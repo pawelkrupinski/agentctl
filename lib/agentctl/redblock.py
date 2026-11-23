@@ -27,15 +27,15 @@ def infra_check(o_r):
     return f"read with {GH_CLI} (`gh auth status` names its auth; https://www.githubstatus.com for an outage)"
 
 
-def gate_unread_spell(o_r, why):
+def gate_unread_spell(o_r, why, store):
     """The patrol could not read the gate: no dispatch, ONE `UNKNOWN:` condition per spell, with an infra check; the
     gate_read probe (a snapshot written after it opened) clears it."""
-    if why is None or condition_item_of(open_store(), "gate-unread"):
+    if why is None or condition_item_of(store, "gate-unread"):
         return None
     line = (f"UNKNOWN: the red patrol cannot read the gate ({why[:200]}): nothing dispatched, pushes fail closed. "
             f"Infra check: {infra_check(o_r)}")
     c = open_condition("UNKNOWN", line, run_probe("gate_read", {"repo": o_r, "since": time.time()}), [],
-                       key="gate-unread", command="red", exit_code=2)
+                       key="gate-unread", command="red", exit_code=2, store=store)
     return line if c else None
 
 

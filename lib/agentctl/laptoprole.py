@@ -117,10 +117,10 @@ def laptop_role(store, t=None, take=False):
     return True, store.get(LAPTOP_ROLE_LEASE)
 
 
-def laptop_role_step(store=None):
+def laptop_role_step(store):
     """The sync loop's first step: the role claimed or renewed. Standby: said to this machine's owner ONCE per holder
     (its inbox), then only in `agentctl status`. Returns True when this machine holds the role."""
-    st = store or open_store()
+    st = store
     held, row = laptop_role(st)
     rec = read_record(laptop_role_path()) or {}
     if held:
@@ -136,9 +136,8 @@ def laptop_role_step(store=None):
     return False
 
 
-def cmd_laptop(a):
+def cmd_laptop(a, st):
     """`agentctl laptop status|take [--yes]`: who holds the laptop role; take it for this machine."""
-    st = open_store()
     if a.lcmd == "status":
         row = st.get(LAPTOP_ROLE_LEASE)
         line = laptop_role_standby(st)

@@ -349,7 +349,7 @@ class FixTest(RedsBase):
         copy = subprocess.run(["git", "-C", cw, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         self.assertNotEqual(copy, sha)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(d, {"worktree": cw, "branch": "copy", "head": copy, "commits": [copy]})
+        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": cw, "branch": "copy", "head": copy, "commits": [copy]})
         e["status"] = "waiting"
         A.save_entry(d, e)
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": cw, "head": copy, "submitted_at": self.t[0]})
@@ -369,7 +369,7 @@ class FixTest(RedsBase):
         self.r.write("fix.txt", "queued\n", at=wt)
         sha = self.r.commit("fix FooSpec\n\nFixes-Red: 19", at=wt)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(d, {"worktree": wt, "branch": "repo-wt-queued", "head": sha, "commits": [sha]})  # no `fixes`
+        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": wt, "branch": "repo-wt-queued", "head": sha, "commits": [sha]})  # no `fixes`
         e["status"] = "waiting"
         A.save_entry(d, e)
         self.tick()
@@ -403,7 +403,7 @@ class FixTest(RedsBase):
         self.r.write("fix.txt", "flakes\n", at=wt)
         sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(d, {"worktree": wt, "branch": "repo-wt-flakes", "head": sha, "commits": [sha]})
+        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": wt, "branch": "repo-wt-flakes", "head": sha, "commits": [sha]})
         e["status"] = "waiting"
         A.save_entry(d, e)
         self.tick()
@@ -435,7 +435,7 @@ class FixTest(RedsBase):
         self.r.write("fix.txt", "gone\n", at=wt)
         sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(d, {"worktree": wt, "branch": "repo-wt-gone", "head": sha, "commits": [sha]})
+        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": wt, "branch": "repo-wt-gone", "head": sha, "commits": [sha]})
         e["status"] = "waiting"
         A.save_entry(d, e)
         self.tick()
@@ -451,7 +451,7 @@ class FixTest(RedsBase):
         self.r.write("fix.txt", f"{name}\n", at=wt)
         sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(d, {"worktree": wt, "branch": f"repo-wt-{name}", "head": sha, "commits": [sha]})
+        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": wt, "branch": f"repo-wt-{name}", "head": sha, "commits": [sha]})
         A.save_entry(d, e)
         self.tick()
         self.assertEqual((self.only()["state"], self.only()["data"]["fix"]["entry"]), ("fix-pending", e["id"]))
@@ -563,7 +563,7 @@ class FixTest(RedsBase):
         self.r.write("fix.txt", "stale\n", at=wt)
         sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(d, {"worktree": wt, "branch": "repo-wt-stale", "head": sha, "commits": [sha]})
+        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": wt, "branch": "repo-wt-stale", "head": sha, "commits": [sha]})
         e["status"] = "waiting"
         A.save_entry(d, e)
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
@@ -606,7 +606,7 @@ class FixTest(RedsBase):
         """A queue entry naming run 20 whose FILE still reads open, its store change LANDED with `tip` -- the tip of the
         change's own check tree, which the landing may have re-cut (Order independence #78, 2026-11-16)."""
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(d, {"worktree": name, "branch": name, "head": head or tip, "commits": [head or tip],
+        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": name, "branch": name, "head": head or tip, "commits": [head or tip],
                                   "fixes": ["20"]})
         e["status"] = "joined"
         A.save_entry(d, e)

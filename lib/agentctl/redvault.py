@@ -18,7 +18,6 @@ from agentctl.worktrees import claimant, worktree_of
 from agentctl.redrepos import red_owner_only
 from agentctl.ciwhy import resolve_run
 from agentctl.statemachines import StaleVersion
-from agentctl.store import open_store
 from agentctl.redrecord import lease_is_live, red_lease, red_of_key, red_what
 from agentctl.leases import block_lease, lease_meta, red_block_of
 from agentctl.conditions import probe_words, run_probe
@@ -308,7 +307,7 @@ def red_blocked_verdict(d):
     return last if str(last.get("outcome") or "").startswith("BLOCKED ON OWNER") else None
 
 
-def block_verdict_note(it, t, store=None):
+def block_verdict_note(it, t, store):
     """A BLOCKED ON OWNER verdict that no live block lease holds, shown as what it is: an old word, its age, and how to
     strike it; None when the red's last word is no such verdict or a block holds it."""
     d = it["data"]
@@ -355,11 +354,10 @@ def red_unblock(store, o_r, target, why, who=None):
     return 0, lines
 
 
-def red_block(o_r, a):
+def red_block(st, o_r, a):
     """`red block`: the red waits on the OWNER, for an owner cause only, as a block lease the tick renews while its
     probe -- named (--until-green / --until-http / --until-tcp), an open cause's, or the red's own workflow going green
     -- still fails and its justification holds. --cause NAME: ONE lease for that outage, every red it explains attached."""
-    st = open_store()
     n = str(a.run).lstrip("#")
     name, units = None, []
     known = red_targets(st, o_r, n, create=False)  # a red key, or a run the tick has seen: as `red claim` finds it

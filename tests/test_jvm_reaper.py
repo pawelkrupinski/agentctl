@@ -112,7 +112,7 @@ class MaintainTest(unittest.TestCase):
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 for _ in range(3):
-                    A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False))
+                    A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False), A.CurrentStore())
         finally:
             A.cmd_orphans, A.cmd_sweep, A.HOME = saved
             os.environ.pop("AGENTCTL_SWEEP_HOUR")

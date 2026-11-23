@@ -58,7 +58,7 @@ def ios_simulator_sweep(root=None, dry_run=False):
                                 "(scripts/ios-simulators sweep)", [], [], 0)
 
 
-def cmd_maintain(a):
+def cmd_maintain(a, store):
     """THE reaper (the owner, 2026-10-27: one service, not three): launchd net.bitcashier.agentctl-maintain runs it every
     15 min. Each pass: the reap (`orphans --kill --safe`: dead owners, stray wait loops, stuck sbt servers, stale JVMs);
     once a day, at the first pass from 09:00 local, the sweep. --dry-run lists and kills nothing."""
@@ -102,7 +102,7 @@ def cmd_maintain(a):
               f"== sweep: from {MAINTAIN_SWEEP_HOUR:02d}:00")
     print("== orphaned work")
     try:
-        for line in orphan_duty(dry_run=a.dry_run) or ["  none"]:
+        for line in orphan_duty(store, dry_run=a.dry_run) or ["  none"]:
             print(f"  {line}")
     except (Exception, SystemExit) as e:
         print(f"  could not look ({str(e)[:160]})")

@@ -59,26 +59,26 @@ def backlog_reconcile(d, st):
         kind = batch_kind(it) if it else "batch"
         if it and it["state"] in BACKLOG_LIVE and e["id"] in (dd.get("members") or []):
             if it["state"] == "pushing" and e["status"] == "checking" and dd.get("depth") == "verify":
-                set_change(d, e, "checked", event={"text": f"{e['id']}: verified {e['tip'][:10]} on {dd['base'][:10]} "
+                set_change(st, d, e, "checked", event={"text": f"{e['id']}: verified {e['tip'][:10]} on {dd['base'][:10]} "
                                                            f"in push batch {bid} (fully checked on "
                                                            f"{(e.get('full_base') or '?')[:10]})"},
                            checked_base=dd["base"], checked_mode=VERIFY_MODE, checked_where=f"in push batch {bid}")
             elif it["state"] == "pushing" and e["status"] == "checking":
-                set_change(d, e, "checked", event={"text": f"{e['id']}: checked in backlog batch {bid} ({e['tip'][:10]} "
+                set_change(st, d, e, "checked", event={"text": f"{e['id']}: checked in backlog batch {bid} ({e['tip'][:10]} "
                                                            f"on {dd['base'][:10]})"},
                            checked_base=dd["base"], full_base=dd["base"], full_tip=e["tip"], checked_mode="--range",
                            checked_where=f"in backlog batch {bid}")
             continue
         if e["status"] == "pushing":
-            set_change(d, e, "checked", event={"text": f"{e['id']}: {kind} {bid}'s push did not land"})
-        set_change(d, e, "queued", event={"text": f"{e['id']}: queued again: {kind} {bid} is "
+            set_change(st, d, e, "checked", event={"text": f"{e['id']}: {kind} {bid}'s push did not land"})
+        set_change(st, d, e, "queued", event={"text": f"{e['id']}: queued again: {kind} {bid} is "
                                                   f"{it['state'] if it else 'gone'} without it"},
                    backlog_batch=None, retry_after=0)
         did.append(f"{e['id']}: queued again ({kind} {bid})")
     return did
 
 
-def push_batch_select(repo, d, tree, kept, base, tips):
+def push_batch_select(st, repo, d, tree, kept, base, tips):
     """(members, tip): the assembled push batch less every member THE RULE (recheck_reason) sends to a FULL round,
     judged against main plus the members before it; the rest assembled again without it. One left out for what landed
     on main is queued for its full round now (as its own push would queue it); one left out only for a member before it
@@ -106,7 +106,7 @@ def push_batch_select(repo, d, tree, kept, base, tips):
         if e.get("status") == "checked":
             e["tip"] = tips.get(e["id"]) or e["tip"]  # its own tip again, never the batch's
         if main_why is not None:
-            set_change(d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
+            set_change(st, d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
                        event={"text": f"{e['id']}: main moved since its checks, {main_why}: checked again "
                                       "(left out of the push batch)"},
                        rounds=e.get("rounds", 0) + 1, retry_after=0, verify=False)
@@ -115,7 +115,7 @@ def push_batch_select(repo, d, tree, kept, base, tips):
             save_entry(d, e)
         wlog(d, f"{e['id']}: left out of the push batch ({why}): "
                 + ("its full round now" if main_why is not None else "it pushes alone after the batch"))
-        kept = assemble(repo, d, tree, [k for k in kept if k["id"] != e["id"]], base, alone=True)
+        kept = assemble(st, repo, d, tree, [k for k in kept if k["id"] != e["id"]], base, alone=True)
     return [], base
 
 
@@ -140,7 +140,7 @@ def batch_progress_path(d: str) -> str:
     return os.path.join(d, "batch-progress.json")
 
 
-def note_batch_progress(d, seen, t):
+def note_batch_progress(d, seen, t, st):
     """Count this tick: stalled (changes wait, gate green, no hold, no batch moving) or not. Returns the count."""
     waiting, it = seen.get("waiting") or [], seen.get("batch")
     stalled = (bool(waiting) and seen.get("reds") is not None and not seen["reds"] and not seen.get("held")
@@ -162,7 +162,7 @@ def note_batch_progress(d, seen, t):
         open_condition("STALLED", f"STALLED: {len(waiting)} change(s) waiting while the gate is green for {n} ticks "
                                   f"({fmt_age(t - since)}): {why}; waiting: {ids}",
                        run_probe("batch_progress", {"d": d}), [], key=f"waiting-green-{batch_key(d)}",
-                       command="waiting")
+                       command="waiting", store=st)
     return n
 
 
@@ -182,7 +182,7 @@ def tick_batch(repo, d, clock, st):
         seen["last"] = did[-1] if did else None
         if seen.get("waiting"):  # the batch as this tick left it (assembled -> checking is no stall)
             seen["batch"] = current_batch(st, d)
-        note_batch_progress(d, seen, clock.time())
+        note_batch_progress(d, seen, clock.time(), st)
     except (Exception, SystemExit) as e:  # never the batch's own step
         err(f"batch progress: {str(e)[:160]}")
     return did
@@ -266,7 +266,7 @@ def red_precheck(repo, d, st, it, waiting, reds):
         git(repo, "fetch", "--quiet", remote(), "main", check=False)
         base = git(repo, "rev-parse", f"{remote()}/main").strip()
         tree = check_tree(repo, i, base)
-        kept = assemble(repo, d, tree, order, base)
+        kept = assemble(st, repo, d, tree, order, base)
         tip = git(tree, "rev-parse", "HEAD").strip()
     finally:
         h.release()
@@ -312,7 +312,7 @@ def release_red_fixes(d, st, reds, waiting, t):
         k = classify_change(e, facts, t)
         if not k["red_fix"]:
             continue
-        set_change(d, e, "queued", event={"text": f"{e['id']}: main is green -- a fix of an open red ({kind_text(k)}) "
+        set_change(st, d, e, "queued", event={"text": f"{e['id']}: main is green -- a fix of an open red ({kind_text(k)}) "
                                                   "is checked alone and first, never a batch member", "severity": "info"},
                    waiting_released=ts())
         out.append(e["id"])
@@ -345,7 +345,7 @@ def batch_step(repo, d, seen, st):
         # waiting change; created only with a check tree free for it (an assembling batch waiting for one holds every
         # solo check behind it, and is held itself past its 5-min deadline)
         facts = queue_facts(reds, st)
-        push = push_candidates(repo, d, reds, t, facts) if not it or depth == "verify" else []
+        push = push_candidates(repo, d, reds, st, t, facts) if not it or depth == "verify" else []
         ready = push or (backlog_candidates(repo, d, reds, st, t, facts) if not it or depth == "full" else [])
         if not it:
             if not ready or not check_tree_slot_free(repo, d):
@@ -358,7 +358,7 @@ def batch_step(repo, d, seen, st):
     else:
         if not waiting and not it:
             return []
-        unread_note(d, reds, waiting)
+        unread_note(d, reds, waiting, st)
         ready = (batch_ready(repo, waiting, reds) if (not reds or fix_waits)
                  and (not it or it["state"] in ("blocked-red", "assembling")) else [])
     go = bool(ready)  # red: a fix waits AND something may land on red now (see BLOCKED BY WHAT MUST WAIT)
@@ -394,9 +394,9 @@ def batch_step(repo, d, seen, st):
             git(repo, "fetch", "--quiet", remote(), "main", check=False)
             base = git(repo, "rev-parse", f"{remote()}/main").strip()
             tree = check_tree(repo, i, base)
-            kept = assemble(repo, d, tree, batch, base, alone=full, autoresolve=depth == "full")
+            kept = assemble(st, repo, d, tree, batch, base, alone=full, autoresolve=depth == "full")
             if depth == "verify":
-                kept, _tip = push_batch_select(repo, d, tree, kept, base, tips)
+                kept, _tip = push_batch_select(st, repo, d, tree, kept, base, tips)
             tip = git(tree, "rev-parse", "HEAD").strip()
             range_base = union_base(tree, kept, base) if depth == "verify" else None
         finally:
@@ -435,7 +435,7 @@ def batch_step(repo, d, seen, st):
             verify = {"verify": True, "rounds": e.get("rounds", 0) + (e.get("status") == "checked")} \
                 if depth == "verify" else {}
             resolved = "; ".join(f"{m['file']} ({', '.join(m['hunks'])})" for m in e.get("autoresolved") or [])
-            set_change(d, e, "checking", data={"autoresolved": resolved or None},
+            set_change(st, d, e, "checking", data={"autoresolved": resolved or None},
                        event={"text": f"{e['id']}: checking in {batch_kind(it)} {it['id']} "
                                       f"({len(kept)} change(s) at {tip[:10]})"
                                       + (f"; its conflict AUTO-RESOLVED in the batch, the batch's full check its "

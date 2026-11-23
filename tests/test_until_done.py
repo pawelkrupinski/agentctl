@@ -114,7 +114,7 @@ class UntilDoneTest(test_queue.QueueTest):
         for _ in range(3):  # the processor decides it while no --until-done waits
             self.drive_queue(0)
         self.assertEqual(A.open_store().item("change", eid)["state"], "rejected")
-        A.project_events()  # its exit event's inbox entry names the worktree and the change
+        A.project_events(A.CurrentStore())  # its exit event's inbox entry names the worktree and the change
         told = [x for x in self.inbox() if x.get("item_id") == eid and x["kind"] == "NOT_LANDED"]
         self.assertEqual([x["cwd"] for x in told], [wt], self.inbox())
         rc, out = self.until_done(wt)

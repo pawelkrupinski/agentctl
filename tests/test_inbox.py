@@ -115,7 +115,14 @@ class InboxTest(unittest.TestCase):
         self.assertEqual((e["command"], e["verdict"], e["exit"]), ("wait", "ended by signal 15", 143))
 
     def test_the_composition_root_routes_entries_through_the_alert_model_and_unwired_they_are_plain_files(self):
-        self.assertEqual(A._inbox_writers, [A.alert_write])
+        seen, saved_write = [], A.alert_write
+        A.alert_write = lambda rec, st: seen.append((rec["verdict"], st))
+        try:
+            A._inbox_writers[0]({"verdict": "routed"})
+        finally:
+            A.alert_write = saved_write
+        self.assertEqual([v for v, _st in seen], ["routed"], "the root's writer is the alert model's")
+        self.assertIsNotNone(seen[0][1], "with the process's store")
         saved = list(A._inbox_writers)
         A._inbox_writers[:] = []
         try:
@@ -309,7 +316,7 @@ class InboxTest(unittest.TestCase):
                "final": True, "exit": 1, "verdict": "AGENTCTL ISSUE 20261104T044122-55799d open 15 d (filed by x): y",
                "kind": "OTHER", "verdicts": [], "tail": [], "item_type": "issue", "item_id": "20261104T044122-55799d",
                "audience": "owner"}
-        A.alert_write(rec)
+        A.alert_write(rec, A.CurrentStore())
         os.environ["AGENTCTL_INBOX_POLL"] = "0.02"
         try:
             code, out = self.run_main(["inbox", "wait", "--since-ack", "--timeout", "5"])

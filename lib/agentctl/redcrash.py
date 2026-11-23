@@ -11,7 +11,6 @@ from agentctl.procrunner import process_runner
 from agentctl.core import HOME, SHORT, env_num, fmt_age, remote, spawn_detached
 from agentctl.timefmt import iso_epoch, parse_time, ts
 from agentctl.statefile import read_record
-from agentctl.store import open_store
 from agentctl.repos import RED_PRIMARY, red_repo_of
 from agentctl.workflows import workflow_file_of
 from agentctl.leases import block_lease, lease_meta
@@ -386,7 +385,7 @@ def red_newer_probe(it, d):
                                                   "run": (d.get("last_run") or {}).get("number"), "repo": d.get("repo")}}
 
 
-def probe_red_newer_verdict(a):
+def probe_red_newer_verdict(a, store):
     """A newer decided run of the red's workflow on main changed its verdict: green, or no longer attached to the red
     (a run failing the same way is attached to it by the tick's observation, before the blocks are probed)."""
     snap = ci_state_load(a.get("repo") or SHORT["movies"])
@@ -397,7 +396,7 @@ def probe_red_newer_verdict(a):
         return False, f"no {a.get('workflow')} run newer than #{a.get('run')}"
     if last.get("conclusion") == "success":
         return True, f"{a.get('workflow')} #{last.get('number')} green"
-    it = open_store().item("red", a.get("item")) if a.get("item") else None
+    it = store.item("red", a.get("item")) if a.get("item") else None
     if it and str((it["data"].get("last_run") or {}).get("databaseId")) == str(last.get("databaseId")):
         return False, f"{a.get('workflow')} #{last.get('number')} still fails this way"
     return True, f"{a.get('workflow')} #{last.get('number')} {last.get('conclusion')}, no longer this failure"

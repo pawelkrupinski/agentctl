@@ -105,7 +105,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         """The change's check under way (its executor taken: checking)."""
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.started, [eid])
-        A.set_change(self.d, self.entry(eid), "checking")
+        A.set_change(A.CurrentStore(), self.d, self.entry(eid), "checking")
 
     def hold_of(self, eid):
         return (A.open_store().item("change", eid)["data"] or {}).get("hold") or {}

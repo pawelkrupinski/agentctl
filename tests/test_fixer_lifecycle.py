@@ -121,7 +121,7 @@ class AttemptTest(CrashLoopBase):
         self.addCleanup(setattr, A, "probe_red_newer_verdict", self.saved_probe)
 
     def probe(self, ok, why):
-        A.probe_red_newer_verdict = lambda args: (ok, why)
+        A.probe_red_newer_verdict = lambda args, store: (ok, why)
 
     def escalate_events(self):
         return [e for e in self.st.events(after=0, limit=1000) if e["severity"] == "escalate"]

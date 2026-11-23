@@ -117,7 +117,7 @@ def batch_drift_split(repo: str, d: str, st: Any, it: dict[str, Any], members: l
         it = st.item("batch", bid)
         if ok is False:
             # policy: drift-check
-            queue_verdict(d, e, "rejected", f"NOT LANDED: the drift check (scripts/identity-drift-ci) is red with your "
+            queue_verdict(st, d, e, "rejected", f"NOT LANDED: the drift check (scripts/identity-drift-ci) is red with your "
                                             f"identity-model change in the batch, twice (entry {e['id']})"
                                             f"\n  {tail_of(out2 or out)}", (out2 or out).splitlines()[-25:])
             batch_move(st, it, "assembling", text=f"batch {bid}: {e['id']} rejected (drift red)", severity="escalate")
@@ -233,7 +233,7 @@ def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
                         pass  # said in the log; the hold says the rest
         else:
             # policy: batch-checks-failed
-            queue_verdict(d, bad, "rejected", f"NOT LANDED: the checks failed with your change in the batch (entry "
+            queue_verdict(st, d, bad, "rejected", f"NOT LANDED: the checks failed with your change in the batch (entry "
                                               f"{bad['id']})\n  {tail_of(cout)}", cout.splitlines()[-25:])
         what = ("checked alone" + (" (its auto-resolution failed the batch)" if alone and resolved else "")) \
             if alone else "rejected"

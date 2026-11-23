@@ -7,7 +7,6 @@ from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, git
 from agentctl.timefmt import parse_time, ts
-from agentctl.store import open_store
 from agentctl.waitingdir import QUEUE_POOL, save_entry, waiting_entries, waiting_state, wlog
 from agentctl.lander import lander_fields
 from agentctl.leases import LeaseHold, lease_live
@@ -127,11 +126,11 @@ def entry_queued_since(e):
         return None
 
 
-def set_change(d: str, e: dict[str, Any], to: str, data: dict[str, Any] | None = None, event: dict[str, Any] | None = None, store: Any = None,
+def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any] | None = None,
+               event: dict[str, Any] | None = None,
                **fields: Any) -> None:
     """THE writer of a change's state: its item (transition + event) and its entry's status, together. A waiting entry
     that queued changes joined passes a final state on to them (joined_verdicts)."""
-    st = store or open_store()
     joined = joined_changes(d, e, st) if machine_state("change", to).terminal else []
     if joined and event:  # its author hears it under the queued id alone (joined_verdicts)
         event = {**event, "refs": {**(event.get("refs") or {}), "no_inbox": True}}
@@ -188,13 +187,13 @@ def joined_verdicts(st, w, joined, to, event, data):
             pass
 
 
-def queue_verdict(d, e, status, verdict, tail=(), code=1, **fields):
+def queue_verdict(st, d, e, status, verdict, tail=(), code=1, **fields):
     """A change's final verdict: its state (set_change), whose event the projector makes its author's inbox entry.
     `decided_on`: the main it was decided on (else the base it was checked on, else the one it was queued on): a land
     replays the verdict only while main is still that (verdict_still_holds)."""
     fields["decided_on"] = fields.get("decided_on") or e.get("checked_base") or e.get("base")
     # its recheck log on its item too (stats' kept_verdicts reads it there): a batch's kept verdict is logged on the
     # entry alone
-    set_change(d, e, {"joined": "waiting"}.get(status, status), event=change_event(e, verdict, tail, code),
+    set_change(st, d, e, {"joined": "waiting"}.get(status, status), event=change_event(e, verdict, tail, code),
                data={"rechecks": e["rechecks"]} if e.get("rechecks") else None, decided=ts(), why=verdict, **fields)
     wlog(d, f"{e['id']}: {verdict.splitlines()[0]}")

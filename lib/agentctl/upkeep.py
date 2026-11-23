@@ -9,7 +9,6 @@ import time
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, _bounded, env_num, reds_dir, run_bounded, state_root
 from agentctl.timefmt import ts
-from agentctl.store import open_store
 from agentctl.selfcode import TOOL_PATH
 from agentctl.fixerrecords import fixer_records
 from agentctl.redrecord import red_active
@@ -41,10 +40,9 @@ def probe_disk_free(a):
     return free >= floor, f"{free:.1f} GB free on {a.get('path') or HOME}"
 
 
-def close_finished_fixer_trees(store=None):
+def close_finished_fixer_trees(st):
     """Each ended fixer's worktree whose red is closed: closed when proven merged, clean and unused (close_worktree
     keeps it otherwise and says why). Returns the lines."""
-    st = store or open_store()
     try:
         open_keys = {it["data"].get("key") for it in red_active(st).values()}
     except Exception:
@@ -151,7 +149,7 @@ UPKEEP_CLEANUP_BOUND = 1800  # the cleanup process's hard bound (killed past it)
 UPKEEP_CLEANUP_DEADLINE = 1200  # its own deadline: well before the bound, the removal reserve (300 s) included
 
 
-def run_upkeep():
+def run_upkeep(store):
     """One upkeep pass (see above); its lines, also appended to the state root's upkeep.log."""
     lines = []
     try:  # its own process: cleanup prints, and the processor's stdout is never redirected under its other threads
@@ -163,7 +161,7 @@ def run_upkeep():
             lines.append(f"cleanup exit {r.returncode}: {(r.stderr or r.stdout).strip()[-200:]}")
     except (OSError, subprocess.TimeoutExpired) as e:
         lines.append(f"cleanup failed: {str(e)[:200]}")
-    lines += close_finished_fixer_trees()
+    lines += close_finished_fixer_trees(store)
     lines += rotate_logs()
     n = sweep_test_tmp()
     if n:
@@ -178,7 +176,7 @@ def run_upkeep():
     return lines
 
 
-def maybe_upkeep(now_=None):
+def maybe_upkeep(store, now_=None):
     """The tick's upkeep step: at most every UPKEEP_EVERY s, or within 10 min when the disk is low (DISK_MIN_GB); and
     WD, the disk invariant: still low with the last upkeep done, an INVARIANT condition whose probe is that same
     free-space check (it closes itself once space is back; it escalates only while it stays open)."""
@@ -190,7 +188,7 @@ def maybe_upkeep(now_=None):
     if t - _last_upkeep[0] >= env_num("AGENTCTL_UPKEEP_EVERY", UPKEEP_EVERY) or (low and t - _last_upkeep[0] >= 600):
         _last_upkeep[0] = t
         # in its thread (minutes of git): the tick goes on; it logs to upkeep.log
-        done = run_bounded("upkeep", run_upkeep, 1)
+        done = run_bounded("upkeep", lambda: run_upkeep(store), 1)
         out.append(f"{'done' if done else 'started'}{' (the disk is low: ' + pr.detail + ')' if low else ''} "
                    f"(log {state_root('upkeep.log')})")
         return out
@@ -198,6 +196,6 @@ def maybe_upkeep(now_=None):
     if low and not (t_up and t_up.is_alive()):  # the upkeep ran and the disk is still low: the owner's to free
         open_condition("INVARIANT", f"INVARIANT WD: the disk is low -- {pr.detail} (under {min_gb:.0f} GB) after the "
                                     "upkeep's cleanup: free space by hand (`du -sh ~/* ~/Library/* | sort -h | tail`)",
-                       pr, [], key="disk-free")
+                       pr, [], key="disk-free", store=store)
         out.append(f"WD: {pr.detail}")
     return out

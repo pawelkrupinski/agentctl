@@ -418,7 +418,7 @@ def red_already_fixed(store, it, upd, outcome, t):
     if not args["repo"]:
         args.pop("repo")
     try:
-        ok, why = probe_red_newer_verdict(args)
+        ok, why = probe_red_newer_verdict(args, store)
     except Exception as e:  # an unreadable snapshot decides nothing: the verify state waits for the run
         ok, why = None, f"probe failed ({type(e).__name__})"
     store.update_item("red", it["id"], it["version"], upd)

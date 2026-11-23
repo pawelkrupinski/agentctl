@@ -4,7 +4,6 @@ import sys
 import time
 from agentctl.procrunner import process_runner
 from agentctl.core import NO_SIGN, err, git, reds_dir, remote
-from agentctl.store import open_store
 from agentctl.forge import forge_release_asset
 from agentctl.land import spawn_land
 from agentctl.worktrees import fresh_worktree
@@ -103,9 +102,8 @@ def explorer_file(o_r, repo, rows, now_):
             pass
 
 
-def explorer_tick(o_r, repo, st=None, now_=None, force=False, fetch=None, filer=None):
+def explorer_tick(o_r, repo, st, now_=None, force=False, fetch=None, filer=None):
     """At most hourly. Returns what it said (a list of strings); never raises."""
-    st = st or open_store()
     t = now_ if now_ is not None else time.time()
     try:
         if not force and t - float(st.meta_get("explorer_at", 0) or 0) < EXPLORER_EVERY:

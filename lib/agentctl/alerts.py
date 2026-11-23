@@ -9,7 +9,6 @@ from agentctl.core import env_num, err, hashlib_sha1
 from agentctl.statefile import read_record, write_json
 from agentctl.inboxentry import inbox_dir, inbox_entries, inbox_kind
 from agentctl.inbox import WAIT_KINDS_DEFAULT, entry_line
-from agentctl.store import open_store
 from agentctl.alertroute import (
     ALERT_AUTHOR_VERDICT_KINDS, alert_audience, alert_kind_of, alert_norm, alert_route, alert_tier)
 from agentctl.alertprobe import alert_probe
@@ -151,7 +150,7 @@ def alert_index(d):
 
 
 # ---------------------------------------------------------------- the write path
-def alert_write(rec, st=None, red=None, condition=None, d=None):
+def alert_write(rec, st, red=None, condition=None, d=None):
     """THE ONE WAY AN ENTRY ENTERS THE INBOX: routed (audience, item), merged into its item's live alert when there is
     one, closing what its verdict closes. Returns the id of the entry that carries it (the live one when merged)."""
     d = d or inbox_dir()
@@ -278,12 +277,12 @@ def alert_close_naming(pattern, why, d=None):
     return n
 
 
-def reconcile_alerts(store=None, force=False):
+def reconcile_alerts(store, force=False):
     """The processor's pass: every live alert's item probed -- cleared: closed (acked, `closed` recorded); its audience
     changed (a red nobody holds became the owner's; a self-healing condition outlived its bound): re-stamped, surfaced
     again when it became the owner's. Returns what it did."""
     d = inbox_dir()
-    st = store or open_store()
+    st = store
     t = time.time()
     try:
         last = float((read_record(alert_index_path(d)) or {}).get("reconciled_at") or 0)

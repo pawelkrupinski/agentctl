@@ -6,7 +6,7 @@ import re
 import time
 from agentctl.core import HOME, fmt_age, git, git_ok, remote
 from agentctl.timefmt import ts
-from agentctl.store import StoreUnavailable, open_store
+from agentctl.store import StoreUnavailable
 from agentctl.repos import RED_PRIMARY
 from agentctl.trailers import fixes_red_in_message, trailer_values
 from agentctl.lander import lander_index, lander_name, lander_of_commit, lander_records, patch_ids
@@ -171,10 +171,9 @@ def revert_close(st, it, how, by):
         return False
 
 
-def tick_reverts(repo, st=None, now_=None, o_r=None):
+def tick_reverts(repo, st, now_=None, o_r=None):
     """The reconciler's step: main's new commits scanned (re-lands close notices, reverts open them), then each notice
     past its deadline moved (open -> escalated, once, to the owner; escalated -> expired, quietly). Its lines."""
-    st = st or open_store()
     t = now_ if now_ is not None else st.clock()
     o_r = o_r or RED_PRIMARY
     out = []
@@ -292,10 +291,9 @@ def revert_note_text(iid, d):
     return f"# {ts()} {lv}\n\n" + "\n".join(f"    {x}" for x in tail) + "\n\n"
 
 
-def revert_notes(st=None):
+def revert_notes(st):
     """The laptop's step: REVERTED.md in each told lander's worktree that is on this machine (once per notice), kept
     out of commits by the clone's info/exclude. Its lines."""
-    st = st or open_store()
     out = []
     for it in st.items("revert", REVERT_OPEN):
         d = it["data"] or {}
@@ -313,9 +311,8 @@ def revert_notes(st=None):
     return out
 
 
-def cmd_revert(a):
+def cmd_revert(a, st):
     """agentctl revert [list] [--all] | ack ID --rework|--drop [--note N]"""
-    st = open_store()
     t = time.time()
     try:
         if a.rcmd == "ack":

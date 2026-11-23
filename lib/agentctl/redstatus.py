@@ -71,7 +71,7 @@ def red_status_text(store: Any, verbose: bool = False) -> str:
                                                                     "untracked", "reverts")), verbose)
 
 
-def write_red_status_snapshot(store: Any = None) -> None:
+def write_red_status_snapshot(store: Any) -> None:
     """The sync's step: the rendered red status, for `red status` to print at once."""
     write_json(red_status_snapshot_path(), {"at": time.time(), "text": red_status_text(store or status_store())})
 

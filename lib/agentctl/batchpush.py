@@ -81,7 +81,7 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
             env = dict(tool_env(), PREPUSH_REUSE_FAST="1")
         for e in members if depth in DEEP_BATCHES else ():
             if e.get("status") == "checked":
-                set_change(d, e, "pushing", event={"text": f"{e['id']}: pushing in batch {it['id']} ({tip[:10]})"})
+                set_change(st, d, e, "pushing", event={"text": f"{e['id']}: pushing in batch {it['id']} ({tip[:10]})"})
         rc, out = run_watched(push_argv(remote(), tip), tree, env, os.path.join(d, f"push-{tip[:10]}"), "push",
                               **push_bounds())
         with open(os.path.join(d, "checks.log"), "a") as f:
@@ -100,7 +100,7 @@ def _push_batch_item(repo, d, st, it, members, tip, base, i):
     mark_gate_dirty()
     for e in members:
         kind = "push batch" if it["data"].get("depth") == "verify" else "batch"
-        queue_verdict(d, e, "landed", f"LANDED {e['tip']} ({kind} {it['id']}: {len(members)} change(s) in one push)",
+        queue_verdict(st, d, e, "landed", f"LANDED {e['tip']} ({kind} {it['id']}: {len(members)} change(s) in one push)",
                       code=0, landed_sha=e["tip"], pushed_at=pushed_at, batch=len(members), batch_id=it["id"])
         if not lock_held(Owned("await", e["id"]).lockpath):  # a `land --follow` waiting on it watches it itself
             start_watch(st, repo, e["tip"], pushed_at, worktree=e["worktree"],

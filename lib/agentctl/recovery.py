@@ -302,7 +302,7 @@ def own_inbox_entry(e, who=None):
     return False
 
 
-def token_unavailable_note(ns: str, why: str) -> None:
+def token_unavailable_note(ns: str, why: str, store: Any) -> None:
     """No source had the token: ONE condition per spell (UNKNOWN in the inbox), cleared by the token probe -- the
     processor holds one again -- with its entry acked."""
     if ns != "movies" or _noting_token[0]:  # the sync's store is remote: its call needs this very token -- once
@@ -311,7 +311,8 @@ def token_unavailable_note(ns: str, why: str) -> None:
     try:
         open_condition("UNKNOWN", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {token_vault_key('pawelkrupinski/movies')[0]}` in any session (the store token's vault); the "
                                   "next land or `waiting status` re-seeds the processor",
-                       run_probe("token", {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2)
+                       run_probe("token", {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2,
+                       store=store)
     except (Exception, SystemExit) as e:
         err(f"token: could not note the missing token ({str(e)[:120]})")
     finally:

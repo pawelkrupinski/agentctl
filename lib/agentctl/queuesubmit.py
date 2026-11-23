@@ -159,7 +159,7 @@ NOTE_PRECHECK_DELAYS = (5, 15, 30, 60)
 NOTE_PRECHECK_WAIT = 110  # s a precheck's note waits at most for the store or its item (the delays above, cut at this)
 
 
-def note_precheck(eid, secs, rc, out, store=None, sleep=time.sleep):
+def note_precheck(eid, secs, rc, out, store, sleep=time.sleep):
     """The precheck's duration and outcome on its change item (`precheck`: the landing record's precheck_* fields),
     before a refusal cancels it; never fatal."""
     outcome, step = precheck_outcome(rc, out)
@@ -170,7 +170,7 @@ def note_precheck(eid, secs, rc, out, store=None, sleep=time.sleep):
             delays.append(d)
     for delay in (*delays, None):
         try:
-            st = store or open_store()
+            st = store
             for _ in range(3):  # a compare-and-set: the reconciler may move the item meanwhile
                 it = st.item("change", eid)
                 if not it:
@@ -295,14 +295,14 @@ def landed_sha_of(eid, data):
     return data.get("tip") or next(iter(data.get("landed_commits") or {}), "") or data.get("head")
 
 
-def await_verdict(eid, bound, clock, store=None):
+def await_verdict(eid, bound, clock, store):
     """Block until queued change eid is decided (its store item; through a store blip, asked again), at most `bound` s:
     (state, its item's data, seconds waited); state `landed`, another terminal state, or the last open one read."""
     t0, delays = clock.time(), backoff(*FIXER_LAND_POLL)
     state, data = "unread", {}
     while True:
         try:
-            it = (store or open_store()).item("change", eid)
+            it = store.item("change", eid)
         except StoreUnavailable as e:
             it, state = None, f"the store did not answer ({str(e)[:80]})"
         if it:
@@ -315,14 +315,14 @@ def await_verdict(eid, bound, clock, store=None):
         clock.sleep(next(delays))
 
 
-def take_delivery(it, store=None):
+def take_delivery(it, store):
     """Record on change item `it` that a waiting call received its verdict (`delivered_at`): a later land never
     replays it as undelivered (verdict_still_holds). Best effort: a store blip or a racing writer only leaves it
     unrecorded, and the next land then checks the change again or replays it, both of them true."""
     if (it.get("data") or {}).get("delivered_at") or it.get("version") is None:  # said already, or a queue entry
         return  # the tick has not made an item of yet (own_change_item): nothing to record it on
     try:
-        (store or open_store()).update_item("change", it["id"], it["version"], {"delivered_at": time.time()})
+        store.update_item("change", it["id"], it["version"], {"delivered_at": time.time()})
     except (StaleVersion, StoreUnavailable):
         pass
 
@@ -339,7 +339,7 @@ def verdict_still_holds(repo, main_ref, it):
         and git(repo, "rev-parse", main_ref).strip() == data["decided_on"]
 
 
-def await_queued(eid, clock, store=None):
+def await_queued(eid, clock, store):
     """Block until queued change eid is decided, bounded by FIXER_LAND_WAIT: LANDED <sha> (0), NOT LANDED: <why> (1),
     or NOT LANDED (still queued) (1)."""
     state, data, waited = await_verdict(eid, env_num("AGENTCTL_FIXER_LAND_WAIT", FIXER_LAND_WAIT), clock, store)

@@ -3,7 +3,6 @@
 
 import time
 from typing import Any
-from agentctl.store import open_store
 from agentctl.selfcode import code_version
 from agentctl.owned import start_rev
 from agentctl.reverts import revert_brief
@@ -15,9 +14,9 @@ from agentctl.queueclose import change_rows
 from agentctl.statemachines import MACHINES, machine_state
 
 
-def write_snapshot(d: str, store: Any = None) -> None:
+def write_snapshot(d: str, store: Any) -> None:
     """The tick's part of state.json: the open items and the tick's own time and code version."""
-    st = store or open_store()
+    st = store
     open_ = lambda typ: [i for i in st.items(typ) if typ in MACHINES and not machine_state(typ, i["state"]).terminal]
     brief = lambda i: {"id": i["id"], "state": i["state"], "deadline": i["deadline"], "level": i["level"],
                        "worktree": (i["data"] or {}).get("worktree"),

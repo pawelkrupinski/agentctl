@@ -81,17 +81,17 @@ class WatchdogTest(unittest.TestCase):
         rc, out = self.run_wd()
         self.assertEqual(rc, 1)
         self.assertIn("W5: VIOLATED", out)
-        self.assertEqual(A.open_conditions(), [], "hysteresis: one missed beat opens nothing (THE ALERT MODEL)")
+        self.assertEqual(A.open_conditions(A.CurrentStore()), [], "hysteresis: one missed beat opens nothing (THE ALERT MODEL)")
         self.assertEqual(len(self.kicks), 1)
         self.run_wd()
-        self.assertEqual([c["key"] for c in A.open_conditions()], ["invariant-W5"], "the second miss in a row opens it")
+        self.assertEqual([c["key"] for c in A.open_conditions(A.CurrentStore())], ["invariant-W5"], "the second miss in a row opens it")
         self.assertEqual(len(self.kicks), 1)  # rate-limited
         self.run_wd()
         self.assertEqual(len([e for e in A.inbox_entries() if e.get("kind") == "INVARIANT"]), 1)  # one per spell
         A.write_beat("processor")
         rc, out = self.run_wd()
         self.assertEqual(rc, 0)
-        self.assertEqual(A.open_conditions(), [])  # the invariant holds again: closed, its entry acked
+        self.assertEqual(A.open_conditions(A.CurrentStore()), [])  # the invariant holds again: closed, its entry acked
         self.assertTrue(all(e["read"] for e in A.inbox_entries() if e.get("kind") == "INVARIANT"))
 
     def test_w5_a_kick_hands_the_old_processors_token_to_its_successor(self):
@@ -153,19 +153,19 @@ class WatchdogTest(unittest.TestCase):
         st_.put_item("change", "old-2", "queued", {"head": "1" * 40, "submitted_at": time.time() - 4 * 3600})
         self.assertIs(A.inv_w1(A.Clock(), A.CurrentStore())[0], False, "a green main's W1 is violated, never 0.0 (neither held nor violated)")
         self.run_wd()
-        [c] = [c for c in A.open_conditions() if c["key"] == "invariant-W1"]
+        [c] = [c for c in A.open_conditions(A.CurrentStore()) if c["key"] == "invariant-W1"]
         self.assertIn("old-1", c["text"])
         it = st_.item("change", "old-1")
         st_.transition("change", "old-1", "landed", it["version"])
         self.run_wd()
-        [c] = [c for c in A.open_conditions() if c["key"] == "invariant-W1"]
+        [c] = [c for c in A.open_conditions(A.CurrentStore()) if c["key"] == "invariant-W1"]
         self.assertIn("unlanded change old-2 (queued", c["text"])
         self.assertNotIn("old-1", c["text"])
         self.assertEqual(len([e for e in A.inbox_entries() if e.get("kind") == "INVARIANT"]), 1, "one entry per spell")
         it = st_.item("change", "old-2")
         st_.transition("change", "old-2", "landed", it["version"])
         self.run_wd()
-        self.assertEqual([c for c in A.open_conditions() if c["key"] == "invariant-W1"], [])
+        self.assertEqual([c for c in A.open_conditions(A.CurrentStore()) if c["key"] == "invariant-W1"], [])
 
     def test_w1_reads_the_gate_from_its_snapshot_and_names_the_red_row_holding_a_waiting_change(self):
         """2026-11-22: the gate was red on Identity takes #349 (Main green) and W1 said "waiting for green while main

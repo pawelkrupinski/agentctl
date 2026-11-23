@@ -147,7 +147,7 @@ def enqueue(repo, main_ref, sh, a, clock, store):
                                   waits=waits)
     else:
         fields = change_fields(repo, main_ref, head, a)
-        e, ahead = queue_change(d, fields)
+        e, ahead = queue_change(store, d, fields)
         submit_ref(repo, d, e)
         print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the "
               f"background; {queued_tail(waits)}", flush=True)

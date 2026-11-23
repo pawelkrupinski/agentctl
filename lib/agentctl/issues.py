@@ -7,7 +7,7 @@ import time
 from typing import Any, Optional
 from agentctl.core import env_num, fmt_age, hashlib_sha1
 from agentctl.timefmt import ts
-from agentctl.store import StoreUnavailable, open_store
+from agentctl.store import StoreUnavailable
 from agentctl.procs import safe_cwd
 from agentctl.worktrees import claimant
 from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec, TerminalState
@@ -59,10 +59,9 @@ def issue_escalation_text(it, t):
             f"(filed by {d.get('by') or '?'}): {d.get('text', '')}")[:400]
 
 
-def tick_issues(st=None, now_=None):
+def tick_issues(st, now_=None):
     """The reconciler's step: the most overdue open issue escalated, at most one per ISSUE_ESCALATE_GAP. Returns what
     it did."""
-    st = st or open_store()
     t = now_ if now_ is not None else st.clock()
     if t - float(st.meta_get("issue_escalated_at", 0) or 0) < env_num("AGENTCTL_ISSUE_ESCALATE_GAP", ISSUE_ESCALATE_GAP):
         return []
@@ -85,9 +84,8 @@ def status_issues(st, t):
             for i in sorted(st.items("issue", ("open",)), key=lambda i: i.get("entered_at") or 0, reverse=True)]
 
 
-def cmd_issue(a):
+def cmd_issue(a, st):
     """agentctl issue "<text>" | --list | --close ID [--note N]"""
-    st = open_store()
     by = claimant()
     try:
         if a.close:

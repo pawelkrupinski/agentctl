@@ -72,7 +72,7 @@ def ask_page(key, title, text, how=None):
     return f"file://{p}#question"
 
 
-def notification_url(ev, store=None):
+def notification_url(ev, store):
     """The URL a notification of event ev opens, or None."""
     refs = ev.get("refs") or {}
     key = refs.get("key")

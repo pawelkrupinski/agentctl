@@ -36,12 +36,12 @@ class UrlTest(unittest.TestCase):
 
     def test_ask_without_run_is_a_local_page(self):
         with mock.patch.dict(os.environ, {"AGENTCTL_STATE_ROOT": self.enterContext(__import__("tempfile").TemporaryDirectory())}):
-            u = A.notification_url({"kind": "red.ask", "refs": {"key": "k1", "verdict": "WAITING ON YOU: x <b>"}})
+            u = A.notification_url({"kind": "red.ask", "refs": {"key": "k1", "verdict": "WAITING ON YOU: x <b>"}}, A.CurrentStore())
         self.assertTrue(u.startswith("file://") and u.endswith(".html#question"))
         self.assertIn("&lt;b&gt;", open(u[7:].split("#")[0]).read())
 
     def test_other_events_have_no_url(self):
-        self.assertIsNone(A.notification_url({"kind": "x", "refs": {}}))
+        self.assertIsNone(A.notification_url({"kind": "x", "refs": {}}, A.CurrentStore()))
 
 
 class NotifierTest(unittest.TestCase):

@@ -171,7 +171,7 @@ def ask_blocks_work(b):
     return not b or ((b.get("meta") or {}).get("probe") or {}).get("kind") not in PROBES
 
 
-def ask_held_until(members, spell, t, store=None):
+def ask_held_until(members, spell, t, store):
     """Until when the owner's question for these reds ((item, ask) pairs) is held (THE QUESTION IS HELD, above), or
     None: tell now (no hold, a gate red, a deadline inside the hold, a block only the owner lifts, or the hold over)."""
     hold = env_num("AGENTCTL_ASK_HOLD", ASK_HOLD)

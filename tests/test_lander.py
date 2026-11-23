@@ -150,7 +150,7 @@ class CommitKeysTest(Base):
         e = {**fields, "id": "e-b", "status": "queued"}
         d = os.path.join(self.tmp.name, "wd")
         os.makedirs(os.path.join(d, "entries"))
-        A.set_change(d, e, "checking", store=st)
+        A.set_change(st, d, e, "checking")
         it = st.item("change", "e-b")
         self.assertEqual(it["data"]["lander"]["session"], "sess-b")  # the item, not only the entry file
         st.transition("change", "e-b", "checked", it["version"])

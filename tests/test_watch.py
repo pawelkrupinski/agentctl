@@ -405,7 +405,7 @@ class WatchItemTest(unittest.TestCase):
         A.watch_eval = lambda *a: ("ok", "WATCH OK: Main #5 green, convergence #6 green (aaaaaaaaaa)", [])
         self.assertEqual(A.tick_watches(*on_clock(FakeClock(time.time() + 120))), [f"watch {'a' * 10}: ok"])
         self.assertEqual(self.closed, [wt])
-        A.project_events()
+        A.project_events(A.CurrentStore())
         [e] = A.inbox_entries()
         self.assertEqual((e["kind"], e["cwd"], e["exit"]), ("OK", wt, 0))
 

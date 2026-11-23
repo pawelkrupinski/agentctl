@@ -175,7 +175,7 @@ class ProjectionTest(unittest.TestCase):
             A.write_json(os.path.join(d, "entries", "w1.json"), w)
             A.project_changes(d, st)
             event_line = why if to != "superseded" else f"SUPERSEDED w1 by w0: {why}"
-            A.set_change(d, w, to, event=A.change_event(w, event_line, code=0), store=st, why=why, **fields)
+            A.set_change(st, d, w, to, event=A.change_event(w, event_line, code=0), why=why, **fields)
             ev = [e for e in st.events() if e["item_id"] == "q1" and e["to_state"] == to]
             self.assertEqual(len(ev), 1, to)
             projected = A.projected_transition(q, w, "waiting", to)[1]["refs"]["verdict"]

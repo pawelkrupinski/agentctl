@@ -100,7 +100,7 @@ def conflict_bounced(every, e, now_=None):
     return last if (now_ or now().timestamp()) - at <= CONFLICT_PLACE_KEPT else None
 
 
-def queue_change(d, fields, entry_id=None):
+def queue_change(st, d, fields, entry_id=None):
     """A submitted change as a queued entry (seq under seq.lock); re-queueing from the same source supersedes the older
     one. Returns (entry, n ahead). Shared by `land` (phase 1) and POST /v1/changes (phase 2)."""
     with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a unique seq; never the landing lock (a push holds it)
@@ -123,11 +123,11 @@ def queue_change(d, fields, entry_id=None):
         save_entry(d, e)
         for old in queued_entries(d):  # RE-QUEUEING REPLACES: only the newest entry per worktree and branch runs
             if old["id"] != e["id"] and same_change_source(old, e["worktree"], e.get("branch")):
-                supersede(d, old, e["id"], f"{e['worktree']} queued again ({e['head'][:10]}); only the newest entry runs")
+                supersede(st, d, old, e["id"], f"{e['worktree']} queued again ({e['head'][:10]}); only the newest entry runs")
     return e, max(len(queued_entries(d)) - 1, 0)
 
 
-def submit_change(body, repo=None):
+def submit_change(st, body, repo=None):
     """POST /v1/changes: a change the laptop pushed to refs/heads/land/<id> becomes a queued entry of the server's queue."""
     repo = repo or server_repo()
     if not os.path.isdir(repo):
@@ -146,15 +146,14 @@ def submit_change(body, repo=None):
     if why:
         raise ValueError(f"NOT LANDED: {why}")
     d = waiting_state(repo)[0]
-    e, ahead = queue_change(d, {k: body.get(k) for k in SUBMIT_FIELDS}, body.get("id"))
-    supersede_stranded(d, e)
+    e, ahead = queue_change(st, d, {k: body.get(k) for k in SUBMIT_FIELDS}, body.get("id"))
+    supersede_stranded(d, e, st)
     return {"id": e["id"], "seq": e["seq"], "ahead": ahead}
 
 
-def supersede_stranded(d, e, store=None):
+def supersede_stranded(d, e, st):
     """A submission replaces every older open item of the same worktree that no entry carries (queue_change supersedes
     the entries; an item mirrored from another host's queue has none): SUPERSEDED, never left waiting."""
-    st = store or open_store()
     carried = {x["id"] for x in waiting_entries(d, open_only=False)}
     for it in st.items("change"):
         dd = it.get("data") or {}
@@ -290,10 +289,10 @@ class StoreAPI:
         if method == "GET" and p == "/v1/state":
             return self._json(200, state_read())
         if method == "POST" and p == "/v1/changes":
-            return self._json(200, submit_change(b, self.repo))
+            return self._json(200, submit_change(st, b, self.repo))
         if method == "POST" and re.fullmatch(r"/v1/changes/[^/]+:(cancel|abandon)", p):
             eid, how = urllib.parse.unquote(p[len("/v1/changes/"):]).rsplit(":", 1)
-            return self._json(200, cancel_submitted(eid, how, self.repo))
+            return self._json(200, cancel_submitted(st, eid, how, self.repo))
         if method == "POST" and p == "/v1/tick":
             with open(state_root("tick.nudge"), "a"):
                 os.utime(state_root("tick.nudge"))

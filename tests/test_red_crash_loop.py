@@ -302,12 +302,7 @@ class RecoveryTest(CrashLoopBase):
         return it, A.red_block_of(it, self.st)["meta"]["probe"]["args"]
 
     def probe(self, args):
-        saved = A.open_store
-        A.open_store = lambda *a, **k: self.st
-        try:
-            return A.probe_red_newer_verdict(args)
-        finally:
-            A.open_store = saved
+        return A.probe_red_newer_verdict(args, self.st)
 
     def test_no_newer_run_holds_it(self):
         _it, args = self.blocked()

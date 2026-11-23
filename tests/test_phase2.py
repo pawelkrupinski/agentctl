@@ -280,7 +280,7 @@ class InternalErrorTest(Phase2Base):
     def test_an_unexpected_error_is_a_500_with_a_json_error_never_a_dropped_connection(self):
         saved = A.submit_change
 
-        def boom(body, repo=None):
+        def boom(st, body, repo=None):
             raise FileNotFoundError(2, "No such file or directory", "git")
         A.submit_change = boom
         try:
@@ -964,7 +964,7 @@ class LandHoldTest(Phase2Base):
             self.assertEqual(A.tick_batch(self.repo, d, *on_clock(A.Clock())), ["held"])
         finally:
             A.waiting_entries, A.current_batch = saved
-        A.write_snapshot(d)
+        A.write_snapshot(d, A.CurrentStore())
         self.sync()
         st = A.state_read()
         self.assertEqual(st["hold"]["why"], "infra deploy")

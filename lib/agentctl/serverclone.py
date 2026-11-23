@@ -10,6 +10,7 @@ import re
 import subprocess
 import threading
 import time
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, git, git_ok, pid_alive, process_cache, remote
 from agentctl.statefile import read_record
@@ -127,7 +128,7 @@ def clone_into_tmp(repo, url):
     return tmp
 
 
-def ensure_server_clone(repo: str | None = None) -> str:
+def ensure_server_clone(repo: str | None, store: Any) -> str:
     repo = repo or server_repo()
     clean_clone_tmps(repo)
     if not os.path.isdir(os.path.join(repo, ".git")):
@@ -145,7 +146,7 @@ def ensure_server_clone(repo: str | None = None) -> str:
         if heal_enabled(repo):  # at startup: a clone that does not verify is repaired before the first tick
             ok, detail = clone_verify(repo)
             if not ok:
-                repair_clone(repo, f"at startup the clone did not verify: {detail}")
+                repair_clone(repo, f"at startup the clone did not verify: {detail}", store)
     return repo
 
 
@@ -268,12 +269,12 @@ def prune_broken(repo, keep):
     return gone
 
 
-def clone_condition(repo, text, probe, tail=()):
+def clone_condition(repo, text, probe, store, tail=()):
     return open_condition("CLONE", text, probe, [], key=f"clone-{os.path.basename(os.path.abspath(repo))}",
-                          command="tick", tail=list(tail))
+                          command="tick", tail=list(tail), store=store)
 
 
-def repair_clone(repo, why):
+def repair_clone(repo, why, store):
     """Clone afresh into a temp directory, swap it in under the clone lock, keep the broken copy (one only), re-link the
     worktrees. Opens the CLONE condition (with git's error) first; its probe, passing after the swap, closes it.
     Returns what it did, or None when another repair runs or the users never let go (tried again next tick)."""
@@ -287,7 +288,7 @@ def repair_clone(repo, why):
             raise SystemExit(f"agentctl: cannot repair {repo}: no $AGENTCTL_MOVIES_REMOTE")
         try:
             clone_condition(repo, f"CLONE BROKEN: {repo}: {why.splitlines()[0][:300]}; re-cloning it from {url}",
-                            run_probe("clone_health", {"repo": repo}), tail=why.splitlines()[-15:])
+                            run_probe("clone_health", {"repo": repo}), store, tail=why.splitlines()[-15:])
         except (Exception, SystemExit) as e:
             err(f"clone repair: the CLONE condition could not be opened ({str(e)[:160]})")
         err(f"clone repair: {repo} is broken ({why.splitlines()[0][:200]}): cloning {url} afresh")
@@ -316,13 +317,13 @@ def repair_clone(repo, why):
                 + (f"; {len(trees)} worktree(s) re-linked" if trees else "")
                 + (f"; removed {', '.join(os.path.basename(g) for g in gone)}" if gone else ""))
         err(line)
-        recovery_recheck("clone_health")
+        recovery_recheck("clone_health", store)
         return line
     finally:
         _clone_repairing.release()
 
 
-def clone_heal_tick(repo):
+def clone_heal_tick(repo, store):
     """The processor's "clone health" step: a suspect clone (a fetch failed with a corruption signature) is probed;
     broken, it is repaired (at most every CLONE_REPAIR_RETRY); healthy, the mark goes (it was something else)."""
     sus = read_record(clone_side(repo, "suspect.json"))
@@ -340,4 +341,4 @@ def clone_heal_tick(repo):
         return f"clone health: {repo} is fine ({r.detail})"
     if r.ok is None:
         return None  # cannot tell now (the network): looked at again next tick
-    return repair_clone(repo, f"{r.detail}\n{sus.get('error') or ''}".strip())
+    return repair_clone(repo, f"{r.detail}\n{sus.get('error') or ''}".strip(), store)

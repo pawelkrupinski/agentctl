@@ -75,7 +75,7 @@ class QueueTest(WaitingTest):
                 A.push_change(self.r.path, d, e, *on_clock(A.Clock()))
             else:
                 break
-        A.project_events()  # the processor's projector: the events become the inbox entries
+        A.project_events(A.CurrentStore())  # the processor's projector: the events become the inbox entries
         e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
         return 1 if e["status"] == "rejected" else 0
 
@@ -224,10 +224,10 @@ class QueueTest(WaitingTest):
             self.assertEqual(self.check(eid), 0)
             wts.append(wt)
             ids.append(eid)
-        A.project_changes(d)  # the server tick's projection of every entry
-        rows = A.change_rows()
+        A.project_changes(d, A.CurrentStore())  # the server tick's projection of every entry
+        rows = A.change_rows(A.CurrentStore())
         self.assertEqual([(r["id"], r["state"]) for r in rows], [(i, "waiting") for i in ids], "one item per change")
-        A.write_snapshot(d)
+        A.write_snapshot(d, A.CurrentStore())
         line = A.status_line()
         self.assertIn("waiting: 3 — ", line)
         for wt in wts:
@@ -244,7 +244,7 @@ class QueueTest(WaitingTest):
         self.assertEqual([self.entries()[i.rsplit("-", 1)[-1]]["status"] for i in ids], ["landed"] * 3)
         self.assertEqual(len(self.pushed()), 1, "one push")
         self.assertEqual(self.remote_log()[:3], ["c: held", "b: held", "a: held"])
-        self.assertEqual(A.change_rows(), [])
+        self.assertEqual(A.change_rows(A.CurrentStore()), [])
 
     def test_failing_checks_are_not_landed_in_the_inbox(self):
         wt, _ = self.agent("a", "BROKEN", "x\n")
@@ -357,7 +357,7 @@ class QueueTest(WaitingTest):
         wt, _ = self.agent("a", "web/src/main/NetFlake.scala", "a\n", msg="a: one")
         eid, _ = self.queued(wt)
         A.check_entry(self.r.path, eid, *on_clock(self.clock))
-        A.project_events()
+        A.project_events(A.CurrentStore())
         self.assertTrue(os.path.exists(flag), "its check ran, and failed on the network")
         e = self.entries()[eid.rsplit("-", 1)[-1]]
         self.assertEqual((e["status"], e.get("infra_reason")), ("queued", A.NETWORK_REASON))
@@ -739,9 +739,9 @@ class QueueTest(WaitingTest):
         eid, _ = self.queued(wt)
         real = A.set_change
 
-        def forgetting(d, e, status, **kw):
+        def forgetting(st, d, e, status, **kw):
             kw.pop("full_tip", None)
-            return real(d, e, status, **kw)
+            return real(st, d, e, status, **kw)
         A.set_change = forgetting
         self.addCleanup(setattr, A, "set_change", real)
         hook = open(os.path.join(self.r.path, "scripts/hooks/pre-push")).read()
@@ -1429,7 +1429,7 @@ class RemotePickupTest(QueueTest):
 
     def test_superseding_an_entry_cancels_its_run(self):
         d, e = self.checking_entry()
-        A.supersede(d, e, "newer", "queued again")
+        A.supersede(A.CurrentStore(), d, e, "newer", "queued again")
         self.assertEqual(self.state["cancelled"], [99])
 
     def test_a_replacement_after_main_moved_adopts_the_run_on_its_own_base(self):

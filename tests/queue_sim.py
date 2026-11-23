@@ -1022,7 +1022,7 @@ class Sim:
                   "commits": list(ch.commits), "fixes": sorted(set().union(*(self.patches[p].fixes for p in ch.patches))),
                   "keep_worktree": False, "no_batch": ch.no_batch, "claude_pid": None, "session": f"s-{ch.worktree}",
                   "base": ch.base, "host": "sim", "lander": {}, "commit_keys": {}}
-        e, _ahead = A.queue_change(self.d, fields)
+        e, _ahead = A.queue_change(A.CurrentStore(), self.d, fields)
         ch.eid = e["id"]
         self.by_eid[e["id"]] = ch
 
@@ -1168,7 +1168,7 @@ class Sim:
         self.open_before = set(self.reds) | set(self.outside)
         self.known_entries = {e["id"] for e in A.waiting_entries(self.d, open_only=False)}
         reds = set(self.reds)
-        A.project_changes(self.d)
+        A.project_changes(self.d, A.CurrentStore())
         A.close_landed_changes(self.repo, self.sim_clock, self.d)
         for x in A.tick_changes(self.repo, self.d, *on_clock(self.sim_clock)):
             A.wlog(self.d, f"tick {self.tick}: {x}")

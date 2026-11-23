@@ -182,7 +182,7 @@ def blame_cancel_changes_of(wt, why):
             if hasattr(st, "cancel_change"):
                 st.cancel_change(it["id"])
             else:
-                cancel_submitted(it["id"])
+                cancel_submitted(st, it["id"])
             out.append(it["id"])
         except (Exception, SystemExit) as e:
             err(f"could not cancel {it['id']} ({why}): {str(e)[:120]}")

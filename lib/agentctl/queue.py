@@ -47,7 +47,7 @@ QUEUE_INFRA_RETRIES = 3
 INFRA_BACKOFF = (300, 600, 1800, 3600)  # infra re-queues back off; from the third, each one escalates
 
 
-def requeue_infra(d, e, why, now, delay=None, reason=None, detail=None, repo=None):
+def requeue_infra(st, d, e, why, now, delay=None, reason=None, detail=None, repo=None):
     """Back to queued for a later look: infra NEVER rejects a change (design §5.1). The delay grows 5 -> 60 min; from
     QUEUE_INFRA_RETRIES on, each re-queue is an escalation (its event's severity). NEVER SILENTLY FOREVER (2026-10-29:
     a corrupt clone's fetch of main re-queued every change for hours, and nobody was told): re-queued for the same
@@ -61,26 +61,26 @@ def requeue_infra(d, e, why, now, delay=None, reason=None, detail=None, repo=Non
     same = e.get("infra_reason") == reason
     n_same = int(e.get("infra_same") or 0) + 1 if same else 1
     since = float(e.get("infra_reason_since") or t) if same else t
-    set_change(d, e, "queued", data={"infra_attempts": n},
+    set_change(st, d, e, "queued", data={"infra_attempts": n},
                event=change_event(e, f"QUEUED AGAIN {e['id']}: infra ({why}); checked again in {int(wait // 60)} min",
                                   code=None, final=False, severity=sev),
                infra_retries=n, retry_after=t + wait, why=f"infra: {why}", waiting_on=None,
                infra_reason=reason, infra_same=n_same, infra_reason_since=since)
     wlog(d, f"{e['id']}: {why}: queued again in {int(wait // 60)} min (infra retry {n}"
             + (", escalated" if sev == "escalate" else "") + ")")
-    requeue_condition(d, e, why, reason, n_same, t - since, detail, repo)
+    requeue_condition(st, d, e, why, reason, n_same, t - since, detail, repo)
 
 
-def requeue_condition(d: str, e: dict[str, Any], why: str, reason: str, n_same: int, age: float, detail: str | None,
+def requeue_condition(st: Any, d: str, e: dict[str, Any], why: str, reason: str, n_same: int, age: float, detail: str | None,
                       repo: str | None) -> None:
     """The condition a re-queue opens, if any. A push credential failure: ONE for the clone, at once (no retry brings it
     back). Any other reason: the infra one, once the same reason repeated QUEUE_INFRA_RETRIES times or for
     INFRA_SAME_MAX."""
     try:
-        if credential_failure(why) and push_credential_condition(d, why, detail, repo):
+        if credential_failure(why) and push_credential_condition(st, d, why, detail, repo):
             return
         if n_same >= QUEUE_INFRA_RETRIES or age >= env_num("AGENTCTL_INFRA_SAME_MAX", INFRA_SAME_MAX):
-            infra_requeue_condition(d, e, why, reason, n_same, age, detail, repo)
+            infra_requeue_condition(st, d, e, why, reason, n_same, age, detail, repo)
     except (Exception, SystemExit) as x:
         err(f"{e['id']}: re-queued {n_same} times for {reason}, and its condition could not be opened ({str(x)[:160]})")
 
@@ -96,7 +96,7 @@ def infra_reason_of(why: str) -> str:
     return re.sub(r"\s*\(.*?\)", "", why).split(":")[0].strip()
 
 
-def infra_requeue_condition(d: str, e: dict[str, Any], why: str, reason: str, n: int, age: float, detail: str | None,
+def infra_requeue_condition(st: Any, d: str, e: dict[str, Any], why: str, reason: str, n: int, age: float, detail: str | None,
                             repo: str | None) -> Any:
     """The condition of a change re-queued n times for the same infra reason: main's fetch failing is the clone's
     (one per clone, cleared when it verifies and fetches main again); any other reason the change's own (cleared when
@@ -108,12 +108,12 @@ def infra_requeue_condition(d: str, e: dict[str, Any], why: str, reason: str, n:
         repo = repo or repo_of_waiting(d)
         return open_condition("STALLED", f"{text}. Every change's check fetches main: the landing is blocked",
                               run_probe("clone_health", {"repo": repo}), [],
-                              key=f"main-fetch-{os.path.basename(os.path.abspath(repo))}", command="land", tail=tail)
+                              key=f"main-fetch-{os.path.basename(os.path.abspath(repo))}", command="land", tail=tail, store=st)
     return open_condition("STALLED", text, run_probe("infra_requeue", {"d": d, "eid": e["id"], "reason": reason}), [],
-                          key=f"infra-requeue-{e['id']}", command="land", cwd=e.get("worktree"), tail=tail)
+                          key=f"infra-requeue-{e['id']}", command="land", cwd=e.get("worktree"), tail=tail, store=st)
 
 
-def push_credential_condition(d: str, why: str, detail: str | None, repo: str | None) -> Any:
+def push_credential_condition(st: Any, d: str, why: str, detail: str | None, repo: str | None) -> Any:
     """GitHub never got, or refused, this clone's push credential: ONE condition per clone, opened at the first such
     re-queue and naming every change it holds, cleared by the next push that succeeds (probe_push_credential) -- not an
     "infra failure" retried on a timer per change (2026-11-22: four changes held for hours by a dead helper)."""
@@ -126,7 +126,7 @@ def push_credential_condition(d: str, why: str, detail: str | None, repo: str | 
     tail = redact_credentials(detail or why).strip().splitlines()[-15:]
     probe = run_probe("push_credential", {"d": d, "since": time.time(), "host": host_role()})
     return open_condition("STALLED", text, probe, [], key=f"push-credential-{os.path.basename(os.path.abspath(repo))}",
-                          command="land", tail=tail, grace=0)
+                          command="land", tail=tail, grace=0, store=st)
 
 
 def credential_held(entries: list[dict[str, Any]]) -> list[str]:

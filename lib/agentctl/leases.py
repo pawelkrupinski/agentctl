@@ -91,9 +91,9 @@ def block_lease(key: Optional[str] = None, cause: Optional[str] = None) -> str:
     return ("block/cause/" + re.sub(r'[^\w.-]+', '_', cause)) if cause else f"block/{key}"
 
 
-def red_block_of(it: dict[str, Any], store: Any = None) -> Optional[dict[str, Any]]:
+def red_block_of(it: dict[str, Any], store: Any) -> Optional[dict[str, Any]]:
     """{name, text, cause, until, meta} of the live block lease holding this red, or None."""
-    st = store or open_store()
+    st = store
     d = it["data"]
     for row in st.list("block/"):
         if lease_is_live(row, st.clock()):
@@ -107,10 +107,10 @@ def red_block_of(it: dict[str, Any], store: Any = None) -> Optional[dict[str, An
 LEASE_LIST_RECENT = 3600         # `lease list` shows the live leases and those free for less than this (--all: every one)
 
 
-def cmd_lease(a):
+def cmd_lease(a, st):
     """`agentctl lease list [prefix] [--all]` (debugging; the leases' holders, epochs, expiry, notes): the live ones and
     those free for under an hour; --all every one still in the table."""
-    st, now_ = open_store(), time.time()
+    now_ = time.time()
     rows = st.list(a.prefix or "")
     hidden = 0 if a.all else sum(1 for r in rows if not (r["holder"] and r["expires_at"] > now_)
                                  and now_ - r["expires_at"] > LEASE_LIST_RECENT)

@@ -14,17 +14,17 @@ from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_dir, inbox_kind
 from agentctl.notifier import notify, notify_cause, notify_fix
 from agentctl.statemachines import ENTRY_STATE, StaleVersion, TerminalState, machine_state, projected_transition
-from agentctl.store import LEASE_ARCHIVE_AFTER, open_store
+from agentctl.store import LEASE_ARCHIVE_AFTER
 from agentctl.queueslots import change_item_fields
 from agentctl.redask import ASK_REMIND_MAX, ask_interval
 from agentctl.alerts import alert_write
 from agentctl.alertroute import event_audience
 
 
-def project_changes(d, store=None):
+def project_changes(d, store):
     """Each queue entry's change item: created in its state, moved (a transition, with its event) when the entry's
     status moved. Returns the items."""
-    st = store or open_store()
+    st = store
     out = []
     every = {x["id"]: x for x in waiting_entries(d, open_only=False)}
     for e in every.values():
@@ -54,9 +54,9 @@ def project_changes(d, store=None):
 # id carries the event's seq, so a repeated pass writes nothing twice. The NOTIFIER sends a macOS notification for
 # an item's live severity=escalate event (notify_escalations: one per item, notified_at once delivered). Both run in the processor's loop; `agentctl inbox`, `inbox wait`,
 # the orchestrator's routing and the status line read the inbox as before.
-def project_events(store=None):
+def project_events(store):
     """Write the inbox entries of the events since the projector's cursor; returns how many."""
-    st = store or open_store()
+    st = store
     cur = int(st.meta_get("projector_seq", 0) or 0)
     n = 0
     for ev in st.events(after=cur):
@@ -119,10 +119,10 @@ def escalation_stale(it, ev):
     return float(it.get("entered_at") or 0) > float(ev["at"])
 
 
-def notify_failure(store=None):
+def notify_failure(store):
     """{at, cause} of the notifier's last failed delivery (both channels failed), or None: invariant WN's reading."""
     try:
-        return json.loads((store or open_store()).meta_get("notify_failed") or "null") or None
+        return json.loads(store.meta_get("notify_failed") or "null") or None
     except ValueError:
         return None
 
@@ -131,7 +131,7 @@ def _escalation_line(ev):
     return str((ev.get("refs") or {}).get("verdict") or ev.get("text") or ev["kind"])
 
 
-def notify_escalations(store=None):
+def notify_escalations(store):
     """ONE LIVE NOTIFICATION PER ITEM (2026-11-03, W6: 152 escalations "not notified" -- five reds re-escalating RED
     UNCLAIMED every 10 min for 5 h, each told on its own, 10-20 s apiece, the notifier 3 h behind and telling the owner
     "no taker" about reds held for an hour). Each pass, over W6's window (not only past the cursor: an event the cursor
@@ -145,7 +145,7 @@ def notify_escalations(store=None):
         and records notify_failed {at, cause, fix}: invariant WN raises ONE condition naming the failed channel's fix;
         W6 defers to it.
     Returns how many notifications were shown."""
-    st = store or open_store()
+    st = store
     cur = int(st.meta_get("notifier_seq", 0) or 0)
     evs = st.events(after=max(0, cur - NOTIFY_LOOKBACK), limit=5000)
     t = st.clock()

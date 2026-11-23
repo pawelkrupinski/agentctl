@@ -95,7 +95,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequenc
             err("pinned recording: still reading from an earlier cycle")
 
     def explorer():
-        if not run_bounded("drift explorer", lambda: [err(x) for x in explorer_tick(o_r, repo)],
+        if not run_bounded("drift explorer", lambda: [err(x) for x in explorer_tick(o_r, repo, store)],
                            env_num("AGENTCTL_STEP_BOUND", 120)):
             err("drift explorer: still running from an earlier cycle")
 
@@ -124,9 +124,9 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequenc
             ("pins", duty(pins)), ("drift explorer", duty(explorer)),
             ("revert notes", duty(lambda: [err(x) for x in revert_notes(store)])),
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),
-            ("network watch", network_watch), ("tunnel probe", tunnel_watch),
+            ("network watch", lambda: network_watch(store)), ("tunnel probe", lambda: tunnel_watch(store)),
             ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store), 1)),
-            ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep()]),
+            ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep(store)]),
             ("root checkout", lambda: [err(x) for x in root_checkout_ff(repo)]),
             ("recovery", lambda: maybe_recovery_tick(store)))
 

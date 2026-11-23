@@ -8,7 +8,6 @@ import time
 from agentctl.procrunner import process_runner
 from agentctl.core import err, git, host_role, remote
 from agentctl.timefmt import ts
-from agentctl.store import open_store
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import save_entry, wlog
 from agentctl.land import run_watched, tool_env
@@ -21,7 +20,7 @@ from agentctl.checkslot import check_slot
 from agentctl.remote import remote_check, remote_checks_supported
 
 
-def assemble(repo, d, wt, entries, base, alone=False, autoresolve=False):
+def assemble(st, repo, d, wt, entries, base, alone=False, autoresolve=False):
     """The batch's tip in check tree wt = base + each entry's commits, in order; a conflicting entry is rejected alone
     (alone: a backlog batch's queued change, left out and checked alone -- its own check says whether it applies),
     one already on main LANDED, a duplicate superseded. autoresolve (a backlog batch: its check is the full landing
@@ -41,18 +40,18 @@ def assemble(repo, d, wt, entries, base, alone=False, autoresolve=False):
             continue
         if how == "conflict":
             # policy: no-longer-applies
-            queue_verdict(d, e, "rejected", f"NOT LANDED: main moved while it waited and the change no longer applies "
+            queue_verdict(st, d, e, "rejected", f"NOT LANDED: main moved while it waited and the change no longer applies "
                                             f"({conflict_cause(wt, e.get('base'), base, x).lstrip('; ')}): rebase onto "
                                             f"{remote()}/main and land again (it keeps its place in the queue)",
                           conflict_files=conflict_paths(x))
             continue
         if how == "landed":  # all of it reached main meanwhile: LANDED, and nothing of it is pushed again
-            already_landed(d, e, x)
+            already_landed(st, d, e, x)
             continue
         if how == "duplicate":  # an earlier entry carries the very same change: that one lands it
             owner = next((k for k in kept if x and git(wt, "merge-base", "--is-ancestor", x, k["tip"],
                                                         check=False).returncode == 0), None)
-            supersede(d, e, owner["id"] if owner else "an earlier entry",
+            supersede(st, d, e, owner["id"] if owner else "an earlier entry",
                       "the same change already waits" + (f" as {owner['id']}" if owner else ""))
             continue
         e["tip"] = git(wt, "rev-parse", "HEAD").strip()  # its tip IN THE BATCH: bisect and the push read it from disk
@@ -162,13 +161,13 @@ def bisect(repo, d, batch, base, bwt, clock, depth="fast", runs=None, failed_out
     return lo, out_hi
 
 
-def unread_note(d, reds, entries):
+def unread_note(d, reds, entries, st):
     """The gate unread while changes wait: once per unread spell, an UNKNOWN inbox entry (they would wait unseen)."""
-    if GATE_UNREAD not in reds or condition_item_of(open_store(), "gate-unread-waiting"):
+    if GATE_UNREAD not in reds or condition_item_of(st, "gate-unread-waiting"):
         return
     wlog(d, f"the gate is unread ({gate_unread_why[0]}): taken as red")
     open_condition("UNKNOWN", f"UNKNOWN: the waiting processor cannot read the gate ({gate_unread_why[0]}); {len(entries)} "
                               "change(s) wait, taken as red. Hand it the token: `~/bin/agentctl land status` from a "
                               "session with the vault unlocked",
                    run_probe("gate_read", {"since": time.time()}), [], key="gate-unread-waiting", command="waiting",
-                   exit_code=2, cwd=entries[0].get("worktree") if entries else None)
+                   exit_code=2, cwd=entries[0].get("worktree") if entries else None, store=st)

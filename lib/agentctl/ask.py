@@ -5,7 +5,6 @@ import re
 import time
 from agentctl.core import slug
 from agentctl.timefmt import hhmmz
-from agentctl.store import open_store
 from agentctl.redrecord import RED_TERMINAL, red_closed_of, red_what
 from agentctl.leases import red_block_of
 from agentctl.owned import default_repo
@@ -223,8 +222,8 @@ def red_decide(store, o_r, target, answer):
     return rc, out
 
 
-def cmd_decide(a):
+def cmd_decide(a, store):
     o_r = slug(a.repo) if getattr(a, "repo", None) else default_repo()
-    rc, lines = red_decide(open_store(), o_r, a.red, a.answer)
+    rc, lines = red_decide(store, o_r, a.red, a.answer)
     print("\n".join(lines))
     return rc

@@ -71,7 +71,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         A.check_entry(self.r.path, eg, *on_clock(self.clock))
         self.assertEqual(self.entry(eg)["status"], "checked")
         e = self.entry(el)
-        A.set_change(self.d, e, "queued", event={"text": "verify"}, verify=True, full_base=e["base"],
+        A.set_change(A.CurrentStore(), self.d, e, "queued", event={"text": "verify"}, verify=True, full_base=e["base"],
                      full_tip=e["head"], retry_after=0)
         k = self.entry(ek)
         k["seq"] = self.entry(el)["seq"] - 1  # its kept place: older than its parent
@@ -112,7 +112,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         o = self.entry(eo)
         o["seq"] = self.entry(ek)["seq"] - 1
         A.save_entry(self.d, o)
-        A.set_change(self.d, o, "checking")
+        A.set_change(A.CurrentStore(), self.d, o, "checking")
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.hold_of(el).get("blocker"), eo, "landing waits for the older change in flight")
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))

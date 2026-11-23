@@ -233,11 +233,11 @@ class TokenNoteRecursionTest(unittest.TestCase):
 
         def needs_token(*a, **k):
             calls.append(1)
-            A.token_unavailable_note("movies", "again")
+            A.token_unavailable_note("movies", "again", A.CurrentStore())
             raise SystemExit("no token")
         A.open_condition = needs_token
         try:
-            A.token_unavailable_note("movies", "none")
+            A.token_unavailable_note("movies", "none", A.CurrentStore())
         finally:
             A.open_condition = saved
         self.assertEqual(calls, [1])

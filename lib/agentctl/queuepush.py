@@ -20,7 +20,7 @@ from agentctl.waiting import supersede
 from agentctl.redseen import gate_reds
 from agentctl.holdgraph import OPEN_PARENT_STATES, push_due, stack_map, waiting_on_changes
 from agentctl.queuebatch import (
-    _behind_said, backlog_batchable, break_hold_cycles, change_hold_stuck, hold_for_overlap, kind_of, main_conflict, note_hold,
+    _behind_said, backlog_batchable, batch_round, break_hold_cycles, change_hold_stuck, hold_for_overlap, kind_of, main_conflict, note_hold,
     overlap_hold, restart_hold, spawn_executor, stuck_recovery)
 from agentctl.queuediff import push_change
 from agentctl.queueclose import regen_hold_overdue
@@ -76,7 +76,7 @@ def tick_changes(repo, d, clock, st):
     for e in sorted(todo, key=lambda e: e["seq"]):  # entries queued before re-queueing replaced: the newest one runs
         for k, older in list(newest.items()):
             if same_change_source(older, e["worktree"], e.get("branch") or ""):
-                supersede(d, older, e["id"], f"{e['worktree']} queued again; only the newest entry runs")
+                supersede(st, d, older, e["id"], f"{e['worktree']} queued again; only the newest entry runs")
                 del newest[k]
         newest[e["id"]] = e
     runs = [e for e in todo if e["id"] in newest]
@@ -115,7 +115,7 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
         it = st.put_item("change", e["id"], ENTRY_STATE.get(e["status"], "queued"), change_item_fields(e))
         state = it["state"]
         if state == "pushing":  # a tick that died mid-push: verified next, never pushed twice blindly
-            set_change(d, e, "checked", event={"text": f"{e['id']}: its push was interrupted: verified, then tried again"})
+            set_change(st, d, e, "checked", event={"text": f"{e['id']}: its push was interrupted: verified, then tried again"})
             state = "checked"
         kind = kinds.get(e["id"]) or classify_change(e, facts, t)
         record_change_kind(st, e, kind)  # on its item, now that it surely has one (a no-op when unchanged)
@@ -128,7 +128,7 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
             continue
         alive = checker_alive(e["id"])
         if state == "checking" and not alive and t > it["deadline"]:
-            requeue_infra(d, e, "its check passed its deadline with no live checker", t)
+            requeue_infra(st, d, e, "its check passed its deadline with no live checker", t)
             did.append(f"{e['id']}: re-queued (checking past its deadline)")
             continue
         if state == "queued":  # past its deadline: said, re-deadlined -- an escalation only when its hold is stuck
@@ -137,7 +137,7 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
             gone = main_conflict(repo, e)
             if gone:  # it no longer applies on main itself: said now, never after a wait for a tree or an older change
                 # policy: no-longer-applies
-                queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
+                queue_verdict(st, d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
                               f"{gone[0][:10]} (main moved since QUEUED{conflict_cause(repo, e.get('base'), gone[0], gone[1])}"
                               f"): rebase onto {remote()}/main and land again (it keeps its place in the queue)",
                               conflict_files=conflict_paths(gone[1]), decided_on=gone[0])
@@ -349,11 +349,9 @@ def backlog_candidates(repo, d, reds, st, t=None, facts=None):
     """The queued changes a backlog batch takes now, in queue order, at most BACKLOG_BATCH_MAX; [] while the gate is
     red, a change verifies its combined tree, or fewer than BACKLOG_BATCH_MIN may go. A fix of an open red (its kind
     under facts: queue_facts, read from the store when None) is checked alone."""
-    t = t if t is not None else time.time()
     if reds:
         return []
-    facts = queue_facts(reds, st) if facts is None else facts
-    entries = queued_entries(d)
+    t, facts, entries = batch_round(d, reds, st, t, facts)
     # THE OLDEST VERIFICATION PUSHES FIRST (queuepush.py) holds the batch too (review 2026-11-18): formed meanwhile, the
     # batch held the verified change's push for its whole check (THE BATCH GOES FIRST), then its push moved main under
     # it and it verified again -- behind the next backlog batch, and the next. No backlog batch while one verifies, or
@@ -415,15 +413,13 @@ def push_batchable(repo, d, e, t, main, facts=None):
     return not checker_alive(e["id"])
 
 
-def push_candidates(repo, d, reds, t=None, facts=None):
+def push_candidates(repo, d, reds, st, t=None, facts=None):
     """The changes a push batch takes now, oldest first, at most BACKLOG_BATCH_MAX; [] while the gate is red, while a
     change's own verify round runs (it pushes first), or when fewer than PUSH_BATCH_MIN may go. A fix of an open red
     (its kind under facts: queue_facts, read from the store when None) pushes alone."""
-    t = t if t is not None else time.time()
     if reds:
         return []
-    facts = queue_facts(reds) if facts is None else facts
-    entries = queued_entries(d)
+    t, facts, entries = batch_round(d, reds, st, t, facts)
     if any(e.get("status") == "checking" and e.get("verify") and not e.get("backlog_batch") for e in entries):
         return []
     # NO PUSH BATCH UNDER A RED FIX IN FLIGHT (2026-11-19 10:37:14Z: push batch #48 formed 13 s before 08010c, a red
@@ -443,7 +439,7 @@ def push_candidates(repo, d, reds, t=None, facts=None):
 def push_held(repo, d, reds, st, t=None, facts=None):
     """The ids of the changes the change tick holds back for the next push batch: with no batch open, the candidates
     one would take now."""
-    return set() if current_batch(st, d) else {c["id"] for c in push_candidates(repo, d, reds, t, facts)}
+    return set() if current_batch(st, d) else {c["id"] for c in push_candidates(repo, d, reds, st, t, facts)}
 
 
 def check_tree_slot_free(repo, d):

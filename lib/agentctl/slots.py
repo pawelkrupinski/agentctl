@@ -282,7 +282,7 @@ def land_loop(repo, main_ref, sh, log_path, a, clock, store):
         reds = gate_reds(repo) if waiting_supported(repo) else set()
         if reds and must_wait(repo, waiting_commits(repo, f"{remote()}/main", head), reds):
             # checked already (before the lock, without the gate): only the cherry-pick onto `waiting` here
-            return join(repo, log_path, a, head)
+            return join(store, repo, log_path, a, head)
         hook = precheck_hook(repo)
         prechecked = getattr(a, "prechecked", None)
         if hook and prechecked and prechecked != (head, git(repo, "rev-parse", main_ref).strip()):
@@ -336,7 +336,7 @@ def land_loop(repo, main_ref, sh, log_path, a, clock, store):
     return 1
 
 
-def join(repo, log_path, a, head):
+def join(st, repo, log_path, a, head):
     """The change (its own checks passed, synced onto main at head) waits for main to turn green: a `waiting` entry
     (design §14.1: no branch, no worktree -- the batch is computed at green, in a check tree). Prints `WAITING <head>
     (entry <id>, n waiting)`."""
@@ -347,7 +347,7 @@ def join(repo, log_path, a, head):
         fcntl.flock(seq_lock, fcntl.LOCK_EX)
         seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
         eid = f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}"
-        supersede_older_waiting(d, repo, branch, eid)
+        supersede_older_waiting(st, d, repo, branch, eid)
         e = {"id": eid, "seq": seq, "worktree": repo, "branch": branch, "head": head, "commits": commits,
              "fixes": sorted(fixes_of(repo, commits)), "status": "waiting", "created": ts(), "tip": head,
              "follow": bool(getattr(a, "follow", False))}

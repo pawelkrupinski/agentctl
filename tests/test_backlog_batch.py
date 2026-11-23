@@ -202,7 +202,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         ei2 = self.queue("i2", "identity/src/main/I2.scala", "--no-batch")  # a lone change younger than the backlog
         self.assertEqual(A.tick_batch(self.r.path, self.d, *on_clock(A.Clock())), [], "no tree free: no batch yet")
         held.pop().release()  # i1's check ends, its tree free
-        A.set_change(self.d, self.entry(ei1), "cancelled", event={"text": "done"})
+        A.set_change(A.CurrentStore(), self.d, self.entry(ei1), "cancelled", event={"text": "done"})
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertNotIn(ei2, self.started, "the younger lone change waits for the older backlog's batch")
         saved = A.spawn_batch_executor
@@ -226,7 +226,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         other, _ = self.agent("m", "docs/notes.md", "n\n", msg="main moves")
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
         e = self.entry(ev)  # its push found main moved: a verify round of its own (THE RULE; this hook has none)
-        A.set_change(self.d, e, "queued", event={"text": "verify"}, verify=True, full_base=e["checked_base"],
+        A.set_change(A.CurrentStore(), self.d, e, "queued", event={"text": "verify"}, verify=True, full_base=e["checked_base"],
                      full_tip=e["tip"], retry_after=0)
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "worker/src/main/B.scala")
@@ -304,7 +304,7 @@ class PushBatchTest(test_queue.QueueTest):
                 + A.tick_batch(self.r.path, self.d, *on_clock(A.Clock()))
             if all(self.entry(e)["status"] in A.ENTRY_FINAL for e in eids):
                 break
-        A.project_events()
+        A.project_events(A.CurrentStore())
         return out
 
     def test_three_checked_changes_on_a_moved_main_are_verified_once_and_pushed_once(self):
@@ -474,13 +474,13 @@ class PushBatchTest(test_queue.QueueTest):
         eb = self.checked("b", "worker/src/main/B.scala")
         ef = self.checked("fix", "infra/bin/backtest-alerts", msg="backtest-alerts: the fix\n\nFixes-Red: 6")
         self.main_moves()
-        self.assertEqual(A.push_candidates(self.r.path, self.d, set()), [], "the red fix goes first")
+        self.assertEqual(A.push_candidates(self.r.path, self.d, set(), A.CurrentStore()), [], "the red fix goes first")
         e = self.entry(ef)
         e["status"] = "landed"
         A.save_entry(self.d, e)
-        self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set(), facts=A.queue_facts(set()))],
+        self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set(), A.CurrentStore(), facts=A.queue_facts(set()))],
                          [ea, eb])
-        self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set())], [ea, eb],
+        self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set(), A.CurrentStore())], [ea, eb],
                          "the open reds read from the store when not given")
 
     def test_a_checked_change_held_behind_a_batch_says_so_and_its_deadline_laps_quietly(self):
@@ -696,7 +696,7 @@ class OverlapTest(BacklogBatchTest):
         ea = self.edit("a", "web/src/main/Ten.scala", 0, "a's line 1", alone=True)
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.started, [ea])
-        A.set_change(self.d, self.entry(ea), "checking")  # its check under way
+        A.set_change(A.CurrentStore(), self.d, self.entry(ea), "checking")  # its check under way
         eb = self.edit("b", "web/src/main/Ten.scala", 9, "b's line 10")
         e = self.entry(eb)
         e["seq"] = self.entry(ea)["seq"] - 1  # its kept place: older by seq than the change checking now
@@ -712,7 +712,7 @@ class OverlapTest(BacklogBatchTest):
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         st = A.open_store()
         self.assertEqual(st.item("change", ey)["data"]["hold"]["blocker"], eo)
-        A.cancel_submitted(eo, repo=self.r.path)
+        A.cancel_submitted(A.CurrentStore(), eo, repo=self.r.path)
         self.assertIsNone(st.item("change", ey)["data"].get("hold"),
                           "no hold names a cancelled change: `land status` never shows a phantom blocker")
 

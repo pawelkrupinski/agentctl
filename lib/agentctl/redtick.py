@@ -20,7 +20,6 @@ from agentctl.ciwhy import (
 from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
 from agentctl.dispatchblock import _blocker_cache, dispatch_blocker, in_fixer
 from agentctl.statemachines import StaleVersion
-from agentctl.store import open_store
 from agentctl.redrecord import RED_TERMINAL, red_what
 from agentctl.lander import lander_note_landed
 from agentctl.redfixread import red_main_current
@@ -173,11 +172,11 @@ def red_tick_repo(repo, store, snap=None, dispatch=False):
     return acts
 
 
-def red_open_flows(o_r, store=None):
+def red_open_flows(o_r, store):
     """The workflows of o_r's open reds that are not its gate's: their newest decided run on main must be read too, or
     such a red can never clear (core Dependabot Updates #154, 2026-11-02: green #155/#156 came, nothing read them)."""
     try:
-        its = (store or open_store()).items("red")
+        its = store.items("red")
     except (Exception, SystemExit):
         return []
     gate = {n for n, _f in red_gate_flows(o_r)}
@@ -193,7 +192,7 @@ def newest_decided_main(o_r, workflow):
                  and r.get("conclusion") in ("success", "failure", "timed_out")), None)
 
 
-def red_gate_snap(o_r, store=None):
+def red_gate_snap(o_r, store):
     """Another watched repo's snapshot: its gate workflows only (red-repos.json), read once. The shared run lists the
     primary's snapshot fills (_gate_lists, _outside_lists) are put back as they were: workflow names repeat across
     repos (movies has a `Stage NixOS closures` too)."""
@@ -239,7 +238,7 @@ RED_OTHERS_EVERY = 60        # seconds between the other watched repos' red tick
 _last_others_tick = [0.0]
 
 
-def red_tick_others(store=None, now_=None, dispatch=False, force=True):
+def red_tick_others(store, now_=None, dispatch=False, force=True):
     """The red tick of every watched repo but the primary (red-repos.json): its gate read, its reds observed and
     stepped, each repo inside its own try (one unreadable repo never stops the others or the primary). Its clone is
     this machine's when there is one (Fixes-Red trailers, authors); without one (ci-runner) its reds open and clear
@@ -263,7 +262,7 @@ def red_tick_others(store=None, now_=None, dispatch=False, force=True):
             clone = red_repo_clone(o_r)
             with _red_lock:
                 acts += [f"{red_repo_short(o_r)}: {x}" for x in
-                         red_tick(store or open_store(), o_r, clone, snap, now_=now_, dispatch=dispatch)]
+                         red_tick(store, o_r, clone, snap, now_=now_, dispatch=dispatch)]
             _others_said.pop(o_r, None)
         except (Exception, SystemExit) as e:
             red_others_skipped(o_r, str(e).replace('agentctl: ', '')[:200])
@@ -293,7 +292,7 @@ def red_others_skipped(o_r, why, now_=None):
     return line
 
 
-def red_no_read_access(repos, store=None):
+def red_no_read_access(repos, store):
     """ONE condition while ci-runner cannot read the other watched repos: cleared by the red_read probe (the reader App
     configured on the host, and their runs read)."""
     return open_condition("UNKNOWN", f"NO READ ACCESS: {', '.join(repos)}: the reconciler cannot read their runs -- "
@@ -326,7 +325,7 @@ def maybe_red_tick(repo, store):
         except (Exception, SystemExit) as e:
             err(f"red tick: skipped ({str(e).replace('agentctl: ', '')[:200]})")
             try:
-                gate_unread_spell(slug(repo), str(e)[:200])
+                gate_unread_spell(slug(repo), str(e)[:200], store)
             except (Exception, SystemExit):
                 pass
         red_tick_others(store, force=False)  # the other watched repos (red-repos.json); never fatal, never the primary's gate spell
@@ -350,7 +349,7 @@ def cmd_red(a, clock, st):
         return cmd_red_probe(a, clock)
     o_r = slug(a.repo) if getattr(a, "repo", None) and a.rcmd not in ("fixer", "owner") else default_repo()
     if a.rcmd == "block":
-        return red_block(o_r, a)
+        return red_block(st, o_r, a)
     if a.rcmd == "unblock":
         rc, lines = red_unblock(st, o_r, a.run, a.why)
         print("\n".join(lines))
@@ -462,7 +461,7 @@ def maybe_publish_gate(repo, store):
             err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")
             return
         try:
-            for text in settle_branch_reds(o_r, snap):
+            for text in settle_branch_reds(o_r, snap, store):
                 err(f"branch reds: {text}")
         except (Exception, SystemExit) as e:
             err(f"branch reds: not settled ({str(e).replace('agentctl: ', '')[:200]})")

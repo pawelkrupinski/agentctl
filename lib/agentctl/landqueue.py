@@ -161,7 +161,7 @@ def land_cancel_command(a: argparse.Namespace, repo: str, d: str, st: Any) -> in
         return cancel_through_store(a.entry, st)
     queued = [e for e in queued_entries(d) if a.entry in e["id"]]
     if len(queued) == 1:
-        return cancel_queued(d, queued[0])
+        return cancel_queued(st, d, queued[0])
     return cancel_waiting(a.entry, repo, d, st)
 
 
@@ -175,11 +175,11 @@ def cancel_through_store(entry: str, st: Any) -> int:
     return 0
 
 
-def cancel_queued(d: str, e: dict[str, Any]) -> int:
+def cancel_queued(st: Any, d: str, e: dict[str, Any]) -> int:
     """A queued entry cancelled, with its remote item and its checker (its CI run is cancelled with it)."""
-    set_change(d, e, "cancelled", event={"text": f"{e['id']}: cancelled"},
+    set_change(st, d, e, "cancelled", event={"text": f"{e['id']}: cancelled"},
                why="cancelled by `agentctl land cancel`", decided=ts())
-    cancel_entry_remote(e, "its queue entry was cancelled")
+    cancel_entry_remote(st, e, "its queue entry was cancelled")
     h = read_record(entry_owned(e["id"]).record) or {}
     if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid"):
         os.kill(int(h["pid"]), signal.SIGTERM)  # its checker: its CI run is cancelled with it
@@ -193,14 +193,14 @@ def cancel_waiting(entry: str, repo: str, d: str, st: Any) -> int:
     if not hits:  # an item no entry carries (stranded): the item alone
         ids = [r["id"] for r in change_rows(st) if entry in r["id"]]
         if len(ids) == 1:
-            cancel_submitted(ids[0], repo=repo)
+            cancel_submitted(st, ids[0], repo=repo)
             print(f"cancelled {ids[0]}")
             return 0
     if len(hits) != 1:
         print(f"no single waiting change matches {entry!r}: `agentctl land status`")
         return 1
     e = hits[0]
-    set_change(d, e, "cancelled", event={"text": f"{e['id']}: cancelled"}, why="cancelled by `agentctl land cancel`",
+    set_change(st, d, e, "cancelled", event={"text": f"{e['id']}: cancelled"}, why="cancelled by `agentctl land cancel`",
                decided=ts())  # the next batch is assembled without it
     print(f"cancelled {e['id']}")
     return 0

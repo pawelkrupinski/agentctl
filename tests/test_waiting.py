@@ -87,7 +87,7 @@ class WaitingTest(Base):
         return len(open(self.pushes).read().split()) if os.path.exists(self.pushes) else 0
 
     def inbox(self):
-        A.project_events()  # as the processor's loop does each cycle (step 7: the events are the inbox's source)
+        A.project_events(A.CurrentStore())  # as the processor's loop does each cycle (step 7: the events are the inbox's source)
         return A.inbox_entries()
 
     def entries(self):
@@ -108,7 +108,7 @@ class WaitingTest(Base):
                     break
         finally:
             A.spawn_batch_executor = saved
-        A.project_events()
+        A.project_events(A.CurrentStore())
         return out
 
     def batch(self):
@@ -351,9 +351,9 @@ class WaitingTest(Base):
         try:
             for _ in range(2):
                 A.tick_batch(self.r.path, d, *on_clock(A.Clock()))
-            self.assertEqual([c for c in A.open_conditions() if c["key"].startswith("waiting-green")], [])
+            self.assertEqual([c for c in A.open_conditions(A.CurrentStore()) if c["key"].startswith("waiting-green")], [])
             A.tick_batch(self.r.path, d, *on_clock(A.Clock()))
-            conds = [c for c in A.open_conditions() if c["key"].startswith("waiting-green")]
+            conds = [c for c in A.open_conditions(A.CurrentStore()) if c["key"].startswith("waiting-green")]
             self.assertEqual(len(conds), 1)
             self.assertIn("waiting while the gate is green for 3 ticks", conds[0]["text"])
             self.assertIn("waiting for a check tree", conds[0]["text"])
@@ -363,8 +363,8 @@ class WaitingTest(Base):
         self.drive()
         self.assertEqual(self.entries()["1"]["status"], "landed")
         self.assertTrue(A.run_probe("batch_progress", {"d": d}).ok)
-        A.recovery_tick(force=True)
-        self.assertEqual([c for c in A.open_conditions() if c["key"].startswith("waiting-green")], [])
+        A.recovery_tick(A.CurrentStore(), force=True)
+        self.assertEqual([c for c in A.open_conditions(A.CurrentStore()) if c["key"].startswith("waiting-green")], [])
 
     def test_waiting_while_red_or_while_the_batch_checks_is_no_stall(self):
         os.environ["AGENTCTL_WAITING_GREEN_TICKS"] = "2"
@@ -383,7 +383,7 @@ class WaitingTest(Base):
         finally:
             A.spawn_batch_executor = saved
         self.assertEqual(self.batch()["state"], "checking")
-        self.assertEqual([c for c in A.open_conditions() if c["key"].startswith("waiting-green")], [])
+        self.assertEqual([c for c in A.open_conditions(A.CurrentStore()) if c["key"].startswith("waiting-green")], [])
 
     def test_status_on_the_laptop_shows_the_batch_ci_runner_keys_by_its_own_waiting_dir(self):
         """2026-10-30: batch var_lib_agentctl_movies_.git#4 checked for an hour; the laptop's `land status` looked
@@ -392,7 +392,7 @@ class WaitingTest(Base):
         self.land(wa)
         d, _c, _w = A.waiting_state(self.r.path)
         eid = A.waiting_entries(d)[0]["id"]
-        A.project_changes(d)
+        A.project_changes(d, A.CurrentStore())
         st = A.open_store()
         it = st.put_item("batch", "var_lib_agentctl_movies_.git#4", "checking", {"retries": 0})
         st.update_item("batch", it["id"], it["version"], {"members": [eid], "tip": "340057e4d3c7", "base": "24e95ec1a217"})
@@ -446,7 +446,7 @@ class WaitingTest(Base):
         self.assertEqual(h["data"]["why"], "infra deploy")
         self.assertAlmostEqual(h["deadline"] - time.time(), 30 * 60, delta=60)
         self.assertEqual(self.drive(), ["held"])
-        A.write_snapshot(d)
+        A.write_snapshot(d, A.CurrentStore())
         line = A.status_line()
         self.assertIn("LAND HELD until", line)
         self.assertIn("infra deploy", line)
@@ -460,7 +460,7 @@ class WaitingTest(Base):
         self.assertEqual(A.open_store().items("hold", ["held"]), [])
         self.assertTrue([e for e in A.open_store().events() if e["kind"] == "hold.expired"])
         self.assertNotEqual(self.drive(), ["held"])
-        A.write_snapshot(d)
+        A.write_snapshot(d, A.CurrentStore())
         self.assertNotIn("HELD", A.status_line())
 
     def test_an_unread_gate_holds_the_batch_and_says_so_once(self):
@@ -638,7 +638,7 @@ class WaitingTest(Base):
 
             def decide(_s, e=e, verdict=verdict, status=status, fields=fields):  # the queue's host decides it ...
                 ticks.append(1)
-                A.queue_verdict(d, dict(e), status, verdict, code=0 if status == "landed" else 1, **fields)
+                A.queue_verdict(A.CurrentStore(), d, dict(e), status, verdict, code=0 if status == "landed" else 1, **fields)
                 os.unlink(os.path.join(d, "entries", f"{e['id']}.json"))  # ... its entry on ITS disk, not this one
             self.clock.on_sleep = decide
             buf = io.StringIO()
@@ -661,7 +661,7 @@ class WaitingTest(Base):
         d = A.waiting_state(self.r.path)[0]
         e = {"id": "e-old", "seq": 1, "status": "waiting", "worktree": self.r.path}
         st.put_item("change", "e-old", "waiting", A.change_item_fields(e))
-        self.clock.on_sleep = lambda _s: A.supersede(d, dict(e), "e-new", "a newer land of the same worktree")
+        self.clock.on_sleep = lambda _s: A.supersede(A.CurrentStore(), d, dict(e), "e-new", "a newer land of the same worktree")
         A.cancel_entry_remote, saved = (lambda *a, **k: None), A.cancel_entry_remote
         try:
             buf = io.StringIO()
@@ -700,7 +700,7 @@ class WaitingTest(Base):
         def tick(_s):
             polls.append(1)
             if len(polls) == 4:
-                A.queue_verdict(d, dict(e), "landed", "LANDED abc123 (batch: 1 change(s) in one push)", code=0,
+                A.queue_verdict(A.CurrentStore(), d, dict(e), "landed", "LANDED abc123 (batch: 1 change(s) in one push)", code=0,
                                 landed_sha="abc123", pushed_at=1.0)
         self.clock.on_sleep = tick
         A.open_store = Flaky

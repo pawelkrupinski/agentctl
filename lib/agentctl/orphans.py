@@ -324,17 +324,17 @@ def orphan_covered_by(wt, items):
     return None
 
 
-def orphan_escalate(repo, wt, name, commits, key, rec, verdict):
+def orphan_escalate(store, repo, wt, name, commits, key, rec, verdict):
     text = (f"UNLANDED ORPHAN: {wt.replace(HOME, '~')}: {len(commits)} commit(s) not on {remote()}/main, its author "
             f"gone, still not landed after a {rec['actions'][-1]['what']} ({verdict or 'never landed'}) -- land it, "
             "hand it to an agent, park it (`agentctl park <worktree> --reason ...`), or drop it")
     c = open_condition("UNLANDED_ORPHAN", text, run_probe("orphan_landed", {"worktree": wt, "key": key, "repo": repo}),
-                       [], key=re.sub(r"[^\w.-]+", "_", f"orphan-{name}"), command="maintain", cwd=wt)
+                       [], key=re.sub(r"[^\w.-]+", "_", f"orphan-{name}"), command="maintain", cwd=wt, store=store)
     rec["escalated"] = ts() if c else None
     return [f"orphan {name}: escalated UNLANDED ORPHAN" if c else f"orphan {name}: cleared"]
 
 
-def orphan_duty(repo=None, dry_run=False, now_=None):
+def orphan_duty(store, repo=None, dry_run=False, now_=None):
     """One maintain pass over the orphans: one action each, then UNLANDED ORPHAN. Returns what it did."""
     repo = repo or movies_repo_path()
     if not os.path.isdir(repo):
@@ -374,19 +374,19 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
         if was and rec["actions"]:  # escalated before its carrier came; the carrier closed (rejected, cancelled)
             # without landing it: the orphan reopens, to a person. Never acted on yet: its one submit, as before.
             rec["actions"].append({"at": ts(), "what": f"none (the change carrying it, {was}, closed unlanded)"})
-            did += orphan_escalate(repo, wt, name, commits, key, rec, verdict or f"{was} closed unlanded")
+            did += orphan_escalate(store, repo, wt, name, commits, key, rec, verdict or f"{was} closed unlanded")
             st[key] = rec
             continue
         if not rec["actions"]:
             last = items.get("last")
             if last and last["state"] == "cancelled":  # (b) somebody cancelled it: only a person submits it again
                 rec["actions"].append({"at": ts(), "what": f"none (its last change {last['id']} was cancelled)"})
-                did += orphan_escalate(repo, wt, name, commits, key, rec, verdict or f"cancelled ({last['id']})")
+                did += orphan_escalate(store, repo, wt, name, commits, key, rec, verdict or f"cancelled ({last['id']})")
                 st[key] = rec
                 continue
             if not land_intent(wt, items, lands):  # LAND INTENT: its author never asked to land it -- a person decides
                 rec["actions"].append({"at": ts(), "what": "none (it never ran `agentctl land`)"})
-                did += orphan_escalate(repo, wt, name, commits, key, rec,
+                did += orphan_escalate(store, repo, wt, name, commits, key, rec,
                                        "its author never ran `agentctl land` there: nothing submits it unasked")
                 st[key] = rec
                 continue
@@ -440,7 +440,7 @@ def orphan_duty(repo=None, dry_run=False, now_=None):
                     if rw in fixers and rec["actions"][-1]["what"] != "fixer":
                         rec["actions"].append({"at": ts(), "what": "fixer (ended unlanded)",
                                                "msg": fixers[rw].get("msg")})
-                    did += orphan_escalate(repo, wt, name, commits, key, rec, real)
+                    did += orphan_escalate(store, repo, wt, name, commits, key, rec, real)
         st[key] = rec
     if not dry_run:
         write_json(path, st)

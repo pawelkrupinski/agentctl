@@ -121,7 +121,7 @@ class LeaseHistoryTest(unittest.TestCase):
         for all_, want in ((False, ["t/live", "t/recent"]), (True, ["t/live", "t/old", "t/recent"])):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                A.cmd_lease(types.SimpleNamespace(prefix="t/", all=all_))
+                A.cmd_lease(types.SimpleNamespace(prefix="t/", all=all_), A.CurrentStore())
             self.assertEqual(sorted(l.split()[0] for l in out.getvalue().splitlines() if l.startswith("t/")), want)
             self.assertEqual("not shown: --all" in out.getvalue(), not all_)
         self.assertTrue(a)

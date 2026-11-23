@@ -21,7 +21,6 @@ from agentctl.ciwhy import _gate_lists, _outside_lists
 from agentctl.runsigs import save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
 from agentctl.dispatchblock import short_flow
-from agentctl.store import open_store
 from agentctl.dispatches import (
     branch_base, branch_red_id, dispatch_key, dispatch_records, orphan_why, owner_gone, owner_of, owner_text,
     record_dispatch, save_dispatch, tracked_branch)
@@ -162,10 +161,10 @@ def branch_reds(snap):
     return [e for e in (snap or {}).get("branches") or [] if e.get("red") and e.get("alive") and not e.get("orphan")]
 
 
-def settle_branch_reds(o_r, snap, store=None):
+def settle_branch_reds(o_r, snap, store):
     """Close the orphan branch reds (event: why), reopen the ones that found an owner (marked `reopened` in the snapshot
     so route_branch_reds tells that owner), retire the ones gone from the snapshot. Returns the event texts."""
-    st = store or open_store()
+    st = store
     out, live = [], set()
     for e in (snap or {}).get("branches") or []:
         if not e.get("red") or not e.get("alive"):

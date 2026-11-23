@@ -169,7 +169,7 @@ class StrandedTest(OneQueueBase):
         self.assertEqual(A.stranded_changes(self.r.path, self.d, self.st), ["x-101"])
         [c] = [c for c in A.open_conditions(self.st) if c["key"].startswith("change-stranded")]
         self.assertIn("STRANDED CHANGE x-101", c["text"])
-        A.cancel_submitted("x-101", repo=self.r.path)  # `land cancel` reaches an item no entry carries
+        A.cancel_submitted(A.CurrentStore(), "x-101", repo=self.r.path)  # `land cancel` reaches an item no entry carries
         self.assertEqual(self.st.item("change", "x-101")["state"], "cancelled")
         A.recovery_tick(now_=time.time() + 3600, force=True, store=self.st)
         self.assertEqual([c for c in A.open_conditions(self.st) if c["key"].startswith("change-stranded")], [])
@@ -180,7 +180,7 @@ class SupersedeTest(OneQueueBase):
         wt, head = self.change("proxy-park", "a\n")
         self.st.put_item("change", "x-95", "waiting", {"worktree": wt, "head": "4" * 40})
         self.st.put_item("change", "y-1", "waiting", {"worktree": "/elsewhere", "head": "5" * 40})
-        r = A.submit_change({"id": "new-1", "worktree": wt, "head": head, "commits": [head]}, repo=self.r.path)
+        r = A.submit_change(A.CurrentStore(), {"id": "new-1", "worktree": wt, "head": head, "commits": [head]}, repo=self.r.path)
         self.assertEqual(r["id"], "new-1")
         self.assertEqual(self.st.item("change", "x-95")["state"], "superseded")
         self.assertEqual(self.st.item("change", "x-95")["data"]["superseded_by"], "new-1")

@@ -232,19 +232,19 @@ def _push_change(repo, d, e, i, clock, st):
             conflicts = []  # no regen command under the landing lock: a generated file's conflict is a new round's
             new_head, via = rebase_in_tree(d, tree, e, moved, regen=False, conflicts=conflicts)
             if via:
-                already_landed(d, e, via if via != "an equivalent commit" else None)
+                already_landed(st, d, e, via if via != "an equivalent commit" else None)
                 return "landed"
             owed = generated_round(tree, conflicts, base, moved, new_head)
             if owed:
                 what = f"main moved {owed[0]} ({', '.join(owed[1][:3])}): a new round, which regenerates them"
-                set_change(d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
+                set_change(st, d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
                            event={"text": f"{e['id']}: {what}"}, rounds=e.get("rounds", 0) + 1, retry_after=0,
                            verify=True)
                 wlog(d, f"{e['id']}: {what}: queued for a new round")
                 return "queued"
             if not new_head:
                 # policy: no-longer-applies
-                queue_verdict(d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
+                queue_verdict(st, d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
                               f"{moved[:10]} (main moved during its checks{conflict_cause(tree, base, moved, conflicts)}"
                               f"): rebase onto {remote()}/main and land again (it keeps its place in the queue)",
                               conflict_files=conflict_paths(conflicts), decided_on=moved)
@@ -279,7 +279,7 @@ def _push_change(repo, d, e, i, clock, st):
                                                  if areas else "") + ")"
                         + (f", as {verify_why}" if verify_why else "")) if verify else f"{why}: checked again"
                 log = recheck_logged(e, "verify" if verify else "full", f"{moved_by}: {verify_why or why}", moved, clock.time())
-                set_change(d, e, "queued", data={"rounds": e.get("rounds", 0) + 1, "rechecks": log},
+                set_change(st, d, e, "queued", data={"rounds": e.get("rounds", 0) + 1, "rechecks": log},
                            event={"text": f"{e['id']}: {moved_by} since its checks, {what}"},
                            rounds=e.get("rounds", 0) + 1, retry_after=0, verify=verify, rechecks=log)
                 wlog(d, f"{e['id']}: {moved_by} during its checks, {what}: queued for a new round")
@@ -293,7 +293,7 @@ def _push_change(repo, d, e, i, clock, st):
         elif e.get("checked_mode") == VERIFY_MODE:  # the combined tree passed: the change's own checks stand
             skip = hook_query(precheck_hook(tree), tree, "--plan", range_paths(tree, base, head))
             if skip is None:
-                set_change(d, e, "queued", event={"text": f"{e['id']}: the hook's plan could not be read: checked again"},
+                set_change(st, d, e, "queued", event={"text": f"{e['id']}: the hook's plan could not be read: checked again"},
                            retry_after=0, verify=False)
                 return "queued"
             areas = e.get("verified_areas")
@@ -308,10 +308,10 @@ def _push_change(repo, d, e, i, clock, st):
             why = (f"its checks failed only where {remote()}/main fails too ({keys_text(kr['keys'])}: "
                    f"{'; '.join(kr['where'])}): not held against it; it lands with the batch once main is green "
                    "or the red's fix lands") if kr else None
-            queue_join(repo, d, e, tree, head, why)
+            queue_join(st, repo, d, e, tree, head, why)
             return "joined"
         fixes = sorted(fixes_of(repo, commits))
-        set_change(d, e, "pushing", data={"rechecks": e["rechecks"]} if e.get("rechecks") else None,
+        set_change(st, d, e, "pushing", data={"rechecks": e["rechecks"]} if e.get("rechecks") else None,
                    event={"text": f"{e['id']}: pushing {head[:10]}"})
         pushed_at = clock.time()
         env = tool_env()
@@ -323,19 +323,19 @@ def _push_change(repo, d, e, i, clock, st):
         git(repo, "fetch", "--quiet", remote(), "main", check=False)
         if landed(repo, head, f"refs/remotes/{remote()}/main"):  # verify: the tip is on main, whatever rc said
             mark_gate_dirty()
-            queue_verdict(d, e, "landed", f"LANDED {head} (queued {e['id']}, checked {where})", code=0,
+            queue_verdict(st, d, e, "landed", f"LANDED {head} (queued {e['id']}, checked {where})", code=0,
                           landed_sha=head, pushed_at=pushed_at)
             close = None if e.get("keep_worktree") else e["worktree"]
             start_watch(st, repo, head, pushed_at, worktree=e["worktree"],
                         close=close if close and os.path.isdir(close) else None, session=e.get("session"))
             return "landed"
         if rc is not None and (RACE.search(out or "") or REDGATE.search(out or "")):
-            set_change(d, e, "checked", event={"text": f"{e['id']}: the push raced or met a red gate: tried again"})
+            set_change(st, d, e, "checked", event={"text": f"{e['id']}: the push raced or met a red gate: tried again"})
             return "checked"
         n = e.get("push_attempts", 0) + 1
         why = "the push stalled" if rc is None else ((TRANSIENT_PUSH.search(out or "") or [None])[0]
                                                      or f"the push failed (exit {rc})")
-        set_change(d, e, "checked", data={"push_attempts": n},
+        set_change(st, d, e, "checked", data={"push_attempts": n},
                    event={"text": f"{e['id']}: {why}: push attempt {n}", "severity": "escalate" if n >= PUSH_ATTEMPTS_MAX else "info",
                           "audience": {"worktree": e.get("worktree")}},
                    push_attempts=n, retry_after=clock.time() + min(60 * 2 ** n, 1800))
@@ -344,7 +344,7 @@ def _push_change(repo, d, e, i, clock, st):
             open_condition("STALLED", f"STALLED: the push of {e['id']} failed {n} times ({why}); it is tried again when "
                                       f"git can read {remote()}/main", run_probe("git_fetch", {"repo": repo}), [],
                            key=f"push-failing-{e['id']}", command="land", cwd=e.get("worktree"),
-                           tail=(out or "").splitlines()[-15:])
+                           tail=(out or "").splitlines()[-15:], store=st)
         return "checked"
 
 

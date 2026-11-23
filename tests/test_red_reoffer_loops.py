@@ -55,7 +55,7 @@ class ReOfferLoopTest(RedsBase):
         self.r.write(path, "queued\n", at=wt)
         sha = self.r.commit(fixes_msg, at=wt)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(d, {"worktree": wt, "branch": "repo-wt-queued", "head": sha, "commits": [sha]})
+        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": wt, "branch": "repo-wt-queued", "head": sha, "commits": [sha]})
         e["status"] = status
         A.save_entry(d, e)
         return e

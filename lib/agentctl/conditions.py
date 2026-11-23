@@ -10,7 +10,6 @@ from typing import Any, Callable
 from agentctl.core import env_num, err, fmt_age, host_role, reds_dir, remote, state_root
 from agentctl.timefmt import iso_at, ts
 from agentctl.statefile import read_record
-from agentctl.store import open_store
 from agentctl.gating import mark_gate_dirty
 from agentctl.inboxentry import ConditionBypass, _OPENING, inbox_dir, inbox_write
 from agentctl.statemachines import StaleVersion, TerminalState
@@ -104,7 +103,7 @@ def maybe_recovery_tick(store: Any) -> None:
     if time.time() - _last_recovery[0] < 5:
         return
     _last_recovery[0] = time.time()
-    recovery_tick(store=store)
+    recovery_tick(store)
 
 
 # -- conditions are items (design §5.4; phase 1 step 12): the store's "condition" machine, open -> closed
@@ -160,7 +159,7 @@ def condition_pending(st, key, grace, t):
 
 def open_condition(kind: str, text: str, probe: Any, on_recover: Any, key: str | None = None, inbox: bool = True,
                    command: str = "recover", exit_code: int = 1, cwd: str | None = None, tail: Any = (), effect: Any = None,
-                   store: Any = None, grace: float | None = None) -> Any:
+                   *, store: Any, grace: float | None = None) -> Any:
     """Open (or refresh) a non-green condition: an item of the "condition" machine. probe: the FAILED ProbeResult of the
     check that found it (required: the same probe, passing, closes it); on_recover: [(action, args)] from
     RECOVER_ACTIONS. effect: a callable run inside; its dict result is merged into every on_recover args. Writes ONE
@@ -174,7 +173,7 @@ def open_condition(kind: str, text: str, probe: Any, on_recover: Any, key: str |
             raise ConditionBypass(f"unknown on_recover action {name!r}")
     if probe.ok:
         return None
-    st = store or open_store()
+    st = store
     key = key or condition_key(kind, probe)
     cur = condition_item_of(st, key)
     if not cur and condition_pending(st, key, condition_grace(kind) if grace is None else grace, st.clock()):
@@ -208,15 +207,15 @@ def open_condition(kind: str, text: str, probe: Any, on_recover: Any, key: str |
     return condition_dict(st.put_item("condition", iid, "open", data))
 
 
-def open_conditions(store=None):
+def open_conditions(store):
     """The open conditions, as dicts (key, kind, text, probe, on_recover, inbox, ... plus id and version)."""
-    return [condition_dict(it) for it in (store or open_store()).items("condition", ["open"])]
+    return [condition_dict(it) for it in store.items("condition", ["open"])]
 
 
-def close_condition(cond, result, store=None):
+def close_condition(cond, result, store):
     """The probe passed (result: its ProbeResult, or a reason string for a manual close): the item moves to closed (a
     compare-and-set: one closer), its inbox entries are acked, its on_recover actions run, one RECOVERED note."""
-    st = store or open_store()
+    st = store
     if isinstance(result, str):
         result = ProbeResult(cond["probe"]["kind"], cond["probe"]["args"], True,
                              result if result.startswith("INVALID:") else f"closed by hand: {result}",
@@ -285,13 +284,13 @@ def probed_here(c):
     return c.get("host", "server") == host_role()
 
 
-def recovery_tick(now_=None, force=False, store=None):
+def recovery_tick(store, now_=None, force=False):
     """Each host's look (the server's tick and the laptop's sync both run it): each open condition OPENED ON THIS HOST
     whose next check is due re-runs ITS probe; a pass closes it. Backoff: PROBE_EVERY x 2^fails, at most
     RECOVER_BACKOFF_MAX. Past its deadline (10 min after opening, then every 2 h) an open condition escalates -- on the
     server only (one writer of escalations): the state's self-transition, an escalate event the notifier delivers.
     Returns the RECOVERED lines."""
-    st = store or open_store()
+    st = store
     t = now_ if now_ is not None else time.time()
     out = []
     server = host_role() == "server"
@@ -329,7 +328,7 @@ def recovery_tick(now_=None, force=False, store=None):
     return out
 
 
-def recovery_recheck(kind, store=None):
+def recovery_recheck(kind, store):
     """An event that may have cleared conditions of probe `kind`: probe those now."""
     try:
         for c in open_conditions(store):
@@ -341,9 +340,9 @@ def recovery_recheck(kind, store=None):
         err(f"recover: recheck of {kind} failed ({str(e)[:120]})")
 
 
-def recovery_recheck_all(store=None):
+def recovery_recheck_all(store):
     """The network changed or came back: every open condition is probed at the next tick, backoff reset."""
-    st = store or open_store()
+    st = store
     for it in st.items("condition", ["open"]):
         try:
             st.update_item("condition", it["id"], it["version"], {"next_check": 0, "fails": 0})
@@ -351,12 +350,12 @@ def recovery_recheck_all(store=None):
             pass
 
 
-def cmd_recover(a):
+def cmd_recover(a, store):
     if a.rcmd == "tick":
-        lines = recovery_tick(force=True)
+        lines = recovery_tick(store, force=True)
         print("\n".join(lines) if lines else "recover: nothing cleared")
         return 0
-    cs = open_conditions()
+    cs = open_conditions(store)
     if not cs:
         print("recover: no open conditions")
         return 0

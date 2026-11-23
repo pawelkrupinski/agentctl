@@ -49,7 +49,7 @@ class WithdrawnRevertOrphanTest(test_orphans.OrphanTest):
     def test_629_a_withdrawn_reverts_worktree_is_never_submitted_and_is_removed(self):
         wt, sha = self.worktree_commit("repo-wt-revert-629", revert_msg())
         self.put_red("red-629.6", blame(None, wt=wt, sha=sha, withdrawn=True))
-        did = A.orphan_duty(self.r.path)
+        did = A.orphan_duty(A.CurrentStore(), self.r.path)
         self.assertEqual(self.relands, [], "never submitted")
         self.assertEqual(len(did), 1, did)
         self.assertIn("orphan repo-wt-revert-629: not submitted", did[0])
@@ -57,14 +57,14 @@ class WithdrawnRevertOrphanTest(test_orphans.OrphanTest):
         self.assertIn("removed revert worktree", did[0])
         self.assertFalse(os.path.isdir(wt))
         self.assertIn("blame revert never landing", self.deleted_log())
-        self.assertEqual(A.orphan_duty(self.r.path), [])
+        self.assertEqual(A.orphan_duty(A.CurrentStore(), self.r.path), [])
 
     def test_a_refuted_changes_revert_is_skipped_but_other_work_beside_it_is_kept(self):
         wt, _sha = self.worktree_commit("repo-wt-mine", revert_msg(run=700))
         self.r.write("more.txt", "mine\n", at=wt)
         self.r.commit("my own work beside it", at=wt)
         self.put_red("red-700.1", blame("refuted", run=700))
-        did = A.orphan_duty(self.r.path)
+        did = A.orphan_duty(A.CurrentStore(), self.r.path)
         self.assertEqual(self.relands, [])
         self.assertIn("kept: it holds commits that are not blame's revert", did[0])
         self.assertTrue(os.path.isdir(wt), "somebody's other commit: never removed")
@@ -74,7 +74,7 @@ class WithdrawnRevertOrphanTest(test_orphans.OrphanTest):
         by the precheck -- stood as an orphan and escalated. A red that is over has nothing left for its revert to fix."""
         wt, sha = self.worktree_commit("repo-wt-revert-2409", revert_msg(run=2409))
         self.put_red("red-2409.1", blame("confirmed", run=2409, wt=wt, sha=sha), state="verified")
-        did = A.orphan_duty(self.r.path)
+        did = A.orphan_duty(A.CurrentStore(), self.r.path)
         self.assertEqual(self.relands, [], "never submitted")
         self.assertEqual(len(did), 1, did)
         self.assertIn("OBSOLETE for #2409", did[0])
@@ -91,7 +91,7 @@ class WithdrawnRevertOrphanTest(test_orphans.OrphanTest):
     def test_an_ordinary_orphan_is_still_submitted(self):
         self.put_red("red-629.6", blame(None, withdrawn=True))
         wt, _sha = self.worktree_commit("repo-wt-other", "other: a change nobody landed")
-        self.assertEqual(A.orphan_duty(self.r.path), ["orphan repo-wt-other: submit (never landed)"])
+        self.assertEqual(A.orphan_duty(A.CurrentStore(), self.r.path), ["orphan repo-wt-other: submit (never landed)"])
         self.assertEqual(self.relands, [wt])
 
     def test_the_refusal_spares_a_newer_reds_confirmed_revert_of_the_same_change(self):
@@ -113,7 +113,7 @@ class WithdrawnRevertOrphanTest(test_orphans.OrphanTest):
         wt, sha = self.worktree_commit("repo-wt-revert-629", revert_msg())
         self.put_red("red-629.6", blame(None, wt=wt, sha=sha, withdrawn=True))
         with self.assertRaises(ValueError) as c:
-            A.submit_change({"id": "r-1", "worktree": "/elsewhere", "head": sha, "commits": [sha]}, repo=self.r.path)
+            A.submit_change(A.CurrentStore(), {"id": "r-1", "worktree": "/elsewhere", "head": sha, "commits": [sha]}, repo=self.r.path)
         self.assertIn("NOT THE CULPRIT", str(c.exception))
         sh(self.r.path, "git", "fetch", "-q", "origin")
         self.assertIn("not landed again", self.saved_o[1](None, {"worktree": wt, "attempt": 1}))

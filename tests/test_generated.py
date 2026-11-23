@@ -441,8 +441,8 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         A.save_entry(d, {"id": "a-1", "seq": 1, "worktree": "/w", "branch": "b", "status": "rejected",
                          "conflict_files": ["x"], "decided": now, "created": now})
         A.save_entry(d, {"id": "o-2", "seq": 2, "worktree": "/o", "branch": "o", "status": "queued", "created": now})
-        first, _ = A.queue_change(d, {"worktree": "/w", "branch": "b", "head": "1" * 40})
-        second, _ = A.queue_change(d, {"worktree": "/x", "branch": "x", "head": "2" * 40})
+        first, _ = A.queue_change(A.CurrentStore(), d, {"worktree": "/w", "branch": "b", "head": "1" * 40})
+        second, _ = A.queue_change(A.CurrentStore(), d, {"worktree": "/x", "branch": "x", "head": "2" * 40})
         self.assertEqual((first["seq"], first["drawn"]), (1, 3), "its old place, a new number")
         self.assertEqual(second["drawn"], 4)
         self.assertNotEqual(first["id"].rsplit("-", 1)[1], second["id"].rsplit("-", 1)[1])

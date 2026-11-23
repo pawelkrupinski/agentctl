@@ -8,7 +8,6 @@ from typing import Any
 from agentctl.core import SHORT, err, git, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
-from agentctl.store import open_store
 from agentctl.repos import server_repo
 from agentctl.trailers import trailer_values
 from agentctl.waitingdir import save_entry, waiting_entries, waiting_state, wlog
@@ -106,13 +105,13 @@ def apply_entry(d, wt, e, base, regen=True, autoresolve=False):
     return "ok", None
 
 
-def already_landed(d, e, via):
+def already_landed(st, d, e, via):
     """Every commit of the entry is on main already (an earlier entry, or someone, landed it): LANDED, nothing pushed."""
-    queue_verdict(d, e, "landed", f"LANDED {e['head']} (already on main via {via or 'an equivalent commit'}): "
+    queue_verdict(st, d, e, "landed", f"LANDED {e['head']} (already on main via {via or 'an equivalent commit'}): "
                                   "nothing left to push", code=0, landed_sha=via, already=True)
 
 
-def cancel_entry_remote(e: dict[str, Any], why: str) -> None:
+def cancel_entry_remote(st: Any, e: dict[str, Any], why: str) -> None:
     """An entry that ends (superseded, cancelled) takes its undecided remote run with it: the run is the entry's."""
     rem = e.get("remote") or {}
     if rem.get("run") is not None and not rem.get("status"):
@@ -122,12 +121,12 @@ def cancel_entry_remote(e: dict[str, Any], why: str) -> None:
             err(f"could not cancel run {rem['run']} of {e['id']}: {str(ex)[:120]}")
 
 
-def supersede(d, e, by, why):
+def supersede(st, d, e, by, why):
     """The entry gives way to `by` (a newer entry of the same worktree and branch, or one carrying the same change): its
     checker, if running, is stopped; said in the inbox."""
     line = f"SUPERSEDED {e['id']} by {by}: {why}"
-    set_change(d, e, "superseded", event=change_event(e, line, code=0), superseded_by=by, why=why, decided=ts())
-    cancel_entry_remote(e, f"its queue entry was superseded by {by}")
+    set_change(st, d, e, "superseded", event=change_event(e, line, code=0), superseded_by=by, why=why, decided=ts())
+    cancel_entry_remote(st, e, f"its queue entry was superseded by {by}")
     h = read_record(entry_owned(e["id"]).record) or {}
     if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid") and int(h["pid"]) != os.getpid():
         try:
@@ -164,11 +163,11 @@ def batch_order(repo, entries, reds):
     return sorted(entries, key=lambda e: (rank(e), e["seq"]))
 
 
-def supersede_older_waiting(d, worktree, branch, eid):
+def supersede_older_waiting(st, d, worktree, branch, eid):
     """Waiting again replaces this worktree and branch's older waiting entry: only the newest (eid) lands."""
     for old in waiting_entries(d):
         if old["id"] != eid and same_change_source(old, worktree, branch):
-            supersede(d, old, eid, f"{worktree} waits again; only the newest entry lands")
+            supersede(st, d, old, eid, f"{worktree} waits again; only the newest entry lands")
 
 
 def note_waiting(d, log_path, head, eid):
@@ -180,11 +179,10 @@ def note_waiting(d, log_path, head, eid):
     return f"WAITING {head} (entry {eid}, {n} waiting)"
 
 
-def cancel_submitted(eid: str, how: str = "cancel", repo: str | None = None) -> dict[str, Any]:
+def cancel_submitted(st: Any, eid: str, how: str = "cancel", repo: str | None = None) -> dict[str, Any]:
     d = waiting_state(repo or server_repo())[0]
     hits = [e for e in queued_entries(d) + waiting_entries(d) if e["id"] == eid]
     if not hits:  # an item no entry carries (stranded): the item alone
-        st = open_store()
         it = st.item("change", eid)
         if not it or machine_state("change", it["state"]).terminal:
             raise KeyError(eid)
@@ -193,10 +191,10 @@ def cancel_submitted(eid: str, how: str = "cancel", repo: str | None = None) -> 
         clear_holds_on(st, eid)
         return {"id": eid, "status": "cancelled"}
     e = hits[0]
-    set_change(d, e, "cancelled", event={"text": f"{e['id']}: {how}led"}, why=f"{how}led through the store API",
+    set_change(st, d, e, "cancelled", event={"text": f"{e['id']}: {how}led"}, why=f"{how}led through the store API",
                decided=ts())
-    cancel_entry_remote(e, f"its queue entry was {how}led")
-    clear_holds_on(open_store(), eid)
+    cancel_entry_remote(st, e, f"its queue entry was {how}led")
+    clear_holds_on(st, eid)
     return {"id": eid, "status": "cancelled"}
 
 

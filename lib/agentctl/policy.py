@@ -15,7 +15,6 @@
 # bound, and the change tick runs the recovery: no hold outlives its bound in silence.
 
 from agentctl.core import err, process_cache
-from agentctl.store import open_store
 from agentctl.statemachines import machine_state
 
 
@@ -99,7 +98,7 @@ def policy(pid):
 _unapproved_said = process_cache({})  # (policy id, subject) -> True: its warning recorded
 
 
-def policy_blocks(pid, st=None, subject=None, what=None):
+def policy_blocks(pid, st, subject=None, what=None):
     """Whether the rule `pid` may hold or reject: True for a mechanism or an owner-approved rule; False for an
     unapproved one, which only WARNS -- one `policy.unapproved` event per (rule, subject), on the subject's change item
     when it has one (`what`: what it would have done)."""
@@ -114,7 +113,6 @@ def policy_blocks(pid, st=None, subject=None, what=None):
                 "only warns (policy.py POLICIES)")
         err(line)
         try:
-            st = st or open_store()
             it = st.item("change", subject) if subject else None
             if it and not machine_state("change", it["state"]).terminal:
                 st.transition("change", subject, it["state"], it["version"],

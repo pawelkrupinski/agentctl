@@ -5,7 +5,6 @@ import argparse
 import os
 import re
 from agentctl.core import cherry_landed, env_num, git, remote
-from agentctl.store import open_store
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.worktrees import worktrees
 from agentctl.cleanup import FREE_WAIT, close_worktree, free_worktree
@@ -48,7 +47,7 @@ def parse_duration(text):
 UNTIL_DONE_AGAIN = "~/bin/agentctl land --until-done"
 
 
-def own_change_item(repo, head, store=None):
+def own_change_item(repo, head, store):
     """The change land submitted from worktree `repo` at `head`, as {id, state, data, entered_at}: the open one, else
     the newest decided one. Read from the store's change items and from this host's queue entries (an entry the tick
     has not made an item of yet: the reconciler's own queue)."""
@@ -56,7 +55,7 @@ def own_change_item(repo, head, store=None):
 
     def ours(x):
         return x.get("head") == head and os.path.realpath(x.get("worktree") or "") == rp
-    mine = [it for it in (store or open_store()).items("change") if ours(it.get("data") or {})]
+    mine = [it for it in store.items("change") if ours(it.get("data") or {})]
     known = {it["id"] for it in mine}
     try:
         d = waiting_state(repo)[0]

@@ -45,7 +45,7 @@ class UpkeepTest(unittest.TestCase):
             os.makedirs(p)
         os.utime(old, (time.time() - 7200, time.time() - 7200))
         os.utime(foreign, (time.time() - 7200, time.time() - 7200))
-        lines = A.run_upkeep()
+        lines = A.run_upkeep(A.CurrentStore())
         self.assertEqual(self.calls, [["cleanup", "--execute", "--no-remote", "--deadline", "1200"]])  # its own stop first
         self.assertLess(A.UPKEEP_CLEANUP_DEADLINE + A.CLEANUP_REMOVE_RESERVE, A.UPKEEP_CLEANUP_BOUND)
         self.assertIn("cleanup: 12 s (movies 12 s)", lines)  # how long it took: in upkeep.log
@@ -58,12 +58,12 @@ class UpkeepTest(unittest.TestCase):
     def test_the_upkeep_runs_at_most_hourly_in_its_own_thread(self):
         runs = []
         saved = A.run_upkeep
-        A.run_upkeep = lambda: runs.append(1) or []
+        A.run_upkeep = lambda store: runs.append(1) or []
         A._last_upkeep[0] = 0.0
         try:
-            self.assertTrue(A.maybe_upkeep(now_=10_000.0))
+            self.assertTrue(A.maybe_upkeep(A.CurrentStore(), now_=10_000.0))
             A._bounded["upkeep"].join(5)
-            self.assertEqual(A.maybe_upkeep(now_=10_000.0 + 60), [])
+            self.assertEqual(A.maybe_upkeep(A.CurrentStore(), now_=10_000.0 + 60), [])
             self.assertEqual(runs, [1])
         finally:
             A.run_upkeep = saved
@@ -72,19 +72,19 @@ class UpkeepTest(unittest.TestCase):
 class DiskTest(unittest.TestCase):
     def test_a_low_disk_runs_the_upkeep_first_and_opens_wd_only_if_it_stays_low(self):
         runs, saved = [], A.run_upkeep
-        A.run_upkeep = lambda: runs.append(1) or []
+        A.run_upkeep = lambda store: runs.append(1) or []
         os.environ["AGENTCTL_DISK_MIN_GB"] = "1e12"  # far more than any disk: low
         A._last_upkeep[0] = 10_000.0  # an upkeep ran a minute ago: not hourly yet
         try:
             # low, an upkeep just ran (the 10-min floor) and it is done: WD opens
-            self.assertTrue(A.maybe_upkeep(now_=10_060.0)[0].startswith("WD: "))
-            self.assertEqual([c for c in A.open_conditions() if c["key"] == "disk-free"][0]["kind"], "INVARIANT")
+            self.assertTrue(A.maybe_upkeep(A.CurrentStore(), now_=10_060.0)[0].startswith("WD: "))
+            self.assertEqual([c for c in A.open_conditions(A.CurrentStore()) if c["key"] == "disk-free"][0]["kind"], "INVARIANT")
             A._last_upkeep[0] = 0.0
-            out = A.maybe_upkeep(now_=20_000.0)  # low: the upkeep runs at once
+            out = A.maybe_upkeep(A.CurrentStore(), now_=20_000.0)  # low: the upkeep runs at once
             A._bounded["upkeep"].join(5)
             self.assertIn("the disk is low", out[0])
             self.assertEqual(runs, [1])
-            [c] = [c for c in A.open_conditions() if c["key"] == "disk-free"]
+            [c] = [c for c in A.open_conditions(A.CurrentStore()) if c["key"] == "disk-free"]
             self.assertEqual(c["probe"]["kind"], "disk_free")
             os.environ["AGENTCTL_DISK_MIN_GB"] = "0"
             self.assertTrue(A.run_probe("disk_free", {"min_gb": 0}).ok)  # the same check passes: the condition closes

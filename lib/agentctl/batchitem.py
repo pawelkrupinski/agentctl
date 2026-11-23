@@ -44,7 +44,8 @@ def batch_fail(st, d, it, why, n_changes=0):
     wlog(d, text)
     it = batch_move(st, it, "held", {"retries": 0, "why": why}, text=text, severity="escalate")
     open_condition("STALLED", text, run_probe("git_fetch", {"repo": repo_of_waiting(d)}),
-                   [("clear_hold", {"d": d})], key=f"batch-retry-{it['id'].replace('#', '-')}", command="waiting")
+                   [("clear_hold", {"d": d})], key=f"batch-retry-{it['id'].replace('#', '-')}", command="waiting",
+                   store=st)
     return it
 
 

@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import time
-from agentctl.store import StoreUnavailable, open_store
+from agentctl.store import StoreUnavailable
 from agentctl.cistate import state_read, state_update
 from agentctl.remotestore import RemoteStore
 
@@ -48,9 +48,8 @@ def port_open(port, host="127.0.0.1", timeout=2.0):
         return False
 
 
-def mirror_state(st=None, now_=None):
+def mirror_state(st, now_=None):
     """ci-runner's /v1/state copied into the laptop's state.json (with fetched_at): the status line reads it."""
-    st = st or open_store()
     try:
         snap = st.state()
     except StoreUnavailable as e:

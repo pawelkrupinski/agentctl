@@ -142,7 +142,7 @@ def record_change_kind(st, e, kind):
         pass  # the next tick records it
 
 
-def classify_queue(repo, d, entries, facts, t, st=None, record=True):
+def classify_queue(repo, d, entries, facts, t, st, record=True):
     """{entry id: kind} for entries, each recorded on its item (record_change_kind) when st is given."""
     kinds = {}
     for e in entries:

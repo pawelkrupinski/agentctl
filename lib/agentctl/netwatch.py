@@ -70,19 +70,19 @@ def uplink_loss():
 _last_route = ["unseen"]  # the route at the last look; None while offline
 
 
-def open_outage(kind, text, probe, on_recover, **kw):
+def open_outage(store, kind, text, probe, on_recover, **kw):
     """open_condition for the laptop's own network or tunnel outage -- which is also the store's (ci-runner's, through
     the tunnel): its inbox entry and this host's state are written whether the store answers or not, so the watch's
     state moves on (one note per outage) instead of raising out of it every cycle. The status line says the rest
     (NETWORK, STORE UNREACHABLE)."""
     try:
-        return open_condition(kind, text, probe, on_recover, **kw)
+        return open_condition(kind, text, probe, on_recover, store=store, **kw)
     except StoreUnavailable as e:
         err(f"{kind}: the store did not answer, the condition is not recorded there ({str(e)[:120]})")
         return None
 
 
-def network_watch(route=None, kick=None):
+def network_watch(store, route=None, kick=None):
     """React to the laptop's network changing (another Wi-Fi, a hotspot, back online): the tunnel's ssh rides the old
     route and would take ServerAlive's 30 s to notice, the gate line says UNREAD until the next read. A changed default
     route kickstarts the tunnel at once and marks the gate dirty. Returns 'changed', 'offline' or ''."""
@@ -92,23 +92,23 @@ def network_watch(route=None, kick=None):
         return ""
     if r is None:
         err(f"the network went away (was {prev[0]} via {prev[1]})")
-        open_outage("NETWORK", f"NETWORK: offline (no default route; was {prev[0]} via {prev[1]})", run_probe("route"),
+        open_outage(store, "NETWORK", f"NETWORK: offline (no default route; was {prev[0]} via {prev[1]})", run_probe("route"),
                        [("tunnel_reset", {})], key="network-offline", inbox=False)  # the kick: below, on the way back
         return "offline"
     err(f"the network {'is back' if prev is None else 'changed'} ({prev[0] if prev else '-'} via {prev[1] if prev else '-'} -> "
         f"{r[0]} via {r[1]}): "
         f"kickstarting {TUNNEL_LABEL}, the gate is read at once")
     (kick or launchctl_kick)()
-    recover_tunnel_reset(None, {}, None)
+    recover_tunnel_reset(None, {}, store)
     try:
-        recovery_recheck_all()  # a new route: every open condition is probed again now, its backoff reset
+        recovery_recheck_all(store)  # a new route: every open condition is probed again now, its backoff reset
     except StoreUnavailable as e:  # the tunnel is not back yet: the next tick's probes run on their own schedule
         err(f"the store did not answer the recheck ({str(e)[:120]})")
     mark_gate_dirty()
     return "changed"
 
 
-def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
+def tunnel_watch(store, now_=None, probe=None, kick=None, uplink=None):
     """One processor cycle of the health probe. Returns what it did: ok, down, kicked, restored, escalated, network, or
     ''. A tunnel that fails while the laptop's own uplink loses packets is the network's fault: no kickstart (it only
     churns the tunnel), no STALLED escalation, one NETWORK note per outage."""
@@ -134,7 +134,7 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
             msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so the tunnel (localhost:{tunnel_ports()[0][0]}) "
                    f"{r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")
             err(msg)
-            open_outage("NETWORK", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel",
+            open_outage(store, "NETWORK", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel",
                            command="tunnel")
         st.update(network=True, pending_since=None, escalated=False)  # the kick/escalation clock starts on a good uplink
         write_json_file(tunnel_state_path(), st)
@@ -152,7 +152,7 @@ def tunnel_watch(now_=None, probe=None, kick=None, uplink=None):
     if st.get("pending_since") and t - st["pending_since"] >= TUNNEL_RESTORE_WAIT and not st.get("escalated"):
         msg = (f"STALLED: the tunnel (localhost:{tunnel_ports()[0][0]}) still {r} {int((t - st['pending_since']) // 60)} min after a "
                f"kickstart; run `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}` and check {TUNNEL_LOG}")
-        open_outage("STALLED", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel-stalled",
+        open_outage(store, "STALLED", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel-stalled",
                        command="tunnel", exit_code=2)
         st["escalated"] = True
         did = "escalated"

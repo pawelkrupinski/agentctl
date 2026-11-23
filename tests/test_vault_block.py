@@ -106,7 +106,7 @@ class VaultAskTest(VaultBase):
         self.assertIn('decide vault-movies "here"', line, "the one line to run is in the telling")
         eid = A.alert_write({"id": "20261116T034801000000-ev1-red-ask", "at": self.t[0], "command": "red", "cwd": "/",
                              "final": True, "exit": 1, "verdict": line, "verdicts": [line], "tail": [],
-                             "item_type": "red", "item_id": it["id"]})
+                             "item_type": "red", "item_id": it["id"]}, A.CurrentStore())
         rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-movies", "here")
         self.assertEqual(rc, 0, out)
         self.assertIn("DECIDED", out[0])

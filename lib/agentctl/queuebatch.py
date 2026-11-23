@@ -17,7 +17,7 @@ from agentctl.queueslots import checker_alive, set_change
 from agentctl.queue import VERIFY_MODE
 from agentctl.generated import generated_entry, holds_in_flight, without_generated
 from agentctl.conflicts import first_hunk, hunks_resolve, own_commits_conflict, union_safe
-from agentctl.queuerecheck import same_change_source
+from agentctl.queuerecheck import queued_entries, same_change_source
 from agentctl.redfixes import fixes_of
 from agentctl.identitychange import change_paths_of
 from agentctl.changekind import classify_change, queue_facts
@@ -400,17 +400,17 @@ def spawn_executor(repo, d, eid):
 QUEUE_ONLY_FIELDS = ("backlog_batch", "batch_alone", "push_alone", "drift_split", "remote_run")  # a check's, not a wait's
 
 
-def queue_join(repo, d, e, tree, head, why=None):
+def queue_join(st, repo, d, e, tree, head, why=None):
     """Under the landing lock, main red (or its checks failing only as its base fails, why): the checked change waits
     for green at `head` (ONE CHANGE, ONE ITEM, above); its WAITING note says why."""
     commits = waiting_commits(repo, f"{remote()}/main", head)
-    supersede_older_waiting(d, e["worktree"], e.get("branch") or "", e["id"])
+    supersede_older_waiting(st, d, e["worktree"], e.get("branch") or "", e["id"])
     for k in QUEUE_ONLY_FIELDS:
         e.pop(k, None)
     e.update(tip=head, commits=commits, fixes=sorted(fixes_of(repo, commits)))
     line = note_waiting(d, os.path.join(d, f"check-{e['id']}"), head, e["id"]) + (f": {why}" if why else "")
     # policy: red-gate
-    set_change(d, e, "waiting", event=change_event(e, line, code=None, final=False), decided=ts())
+    set_change(st, d, e, "waiting", event=change_event(e, line, code=None, final=False), decided=ts())
     wlog(d, f"{e['id']}: {line}")
     return 0
 
@@ -480,3 +480,10 @@ def kind_of(repo, e, facts, t):
 
 
 _behind_said = process_cache({})  # (entry id, what) -> batch id: said once per batch
+
+
+def batch_round(d: str, reds: set[str], st: Any, t: float | None,
+                facts: dict[str, Any] | None) -> tuple[float, Any, list[dict[str, Any]]]:
+    """What a backlog or push batch's round reads at a green gate: (now, the queue's facts -- queue_facts, read from
+    the store when None --, its queued entries)."""
+    return (t if t is not None else time.time()), (queue_facts(reds, st) if facts is None else facts), queued_entries(d)

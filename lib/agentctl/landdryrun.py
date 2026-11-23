@@ -113,9 +113,9 @@ def network_requeue(repo, head, out, log_path, clock, store, a=None):
     d, _clone, _wt = waiting_state(repo)
     if host_role() == "sync":  # ONE QUEUE: ci-runner's (its checks run there, its own network)
         return submit_to_server(repo, d, change_fields(repo, f"{remote()}/main", head, a), store, note=f" after {why}")
-    e, _ahead = queue_change(d, change_fields(repo, f"{remote()}/main", head, a))
+    e, _ahead = queue_change(store, d, change_fields(repo, f"{remote()}/main", head, a))
     submit_ref(repo, d, e)
-    requeue_infra(d, e, why, clock.time(), reason=NETWORK_REASON, detail=out, repo=repo)
+    requeue_infra(store, d, e, why, clock.time(), reason=NETWORK_REASON, detail=out, repo=repo)
     e = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or e
     left = max(0, int((float(e.get("retry_after") or clock.time()) - clock.time()) // 60))
     print(f"QUEUED {e['id']} ({head[:10]}): infra, not a known red -- {why}; checked again in {left} min; "

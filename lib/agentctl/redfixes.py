@@ -42,7 +42,7 @@ def entry_fixes(repo, e):
     return out
 
 
-def red_fix_facts(repo, store=None):
+def red_fix_facts(repo, store):
     """What links a red to its fix: the queue's Fixes-Red changes, the Fixes-Red commits on main, and every run any
     spell of each red key was seen in (key_runs: a red whose own item lost a run -- a duplicate spell, an import --
     still meets the change that names that run)."""
