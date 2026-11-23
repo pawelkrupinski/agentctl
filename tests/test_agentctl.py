@@ -18,6 +18,7 @@ tempfile.tempdir = os.environ["AGENTCTL_TEST_RUN_TMP"]
 TOOL = os.environ.get("AGENTCTL_UNDER_TEST") or os.path.join(HERE, "..", "agentctl")
 os.environ.setdefault("AGENTCTL_CONFIG", "-")  # no config file of the machine's: the code's defaults, then the test's env
 from agentctl_view import load as _load_view  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 A = _load_view(TOOL)  # the tests' view of every module (tests/agentctl_view.py): A.<name> reads and patches them all
 # THE GH TALLY NEVER PRINTS INTO A TEST (2026-11-19, a042390's CI): a worker process alive past GH_TALLY_SECONDS (a
 # suite over 300 s on a slow runner) printed its `agentctl: github calls (pid ...)` tally into a fixer land's captured
@@ -289,12 +290,13 @@ class Base(unittest.TestCase):
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
         for c in A.PROCESS_CACHES:  # every part's process-wide cache: per process, so per test (core.process_cache)
             c.clear()
+        self.clock = FakeClock()  # the clock run_tool hands agentctl's main: its sleeps return at once
 
     def tearDown(self):
         os.environ["AGENTCTL_STATE_ROOT"] = self.saved_root
         self.tmp.cleanup()
 
-    def run_tool(self, *argv, stdin=None, cwd=None):
+    def run_tool(self, *argv, stdin=None, cwd=None, clock=None):
         out, errb = io.StringIO(), io.StringIO()
         old_cwd = os.getcwd()
         old_stdin = sys.stdin
@@ -303,7 +305,7 @@ class Base(unittest.TestCase):
                 os.chdir(cwd)
             sys.stdin = io.StringIO(stdin or "")
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errb):
-                rc = A.main(list(argv))
+                rc = A.main(list(argv), clock=clock or self.clock)
         finally:
             os.chdir(old_cwd)
             sys.stdin = old_stdin

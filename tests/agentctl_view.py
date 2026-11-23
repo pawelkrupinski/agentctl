@@ -7,9 +7,10 @@ and each one importing it -- so a fake reaches the code under test wherever it r
 drops it from them all. Each module's names are copied onto the package once, when the view loads (a later module's
 value of a name winning: they are the same object but for the MACHINES registry, extended in place, and equal aliases).
 
-Until step 4 of the restructuring injects the clock, subprocess and the store from the composition root, this view is
-how a test fakes them (`A.time.sleep = ...`, tests/harness.py's proxies); it is the tests' only, never imported by
-agentctl itself.
+The clock is being passed in from the composition root (lib/agentctl/clock.py; a test hands a tests/fake_clock.py
+FakeClock to main, land, the await, the watch and the processor's loop); until it reaches every module, and until
+subprocess and the store are passed in too, this view is how a test fakes the rest (`A.time.sleep = ...`,
+tests/harness.py's proxies); it is the tests' only, never imported by agentctl itself.
 
   from agentctl_view import load; A = load(<path of an agentctl entry>)     (a child process's way in, too)
 """

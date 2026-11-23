@@ -63,7 +63,7 @@ class InboxTest(unittest.TestCase):
         # days), each acked by hand. A queue subcommand answers its caller there and then; only a land's own verdict
         # may outlive the agent that started it
         saved = A.cmd_land
-        A.cmd_land = lambda a: print("  20261116-185821-movies-x-79a0ca  checking  /w  abc  deadline in 9 min") or 0
+        A.cmd_land = lambda a, clock: print("  20261116-185821-movies-x-79a0ca  checking  /w  abc  deadline in 9 min") or 0
         self.addCleanup(setattr, A, "cmd_land", saved)
         for argv in (["land", "status"], ["land", "hold"], ["land", "release"], ["land", "cancel", "e1"]):
             self.assertEqual(self.run_main(argv)[0], 0)

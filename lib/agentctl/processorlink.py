@@ -6,7 +6,7 @@ import socket
 import subprocess
 import sys
 import threading
-import time
+from agentctl.clock import Clock
 from agentctl.core import env_num, err, slug, spawn_detached
 from agentctl.store import StoreUnavailable, open_store
 from agentctl.selfcode import TOOL_PATH
@@ -42,8 +42,8 @@ def spawn_waiting_processor(repo: str) -> None:
 class TokenDrop:
     """The processor's end of the hand-off."""
 
-    def __init__(self, d: str, o_r: str) -> None:
-        self.path, self.o_r = token_sock_path(d), o_r
+    def __init__(self, d: str, o_r: str, clock: Clock) -> None:
+        self.path, self.o_r, self.clock = token_sock_path(d), o_r, clock
         self.sock: socket.socket | None = None
         self.thread: threading.Thread | None = None
 
@@ -83,12 +83,12 @@ class TokenDrop:
 
     def nap(self, secs: float) -> None:
         """Sleep secs (the socket is served by its own thread)."""
-        end = time.time() + secs
+        end = self.clock.time() + secs
         while True:
-            left = end - time.time()
+            left = end - self.clock.time()
             if left <= 0:
                 return
-            time.sleep(min(left, 10))
+            self.clock.sleep(min(left, 10))
 
     def take(self):
         if self.sock is None:  # closed under the serving thread
@@ -143,7 +143,7 @@ def offer_token(repo: str) -> bool:
         return False
 
 
-def await_entry(repo: str, eid: str, close: str | None = None) -> tuple[int, str | None, float | None]:
+def await_entry(repo: str, eid: str, clock: Clock, close: str | None = None) -> tuple[int, str | None, float | None]:
     """Block until the entry lands or is rejected: (rc, landed sha, pushed_at). Restarts a dead processor. OWNED (one
     awaiter per entry; on agentctl's new code it re-execs as `agentctl waiting await <entry>`, which then watches)."""
     own = Owned("await", eid, ["waiting", "await", eid, "--repo", repo] + (["--close", close] if close else []))
@@ -152,16 +152,16 @@ def await_entry(repo: str, eid: str, close: str | None = None) -> tuple[int, str
         print(f"NOT LANDED (still waiting): entry {eid} is already awaited by pid {h.get('pid')} ({h.get('owner')})")
         return 2, None, None
     try:
-        return _await_entry(repo, eid, own)
+        return _await_entry(repo, eid, own, clock)
     finally:
         own.release()
 
 
-def _await_entry(repo: str, eid: str, own: Owned) -> tuple[int, str | None, float | None]:
+def _await_entry(repo: str, eid: str, own: Owned, clock: Clock) -> tuple[int, str | None, float | None]:
     """The change's STORE ITEM decides (a RemoteStore on the laptop): an entry's JSON is only on the host whose queue
     runs it -- ci-runner's for every change since ONE QUEUE (2026-11-16: `waiting await` on the laptop crashed with
     FileNotFoundError on one). A joined change's item follows its waiting entry (project_changes)."""
-    t0, delays = time.time(), backoff(15, 60)
+    t0, delays = clock.time(), backoff(15, 60)
     timeout = env_num("AGENTCTL_WAITING_TIMEOUT", WAITING_AWAIT_TIMEOUT)
     state, said = "not in the store yet", None
     while True:
@@ -190,10 +190,10 @@ def _await_entry(repo: str, eid: str, own: Owned) -> tuple[int, str | None, floa
         if state != said:  # what it waits on, said once each time it changes (a store outage is never silent)
             err(f"awaiting {eid}: it is {state}")
             said = state
-        if time.time() - t0 > timeout:
+        if clock.time() - t0 > timeout:
             print(f"NOT LANDED (still waiting): entry {eid} is {state} after {int(timeout // 3600)} h; "
                   "`agentctl land status`")
             return 2, None, None
         spawn_waiting_processor(repo)
         restart_if_changed([own])
-        time.sleep(next(delays))
+        clock.sleep(next(delays))

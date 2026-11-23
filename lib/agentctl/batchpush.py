@@ -9,7 +9,7 @@ from agentctl.repos import precheck_hook
 from agentctl.waitingdir import waiting_state, wlog
 from agentctl.gating import mark_gate_dirty
 from agentctl.leases import lock_note
-from agentctl.land import RACE, REDGATE, land_lock, landed, push_argv, push_bounds, run_watched, tool_env
+from agentctl.land import RACE, REDGATE, land_lock_if_free, landed, push_argv, push_bounds, run_watched, tool_env
 from agentctl.owned import Owned, lock_held
 from agentctl.queueslots import queue_verdict, set_change, tree_slot
 from agentctl.queue import hook_query, range_paths
@@ -40,7 +40,7 @@ def push_batch_item(repo, d, st, it):
 def _push_batch_item(repo, d, st, it, members, tip, base, i):
     _d, clone, _w = waiting_state(repo)
     tree = f"{clone}-wt-check-{i}"
-    with land_lock(repo, timeout=0) as held:
+    with land_lock_if_free(repo) as held:
         if not held:
             return f"batch {it['id']}: the landing lease is busy"
         git(repo, "fetch", "--quiet", remote(), "main", check=False)

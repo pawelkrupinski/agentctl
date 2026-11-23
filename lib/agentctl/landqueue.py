@@ -6,6 +6,7 @@ import os
 import signal
 import time
 from typing import Any
+from agentctl.clock import Clock
 from agentctl.core import fmt_age, git, git_ok, host_role
 from agentctl.timefmt import hhmmz, ts
 from agentctl.statefile import read_json_file, read_record
@@ -48,7 +49,7 @@ def waiting_repo(a: argparse.Namespace) -> str:
 
 def queue_command(a: argparse.Namespace) -> int:
     """The land queue's commands (`land status | hold | release | cancel`, and the processor's children: a change's or
-    the batch's checker, the service, `await`): every `waiting` subcommand but `run`, the processor itself."""
+    the batch's checker, the service): every `waiting` subcommand but `run` (the processor) and `await` (cmd_waiting)."""
     repo = waiting_repo(a)
     d, _c, _wt = waiting_state(repo)
     if a.wcmd == "check":  # one queued change's checker (the processor starts it)
@@ -57,8 +58,6 @@ def queue_command(a: argparse.Namespace) -> int:
         return check_batch(main_clone(repo), a.entry)
     if a.wcmd == "service":
         return waiting_service(a.action, repo)
-    if a.wcmd == "await":  # land's wait on its entry, resumed after a restart on new code
-        return land_await(a, repo)
     if a.wcmd == "pause":  # `land hold`: an item in the store (the reconciler's, wherever this runs)
         return land_hold_command(a)
     if a.wcmd == "resume":
@@ -70,13 +69,13 @@ def queue_command(a: argparse.Namespace) -> int:
     return 2
 
 
-def land_await(a: argparse.Namespace, repo: str) -> int:
+def land_await(a: argparse.Namespace, repo: str, clock: Clock) -> int:
     """`waiting await`: land's wait on its entry, resumed after a restart on new code."""
     a.inbox_cwd = a.close or a.repo
     repo = main_clone(repo)
     os.chdir(repo)
-    rc, sha, pushed_at = await_entry(repo, a.entry)
-    return watch_landed(repo, sha, pushed_at, close=a.close) if rc == 0 and sha else rc
+    rc, sha, pushed_at = await_entry(repo, a.entry, clock)
+    return watch_landed(repo, sha, pushed_at, clock, close=a.close) if rc == 0 and sha else rc
 
 
 def land_hold_command(a: argparse.Namespace) -> int:

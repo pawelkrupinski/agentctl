@@ -7,6 +7,7 @@ import json, os, stat, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, StallSamples, sh  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 REPO_HOOK = """#!/bin/sh
 # supports --checks-only (the checks without the red gate) and --fast-only (compile and the fast tests)
@@ -41,9 +42,9 @@ class WaitingTest(Base):
         self.saved_inbox = os.environ.get("AGENTCTL_INBOX_DIR")
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(t, "inbox")
         self.awaited = []
-        A.await_entry = lambda repo, eid, close=None: (self.awaited.append(eid), (9, None, None))[1]
+        A.await_entry = lambda repo, eid, clock, close=None: (self.awaited.append(eid), (9, None, None))[1]
         A.time.sleep = lambda s: None
-        A.watch_landed = lambda repo, sha, pushed_at, o_r=None, close=None, fixes=(): 0
+        A.watch_landed = lambda repo, sha, pushed_at, clock, o_r=None, close=None, fixes=(): 0
         os.environ.pop("PREPUSH_SKIP", None)
         self.calls, self.pushes = os.path.join(t, "hook-calls"), os.path.join(t, "pushes")
         hooks = os.path.join(t, "hooks")
@@ -413,9 +414,9 @@ class WaitingTest(Base):
             A.gate_reds = saved
 
     def test_land_follow_still_waits_and_watches(self):
-        A.await_entry = lambda repo, eid, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
+        A.await_entry = lambda repo, eid, clock, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
         watched = []
-        A.watch_landed = lambda repo, sha, pushed_at, o_r=None, close=None, fixes=(): (watched.append(sha), 3)[1]
+        A.watch_landed = lambda repo, sha, pushed_at, clock, o_r=None, close=None, fixes=(): (watched.append(sha), 3)[1]
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         rc, out = self.land(wt, "--follow")
         self.assertEqual(rc, 3, out)
@@ -560,11 +561,14 @@ class WaitingTest(Base):
         A.slug = lambda repo: "pawelkrupinski/movies"
         try:
             d, _c, _w = A.waiting_state(self.r.path)
-            drop = A.TokenDrop(d, "pawelkrupinski/movies").open()
+            drop = A.TokenDrop(d, "pawelkrupinski/movies", FakeClock()).open()
             self.assertEqual(oct(os.stat(drop.path).st_mode & 0o777), "0o600")
             A.token = lambda o_r: "tok-0123456789abcdef"
             self.assertTrue(A.offer_token(self.r.path))
-            drop.nap(0.5)
+            import time
+            deadline = time.monotonic() + 30  # the drop's thread takes it: waited for, never a fixed nap under load
+            while os.environ.get("AGENTCTL_STORE_TOKEN") != "tok-0123456789abcdef" and time.monotonic() < deadline:
+                time.sleep(0.01)
             self.assertEqual(os.environ.get("AGENTCTL_STORE_TOKEN"), "tok-0123456789abcdef")
             drop.close()
             self.assertFalse(os.path.exists(drop.path))
@@ -639,10 +643,10 @@ class WaitingTest(Base):
                 ticks.append(1)
                 A.queue_verdict(d, dict(e), status, verdict, code=0 if status == "landed" else 1, **fields)
                 os.unlink(os.path.join(d, "entries", f"{e['id']}.json"))  # ... its entry on ITS disk, not this one
-            A.time.sleep = decide
+            self.clock.on_sleep = decide
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                got = await_entry(self.r.path, eid)
+                got = await_entry(self.r.path, eid, self.clock)
             self.assertEqual(ticks, [1])
             if status == "landed":
                 self.assertEqual(got, (0, "abc123", 1234.5))
@@ -660,12 +664,12 @@ class WaitingTest(Base):
         d = A.waiting_state(self.r.path)[0]
         e = {"id": "e-old", "seq": 1, "status": "waiting", "worktree": self.r.path}
         st.put_item("change", "e-old", "waiting", A.change_item_fields(e))
-        A.time.sleep = lambda _s: A.supersede(d, dict(e), "e-new", "a newer land of the same worktree")
+        self.clock.on_sleep = lambda _s: A.supersede(d, dict(e), "e-new", "a newer land of the same worktree")
         A.cancel_entry_remote, saved = (lambda *a, **k: None), A.cancel_entry_remote
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                got = await_entry(self.r.path, "e-old")
+                got = await_entry(self.r.path, "e-old", self.clock)
         finally:
             A.cancel_entry_remote = saved
         self.assertEqual(got, (0, None, None))
@@ -701,12 +705,12 @@ class WaitingTest(Base):
             if len(polls) == 4:
                 A.queue_verdict(d, dict(e), "landed", "LANDED abc123 (batch: 1 change(s) in one push)", code=0,
                                 landed_sha="abc123", pushed_at=1.0)
-        A.time.sleep = tick
+        self.clock.on_sleep = tick
         A.open_store = Flaky
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-                got = await_entry(self.r.path, "e-blip")
+                got = await_entry(self.r.path, "e-blip", self.clock)
         finally:
             A.open_store = real
         self.assertEqual(got, (0, "abc123", 1.0))

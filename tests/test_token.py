@@ -4,6 +4,7 @@ import json, os, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, TOOL  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 MOVIES = "pawelkrupinski/movies"
 TOK = "tok-0123456789abcdef"
@@ -46,7 +47,7 @@ class TokenResolutionTest(Base):
 
     def serve(self, tok=TOK):
         d, _c, _w = A.waiting_state(self.r.path)
-        drop = A.TokenDrop(d, MOVIES).open()
+        drop = A.TokenDrop(d, MOVIES, FakeClock()).open()
         drop.held = lambda: tok or ""  # the processor's token (the test process itself has none in its environment)
         self.addCleanup(drop.close)
         return drop
@@ -185,7 +186,7 @@ class LoopCannotStallTest(unittest.TestCase):
         os.environ["AGENTCTL_SOCK_DIR"] = base
         try:
             d = tempfile.mkdtemp()
-            drop = A.TokenDrop(d, MOVIES).open()
+            drop = A.TokenDrop(d, MOVIES, FakeClock()).open()
             drop.held = lambda: TOK
             self.addCleanup(drop.close)
             # the main thread never calls nap/take: only the server thread can answer
@@ -361,7 +362,7 @@ class TokenSaidOnTransitionTest(unittest.TestCase):
         A.slug = lambda repo: MOVIES
         A.token = lambda o_r: TOK
         try:
-            drop = A.TokenDrop(d, MOVIES).open()
+            drop = A.TokenDrop(d, MOVIES, FakeClock()).open()
             self.addCleanup(drop.close)
             self.assertTrue(A.offer_token("/x"))  # it holds none: handed over
             deadline = time.time() + 5

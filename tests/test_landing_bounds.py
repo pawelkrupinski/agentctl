@@ -285,7 +285,7 @@ class UnboundTest(unittest.TestCase):
             name = A.land_lease_name(d)
             st.acquire(name, "other:land:1", 600, 3600)
             t0 = time.monotonic()
-            with A.land_lock(d, timeout=0) as held:
+            with A.land_lock_if_free(d) as held:
                 self.assertFalse(held)
             self.assertLess(time.monotonic() - t0, 5)
 

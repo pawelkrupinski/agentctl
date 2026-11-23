@@ -24,6 +24,7 @@ import hashlib, json, os, random, re, shutil, subprocess, sys, tempfile, threadi
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 TICK = 60  # s of simulated time per reconciler tick
 # THE INVARIANT KINDS (tests/sim-invariants.tsv: each one's version, definition fingerprint and violation baseline;
@@ -1042,7 +1043,7 @@ class Sim:
         import argparse, contextlib, io
         with contextlib.redirect_stdout(io.StringIO()):
             A.cmd_waiting(argparse.Namespace(wcmd="cancel", repo=self.repo, entry=ch.eid, renamed=True, hold_for=None,
-                                             hold_why=None))
+                                             hold_why=None), FakeClock(self.clock[0]))  # a cancel never waits
 
     def entry_by_id(self, eid):
         return A.read_record(os.path.join(self.d, "entries", f"{eid}.json"))

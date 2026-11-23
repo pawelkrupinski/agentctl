@@ -289,10 +289,10 @@ def landed_sha_of(eid, data):
     return data.get("tip") or next(iter(data.get("landed_commits") or {}), "") or data.get("head")
 
 
-def await_verdict(eid, bound, store=None):
+def await_verdict(eid, bound, clock, store=None):
     """Block until queued change eid is decided (its store item; through a store blip, asked again), at most `bound` s:
     (state, its item's data, seconds waited); state `landed`, another terminal state, or the last open one read."""
-    t0, delays = time.time(), backoff(*FIXER_LAND_POLL)
+    t0, delays = clock.time(), backoff(*FIXER_LAND_POLL)
     state, data = "unread", {}
     while True:
         try:
@@ -303,10 +303,10 @@ def await_verdict(eid, bound, store=None):
             state, data = it["state"], it.get("data") or {}
             if machine_state("change", state).terminal:
                 take_delivery(it, store)
-                return state, data, time.time() - t0
-        if time.time() - t0 >= bound:
-            return state, data, time.time() - t0
-        time.sleep(next(delays))
+                return state, data, clock.time() - t0
+        if clock.time() - t0 >= bound:
+            return state, data, clock.time() - t0
+        clock.sleep(next(delays))
 
 
 def take_delivery(it, store=None):
@@ -333,10 +333,10 @@ def verdict_still_holds(repo, main_ref, it):
         and git(repo, "rev-parse", main_ref).strip() == data["decided_on"]
 
 
-def await_queued(eid, store=None):
+def await_queued(eid, clock, store=None):
     """Block until queued change eid is decided, bounded by FIXER_LAND_WAIT: LANDED <sha> (0), NOT LANDED: <why> (1),
     or NOT LANDED (still queued) (1)."""
-    state, data, waited = await_verdict(eid, env_num("AGENTCTL_FIXER_LAND_WAIT", FIXER_LAND_WAIT), store)
+    state, data, waited = await_verdict(eid, env_num("AGENTCTL_FIXER_LAND_WAIT", FIXER_LAND_WAIT), clock, store)
     if state == "landed":
         print(f"LANDED {landed_sha_of(eid, data)} (queued {eid})", flush=True)
         return 0

@@ -18,7 +18,7 @@ class UntilDoneTest(test_queue.QueueTest):
         self.d = A.waiting_state(self.r.path)[0]
         self.sleeps = 0
         self.before_drive = None
-        A.time.sleep = self.drive_queue  # the await's poll: the processor moves the queue meanwhile
+        self.clock.on_sleep = self.drive_queue  # the await's poll: the processor moves the queue meanwhile
         self.saved_cwds = A.process_cwds
         A.process_cwds = lambda: {}  # no process of this machine works in the test's worktrees
 
@@ -84,13 +84,13 @@ class UntilDoneTest(test_queue.QueueTest):
 
     def test_called_again_after_an_interruption_it_resumes_its_entry_and_never_queues_twice(self):
         wt, _ = self.agent("r", "web/src/main/R.scala", "r\n", msg="r: resume")
-        A.time.sleep = lambda s: None  # nothing moves: the deadline ends the first call
+        self.clock.on_sleep = None  # nothing moves: the deadline ends the first call
         rc, out = self.until_done(wt, "--deadline", "0")
         self.assertEqual(rc, 2, out)
         self.assertIn("NOT DONE", out)
         self.assertIn("land --until-done", out, "it says how to resume")
         eid = out.split("QUEUED ", 1)[1].split()[0]
-        A.time.sleep = self.drive_queue
+        self.clock.on_sleep = self.drive_queue
         rc, out = self.until_done(wt)
         self.assertEqual(rc, 0, out)
         self.assertIn(f"RESUMING {eid}", out)
@@ -106,7 +106,7 @@ class UntilDoneTest(test_queue.QueueTest):
         waiting". The verdict is durable: decided while no call waited, the next call prints it (a rejection is never
         queued again unchanged), and `land status <entry>` gives it after the fact."""
         wt, _ = self.agent("v", "web/src/main/BROKEN.scala", "v\n", msg="v: broken")
-        A.time.sleep = lambda s: None
+        self.clock.on_sleep = None
         rc, out = self.until_done(wt, "--deadline", "0")
         self.assertEqual(rc, 2, out)
         eid = out.split("QUEUED ", 1)[1].split()[0]
@@ -132,7 +132,7 @@ class UntilDoneTest(test_queue.QueueTest):
         `land --until-done` at 17:35 at the same head replayed that NOT LANDED although main had moved: the verdict no
         longer held, and the agent rebased by hand. A verdict decided on another main is checked again."""
         wt, _ = self.agent("mv", "web/src/main/BROKEN.scala", "v\n", msg="mv: broken")
-        A.time.sleep = lambda s: None
+        self.clock.on_sleep = None
         rc, out = self.until_done(wt, "--deadline", "0")
         self.assertEqual(rc, 2, out)
         eid = out.split("QUEUED ", 1)[1].split()[0]
@@ -141,7 +141,7 @@ class UntilDoneTest(test_queue.QueueTest):
         self.assertEqual(A.open_store().item("change", eid)["state"], "rejected")
         other, _ = self.agent("mm", "docs/mm.md", "mm\n", msg="main moves")
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
-        A.time.sleep = self.drive_queue
+        self.clock.on_sleep = self.drive_queue
         rc, out = self.until_done(wt)
         self.assertNotIn("DECIDED", out, "a verdict decided on an older main is no verdict on this one")
         self.assertIn("QUEUED ", out, "the change is checked again")
@@ -332,7 +332,7 @@ class UntilDoneTest(test_queue.QueueTest):
             try:
                 os.chdir(wt)
                 with contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
-                    return A.main(["land", *argv])
+                    return A.main(["land", *argv], clock=self.clock)
             finally:
                 os.chdir(old)
 

@@ -349,32 +349,17 @@ class LandTest(LandBase):
         return got
 
     def hold_until_waited(self):
-        """Another lander holds the landing lease until this lander has been REFUSED it and then waits (its first sleep
-        after the refusal): a timer of 1.5 s expired before a lander slowed by a loaded machine (load 25) ever reached
-        the lock; releasing at the lander's first sleep of any kind let a sleep before the lock -- the precheck waiting
-        for the governor or a check slot under a loaded suite -- free the lease, and the lander never waited. Only the
-        lander's thread counts: A.time.sleep is the process's, and a thread an earlier test left running sleeps too."""
+        """Another lander holds the landing lease until this lander, refused it, waits: its first sleep on ITS clock.
+        (A timer expired before a lander slowed by a loaded machine reached the lock; a sleep anywhere in the process
+        -- the precheck waiting for the governor, a thread an earlier test left running -- freed it too early. The
+        lander's own clock sleeps only where land itself waits.)"""
         got = self.hold_lock(3600)
-        name, sleep = A.land_lease_name(self.r.path), self.sleep
-        import threading
-        lander, refused = threading.get_ident(), []
-        acquire = A.Store.acquire
+        name = A.land_lease_name(self.r.path)
 
-        def watched_acquire(st, lease, holder, *a, **k):
-            r = acquire(st, lease, holder, *a, **k)
-            if lease == name and holder != "other lander" and "held" in (r or {}):
-                refused.append(holder)
-            return r
-        A.Store.acquire = watched_acquire
-        self.addCleanup(setattr, A.Store, "acquire", acquire)
-
-        def first_wait(secs):
-            if threading.get_ident() != lander or not refused:
-                return sleep(min(secs, 0.05))
+        def first_wait(_secs):
             A.open_store().release(name, got["epoch"], got["secret"])
-            A.time.sleep = sleep
-            return sleep(min(secs, 0.2))
-        A.time.sleep = first_wait
+            self.clock.on_sleep = None
+        self.clock.on_sleep = first_wait
 
     def test_a_second_lander_waits_for_the_lock_then_lands(self):
         self.hook("exit 0")
@@ -397,7 +382,6 @@ class LandTest(LandBase):
     def test_lock_wait_times_out_without_pushing(self):
         self.hook("exit 0")
         self.hold_lock(30)
-        A.time.sleep = self.sleep
         os.environ["AGENTCTL_LAND_LOCK_TIMEOUT"] = "0.5"
         self.r.write("f1.txt", "mine\n")
         sha = self.r.commit("mine")

@@ -4,6 +4,7 @@ import inspect, os, sys, threading, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, code_source  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 
 class StepBoundTest(unittest.TestCase):
@@ -78,7 +79,7 @@ class StoreDownNeverEndsTheLoopTest(unittest.TestCase):
         A.open_condition, A.TokenDrop.nap, A.restart_if_changed = down, nap, lambda *a, **k: None
         A.write_snapshot = lambda *a, **k: None
         try:
-            self.assertEqual(A.waiting_run(r.path), 0)  # ended by TICK_STOP, never by the store's exception
+            self.assertEqual(A.waiting_run(r.path, FakeClock()), 0)  # ended by TICK_STOP, never by the store's exception
         finally:
             (A.server_steps, A.open_condition, A.TokenDrop.nap, A.restart_if_changed, A.write_snapshot) = saved
             A.TICK_STOP[0] = False

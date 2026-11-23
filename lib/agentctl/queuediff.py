@@ -11,7 +11,7 @@ from agentctl.classify import ANSI, TRANSIENT_PUSH, norm_line
 from agentctl.repos import gated_repo, precheck_hook, waiting_supported
 from agentctl.waitingdir import save_entry, waiting_entries, waiting_state, wlog
 from agentctl.wait import fetch_failed_log, log_entries
-from agentctl.land import HOOK_STATUS, RACE, REDGATE, land_lock, landed, push_argv, push_bounds, run_watched, tool_env
+from agentctl.land import HOOK_STATUS, RACE, REDGATE, land_lock_if_free, landed, push_argv, push_bounds, run_watched, tool_env
 from agentctl.gating import mark_gate_dirty
 from agentctl.clones import fetch_main
 from agentctl.queueslots import PUSH_ATTEMPTS_MAX, check_tree, queue_verdict, set_change, tree_slot
@@ -219,7 +219,7 @@ def _push_change(repo, d, e, i):
     hook = precheck_hook(repo)
     log_path = os.path.join(d, f"check-{e['id']}")
     tree = check_tree_for_push(repo, e, i)
-    with land_lock(repo, timeout=0) as held:
+    with land_lock_if_free(repo) as held:
         if not held:
             return "busy"
         now_ = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or {}

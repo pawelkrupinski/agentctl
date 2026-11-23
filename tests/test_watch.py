@@ -5,6 +5,7 @@ import datetime as dt, os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 MOVIES = "pawelkrupinski/movies"
 
@@ -58,7 +59,7 @@ class WatchTest(Base):
         import contextlib, io
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, o_r=MOVIES)
+            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, self.clock, o_r=MOVIES)
         return rc, out.getvalue()
 
     def test_green_main_and_convergence(self):
@@ -167,14 +168,7 @@ class WatchTest(Base):
         A.gh_json = broken
         # ON A CLOCK THE SLEEPS MOVE (2026-11-19: with a 0.3 s real-time bound and no-op sleeps, how many reads fit
         # was the machine's speed -- 10 in python:3.14 under load, and the assertion failed): each sleep advances it
-        sleeps, clock, real = [], [1795000000.0], A.time.time
-        A.time.time = lambda: clock[0]
-        self.addCleanup(setattr, A.time, "time", real)
-
-        def sleep(s):
-            sleeps.append(s)
-            clock[0] += s
-        A.time.sleep = sleep
+        sleeps = self.clock.slept
         os.environ["AGENTCTL_WATCH_TIMEOUT"] = "3000"
         rc, out = self.watch()
         self.assertEqual(rc, 2, out)
@@ -226,7 +220,7 @@ class WatchTest(Base):
             subprocess.run(["git", "-C", self.r.path, "worktree", "remove", "--force", wt], check=True)
             self.assertFalse(os.path.exists(wt))
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-                rc = A.main(["watch", "--repo", wt, "--sha", self.sha, "--pushed-at", str(self.pushed_at), "--close", wt])
+                rc = A.main(["watch", "--repo", wt, "--sha", self.sha, "--pushed-at", str(self.pushed_at), "--close", wt], clock=self.clock)
         finally:
             os.chdir(old)
             A.slug = saved_slug
@@ -261,7 +255,7 @@ class WatchTest(Base):
         def theirs_decides(_s):  # the other follower's verdict, on the item
             it = st.item("watch", self.sha)
             st.transition("watch", self.sha, "ok", it["version"], data={"verdict": "WATCH OK: Main #7 green"})
-        A.time.sleep = theirs_decides
+        self.clock.on_sleep = theirs_decides
         rc, out = self.watch()
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.listed, [], "never a second watch of GitHub")
@@ -319,7 +313,7 @@ class WatchTest(Base):
         import contextlib, io
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, o_r="bitcashier/infra")
+            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, self.clock, o_r="bitcashier/infra")
         self.assertEqual(rc, 0)
         self.assertEqual(self.listed, [])
 
@@ -332,7 +326,7 @@ class LandWatchTest(Base):
         self.saved = A.watch_landed
         self.calls = []
 
-        def fake(repo, sha, pushed_at, o_r=None, close=None, fixes=()):
+        def fake(repo, sha, pushed_at, clock, o_r=None, close=None, fixes=()):
             # the lease is free while watching: another lander could take it now
             r = A.open_store().get(A.land_lease_name(repo))
             assert not r or not r["holder"] or r["expires_at"] <= time.time(), "the landing lease is held while watching"
@@ -455,7 +449,7 @@ class WatchItemTest(unittest.TestCase):
     def test_a_follower_never_renews_a_claim_another_follower_took_over(self):
         """Review round 7: renew() wrote its lease over whoever held the item, so a follower whose claim lapsed (asleep)
         took it back from the one that had taken it over."""
-        claim = A.WatchClaim("/repo", "g" * 40, time.time(), "pawelkrupinski/movies")
+        claim = A.WatchClaim("/repo", "g" * 40, time.time(), "pawelkrupinski/movies", FakeClock())
         A.start_watch("/repo", "g" * 40, time.time(), worktree="/w",
                       follower={"followed_by": "ci-runner:7", "followed_until": time.time() + 600})
         claim.renew()

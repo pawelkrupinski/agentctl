@@ -19,10 +19,11 @@ from agentctl.landwatch import (
 from agentctl.redopen import red_attach
 from agentctl.cireport import ci_why
 from agentctl.statemachines import StaleVersion, TerminalState
+from agentctl.clock import Clock
 
 
-def watch_landed(repo: str, sha: str, pushed_at: float | None, o_r: str | None = None, close: str | None = None,
-                 fixes: Sequence[str] = ()) -> int:
+def watch_landed(repo: str, sha: str, pushed_at: float | None, clock: Clock, o_r: str | None = None,
+                 close: str | None = None, fixes: Sequence[str] = ()) -> int:
     """Watch Main and the convergence for a landed sha. 0 green (or nothing to watch), 3 red, 2 could not tell. OWNED
     (one watcher per sha; on agentctl's new code it re-execs as `agentctl watch`). fixes: the runs the landed commits'
     `Fixes-Red:` trailers name (the sha's own are read here too): each is verified against the new run (FIX OK / FIX
@@ -32,12 +33,12 @@ def watch_landed(repo: str, sha: str, pushed_at: float | None, o_r: str | None =
     if not flows:
         print(f"watch: no CI watched for {o_r} (only movies' Main and convergence are)")
         return 0
-    pushed_at = pushed_at or time.time()
+    pushed_at = pushed_at or clock.time()
     try:
         fixes = sorted(set(fixes) | fixes_of(repo, [sha]))
     except Exception:
         fixes = sorted(set(fixes))
-    claim = WatchClaim(repo, sha, pushed_at, o_r, close)
+    claim = WatchClaim(repo, sha, pushed_at, o_r, clock, close)
     how, it = claim.look()
     if how == "theirs":
         how, it = claim.wait_theirs(it)
@@ -60,7 +61,7 @@ def watch_landed(repo: str, sha: str, pushed_at: float | None, o_r: str | None =
                   "its verdict is its own (`agentctl orphans` lists owners)")
             return 2
         try:
-            rc = _watch(repo, sha, pushed_at, o_r, flows, own, fixes, claim if how == "mine" else None)
+            rc = _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes, claim if how == "mine" else None)
         finally:
             own.release()
     if rc == 0 and close:
@@ -69,8 +70,9 @@ def watch_landed(repo: str, sha: str, pushed_at: float | None, o_r: str | None =
 
 
 class WatchClaim:
-    def __init__(self, repo, sha, pushed_at, o_r, close=None):
+    def __init__(self, repo, sha, pushed_at, o_r, clock, close=None):
         self.repo, self.sha, self.pushed_at, self.o_r, self.close = repo, sha, pushed_at, o_r, close
+        self.clock = clock
         self.me = f"{os.uname().nodename}:{os.getpid()}"
 
     def lease(self, t):
@@ -78,7 +80,7 @@ class WatchClaim:
 
     def look(self):
         """('mine' | 'theirs' | 'decided', item), or (None, None) when the store did not answer."""
-        t = time.time()
+        t = self.clock.time()
         try:
             st = open_store()
             it = start_watch(self.repo, self.sha, self.pushed_at, worktree=self.repo, close=self.close, o_r=self.o_r,
@@ -106,11 +108,11 @@ class WatchClaim:
         or its claim lapsing (then ours)."""
         err(f"watch: {self.sha[:10]} is already watched by {it['data'].get('followed_by')}: its verdict is read from "
             "the store, not watched twice")
-        t0, timeout = time.time(), env_num("AGENTCTL_WATCH_TIMEOUT", WATCH_TIMEOUT)
+        t0, timeout = self.clock.time(), env_num("AGENTCTL_WATCH_TIMEOUT", WATCH_TIMEOUT)
         delays = backoff(env_num("AGENTCTL_WATCH_POLL", 60), 300)
         how = "theirs"
-        while how == "theirs" and time.time() - t0 < timeout:
-            time.sleep(next(delays))
+        while how == "theirs" and self.clock.time() - t0 < timeout:
+            self.clock.sleep(next(delays))
             how, got = self.look()
             it = got or it
             if how is None:  # a store blip while reading: read again
@@ -124,7 +126,7 @@ class WatchClaim:
             # only its OWN claim: one that lapsed (a laptop asleep) and was taken over is the new follower's now --
             # renewing it would take it back from under that one, and the tick would leave both watching
             if self.mine(it):
-                st.update_item("watch", self.sha, it["version"], self.lease(time.time()))
+                st.update_item("watch", self.sha, it["version"], self.lease(self.clock.time()))
         except (Exception, SystemExit) as e:  # renewed at the next look; a lapse lets the tick evaluate it meanwhile
             err(f"watch {self.sha[:10]}: could not renew its claim ({str(e)[:120]})")
 
@@ -156,17 +158,17 @@ class WatchClaim:
             err(f"watch {self.sha[:10]}: could not write its verdict to the store ({str(e)[:120]})")
 
 
-def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=(), claim=None):
+def _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None):
     timeout = env_num("AGENTCTL_WATCH_TIMEOUT", WATCH_TIMEOUT)
     conv_start = env_num("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START)
-    t0 = time.time()
+    t0 = clock.time()
     err(f"watching Main and the convergence for {sha[:10]} (up to {int(timeout // 60)} min; `--no-watch` skips this)"
         + (f"; its Fixes-Red {', '.join(fixes)} is verified by the red's own item (`agentctl red status`)" if fixes else ""))
     done, said = {}, set()  # kind -> (run, ok | None for none started)
     # NO PROGRESS: nothing about the followed runs (which run, its status, its last update) changed for this long ends
     # the watch with a named verdict (a queue no runner serves, a runner lost mid-run), not a silent 3 h wait
     stall = env_num("AGENTCTL_WATCH_STALL_MIN", WATCH_STALL_MIN) * 60
-    state, changed = None, time.time()
+    state, changed = None, clock.time()
     delays = backoff(env_num("AGENTCTL_WATCH_POLL", 60), 300)
     # UNREACHABLE: a failed read backs off (to 5 min) and is retried until the watch's own bound; only then UNKNOWN,
     # saying for how long GitHub could not be read (2026-10-27: ten failures in a row used to end it in minutes)
@@ -192,7 +194,7 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=(), claim=None):
     while True:
         seen = {}
         try:
-            seen = watch_look(repo, sha, o_r, flows, done, pushed_at, t0, time.time(), on_run)
+            seen = watch_look(repo, sha, o_r, flows, done, pushed_at, t0, clock.time(), on_run)
             if unreachable is not None:
                 err(f"watch: GitHub answers again after {red_for(iso_at(unreachable))} ({failures} failed reads)")
             unreachable, failures, err_delays = None, 0, None
@@ -203,7 +205,7 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=(), claim=None):
             failures += 1
             last_error = str(e)[:160]
             if unreachable is None:
-                unreachable, err_delays = time.time(), backoff(env_num("AGENTCTL_WATCH_ERROR_POLL", 30), 300)
+                unreachable, err_delays = clock.time(), backoff(env_num("AGENTCTL_WATCH_ERROR_POLL", 30), 300)
             err(f"watch: could not read the runs ({last_error}) [{failures} failed, unreachable for "
                 f"{red_for(iso_at(unreachable))}]")
         v = watch_verdict(o_r, sha, flows, done)
@@ -216,7 +218,7 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=(), claim=None):
             return 3
         if v:
             return verdict(0, v[1])
-        if time.time() - t0 >= timeout:
+        if clock.time() - t0 >= timeout:
             left = ", ".join(flows[k][0] for k in flows if k not in done)
             if unreachable is not None:
                 return verdict(2, f"WATCH UNKNOWN: GitHub's runs could not be read for {red_for(iso_at(unreachable))} "
@@ -227,8 +229,8 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=(), claim=None):
         if unreachable is None:  # a failed read says nothing about the runs: no stall judged on it
             now_state = (tuple(sorted(done)), tuple(sorted(seen.items())))
             if now_state != state:
-                state, changed = now_state, time.time()
-            elif time.time() - changed >= stall:
+                state, changed = now_state, clock.time()
+            elif clock.time() - changed >= stall:
                 left = ", ".join(f"{flows[k][0]} {('run ' + str(v[0]) + ' ' + str(v[1])) if v else 'no run'}"
                                  for k, v in [(k, seen.get(k)) for k in flows if k not in done])
                 return verdict(2, f"WATCH STALLED: no change in {left} for {int(stall // 60)} min; check `agentctl "
@@ -236,14 +238,14 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, fixes=(), claim=None):
         if claim:
             claim.renew()
         restart_if_changed([own])
-        time.sleep(next(err_delays) if unreachable is not None else next(delays))
+        clock.sleep(next(err_delays) if unreachable is not None else next(delays))
 
 
-def cmd_watch(a):
+def cmd_watch(a, clock):
     a.inbox_cwd = a.agent_cwd or a.close or a.repo or safe_cwd()  # its inbox entry routes to the agent's worktree
     repo = main_clone(a.repo or safe_cwd())
     os.chdir(repo)  # not the worktree: --close removes it, and so may its agent
-    return watch_landed(repo, a.sha, a.pushed_at, close=a.close, fixes=a.fixes or ())
+    return watch_landed(repo, a.sha, a.pushed_at, clock, close=a.close, fixes=a.fixes or ())
 
 
 def tick_watches(now_=None):

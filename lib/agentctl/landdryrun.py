@@ -190,10 +190,10 @@ def judge_against_baseline(repo, hook, head, out, log_path):
     return new, {c: l for c, l in mine.items() if c not in new}
 
 
-def precheck(repo, main_ref, sh, log_path, a):
+def precheck(repo, main_ref, sh, log_path, a, clock):
     """Before the lock: sync and the hook's dry run (the long part). None when land goes on to the lock (with
     a.prechecked = (head, base) when the dry run passed there), else land's rc."""
-    rc, head = sync(repo, main_ref, sh, getattr(a, "release_hold", False))
+    rc, head = sync(repo, main_ref, sh, clock, getattr(a, "release_hold", False))
     if rc is not None:
         return rc
     hook = precheck_hook(repo)

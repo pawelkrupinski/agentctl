@@ -164,7 +164,6 @@ cognitive	kick_processor	11
 cognitive	land_calls	19
 cognitive	land_hold	13
 cognitive	land_in_worktree	41
-cognitive	land_lock	13
 cognitive	land_loop	39
 cognitive	land_status_entry	29
 cognitive	land_until_done	28

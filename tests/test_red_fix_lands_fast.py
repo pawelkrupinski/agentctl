@@ -26,11 +26,9 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         self.saved_fast = A.fast_precheck_spawn
         self.spawned = []
         A.fast_precheck_spawn = lambda argv, **kw: self.spawned.append(argv)
-        self.saved_sleep = A.time.sleep
 
     def tearDown(self):
         A.fast_precheck_spawn = self.saved_fast
-        A.time.sleep = self.saved_sleep
         for k, v in self.saved_env.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -66,7 +64,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
                     A.check_entry(self.r.path, e["id"])
                 elif e["status"] == "checked":
                     A.push_change(self.r.path, d, e)
-        A.time.sleep = sleep
+        self.clock.on_sleep = sleep
 
     # -- the fixer's land ---------------------------------------------------------------------------------------------
     def test_a_fixers_land_queues_like_any_land_and_ends_at_its_verdict(self):
@@ -90,7 +88,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         self.r.write("scripts/land-precheck", "#!/bin/sh\necho 'PRECHECK FAIL: rules (1 s)'\nexit 1\n", at=wt)
         os.chmod(os.path.join(wt, "scripts/land-precheck"), 0o755)
         self.r.commit("the fix's precheck", at=wt)
-        A.time.sleep = lambda s: self.fail("a refused fix waits for nothing")
+        self.clock.on_sleep = lambda s: self.fail("a refused fix waits for nothing")
         rc, out = self.land(wt)
         self.assertEqual(rc, 1, out)
         self.assertEqual(self.spawned, [], "a fixer's precheck runs in the foreground, not detached")
@@ -114,7 +112,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         os.environ["AGENTCTL_FIXER_LAND_WAIT"] = "0"
         try:
             wt, _ = self.agent("fix", "web/src/main/A.scala", "a\n", msg="the fix\n\nFixes-Red: 7")
-            A.time.sleep = lambda s: None  # nothing drives the queue
+            self.clock.on_sleep = None  # nothing drives the queue
             rc, out = self.land(wt)
         finally:
             os.environ.pop("AGENTCTL_FIXER_LAND_WAIT", None)

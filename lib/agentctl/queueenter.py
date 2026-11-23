@@ -126,10 +126,10 @@ def cmd_land_precheck(a):
     return 1
 
 
-def enqueue(repo, main_ref, sh, a):
+def enqueue(repo, main_ref, sh, a, clock):
     """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor. A red
     fixer's land then waits for the verdict (fixer_land)."""
-    rc, head = sync(repo, main_ref, sh, getattr(a, "release_hold", False))
+    rc, head = sync(repo, main_ref, sh, clock, getattr(a, "release_hold", False))
     if rc is not None:
         return rc
     d, _clone, _wt = waiting_state(repo)
@@ -159,7 +159,7 @@ def enqueue(repo, main_ref, sh, a):
         return rc
     if not fixer:  # land --until-done: its caller waits (land_until_done)
         return foreground_precheck(repo, main_ref, head, a.queued_id, a)
-    return fixer_land(repo, main_ref, head, a.queued_id, a)
+    return fixer_land(repo, main_ref, head, a.queued_id, a, clock)
 
 
 def foreground_precheck(repo, main_ref, head, eid, a):
@@ -172,15 +172,15 @@ def foreground_precheck(repo, main_ref, head, eid, a):
     return 0
 
 
-def fixer_land(repo, main_ref, head, eid, a):
+def fixer_land(repo, main_ref, head, eid, a, clock):
     if foreground_precheck(repo, main_ref, head, eid, a) == 1:
         return 1
-    return await_queued(eid)
+    return await_queued(eid, clock)
 
 
-def land_until_done(repo, main_ref, sh, a):
+def land_until_done(repo, main_ref, sh, a, clock):
     """`land --until-done` (LAND --UNTIL-DONE above)."""
-    t0 = time.time()
+    t0 = clock.time()
     bound = a.deadline if a.deadline is not None else env_num("AGENTCTL_UNTIL_DONE_DEADLINE", UNTIL_DONE_DEADLINE)
     head = git(repo, "rev-parse", "HEAD").strip()
     it = own_change_item(repo, head)
@@ -204,12 +204,12 @@ def land_until_done(repo, main_ref, sh, a):
             # nothing of its own left to land (it reached main another way, or there never was a commit)
             return until_done_finish(repo, "-", git(repo, "rev-parse", main_ref).strip(), a)
         a.until_done = True
-        rc = enqueue(repo, main_ref, sh, a)
+        rc = enqueue(repo, main_ref, sh, a, clock)
         eid = getattr(a, "queued_id", None)
         if rc != 0 or not eid:
             print(next_command(repo, ""), flush=True)
             return 1
-    state, data, _waited = await_verdict(eid, max(0.0, bound - (time.time() - t0)))
+    state, data, _waited = await_verdict(eid, max(0.0, bound - (clock.time() - t0)), clock)
     if state == "landed":
         sha = data.get("landed_sha") or landed_sha_of(eid, data)
         print(f"LANDED {sha} (queued {eid})", flush=True)
@@ -220,7 +220,7 @@ def land_until_done(repo, main_ref, sh, a):
         print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)
         print(next_command(repo, why), flush=True)
         return 1
-    print(f"NOT DONE: {eid} is {state} after {fmt_age(time.time() - t0)} (the --deadline); it stays queued -- run "
+    print(f"NOT DONE: {eid} is {state} after {fmt_age(clock.time() - t0)} (the --deadline); it stays queued -- run "
           f"{UNTIL_DONE_AGAIN} again from {repo}: it resumes this entry", flush=True)
     return 2
 
@@ -239,7 +239,7 @@ def rebase_in_progress(repo):
 # the next land's `rebase --abort` reset the branch to the pre-rebase commit, dropping them). A land that finds a rebase
 # already in progress refuses -- it is the agent's to finish or abort, never land's to discard -- and a rebase land
 # started is aborted on whatever path land leaves it unfinished.
-def sync(repo, main_ref, sh, release_hold=False):
+def sync(repo, main_ref, sh, clock, release_hold=False):
     """sync_onto_main, never leaving a rebase it started in progress; refused when one is in progress already."""
     pending = rebase_in_progress(repo)
     if pending:
@@ -248,16 +248,16 @@ def sync(repo, main_ref, sh, release_hold=False):
               "and an abort resets the branch -- then land again")
         return 1, None
     with WorktreeGuard(repo):
-        return sync_onto_main(repo, main_ref, sh, release_hold)
+        return sync_onto_main(repo, main_ref, sh, clock, release_hold)
 
 
-def sync_onto_main(repo, main_ref, sh, release_hold=False):
+def sync_onto_main(repo, main_ref, sh, clock, release_hold=False):
     """Fetch, rebase onto origin/main, the squash guard: (rc, None) when land is decided here, else (None, head).
     A commit with a `Hold: <why>` trailer is refused unless release_hold (`land --release-hold`: the owner's go)."""
     r = sh("git", "fetch", "--quiet", remote(), "main")
     if r.returncode:  # a tunnel restart is seconds long: one more try before giving up
         err(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
-        time.sleep(15)
+        clock.sleep(15)
         r = sh("git", "fetch", "--quiet", remote(), "main")
     if r.returncode:
         print(f"NOT LANDED: git fetch {remote()} main failed: {r.stderr.strip()[:300]} (tunnel? `agentctl env --check`)")

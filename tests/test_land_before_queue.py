@@ -6,6 +6,7 @@ import contextlib, io, os, stat, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Repo  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 
 class LandBeforeQueueTest(unittest.TestCase):
@@ -31,7 +32,7 @@ class LandBeforeQueueTest(unittest.TestCase):
         sh = lambda *args: A.subprocess.run(args, cwd=self.r.path, capture_output=True, text=True)  # noqa: E731
         errs = io.StringIO()
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errs):
-            rc, head = A.sync(self.r.path, "origin/main", sh)
+            rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock())
         return rc, head, errs.getvalue()
 
     def test_a_commit_the_step_adds_rides_the_same_push(self):

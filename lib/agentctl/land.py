@@ -9,6 +9,8 @@ import time
 import sys
 import contextlib
 import json
+from typing import Any, Iterator
+from agentctl.clock import Clock
 from agentctl.core import HOME, env_num, err, process_cache, run_cmd
 from agentctl.store import LeaseLost, StoreUnavailable
 from agentctl.procs import tosec
@@ -303,7 +305,7 @@ LAND_LEASE_TTL = 120
 LAND_LEASE_MAX = 45 * 60  # the design's 300 s once checks no longer run in the push's hook under the lease (step 6)
 
 
-def land_lease_name(repo):
+def land_lease_name(repo: str) -> str:
     """One lease per REPOSITORY (its GitHub slug): every clone and worktree of it, on every host -- keyed by the
     local clone's path, the laptop's `land --follow` and ci-runner's pushes took different leases on one store. A
     checkout without the remote: its git common dir."""
@@ -314,34 +316,62 @@ def land_lease_name(repo):
     return "land/" + re.sub(r"[^A-Za-z0-9._-]", "_", key.strip("/"))
 
 
+def land_lease_hold(repo: str) -> LeaseHold:
+    return LeaseHold(land_lease_name(repo), env_num("AGENTCTL_LAND_LEASE_TTL", LAND_LEASE_TTL),
+                     env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX), meta={"repo": repo})
+
+
 @contextlib.contextmanager
-def land_lock(repo, timeout=None):
-    """Hold the repository's landing lease, waiting for it with a line saying who holds it and doing what, repeated
-    every LAND_WAIT_REPORT_MIN minutes. Yields True when held, False when the wait timed out (timeout s; default
-    LAND_LOCK_TIMEOUT -- the tick's pushes pass 0: busy now is tried again next tick, never a tick held for hours)."""
-    h = LeaseHold(land_lease_name(repo), env_num("AGENTCTL_LAND_LEASE_TTL", LAND_LEASE_TTL),
-                  env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX), meta={"repo": repo})
+def land_lock(repo: str, clock: Clock) -> Iterator[bool]:
+    """Hold the repository's landing lease, waiting for it (LAND_LOCK_TIMEOUT s at most) with a line saying who holds
+    it and doing what, repeated every LAND_WAIT_REPORT_MIN minutes. Yields True when held, False when the wait timed
+    out."""
+    h = land_lease_hold(repo)
+    if not (h.acquire() or waited_for_lease(h, clock)):
+        yield False
+        return
+    with holding_land_lease(h):
+        yield True
+
+
+@contextlib.contextmanager
+def land_lock_if_free(repo: str) -> Iterator[bool]:
+    """The landing lease when it is free now, else False: the tick's pushes, where busy now is tried again next tick
+    (never a tick held for hours)."""
+    h = land_lease_hold(repo)
     if not h.acquire():
-        def said(r):
-            meta = json.loads(r.get("meta") or "{}")
-            return f"{r['holder']} (pid {meta.get('pid')}), {meta.get('note') or 'working'}; expires in {int(r['expires_at'] - time.time())} s"
-        err(f"waiting for the landing lease {h.name}, held by {said(h.held)}")
-        deadline = time.monotonic() + (env_num("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT) if timeout is None
-                                       else timeout)
-        every = env_num("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN) * 60
-        report_at = time.monotonic() + every
-        while not h.acquire():
-            if time.monotonic() > deadline:
-                yield False
-                return
-            if time.monotonic() > report_at:
-                err(f"still waiting for the landing lease: {said(h.held)}")
-                report_at = time.monotonic() + every
-            time.sleep(2)
-        err("got the landing lease")
+        yield False
+        return
+    with holding_land_lease(h):
+        yield True
+
+
+def waited_for_lease(h: LeaseHold, clock: Clock) -> bool:
+    """Wait for the held lease h, saying who holds it; True once acquired, False after LAND_LOCK_TIMEOUT s."""
+    def said(r: dict[str, Any]) -> str:
+        meta = json.loads(r.get("meta") or "{}")
+        return (f"{r['holder']} (pid {meta.get('pid')}), {meta.get('note') or 'working'}; "
+                f"expires in {int(r['expires_at'] - clock.time())} s")
+    err(f"waiting for the landing lease {h.name}, held by {said(h.held)}")
+    deadline = clock.monotonic() + env_num("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT)
+    every = env_num("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN) * 60
+    report_at = clock.monotonic() + every
+    while not h.acquire():
+        if clock.monotonic() > deadline:
+            return False
+        if clock.monotonic() > report_at:
+            err(f"still waiting for the landing lease: {said(h.held)}")
+            report_at = clock.monotonic() + every
+        clock.sleep(2)
+    err("got the landing lease")
+    return True
+
+
+@contextlib.contextmanager
+def holding_land_lease(h: LeaseHold) -> Iterator[None]:
     _landing[0] = h
     try:
-        yield True
+        yield
     finally:
         _landing[0] = None
         h.release()

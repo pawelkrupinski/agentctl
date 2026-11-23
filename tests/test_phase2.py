@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, seed_gating_checks  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 USERS = {"tok-pawel": "pawel", "tok-metrics": "ci-metrics", "tok-other": "mallory"}
 
@@ -944,7 +945,7 @@ class LandHoldTest(Phase2Base):
     def land(self, cmd, **kw):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = A.cmd_waiting(argparse.Namespace(wcmd=cmd, repo=self.repo, entry=None, renamed=True, **kw))
+            rc = A.cmd_waiting(argparse.Namespace(wcmd=cmd, repo=self.repo, entry=None, renamed=True, **kw), FakeClock())
         return rc, out.getvalue()
 
     def test_a_hold_made_on_the_laptop_holds_ci_runners_batch_until_released(self):

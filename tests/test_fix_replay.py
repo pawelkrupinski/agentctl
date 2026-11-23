@@ -9,6 +9,7 @@ import os, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Repo, approved  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 REGISTRY = ("# workflow\tverify_dispatch\treplay\twhy\n"
             "Alert backtest\tyes\tinfra/bin/backtest-alerts-replay --from-run {run}\t~30 min on ci-runner\n"
@@ -104,14 +105,14 @@ class FixReplayTest(unittest.TestCase):
         import io, contextlib
         out, errs = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errs):
-            rc, head = A.sync(self.r.path, "origin/main", sh)
+            rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock())
         # a red OUTSIDE the gate: warn-only (the owner, 2026-11-20) -- it warns, never blocks
         self.assertIsNone(rc)
         self.assertIn("POLICY UNAPPROVED fix-replay-outside", errs.getvalue())
         with approved("fix-replay-outside"):  # were it ever approved, it refuses as it was written to
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                rc, head = A.sync(self.r.path, "origin/main", sh)
+                rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock())
         self.assertEqual((rc, head), (1, None))
         self.assertIn("NOT LANDED: Alert backtest #5 [backtest] has a replay", out.getvalue())
 
@@ -130,20 +131,20 @@ class FixReplayTest(unittest.TestCase):
         self.assertTrue(A.rebase_in_progress(self.r.path))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc, _ = A.sync(self.r.path, "origin/main", sh)
+            rc, _ = A.sync(self.r.path, "origin/main", sh, FakeClock())
         self.assertEqual(rc, 1)
         self.assertIn("a rebase is in progress", out.getvalue())
         self.assertTrue(A.rebase_in_progress(self.r.path), "never land's to abort: it would reset the branch")
         sh("git", "rebase", "--abort")
         real = A.sync_onto_main
 
-        def leaves_one(repo, main_ref, sh_, release_hold=False):  # a path that stops mid-rebase
+        def leaves_one(repo, main_ref, sh_, clock, release_hold=False):  # a path that stops mid-rebase
             sh_("git", "rebase", "-q", mine)
             return 1, None
         A.sync_onto_main = leaves_one
         self.addCleanup(setattr, A, "sync_onto_main", real)
         with contextlib.redirect_stdout(io.StringIO()):
-            A.sync(self.r.path, "origin/main", sh)
+            A.sync(self.r.path, "origin/main", sh, FakeClock())
         self.assertIsNone(A.rebase_in_progress(self.r.path), "a rebase land started is aborted on its way out")
 
     # ---------------------------------------------------------------- gate reds (the owner, 2026-11-20)
@@ -246,14 +247,14 @@ class FixReplayTest(unittest.TestCase):
         self.fix("Fixes-Red: 2600")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            rc, _head = A.sync(self.r.path, "origin/main", sh)
+            rc, _head = A.sync(self.r.path, "origin/main", sh, FakeClock())
         self.assertEqual(rc, 1)
         self.assertIn("NOT LANDED: Main #2600 [unit (web)] is a gate red", out.getvalue())
         A.git(self.r.path, "reset", "-q", "--hard", self.base)
         self.r.write("marker.txt", "fixed\n")
         self.r.commit("the fix\n\nFixes-Red: 2600\nFix-Replay: grep -q fixed marker.txt")
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            rc, head = A.sync(self.r.path, "origin/main", sh)
+            rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock())
         self.assertIsNone(rc)
         fields = A.change_fields(self.r.path, "origin/main", head, A.argparse.Namespace())
         self.assertEqual([(p["cmd"], p["base"], p["head"]) for p in fields["replays"]],
