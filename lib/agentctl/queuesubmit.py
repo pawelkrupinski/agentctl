@@ -198,8 +198,9 @@ PRECHECK_NOISE = re.compile(r"blocked by:|^!?\s*pre-push\S* \S+ (ok|FAILED)|^\W*
 # THE FAILURE, NEVER THE TESTS AROUND IT (2026-11-19, 20261119-172743-...-f900cc: the NOT LANDED line read "lints: [info]
 # - should name that file ...", two specs that PASSED, while deploy.SharedMachineStateLintSpec failed further down): a
 # refusing step's detail is read for a test runner's own failure first -- ScalaTest's `- <test> *** FAILED ***` with
-# its suite (sbt's `Failed tests:` list, or the `<Suite>:` header above it) and its first assertion line (the indented
-# one under it), unittest's `FAIL: <test>` with its `...Error: ...` line -- and only without one for its first lines.
+# its suite (sbt's `Failed tests:` list, or the `<Suite>:` header above it) and its assertion message (the indented
+# lines under it, up to its first stack frame: a withClue's list of offenders sits under its first line, 2026-11-23,
+# movies b4be01, whose NOT LANDED line ended "...allowlist the line with why:" and named none), unittest's `FAIL: <test>` with its `...Error: ...` line -- and only without one for its first lines.
 SCALATEST_FAILED = re.compile(r"^(?:\[info\]\s*)?- (.+?)\s*\*\*\* FAILED \*\*\*")
 SCALATEST_SUITE = re.compile(r"^(?:\[info\]\s*)?([A-Z][\w$]*):$")
 SCALATEST_DETAIL = re.compile(r"^(?:\[info\])?\s{2,}(?!at )(\S.*)$")
@@ -221,10 +222,15 @@ def _failed_suites(texts: list[str]) -> list[str]:
 
 
 def _scalatest_failure(texts: list[str], i: int, test: str) -> str:
-    """`<suite>: <test>: <its first assertion line>` of ScalaTest's failing test at texts[i]."""
+    """`<suite>: <test>: <its assertion message, its lines joined>` of ScalaTest's failing test at texts[i]."""
     above = next((m.group(1) for m in map(SCALATEST_SUITE.match, reversed(texts[:i])) if m), None)
-    detail = SCALATEST_DETAIL.match(texts[i + 1]) if i + 1 < len(texts) else None
-    return ": ".join(x for x in ((_failed_suites(texts) or [above])[0], test, detail and detail.group(1)) if x)
+    message: list[str] = []
+    for line in texts[i + 1:]:
+        detail = SCALATEST_DETAIL.match(line)
+        if not detail:
+            break
+        message.append(detail.group(1))
+    return ": ".join(x for x in ((_failed_suites(texts) or [above])[0], test, " ".join(message)) if x)
 
 
 def _unittest_failure(texts: list[str], i: int, test: str) -> str:

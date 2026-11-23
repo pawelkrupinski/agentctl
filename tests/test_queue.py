@@ -1158,6 +1158,19 @@ class FastPrecheckTest(QueueTest):
         self.assertNotIn("more.stack", why)
         self.assertLess(why.index("SharedMachineStateLintSpec:"), why.index("was not empty"), why)
 
+    def test_a_failed_specs_assertion_of_several_lines_is_kept_whole(self):
+        """2026-11-23, movies 20261123-031245-...-b4be01: a withClue's list sits on the lines under its first, and
+        the NOT LANDED line kept only "...or allowlist the line with why:" -- a refusal naming no offender."""
+        lines = list(self.SCALATEST_FAIL)
+        at = next(i for i, l in enumerate(lines) if "*** FAILED ***" in l) + 1
+        lines[at:at] = ["    [info]   These lines sleep to wait; or allowlist the line with why:",
+                        "    [info]   android/scripts/x_test.py:106: time.sleep(0.05)",
+                        '    [info]   Vector("android/scripts/x_test.py:106: time.sleep(0.05)") was not empty (S.scala:211)',
+                        "    [info]   at more.stack(Frame.scala:1)"]
+        why = A.precheck_reason(lines)
+        self.assertIn("with why: android/scripts/x_test.py:106: time.sleep(0.05)", why)
+        self.assertNotIn("more.stack", why)
+
     def test_a_failed_unittest_is_named_with_its_assertion(self):
         why = A.precheck_reason(["precheck rules FAIL (3 s)", "    ok: test_a (m.T)",
                                  "    FAIL: test_b (scripts.ci.m_test.T.test_b)", "    Traceback (most recent call last):",
