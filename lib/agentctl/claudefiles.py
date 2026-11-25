@@ -64,28 +64,33 @@ def claude_limit(text: object) -> str | None:
     return " ".join(m.group(0).split())[:200] if m else None
 
 
+def limit_zone(name: str | None) -> dt.tzinfo | None:
+    """The zone a limit line names (`(Europe/Warsaw)`, `(UTC)`), None for none or one unknown here (local time)."""
+    try:
+        return ZoneInfo("UTC" if (name or "").upper() == "UTC" else name) if name else None
+    except (ValueError, KeyError, OSError):
+        return None
+
+
+def limit_hour(m: re.Match[str]) -> int:
+    """The 24-hour clock hour of a `resets H[am|pm]`."""
+    h = int(m["h"])
+    return h if not m["ap"] else h % 12 + (12 if m["ap"].lower() == "pm" else 0)
+
+
 def claude_limit_reset(line: str, now: float) -> float:
     """When the limit `line` names resets (its `resets [Mon D at] H[:MM]am|pm [(Zone)]`, in that zone or else local
     time), the first such moment after `now`; CLAUDE_LIMIT_FALLBACK after `now` when it names none."""
     m = CLAUDE_LIMIT_RESET.search(line or "")
     if not m:
         return now + CLAUDE_LIMIT_FALLBACK
-    tz = None
-    if m["tz"]:
-        try:
-            tz = ZoneInfo("UTC" if m["tz"].upper() == "UTC" else m["tz"])
-        except (ValueError, KeyError, OSError):
-            tz = None
+    tz = limit_zone(m["tz"])
     base = dt.datetime.fromtimestamp(now, tz) if tz else dt.datetime.fromtimestamp(now).astimezone()
-    hour = int(m["h"]) % 12 + (12 if (m["ap"] or "").lower() == "pm" else 0) if m["ap"] else int(m["h"])
-    at = base.replace(hour=hour % 24, minute=int(m["m"] or 0), second=0, microsecond=0)
-    if m["mon"]:
-        try:
-            month = dt.datetime.strptime(m["mon"][:3].title(), "%b").month
-            at = at.replace(month=month, day=int(m["day"]))
-        except ValueError:
-            return now + CLAUDE_LIMIT_FALLBACK
-        if at.timestamp() < now - 180 * 86400:  # "Jan 2" read in December: next year's
-            at = at.replace(year=at.year + 1)
-        return at.timestamp()
-    return (at if at.timestamp() > now else at + dt.timedelta(days=1)).timestamp()
+    at = base.replace(hour=limit_hour(m) % 24, minute=int(m["m"] or 0), second=0, microsecond=0)
+    if not m["mon"]:
+        return (at if at.timestamp() > now else at + dt.timedelta(days=1)).timestamp()
+    try:
+        at = at.replace(month=dt.datetime.strptime(m["mon"][:3].title(), "%b").month, day=int(m["day"]))
+    except ValueError:
+        return now + CLAUDE_LIMIT_FALLBACK
+    return (at.replace(year=at.year + 1) if at.timestamp() < now - 180 * 86400 else at).timestamp()  # "Jan 2" read in Dec

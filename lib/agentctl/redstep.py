@@ -301,6 +301,20 @@ def red_vault_ask(store: Any, it: Any, upd: dict[str, Any], ns: str, out: str, t
     return red_vault_block(store, it, upd, ns, out, t)
 
 
+def red_end_outcome(h: dict[str, Any], m: dict[str, Any], row: Any, t: float) -> float | None:
+    """The ended lease's outcome `h` as the ladder reads it: a launch on claude's spent usage limit is LIMITED (no
+    attempt, no crash: the time it resets is returned, the red's next dispatch), a quick end with no verdict NOT STARTED."""
+    end = float(m.get("released_at") or t)
+    limit = claude_limit(f"{h['outcome']}\n{h.get('notes') or ''}")
+    if limit:  # THE ACCOUNT'S USAGE LIMIT IS SPENT: dispatched again once it resets
+        h["outcome"] = f"LIMITED: claude's usage limit is spent ({limit}); the fixer launches again when it resets"
+        return claude_limit_reset(limit, end)
+    quick = end - float((row or {}).get("acquired_at") or 0) < RED_QUICK_EXIT
+    if quick and re.match(r"(exit -?\d+|ended) with no|NOT STARTED", str(h["outcome"])):  # it never got going (a crash at
+        h["outcome"] = re.sub(r"^(NOT STARTED: )*", "NOT STARTED: ", str(h["outcome"]))  # start): not an attempt, nor an
+    return None  # instant re-dispatch
+
+
 def red_lease_ended(store, it, row, block, t, repo=None):
     """Its holder's lease ended (released with a verdict, expired without progress, revoked): one attempt (not for a
     release by hand, a fixer that never started, a lease lost to infra, a red found already fixed, or one that needs the
@@ -309,12 +323,7 @@ def red_lease_ended(store, it, row, block, t, repo=None):
     d = it["data"]
     h = red_history(row, t)
     m = lease_meta(row)
-    quick = float(m.get("released_at") or t) - float((row or {}).get("acquired_at") or 0) < RED_QUICK_EXIT
-    limit = claude_limit(f"{h['outcome']}\n{h.get('notes') or ''}")
-    if limit:  # THE ACCOUNT'S USAGE LIMIT IS SPENT: no attempt, no crash -- dispatched again once it resets
-        h["outcome"] = f"LIMITED: claude's usage limit is spent ({limit}); the fixer launches again when it resets"
-    elif quick and re.match(r"(exit -?\d+|ended) with no|NOT STARTED", str(h["outcome"])):  # it never got going (a crash at start): not an
-        h["outcome"] = re.sub(r"^(NOT STARTED: )*", "NOT STARTED: ", str(h["outcome"]))  # attempt, nor an instant re-dispatch
+    reset = red_end_outcome(h, m, row, t)
     out = str(h["outcome"])
     infra = bool(h.get("dispatched") and LEASE_INFRA.match(out))  # a wrapper's lease renews by its beat: a lapse is
     # the wrapper or its machine gone (an interactive claim lapses by its own inactivity: that one counts)
@@ -323,8 +332,8 @@ def red_lease_ended(store, it, row, block, t, repo=None):
     upd = {"history": (d.get("history") or []) + [h], "holder": None,
            "attempts": int(d.get("attempts") or 0) + (1 if counted else 0),
            "ended_lease": (row or {}).get("epoch")}
-    if limit:
-        upd["dispatch_after"] = claude_limit_reset(limit, float(m.get("released_at") or t))
+    if reset is not None:
+        upd["dispatch_after"] = reset
     elif str(h["outcome"]).startswith("NOT STARTED") and m.get("tier") == "lander" and d.get("blame"):
         # THE LANDER COULD NOT BE REVIVED (LAUNCH FAILED): a fresh fixer at once, briefed with the change -- no backoff
         upd["blame"] = dict(d["blame"], revive_failed=str(h["outcome"])[:300])

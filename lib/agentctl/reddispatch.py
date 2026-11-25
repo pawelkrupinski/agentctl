@@ -257,6 +257,17 @@ def red_family_holder(store, fam, t, active=None):
     return None  # a holder is ONLY a live lease
 
 
+def red_backoff_why(d: dict[str, Any], after: float) -> str:
+    """Why red (data d) waits until `after`: claude's spent usage limit, or fixers that never got going (the last error)."""
+    at, hist = time.strftime('%H:%M', time.localtime(after)), d.get("history") or []
+    if hist and str(hist[-1].get("outcome")).startswith("LIMITED"):
+        return f"claude's usage limit is spent: the next fixer at {at}"
+    last = re.sub(r"^(NOT STARTED: )+", "", next((str(h.get("outcome") or "") for h in reversed(hist)
+                                                  if str(h.get("outcome") or "").startswith("NOT STARTED")), ""))
+    return f"its last {d.get('start_failures')} fixer(s) never got going; the next at {at}" + (
+        f"; launch error: {last[:240]}" if last else "")
+
+
 def red_dispatcher(store, o_r, repo, t):
     """THE QUEUE (see ONE RED MODEL above): the open fixer offers, highest priority first; per queue family exactly one
     fixer -- a new red of a family at work joins its fixer, a family with none is dispatched once (its other open
@@ -323,14 +334,8 @@ def red_dispatcher(store, o_r, repo, t):
             why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
         elif off["tier"] == "blame":
             why = blame_waiting(pic.get("blame"))
-        elif after > t and str((item["data"].get("history") or [{}])[-1].get("outcome")).startswith("LIMITED"):
-            why = f"claude's usage limit is spent: the next fixer at {time.strftime('%H:%M', time.localtime(after))}"
         elif after > t:
-            last = next((str(h.get("outcome") or "") for h in reversed(item["data"].get("history") or [])
-                         if str(h.get("outcome") or "").startswith("NOT STARTED")), "")
-            last = re.sub(r"^(NOT STARTED: )+", "", last)
-            why = (f"its last {item['data'].get('start_failures')} fixer(s) never got going; the next at "
-                   f"{time.strftime('%H:%M', time.localtime(after))}" + (f"; launch error: {last[:240]}" if last else ""))
+            why = red_backoff_why(item["data"], after)
         elif blocker:
             why = blocker
         elif not free:

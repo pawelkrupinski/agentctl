@@ -121,6 +121,14 @@ def lapse_in_sleep(h):
     return host_slept(end, OWNER_TTL + 300) >= env_num("AGENTCTL_SLEEP_MIN", SLEEP_MIN)
 
 
+def launch_neutral(h: dict[str, Any]) -> bool:
+    """True for a history entry that is no launch for the crash streak: a neutral end (a release by hand, a stopped
+    wrapper, LIMITED), a launch on claude's spent usage limit, or a lease lapse while the host slept."""
+    o = str(h.get("outcome") or "")
+    return bool(RED_CRASH_NEUTRAL.match(o) or claude_limit(f"{o}\n{h.get('notes') or ''}")
+                or (h.get("dispatched") and lapse_in_sleep(h)))
+
+
 def red_crash_streak(d):
     """The newest fixer launches (newest first) since the red's last crash-loop step that ended with no result -- up to
     the first launch (or fix) with one. A lease lapse while the host slept is no launch (host_slept), nor one that ended
@@ -129,8 +137,7 @@ def red_crash_streak(d):
     out = []
     for h in reversed(hist[int((d.get("crash_loop") or {}).get("mark") or 0):]):
         o = str(h.get("outcome") or "")
-        if RED_CRASH_NEUTRAL.match(o) or claude_limit(f"{o}\n{h.get('notes') or ''}") \
-                or (h.get("dispatched") and lapse_in_sleep(h)):
+        if launch_neutral(h):
             continue
         if not h.get("dispatched") or not RED_CRASH_OUTCOME.match(o):
             break
