@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+from typing import Any
 from agentctl.core import attempt, dispatches_dir, process_cache, reds_dir
 from agentctl.statefile import mtime, read_json_file, read_record, tail_bytes
 from agentctl.procs import proc_alive
@@ -90,59 +91,87 @@ def live_meta(p):
     return hit[1]
 
 
-def live_registry_read(t=None):
-    """{agent id: entry} of every agent whose transcript may be streamed, from files only (fixer records, dispatch
-    records, the subagent globs) plus the lease holders the last Agents read saw. One transcript has one id: a fixer's
-    wins over its session's."""
-    t = time.time() if t is None else t
-    reg, seen = {}, set()
+class RegistryRead:
+    """One read of the registry: a method per source (fixer records, dispatch records, the leased holders, the subagent
+    globs), each adding its agents; a transcript has one id, the first source's."""
 
-    def add(aid, path, **k):
+    def __init__(self, t: float) -> None:
+        self.t = t
+        self.reg: dict[str, dict[str, Any]] = {}
+        self.seen: set[str] = set()
+
+    def add(self, aid: str, path: Any, **k: Any) -> None:
         real = live_transcript_ok(path)
-        if real and real not in seen and aid not in reg:
-            seen.add(real)
-            reg[aid] = {"id": aid, "transcript": real, **k}
-    for p in glob.glob(reds_dir("*", "fixer*.json")):
-        m = re.fullmatch(r"fixer(?:-(\d+))?\.json", os.path.basename(p))
-        if not m or t - mtime(p) > LIVE_MAX_AGE:
-            continue
-        r = read_record(p)
-        if not r:
-            continue
+        if real and real not in self.seen and aid not in self.reg:
+            self.seen.add(real)
+            self.reg[aid] = {"id": aid, "transcript": real, **k}
+
+    def _fresh(self, p: str) -> bool:
+        return self.t - mtime(p) <= LIVE_MAX_AGE
+
+    def fixers(self) -> None:
+        for p in glob.glob(reds_dir("*", "fixer*.json")):
+            m = re.fullmatch(r"fixer(?:-(\d+))?\.json", os.path.basename(p))
+            r = read_record(p) if m and self._fresh(p) else None
+            if m and r:
+                self._add_fixer(p, m.group(1) or "1", r)
+
+    def _add_fixer(self, p: str, n: str, r: dict[str, Any]) -> None:
         run = live_id_part(os.path.basename(os.path.dirname(p)))
         path = r.get("transcript") or (r.get("log") if str(r.get("log") or "").endswith(".jsonl") else None) \
             or live_session_transcript(r.get("session"), r.get("worktree"))
-        add(f"fixer-{run}-{m.group(1) or 1}", path, kind="fixer", label=r.get("label") or f"red fixer #{run}",
-            pid=r.get("pid"), process_start=r.get("process_start"), started=r.get("started"), ended=r.get("ended"),
-            rc=r.get("rc"), verdict=r.get("verdict"), worktree=r.get("worktree"), run=r.get("run"), record=p)
-    recs = []
-    for p in glob.glob(dispatches_dir("*.json")):
-        if t - mtime(p) <= LIVE_MAX_AGE:
-            r = read_record(p)
+        self.add(f"fixer-{run}-{n}", path, kind="fixer", label=r.get("label") or f"red fixer #{run}",
+                 pid=r.get("pid"), process_start=r.get("process_start"), started=r.get("started"), ended=r.get("ended"),
+                 rc=r.get("rc"), verdict=r.get("verdict"), worktree=r.get("worktree"), run=r.get("run"), record=p)
+
+    def _dispatch_records(self) -> list[dict[str, Any]]:
+        recs = []
+        for p in glob.glob(dispatches_dir("*.json")):
+            r = read_record(p) if self._fresh(p) else None
             if r and r.get("session"):
                 recs.append(r)
-    for r in sorted(recs, key=lambda r: -float(r.get("epoch") or 0)):  # the newest record of a session names it
-        s = str(r["session"])
-        add(f"session-{live_id_part(s)}", live_session_transcript(s, r.get("worktree")), kind="session",
-            label=f"session {s[:8]}" + (f" · {r.get('agent')}" if r.get("agent") else "")
-            + (f" · {str(r.get('purpose'))[:80]}" if r.get("purpose") else ""),
-            pid=r.get("pid"), process_start=r.get("process_start"), worktree=r.get("worktree"))
-    for aid, e in list(_live_leased.items()):
-        add(aid, e.get("transcript"), **{k: v for k, v in e.items() if k not in ("id", "transcript")})
-    for g in live_globs():
-        for p in glob.glob(g):
-            try:
-                if os.lstat(p).st_uid != os.getuid() or t - mtime(p) > LIVE_MAX_AGE:
-                    continue
-            except OSError:
+        return recs
+
+    def sessions(self) -> None:
+        for r in sorted(self._dispatch_records(), key=lambda r: -float(r.get("epoch") or 0)):  # the newest record of a session names it
+            s = str(r["session"])
+            self.add(f"session-{live_id_part(s)}", live_session_transcript(s, r.get("worktree")), kind="session",
+                     label=f"session {s[:8]}" + (f" · {r.get('agent')}" if r.get("agent") else "")
+                     + (f" · {str(r.get('purpose'))[:80]}" if r.get("purpose") else ""),
+                     pid=r.get("pid"), process_start=r.get("process_start"), worktree=r.get("worktree"))
+
+    def leased(self) -> None:
+        for aid, e in list(_live_leased.items()):
+            self.add(aid, e.get("transcript"), **{k: v for k, v in e.items() if k not in ("id", "transcript")})
+
+    def _own_and_fresh(self, p: str) -> bool:
+        try:
+            return os.lstat(p).st_uid == os.getuid() and self._fresh(p)
+        except OSError:
+            return False
+
+    def subagents(self) -> None:
+        for p in (p for g in live_globs() for p in glob.glob(g)):
+            if not self._own_and_fresh(p):
                 continue
             stem = os.path.basename(p).rsplit(".", 1)[0]
             real = live_transcript_ok(p)
             meta = live_meta(real[:-len(".jsonl")] + ".meta.json") if real else {}
-            add(f"task-{live_id_part(stem)}", p, kind="subagent",
-                label=str(meta.get("description") or f"subagent {stem}")[:120], agent_type=meta.get("agentType"),
-                finished=bool(meta.get("finished")))
-    return reg
+            self.add(f"task-{live_id_part(stem)}", p, kind="subagent",
+                     label=str(meta.get("description") or f"subagent {stem}")[:120], agent_type=meta.get("agentType"),
+                     finished=bool(meta.get("finished")))
+
+
+def live_registry_read(t: float | None = None) -> dict[str, dict[str, Any]]:
+    """{agent id: entry} of every agent whose transcript may be streamed, from files only (fixer records, dispatch
+    records, the subagent globs) plus the lease holders the last Agents read saw. One transcript has one id: a fixer's
+    wins over its session's."""
+    read = RegistryRead(time.time() if t is None else t)
+    read.fixers()
+    read.sessions()
+    read.leased()
+    read.subagents()
+    return read.reg
 
 
 def live_registry(fresh=False):
@@ -208,7 +237,17 @@ def live_tail_info(path, max_bytes=256 << 10):
     return dict(info)
 
 
-def live_state(e, info, t=None):
+def _process_state(alive: Any, stop: Any) -> tuple[str, str] | None:
+    """What the process's life says of the agent (alive is None when it cannot be told), None when it says nothing."""
+    if alive is False:
+        return ("done", "the process ended after its answer") if stop == "end_turn" else ("failed", "the process ended mid-turn")
+    if alive:
+        return ("waiting on background", "its turn ended; it waits for background work or a message") \
+            if stop == "end_turn" else ("working", "its turn is running")
+    return None
+
+
+def live_state(e: dict[str, Any], info: dict[str, Any], t: float | None = None) -> tuple[str, str]:
     """(state, why): working, waiting on background, done or failed -- from the fixer record's end, the process, and
     the transcript's last conversational entry (a turn that ended with end_turn is an answer given)."""
     t = time.time() if t is None else t
@@ -218,15 +257,10 @@ def live_state(e, info, t=None):
     stop = info.get("stop")
     if info.get("api_error"):
         return "failed", "the last answer was an API error"
-    alive = None
-    if e.get("pid"):
-        alive = attempt(lambda: proc_alive(e["pid"], e.get("process_start")), None, catch=(Exception, SystemExit))
-    if alive is False:
-        return ("done", "the process ended after its answer") if stop == "end_turn" else \
-            ("failed", "the process ended mid-turn")
-    if alive:
-        return ("waiting on background", "its turn ended; it waits for background work or a message") \
-            if stop == "end_turn" else ("working", "its turn is running")
+    alive = attempt(lambda: proc_alive(e["pid"], e.get("process_start")), None, catch=(Exception, SystemExit)) if e.get("pid") else None
+    process = _process_state(alive, stop)
+    if process:
+        return process
     if e.get("finished") or stop == "end_turn":
         return "done", "its final answer is given"
     idle = t - float(info.get("mtime") or t)
@@ -235,11 +269,8 @@ def live_state(e, info, t=None):
     return "working", "its turn is running"
 
 
-def live_annotate(agents, t=None):
-    """Give each Agents row whose transcript may be streamed its live id and state (a lease holder's transcript
-    becomes known as session-<stem>), then add a row for every other known session or subagent written within
-    LIVE_RECENT (newest first, LIVE_ROWS_MAX at most)."""
-    t = time.time() if t is None else t
+def _leased_agents(agents: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """The lease holders whose transcript may be streamed, under the id it will be known by (session-<stem>)."""
     leased = {}
     for a in agents:
         real = live_transcript_ok(a.get("transcript"))
@@ -247,9 +278,11 @@ def live_annotate(agents, t=None):
             aid = f"session-{live_id_part(os.path.basename(real)[:-len('.jsonl')])}"
             leased[aid] = {"transcript": real, "kind": a.get("kind") or "lease holder",
                            "label": a.get("label") or a.get("holder"), "pid": a.get("pid")}
-    _live_leased.clear()
-    _live_leased.update(leased)
-    reg = live_registry(fresh=True)
+    return leased
+
+
+def _mark_live(agents: list[dict[str, Any]], reg: dict[str, dict[str, Any]], t: float) -> set[str]:
+    """Give each row whose transcript is registered its live id and state; the ids it shows."""
     by_path = {e["transcript"]: e for e in reg.values()}
     shown = set()
     for a in agents:
@@ -257,23 +290,32 @@ def live_annotate(agents, t=None):
         e = by_path.get(real) if real else None
         if e:
             a["live"] = e["id"]
-            a["live_state"], a["live_why"] = live_state({**e, "ended": a.get("ended") or e.get("ended")},
-                                                        live_tail_info(real), t)
+            a["live_state"], a["live_why"] = live_state({**e, "ended": a.get("ended") or e.get("ended")}, live_tail_info(real), t)
             shown.add(e["id"])
-    extra = []
-    for e in reg.values():
-        if e["id"] in shown or e["kind"] == "fixer":
-            continue
-        m = mtime(e["transcript"])
-        if t - m > LIVE_RECENT:
-            continue
-        info = live_tail_info(e["transcript"])
-        st, why = live_state(e, info, t)
-        extra.append((m, {"pid": e.get("pid"), "holder": None, "kind": e["kind"], "label": e.get("label"),
-                          "worktree": e.get("worktree"), "leases": [], "live": e["id"], "live_state": st,
-                          "live_why": why, "alive": st in ("working", "waiting on background"),
-                          "last_progress": m, "transcript": e["transcript"]}))
+    return shown
+
+
+def _extra_row(e: dict[str, Any], t: float) -> tuple[float, dict[str, Any]] | None:
+    """(its mtime, the Agents row) of a registered agent no row shows, when it wrote within LIVE_RECENT."""
+    m = mtime(e["transcript"])
+    if t - m > LIVE_RECENT:
+        return None
+    st, why = live_state(e, live_tail_info(e["transcript"]), t)
+    return m, {"pid": e.get("pid"), "holder": None, "kind": e["kind"], "label": e.get("label"),
+               "worktree": e.get("worktree"), "leases": [], "live": e["id"], "live_state": st,
+               "live_why": why, "alive": st in ("working", "waiting on background"),
+               "last_progress": m, "transcript": e["transcript"]}
+
+
+def live_annotate(agents: list[dict[str, Any]], t: float | None = None) -> list[dict[str, Any]]:
+    """Give each Agents row whose transcript may be streamed its live id and state (a lease holder's transcript
+    becomes known as session-<stem>), then add a row for every other known session or subagent written within
+    LIVE_RECENT (newest first, LIVE_ROWS_MAX at most)."""
+    t = time.time() if t is None else t
+    _live_leased.clear()
+    _live_leased.update(_leased_agents(agents))
+    reg = live_registry(fresh=True)
+    shown = _mark_live(agents, reg, t)
+    extra = [row for row in (_extra_row(e, t) for e in reg.values() if e["id"] not in shown and e["kind"] != "fixer") if row]
     extra.sort(key=lambda x: -x[0])
     return agents + [a for _m, a in extra[:LIVE_ROWS_MAX]]
-
-

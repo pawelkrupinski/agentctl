@@ -65,8 +65,8 @@ mypy-errors	landwatch	19
 mypy-errors	laptoprole	39
 mypy-errors	launchd	2
 mypy-errors	leases	1
-mypy-errors	live	46
-mypy-errors	livestream	43
+mypy-errors	live	36
+mypy-errors	livestream	42
 mypy-errors	localrecheck	33
 mypy-errors	maint	34
 mypy-errors	maintain	9
@@ -158,7 +158,7 @@ mypy-errors	snapshot	9
 mypy-errors	statemachines	31
 mypy-errors	stats	33
 mypy-errors	status	85
-mypy-errors	statusagents	38
+mypy-errors	statusagents	37
 mypy-errors	statusline	4
 mypy-errors	statuspage	29
 mypy-errors	store	76

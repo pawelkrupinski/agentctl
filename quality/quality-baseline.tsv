@@ -62,9 +62,7 @@ cognitive	lander_transcript	32
 cognitive	lap_change_deadline	15
 cognitive	laptop_role	15
 cognitive	laptop_role_refusal	23
-cognitive	live_annotate	19
-cognitive	live_registry_read	44
-cognitive	live_state	17
+cognitive	live_state	12
 cognitive	live_stream	33
 cognitive	main_workflow_files	28
 cognitive	migrate_local_queue	19
@@ -197,9 +195,7 @@ cyclomatic	lander_transcript	23
 cyclomatic	lap_change_deadline	17
 cyclomatic	laptop_role	17
 cyclomatic	laptop_role_refusal	16
-cyclomatic	live_annotate	17
-cyclomatic	live_registry_read	30
-cyclomatic	live_state	15
+cyclomatic	live_state	12
 cyclomatic	live_stream	23
 cyclomatic	main_workflow_files	11
 cyclomatic	migrate_local_queue	13
@@ -267,7 +263,6 @@ cyclomatic	write_snapshot	23
 inner-defs	sync_steps	7
 method-lines	dry_run	53
 method-lines	jvm_reap	57
-method-lines	live_registry_read	53
 method-lines	live_stream	51
 method-lines	red_dispatch	59
 method-lines	sweep_repo	61
