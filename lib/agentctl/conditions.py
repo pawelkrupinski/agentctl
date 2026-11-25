@@ -293,7 +293,7 @@ def recovery_tick(store, now_=None, force=False):
     Returns the RECOVERED lines."""
     st = store
     t = now_ if now_ is not None else time.time()
-    out = []
+    out: list[str] = []
     server = host_role() == "server"
     out += attempt(lambda: migrate_condition_files(st), [], catch=(Exception, SystemExit),
                    what="recover: could not migrate the condition files")

@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
+from typing import Any
 from agentctl.core import HOME, SHORT, attempt, env_num, err, fmt_age, git, remote
 from agentctl.timefmt import iso_at, parse_time, ts
 from agentctl.statefile import read_record
@@ -159,7 +160,7 @@ def red_attach(store, workflow, run, author=None, o_r=None):
         _name, run = resolve_run(o_r, run)
         if run is None:
             return []
-    sigs = attempt(lambda: run_sigs(o_r, run, workflow), [], catch=(Exception, SystemExit))
+    sigs: list[Any] = attempt(lambda: run_sigs(o_r, run, workflow), [], catch=(Exception, SystemExit))
     if sigs_no_verdict(sigs):
         return []  # an incomplete run: no verdict, no red to open
     gate = workflow in {g for g, _ in red_gate_flows(o_r)}

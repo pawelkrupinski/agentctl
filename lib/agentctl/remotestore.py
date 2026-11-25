@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from typing import Any
 from agentctl.statefile import read_text_or
 from agentctl.core import SHORT, attempt, env_num, host_role
 from agentctl.store import StoreAuthFailed, StoreUnavailable, store_errors
@@ -92,7 +93,7 @@ class RemoteStore:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
                 return json.loads(r.read() or b"null")
         except urllib.error.HTTPError as e:
-            b = attempt(lambda: json.loads(e.read() or b"{}"), {}, catch=(ValueError,))
+            b: Any = attempt(lambda: json.loads(e.read() or b"{}"), {}, catch=(ValueError,))
             if e.code in (401, 403):
                 raise StoreAuthFailed(f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}") from None
             cls = store_errors().get(b.get("error"))

@@ -179,7 +179,7 @@ def orphan_candidates(repo, store, now_=None, dead=None, refused=None, lands=Non
     cwds = attempt(lambda: {os.path.realpath(c) for c in process_cwds().values()}, set(), catch=(Exception, SystemExit))
     landers = attempt(lambda: {os.path.realpath(w) for w in land_cwds()}, set(), catch=(Exception, SystemExit))
     live = live_lease_worktrees(store)
-    sessions = attempt(lambda: session_worktrees([w.get("worktree") for w in worktrees(repo)], t), {},
+    sessions: dict[Any, Any] = attempt(lambda: session_worktrees([w.get("worktree") for w in worktrees(repo)], t), {},
                        catch=(Exception, SystemExit))
     records = blame_records(store)
     with suppress(Exception, SystemExit):  # a change in the land queue (queued, checking, waiting) is not orphaned

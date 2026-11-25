@@ -3,6 +3,7 @@
 
 import re
 import time
+from typing import Any
 from agentctl.core import attempt
 from agentctl.classify import QUOTA_LOG
 from agentctl.forge import GH_CLI, RED_CONCLUSIONS
@@ -123,7 +124,7 @@ def owner_details(o_r, n, name, units, cmd, words, owner_cause, store):
     it clears (the owner, 2026-10-28: "more details in the future pls")."""
     u = units[0] if units else {}
     failing = f"{u.get('job') or '?'}: {str(u.get('line') or 'no error line read')[:160]}"
-    its = attempt(lambda: red_item_of_run(store, n, name), [], catch=(Exception,))
+    its: list[Any] = attempt(lambda: red_item_of_run(store, n, name), [], catch=(Exception,))
     hist = [h for it in its for h in it["data"].get("history") or []]
     verdicts = [f"{h.get('holder')}: {str(h.get('outcome'))[:90]}" for h in hist]
     refuted = sorted({x[:9] for it in its for x in it["data"].get("refuted") or []})

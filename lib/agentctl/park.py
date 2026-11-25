@@ -138,7 +138,7 @@ def resolve_blocker(x, repo, store):
     """{change, commit} of `--until-landed x`: a change id (whole or a unique part; its head the commit), else a commit
     of repo. Raises ValueError."""
     st = store
-    items = attempt(lambda: st.items("change"), [], catch=(Exception, SystemExit))
+    items: list[Any] = attempt(lambda: st.items("change"), [], catch=(Exception, SystemExit))
     its = [i for i in items if i["id"] == x] or [i for i in items if x in i["id"]]
     if len(its) == 1:
         return {"change": its[0]["id"], "commit": (its[0].get("data") or {}).get("head")}
