@@ -66,3 +66,22 @@ class AnnotationsTest(unittest.TestCase):
     def test_the_reader_sees_the_2026_11_23_shape(self):
         src = "import os\nfrom typing import Optional\ndef f(store: Any, x: 'Later') -> Optional[int]:\n    pass\n"
         self.assertEqual(unbound_annotation_names(src), [("Any", 3)])
+
+
+SERVER_PYTHON = "3.13"   # ci-runner's interpreter (`ssh ci-runner python3 --version`, 2026-11-25: 3.13.17)
+
+
+class ServerPythonInCiTest(unittest.TestCase):
+    """THE AUTO-PIN READS tests.yml (2026-11-25, the owner): a static reader catches one shape of a 3.13-only failure;
+    the suite on ci-runner's own Python catches them all. Every shard runs under SERVER_PYTHON as well as the newest."""
+
+    def test_every_suite_shard_runs_on_ci_runners_python(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, ".github", "workflows", "tests.yml")) as f:
+            wf = f.read()
+        suite = wf.split("\n  suite:", 1)[1].split("\n  sim-gate:", 1)[0]
+        import re
+        versions = re.search(r"python:\s*\[([^\]]*)\]", suite)
+        self.assertIsNotNone(versions, "the suite job's matrix names no python versions")
+        self.assertIn(f'"{SERVER_PYTHON}"', versions.group(1))
+        self.assertIn("python-version: ${{ matrix.python }}", suite)
