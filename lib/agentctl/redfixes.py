@@ -56,6 +56,11 @@ def _recent_entry(e: Any) -> Any:
         catch=(ValueError, TypeError))
 
 
+def _open_untrailered(e: Any, fx: Any) -> Any:
+    """An open entry naming no fix: linked only by the files it edits."""
+    return not fx and e.get("status") in FIX_OPEN
+
+
 def _queue_facts(repo: Any, store: Any) -> Any:
     """(the queue's changes that name fixes, those that name none but are open, why the queue could not be read)."""
     entries: list[Any] = []
@@ -66,7 +71,7 @@ def _queue_facts(repo: Any, store: Any) -> Any:
             fx = entry_fixes(repo, e, store) if _recent_entry(e) or e.get("fixes") else None
             if fx and not red_unrelated(repo, e):
                 entries.append({**e, "fixes": fx})
-            elif not fx and e.get("status") in FIX_OPEN:  # no Fixes-Red: linked only by the files it edits
+            elif _open_untrailered(e, fx):
                 untrailered.append(e)
     except (Exception, SystemExit) as ex:  # AN UNREAD QUEUE IS NO EMPTY QUEUE (red_fix_held): said, never "nothing queued"
         return entries, untrailered, str(ex)[:200] or type(ex).__name__
@@ -261,6 +266,12 @@ def red_fix_candidates(d, facts):
     yield from FixCandidates(d, facts).all()
 
 
+def _workflow_runs(snap: Any, workflow: Any) -> Any:
+    """The snapshot's runs on main of the workflow (gate first, then outside), newest first."""
+    return next((g.get("runs") or [] for g in (snap.get("gate") or []) + (snap.get("outside") or [])
+                 if g.get("name") == workflow), [])
+
+
 def _newer_undecided(r: Any, own: Any, base: Any) -> Any:
     """Run r is an undecided run on main, newer than the failing run (own, whose head is base) and of another head."""
     return not (r.get("status") == "completed" or r.get("headBranch", "main") != "main" or not r.get("headSha")
@@ -281,9 +292,7 @@ def red_run_on_way(d, snap, repo):
     base = own.get("headSha")
     if not repo or not base or not snap:
         return None
-    runs = next((g.get("runs") or [] for g in (snap.get("gate") or []) + (snap.get("outside") or [])
-                 if g.get("name") == d.get("workflow")), [])
-    for r in runs:
+    for r in _workflow_runs(snap, d.get("workflow")):
         sha = _reaching_commit(repo, base, r["headSha"], d) if _newer_undecided(r, own, base) else None
         if sha:
             return r, sha
