@@ -72,7 +72,6 @@ cognitive	dry_run	34
 cognitive	ensure_server_clone	14
 cognitive	event_audience	12
 cognitive	expire_cache	51
-cognitive	explain_run_jobs	99
 cognitive	explorer_tick	19
 cognitive	failed_jobs_log	23
 cognitive	failure_detail	13
@@ -93,7 +92,6 @@ cognitive	gate_flow_names	17
 cognitive	gate_runs_pass	17
 cognitive	gating_checks	29
 cognitive	generated_parse	16
-cognitive	github_incidents	16
 cognitive	gov_fits	20
 cognitive	gov_replay	27
 cognitive	hold_for_overlap	21
@@ -338,7 +336,6 @@ cyclomatic	conflict_resolve	21
 cyclomatic	dry_run	20
 cyclomatic	event_audience	13
 cyclomatic	expire_cache	29
-cyclomatic	explain_run_jobs	90
 cyclomatic	explorer_file	14
 cyclomatic	explorer_parse	14
 cyclomatic	explorer_tick	19
@@ -360,7 +357,6 @@ cyclomatic	gate_flow_names	22
 cyclomatic	gate_runs_pass	21
 cyclomatic	gating_checks	21
 cyclomatic	generated_parse	17
-cyclomatic	github_incidents	16
 cyclomatic	gov_fits	21
 cyclomatic	gov_replay	39
 cyclomatic	group_cpu_seconds	16
@@ -372,7 +368,6 @@ cyclomatic	identity_change	13
 cyclomatic	inv_w1	34
 cyclomatic	inv_wb	15
 cyclomatic	inv_wr	22
-cyclomatic	job_annotations	11
 cyclomatic	job_ever_green	20
 cyclomatic	job_log_lines	17
 cyclomatic	jobs_verdict	23
@@ -543,7 +538,6 @@ method-lines	cmd_gov	69
 method-lines	cmd_maintain	56
 method-lines	dry_run	53
 method-lines	expire_cache	58
-method-lines	explain_run_jobs	119
 method-lines	jvm_reap	57
 method-lines	live_registry_read	53
 method-lines	live_stream	51

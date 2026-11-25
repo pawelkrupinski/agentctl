@@ -15,11 +15,11 @@ mypy-errors	beats	4
 mypy-errors	blame	43
 mypy-errors	blameopen	13
 mypy-errors	blamerecords	25
-mypy-errors	branches	73
+mypy-errors	branches	72
 mypy-errors	buildview	42
 mypy-errors	changekind	27
 mypy-errors	checkslot	26
-mypy-errors	cireport	65
+mypy-errors	cireport	62
 mypy-errors	ciwhy	57
 mypy-errors	classify	1
 mypy-errors	cleanup	43
@@ -109,7 +109,7 @@ mypy-errors	redclaim	29
 mypy-errors	redcommands	18
 mypy-errors	redcrash	52
 mypy-errors	reddispatch	35
-mypy-errors	redearly	9
+mypy-errors	redearly	8
 mypy-errors	redfamilies	10
 mypy-errors	redfixes	48
 mypy-errors	redfixread	35
@@ -140,8 +140,8 @@ mypy-errors	remotestore	26
 mypy-errors	repos	29
 mypy-errors	reverts	46
 mypy-errors	rundispatch	11
-mypy-errors	runexplain	43
-mypy-errors	runsigs	22
+mypy-errors	runexplain	22
+mypy-errors	runsigs	21
 mypy-errors	server	61
 mypy-errors	serverclone	36
 mypy-errors	serversteps	27
