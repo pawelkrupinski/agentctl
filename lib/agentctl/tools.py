@@ -87,47 +87,70 @@ def env_print(ns: str) -> int:
     return 0
 
 
+def which_in(env, cmd):
+    """The executable `cmd` on env's PATH, or None."""
+    for d in env["PATH"].split(":"):
+        p = os.path.join(d, cmd)
+        if os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def check_sbt(env):
+    """(report, problems) of the sbt check."""
+    sbt = which_in(env, "sbt")
+    return ([f"sbt: {sbt}"], []) if sbt else ([], ["sbt: NOT FOUND (install sdkman sbt)"])
+
+
+def check_java(env):
+    """(report, problems) of the java check: a java that runs `-version`."""
+    java = os.path.join(env["JAVA_HOME"], "bin", "java") if env.get("JAVA_HOME") else which_in(env, "java")
+    jv = process_runner().run([java, "-version"], capture_output=True, text=True, timeout=30) if java else None
+    if jv and jv.returncode == 0:
+        return [f"java: {(jv.stderr or jv.stdout).splitlines()[0]}"], []
+    return [], [f"java: no java that runs ({java or 'none on PATH'})"]
+
+
+def check_vault(ns, st):
+    """(report, problems) of the vault check, st being vault_state(ns)."""
+    note = ", not needed (this fixer's credentials are in its environment)" if st == "locked" else ""
+    line = f"vault {ns}: {st}{note}"
+    return ([line], []) if st in ("unlocked", "locked") else ([], [line])
+
+
+def check_tunnels():
+    """(report, problems) of the tunnel check: every tunnel port open, else the fix."""
+    report, problems = [], []
+    for port, what in tunnel_ports():
+        ok = port_open(port)
+        (report if ok else problems).append(f"tunnel localhost:{port} ({what}): {'open' if ok else 'REFUSED'}")
+    if problems:
+        problems.append(f"  fix: launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}")
+    return report, problems
+
+
+def check_github(env):
+    """(report, problems) of the github check (gh's own auth)."""
+    gh = (GH_CLI if os.path.isabs(GH_CLI) and os.access(GH_CLI, os.X_OK) else None) or which_in(env, GH_CLI)
+    return ([f"github: gh {gh}"], []) if gh else ([], [f"github: gh MISSING ({GH_CLI})"])
+
+
 def cmd_env(a):
     ns = a.ns or default_ns()
     if not a.check:
         return env_print(ns)
     env = tool_env()
-    problems, report = [], []
-
-    def which(cmd):
-        for d in env["PATH"].split(":"):
-            p = os.path.join(d, cmd)
-            if os.path.isfile(p) and os.access(p, os.X_OK):
-                return p
-        return None
-
-    sbt = which("sbt")
-    (report if sbt else problems).append(f"sbt: {sbt or 'NOT FOUND (install sdkman sbt)'}")
-    java = os.path.join(env["JAVA_HOME"], "bin", "java") if env.get("JAVA_HOME") else which("java")
-    jv = process_runner().run([java, "-version"], capture_output=True, text=True, timeout=30) if java else None
-    if jv and jv.returncode == 0:
-        report.append(f"java: {(jv.stderr or jv.stdout).splitlines()[0]}")
-    else:
-        problems.append(f"java: no java that runs ({java or 'none on PATH'})")
     st = vault_state(ns)
     if st == "locked" and not vault_not_needed():
         print(locked_line(ns))
         return 1
-    (report if st in ("unlocked", "locked") else problems).append(
-        f"vault {ns}: {st}" + (", not needed (this fixer's credentials are in its environment)" if st == "locked" else ""))
-    tunnel_ok = True
-    for port, what in tunnel_ports():
-        ok = port_open(port)
-        tunnel_ok &= ok
-        (report if ok else problems).append(f"tunnel localhost:{port} ({what}): {'open' if ok else 'REFUSED'}")
-    if not tunnel_ok:
-        problems.append(f"  fix: launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}")
-    gh = (GH_CLI if os.path.isabs(GH_CLI) and os.access(GH_CLI, os.X_OK) else None) or which(GH_CLI)  # gh's own auth
-    (report if gh else problems).append(f"github: gh {gh or 'MISSING (' + GH_CLI + ')'}")
-    for l in report:
-        print(f"ok   {l}")
-    for l in problems:
-        print(f"FAIL {l}")
+    checks = [check_sbt(env), check_java(env), check_vault(ns, st), check_tunnels(), check_github(env)]
+    for report, _ in checks:
+        for line in report:
+            print(f"ok   {line}")
+    problems = [line for _, probs in checks for line in probs]
+    for line in problems:
+        print(f"FAIL {line}")
     return 1 if problems else 0
 
 
@@ -145,6 +168,17 @@ notes:
 """
 
 
+def set_field(text, field, value, append):
+    """text with `field: value` set (appended, comma-separated, to a non-empty value when `append`); a missing field is
+    added at the end."""
+    m = re.search(rf"^{re.escape(field)}:[ \t]*(.*)$", text, re.M)
+    if not m:
+        return text.rstrip("\n") + f"\n{field}: {value}\n"
+    old = m.group(1).strip()
+    new = f"{old}, {value}" if append and old else value
+    return text[: m.start()] + f"{field}: {new}" + text[m.end():]
+
+
 def cmd_state(a):
     path = os.path.join(scratch(), f"state-{a.topic}.md")
     if not os.path.exists(path):
@@ -152,20 +186,11 @@ def cmd_state(a):
             f.write(TEMPLATE.format(topic=a.topic, ts=ts()))
         err(f"created {path}")
     text = open(path).read()
-    changed = False
-    for spec, append in [(s, False) for s in a.set or []] + [(s, True) for s in a.add or []]:
+    specs = [(s, False) for s in a.set or []] + [(s, True) for s in a.add or []]
+    for spec, append in specs:
         field, _, value = spec.partition("=")
-        field = field.strip()
-        pat = re.compile(rf"^{re.escape(field)}:[ \t]*(.*)$", re.M)
-        m = pat.search(text)
-        if m:
-            old = m.group(1).strip()
-            new = f"{old}, {value}" if append and old else value
-            text = text[: m.start()] + f"{field}: {new}" + text[m.end():]
-        else:
-            text = text.rstrip("\n") + f"\n{field}: {value}\n"
-        changed = True
-    if changed:
+        text = set_field(text, field.strip(), value, append)
+    if specs:
         text = re.sub(r"^updated:.*$", f"updated: {ts()}", text, count=1, flags=re.M)
         with open(path, "w") as f:
             f.write(text)
@@ -276,6 +301,18 @@ def identifiers(lines):
     return {t for ln in lines for t in IDENTIFIER.findall(ln)}
 
 
+def undone_in_other_file(repo, mb, head, q, commit, gone):
+    """True when the push undoes, in file q of `commit`, lines of `commit` that carry an identifier in `gone` and
+    removes them WITHOUT restoring what `commit` replaced there (the replacement is new content)."""
+    commit_removed, commit_added = diff_lines(repo, f"{commit}^", commit, q)
+    push_removed, push_added = diff_lines(repo, mb, head, q)
+    undone = push_removed & commit_added
+    if not undone or not identifiers(undone) & gone:
+        return False
+    restored = push_added & commit_removed
+    return bool(push_added - commit_removed) and 2 * len(restored) < max(len(commit_removed), 1)
+
+
 def coherent_edit(repo, mb, head, path, commit, files, hits):
     """True when head's return of `path` to its content before `commit` is part of the push's own coherent edit, not an
     undo of `commit`: the identifiers the push takes out of `path` it also takes out of another file `commit` touched,
@@ -289,83 +326,90 @@ def coherent_edit(repo, mb, head, path, commit, files, hits):
     gone = identifiers(removed) - identifiers(added)
     if not gone:
         return False
-    flagged = {p for p, _ in hits}
+    skip = {path} | {p for p, _ in hits}
     pushed = {p for _, p in files}
     theirs = git(repo, "diff-tree", "--no-commit-id", "--no-renames", "--name-only", "-r", commit, check=False).stdout.split()
-    for q in theirs:
-        if q == path or q in flagged or q not in pushed:
-            continue
-        commit_removed, commit_added = diff_lines(repo, f"{commit}^", commit, q)
-        push_removed, push_added = diff_lines(repo, mb, head, q)
-        undone = push_removed & commit_added
-        if not undone or not identifiers(undone) & gone:
-            continue
-        restored = push_added & commit_removed
-        if push_added - commit_removed and 2 * len(restored) < max(len(commit_removed), 1):
-            return True
-    return False
+    return any(undone_in_other_file(repo, mb, head, q, commit, gone) for q in theirs if q not in skip and q in pushed)
 
 
 def allowed(path, globs):
     return any(fnmatch.fnmatch(path, g) or path.startswith(g.rstrip("/") + "/") for g in globs)
 
 
+def empty_commits_problem(repo, base, mb, head):
+    """The problem line for the push's EMPTY commits (four landed as re-queued duplicates, 2026-10-27), or None."""
+    empty = [c for c in git(repo, "rev-list", "--no-merges", f"{mb}..{head}").split()
+             if is_empty_commit(repo, c) and not deliberate_empty(repo, c)]
+    if not empty:
+        return None
+    return (f"{len(empty)} EMPTY commit(s) (no change: already on main?): "
+            + ", ".join(f"{c[:10]} {git(repo, 'log', '-1', '--format=%s', c).strip()[:60]}" for c in empty[:10])
+            + f". Drop them (git rebase {base}); a deliberate empty commit needs an "
+              f"`{ALLOW_EMPTY_TRAILER}: <why>` trailer")
+
+
+def reverts_problem(repo, base, head, reverts, max_foreign):
+    """The problem line for files reverted back to an older main version past the cap, or None."""
+    if len(reverts) <= max_foreign:
+        return None
+    gone = [p for p, _c in reverts if git(repo, "cat-file", "-e", f"{head}:{p}", check=False).returncode != 0]
+    return (
+        f"{len(reverts)} file(s) would be reverted/deleted back to an older main version (max {max_foreign}) -- "
+        f"a squash onto a moved main? `git rebase {remote()}/main` and re-check. "
+        + ", ".join(f"{p} (undoes {c})" for p, c in reverts[:20])
+        + (f". AN INTENDED DELETION (a lane removing its own scaffolding) is declared, never forced: one "
+           f"`Retires: <path>` trailer per file in the commit's final trailer block (here: "
+           + "; ".join(f"Retires: {p}" for p in gone[:10]) + (" ..." if len(gone) > 10 else "") + ")"
+           if gone else "")
+        + ". AGENTCTL_MAX_FOREIGN raises the cap for every file and is a bypass: name it in your report"
+    )
+
+
+def foreign_reverts_of(repo, base, mb, head, files, allow):
+    """The (path, commit) reverts the push makes back to an older main version, minus the exempt, the coherent edits and
+    (files in the allowed set are the agent's own: reverting them is its call) the allowed files."""
+    exempt = reverted_commits(repo, mb, head) | renamed_away(repo, mb, head)
+    reverts = [(p, c) for p, c in foreign_reverts(repo, base, head, files) if p not in exempt]
+    reverts = [(p, c) for p, c in reverts if not coherent_edit(repo, mb, head, p, c, files, reverts)]
+    return [(p, c) for p, c in reverts if not (allow and allowed(p, allow))]
+
+
 def check_range(repo, base, head, allow, max_foreign):
-    problems = []
     mb = git(repo, "merge-base", base, head).strip()
     files = changed_files(repo, mb, head)
     stat = git(repo, "diff", "--shortstat", mb, head).strip()
     print(f"prepush-check: {base}...{head[:12]}: {stat or 'no changes'}")
-    if allow:
-        outside = [p for _, p in files if not allowed(p, allow)]
-        if outside:
-            problems.append(f"{len(outside)} file(s) outside the allowed set {allow}: " + ", ".join(outside[:20]))
-    empty = [c for c in git(repo, "rev-list", "--no-merges", f"{mb}..{head}").split()
-             if is_empty_commit(repo, c) and not deliberate_empty(repo, c)]
-    if empty:  # never an empty commit on main (four landed as re-queued duplicates, 2026-10-27)
-        problems.append(f"{len(empty)} EMPTY commit(s) (no change: already on main?): "
-                        + ", ".join(f"{c[:10]} {git(repo, 'log', '-1', '--format=%s', c).strip()[:60]}" for c in empty[:10])
-                        + f". Drop them (git rebase {base}); a deliberate empty commit needs an "
-                          f"`{ALLOW_EMPTY_TRAILER}: <why>` trailer")
-    exempt = reverted_commits(repo, mb, head) | renamed_away(repo, mb, head)
-    reverts = [(p, c) for p, c in foreign_reverts(repo, base, head, files) if p not in exempt]
-    reverts = [(p, c) for p, c in reverts if not coherent_edit(repo, mb, head, p, c, files, reverts)]
-    if allow:  # files in the allowed set are the agent's own: reverting them is its call
-        reverts = [(p, c) for p, c in reverts if not allowed(p, allow)]
-    if len(reverts) > max_foreign:
-        gone = [p for p, _c in reverts if git(repo, "cat-file", "-e", f"{head}:{p}", check=False).returncode != 0]
-        problems.append(
-            f"{len(reverts)} file(s) would be reverted/deleted back to an older main version (max {max_foreign}) -- "
-            f"a squash onto a moved main? `git rebase {remote()}/main` and re-check. "
-            + ", ".join(f"{p} (undoes {c})" for p, c in reverts[:20])
-            + (f". AN INTENDED DELETION (a lane removing its own scaffolding) is declared, never forced: one "
-               f"`Retires: <path>` trailer per file in the commit's final trailer block (here: "
-               + "; ".join(f"Retires: {p}" for p in gone[:10]) + (" ..." if len(gone) > 10 else "") + ")"
-               if gone else "")
-            + ". AGENTCTL_MAX_FOREIGN raises the cap for every file and is a bypass: name it in your report"
-        )
-    return problems
+    outside = [p for _, p in files if allow and not allowed(p, allow)]
+    problems = [f"{len(outside)} file(s) outside the allowed set {allow}: " + ", ".join(outside[:20])] if outside else []
+    problems.append(empty_commits_problem(repo, base, mb, head))
+    reverts = foreign_reverts_of(repo, base, mb, head, files, allow)
+    problems.append(reverts_problem(repo, base, head, reverts, max_foreign))
+    return [p for p in problems if p]
+
+
+def hook_ranges(repo, remote, lines):
+    """(base, pushed sha) of every pushed branch of a pre-push hook's stdin `lines`: deletes and tags have nothing to
+    check."""
+    base_ref = f"refs/remotes/{remote}/main"
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 4:
+            continue
+        _, lsha, rref, rsha = parts
+        if lsha == ZERO or not rref.startswith("refs/heads/"):
+            continue
+        base = base_ref if git_ok(repo, "rev-parse", "--verify", "-q", base_ref) else rsha
+        if base != ZERO:
+            yield base, lsha
 
 
 def cmd_prepush(a):
     repo = os.getcwd()
     allow = (a.allow or []) + os.environ.get("AGENTCTL_ALLOW", "").split()
     max_foreign = a.max_foreign if a.max_foreign is not None else int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN))
-    problems = []
     if a.hook:
-        remote = a.hook[0]
-        base_ref = f"refs/remotes/{remote}/main"
-        for line in sys.stdin.read().splitlines():
-            parts = line.split()
-            if len(parts) != 4:
-                continue
-            _, lsha, rref, rsha = parts
-            if lsha == ZERO or not rref.startswith("refs/heads/"):
-                continue  # deletes and tags: nothing to check
-            base = base_ref if git_ok(repo, "rev-parse", "--verify", "-q", base_ref) else rsha
-            if base == ZERO:
-                continue
-            problems += check_range(repo, base, lsha, allow, max_foreign)
+        ranges = hook_ranges(repo, a.hook[0], sys.stdin.read().splitlines())
+        problems = [p for base, lsha in ranges for p in check_range(repo, base, lsha, allow, max_foreign)]
     else:
         problems = check_range(repo, a.base, git(repo, "rev-parse", a.head).strip(), allow, max_foreign)
     for p in problems:

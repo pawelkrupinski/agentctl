@@ -190,6 +190,30 @@ def git_ok(repo: str, *args: str) -> bool:
 _changed_lines_cache, _main_index_cache = process_cache({}), process_cache({})
 
 
+def parse_changed_lines(diff):
+    """{file header: [the +/- lines, in order]} of a `git show -U0` text: the file's header keeps its modes and
+    binary-ness (its index line is dropped, its blob id kept for a binary change), its hunks their +/- lines."""
+    out, cur, in_hunk, blob = {}, None, False, None
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            cur, in_hunk, blob = line, False, None
+            out[cur] = []
+        elif cur is None or (in_hunk and line.startswith("@@")):
+            continue
+        elif in_hunk:
+            if line[:1] in ("+", "-", "\\"):
+                out[cur].append(line)
+        elif line.startswith("@@"):
+            in_hunk = True
+        elif line.startswith("index "):
+            blob = line.split()[1].split("..")[-1]
+        elif line.startswith(("new file mode", "deleted file mode", "old mode", "new mode")):
+            out[cur].append(line)
+        elif line.startswith(("Binary files", "GIT binary patch")):
+            out[cur].append(f"{line} {blob}")
+    return out
+
+
 def changed_lines(repo, c):
     """{file header: [the +/- lines, in order]} of commit c against its first parent: no context, no line numbers, no
     blob ids of a text change (they name the whole file, context included); a binary change keeps its new blob id."""
@@ -199,30 +223,21 @@ def changed_lines(repo, c):
                  "--diff-merges=first-parent", c], timeout=120, text=False)
     if r.returncode != 0:
         return None
-    out, cur, in_hunk, blob = {}, None, False, None
-    for line in r.stdout.decode(errors="replace").splitlines():
-        if line.startswith("diff --git "):
-            cur, in_hunk, blob = line, False, None
-            out[cur] = []
-        elif cur is None:
-            continue
-        elif not in_hunk:  # the file's header: its modes and binary-ness count, its index line does not
-            if line.startswith("@@"):
-                in_hunk = True
-            elif line.startswith("index "):
-                blob = line.split()[1].split("..")[-1]
-            elif line.startswith(("new file mode", "deleted file mode", "old mode", "new mode")):
-                out[cur].append(line)
-            elif line.startswith(("Binary files", "GIT binary patch")):
-                out[cur].append(f"{line} {blob}")
-        elif line.startswith("@@"):
-            continue
-        elif line[:1] in ("+", "-", "\\"):
-            out[cur].append(line)
+    out = parse_changed_lines(r.stdout.decode(errors="replace"))
     if len(_changed_lines_cache) > 4000:
         _changed_lines_cache.clear()
     _changed_lines_cache[c] = out
     return out
+
+
+def _index_main_log(log):
+    """{(author name, email, author date, subject): [sha]} of a `%H%x00%an%x00%ae%x00%at%x00%s` log."""
+    idx = {}
+    for line in log.splitlines():
+        p = line.split("\x00")
+        if len(p) == 5:
+            idx.setdefault(tuple(p[1:]), []).append(p[0])
+    return idx
 
 
 def _main_index(repo, main, since):
@@ -231,14 +246,9 @@ def _main_index(repo, main, since):
     if key not in _main_index_cache:
         rng = f"{since}..{main}" if since else main
         r = git(repo, "log", "--no-merges", "-n", "20000", "--format=%H%x00%an%x00%ae%x00%at%x00%s", rng, check=False)
-        idx = {}
-        for line in (r.stdout if r.returncode == 0 else "").splitlines():
-            p = line.split("\x00")
-            if len(p) == 5:
-                idx.setdefault(tuple(p[1:]), []).append(p[0])
         if len(_main_index_cache) > 32:
             _main_index_cache.clear()
-        _main_index_cache[key] = idx
+        _main_index_cache[key] = _index_main_log(r.stdout if r.returncode == 0 else "")
     return _main_index_cache[key]
 
 
@@ -251,14 +261,11 @@ def content_twin(repo, c, main):
     if len(p) != 4 or not head:
         return None
     mb = git(repo, "merge-base", c, head, check=False).stdout.strip()
-    mine = None
-    for u in _main_index(repo, head, mb).get(tuple(p), []):
-        if u == c:
-            continue
-        mine = changed_lines(repo, c) if mine is None else mine
-        if mine is not None and inked_lines(changed_lines(repo, u)) == inked_lines(mine):
-            return u
-    return None
+    mine = inked_lines(changed_lines(repo, c))
+    if mine is None:
+        return None
+    return next((u for u in _main_index(repo, head, mb).get(tuple(p), [])
+                 if u != c and inked_lines(changed_lines(repo, u)) == mine), None)
 
 
 def inked_lines(changed):
