@@ -253,7 +253,7 @@ def land_in_worktree(repo, a, clock, store):
 MAIN_MOVED = "main moved"  # land_loop: the check outside the lock no longer covers origin/main
 
 
-def proven_push(repo, head, main_ref, log_path, a):
+def proven_push(repo, head, main_ref, log_path, a, store):
     """A push that exited 0, proven on main by a fetch (net_run: through a blip): LANDED (0), NOT LANDED (1) -- or,
     the fetch still failing the network's way, UNKNOWN (2): the network's, never NOT LANDED for a change on main."""
     f = net_run("git fetch main", ["git", "fetch", "--quiet", remote(), "main"], cwd=repo, capture_output=True,
@@ -267,7 +267,7 @@ def proven_push(repo, head, main_ref, log_path, a):
     if how:
         print(f"LANDED {head}" + ("" if how == "ancestor" else f" ({how})"), flush=True)
         a.landed_sha = head
-        lander_note_direct(repo, head, getattr(a, "lander_keys", None))
+        lander_note_direct(store, repo, head, getattr(a, "lander_keys", None))
         return 0
     print(f"NOT LANDED: the push exited 0 but {head[:10]} is not on {remote()}/main after a fetch; see {log_path}")
     return 1
@@ -317,7 +317,7 @@ def land_loop(repo, main_ref, sh, log_path, a, clock, store):
         if rc is None:
             return stalled("push (git push and its pre-push hook)", out, log_path)
         if rc == 0:
-            return proven_push(repo, head, main_ref, log_path, a)
+            return proven_push(repo, head, main_ref, log_path, a, store)
         if RACE.search(out) and attempt < LAND_RETRIES:
             err(f"push race ({RACE.search(out).group(0)}): refetch, rebase, retry")
             clock.sleep(min(30, 2 + 3 * attempt))

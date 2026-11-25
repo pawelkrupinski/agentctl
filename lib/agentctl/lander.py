@@ -12,7 +12,6 @@ from agentctl.procrunner import process_runner
 from agentctl.core import HOME, branch_of, env_num, err, git, git_ok, process_cache, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime
-from agentctl.store import open_store
 from agentctl.repos import RED_PRIMARY
 from agentctl.storetoken import no_vault
 from agentctl.claudefiles import claude_projects_root
@@ -289,13 +288,13 @@ def lander_note_landed(store, repo, o_r, t, force=False):
     return acts
 
 
-def lander_note_direct(repo, head, keys):
+def lander_note_direct(store, repo, head, keys):
     """A direct land's record (`agentctl land` with no queue): a `lander` item, best effort -- a store that does not
     answer costs the record, never the landing."""
     try:
         cid = f"direct-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{head[:10]}"
         with no_vault():
-            lander_put(open_store(), cid, lander_record(repo), keys or [], landed_sha=head)
+            lander_put(store, cid, lander_record(repo), keys or [], landed_sha=head)
         return cid
     except (Exception, SystemExit) as e:
         err(f"lander: not recorded ({str(e)[:160]})")

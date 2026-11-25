@@ -166,7 +166,7 @@ class CommitKeysTest(Base):
     def test_a_direct_land_writes_a_lander_item(self):
         wt, sha = self.change("c", {"c.txt": "c\n"})
         keys = A.commit_keys(wt, "origin/main", sha)
-        cid = A.lander_note_direct(wt, sha, keys)
+        cid = A.lander_note_direct(A.open_store(), wt, sha, keys)
         it = A.open_store().item("lander", cid)
         self.assertEqual(it["state"], "recorded")
         self.assertEqual(it["data"]["landed_commits"], {sha: keys[0]["patch_id"]})
