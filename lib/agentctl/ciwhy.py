@@ -348,7 +348,7 @@ def ci_state_write(snap):
     return snap
 
 
-def ci_state_load(o_r, now=None):
+def ci_state_load(o_r: str, now: float | None = None) -> dict[str, Any] | None:
     """The snapshot when it is for o_r and at most CI_STATE_MAX_AGE old, else None (unread)."""
     try:
         snap = state_read().get("ci") or {}

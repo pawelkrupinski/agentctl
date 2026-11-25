@@ -3,10 +3,12 @@
 
 from operator import itemgetter
 import time
+from typing import Any
 from contextlib import suppress
 from typing import Any
 from agentctl.core import fmt_age
 from agentctl.redrecord import RED_TERMINAL, red_names
+from agentctl.redepisode import red_episode_names
 from agentctl.queueslots import checker_alive
 from agentctl.fixchange import fixes_named
 from agentctl.issues import issue_open
@@ -66,7 +68,8 @@ def red_kind_of(d):
 
 def queue_facts(gate, st):
     """THE FACTS a change is classified against: {"gate": the gate's current red names (gate_reds), "open": {name: [red
-    id, red kind]} for every red the store has open}. An unreadable store gives no open reds: the gate's still count."""
+    id, red kind]} for every red the store has open: the item's names and, for a gate red, the runs of its EPISODE (redepisode.py).
+    An unreadable store gives no open reds: the gate's still count."""
     open_ = {}
     try:
         items = st.items("red")
@@ -76,7 +79,7 @@ def queue_facts(gate, st):
         if it["state"] in RED_TERMINAL:
             continue
         d = it.get("data") or {}
-        for n in sorted(str(x) for x in red_names(d) if x):
+        for n in sorted(str(x) for x in red_names(d) | red_episode_names(d) if x):
             open_.setdefault(n.lstrip("#"), [it["id"], red_kind_of(d)])
     return {"gate": {str(x) for x in gate or ()}, "open": open_}
 
@@ -86,6 +89,16 @@ def gate_facts(gate):
     return {"gate": {str(x) for x in gate or ()}, "open": {}}
 
 
+def named_reds(names: set[str], gate: set[str], open_: dict[str, list[Any]]) -> list[dict[str, Any]]:
+    """[{name, red, kind}] of the reds a change names: the gate's current names and every open red's (queue_facts)."""
+    reds = []
+    for n in sorted(names):
+        if n in gate or n in open_:
+            rid, kind = (open_.get(n) or [None, None])[:2]
+            reds.append({"name": n, "red": rid, "kind": "gate" if n in gate else kind})
+    return reds
+
+
 def classify_change(e, facts, t=None, repo=None):
     """THE KIND of change entry e (or an item's data) under facts (queue_facts). repo: also ask whether a queued change
     is an identity change (batch.identity_change, cached per entry and head) when nothing else already keeps it out of
@@ -93,11 +106,7 @@ def classify_change(e, facts, t=None, repo=None):
     t = t if t is not None else time.time()
     names = fixes_named(e)
     gate, open_ = facts.get("gate") or set(), facts.get("open") or {}
-    reds = []
-    for n in sorted(names):
-        if n in gate or n in open_:
-            rid, kind = (open_.get(n) or [None, None])[:2]
-            reds.append({"name": n, "red": rid, "kind": "gate" if n in gate else kind})
+    reds = named_reds(names, gate, open_)
     red_fix = bool(reds)
     gate_fix = "gate" in map(itemgetter("kind"), reds)
     backlog_why = ("red-fix" if red_fix else "no-batch" if e.get("no_batch")

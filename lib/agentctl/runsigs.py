@@ -5,6 +5,7 @@ import glob
 import os
 import time
 from contextlib import suppress
+from typing import Any
 from agentctl.core import reds_dir
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -65,11 +66,11 @@ def name_causes(o_r=None, values=()):
     return out
 
 
-def run_names(r):
+def run_names(r: dict[str, Any]) -> set[str]:
     return {str(x) for x in (r.get("number"), r.get("databaseId")) if x not in (None, "")}
 
 
-def classifier_version():
+def classifier_version() -> str:
     """What a cached signature was judged by: its KIND (classify_job and every pattern it reads) and its LINE, the red's
     key (relevant_lines, job_log_lines, choose_job_lines and the STRONG / WEAK / NOISE / ANNOTATION patterns). A record
     of another version is read again (#2426: cached a TEST FAILURE before KEY_REFUSED_LOG, `red block` kept reading it;

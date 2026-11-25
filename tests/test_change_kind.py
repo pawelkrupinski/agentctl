@@ -43,6 +43,34 @@ class ChangeKindTest(unittest.TestCase):
         self.assertEqual((k["red_fix"], k["gate_fix"], k["priority"], k["backlog_batch"]),
                          (False, False, "ordinary", None))
 
+    def test_a_fix_naming_a_run_of_the_open_episode_counts_though_the_red_item_dropped_it(self):
+        """2026-11-25: the open gate red's item names #8 only; #7 failed the SAME way (its cached signature) since the last
+        green #5, so a fix naming #7 fixes the red (its episode). #6 failed another way and #4 is before the green: a fix
+        naming either is no fix of it and still waits."""
+        os.environ["AGENTCTL_STATE_FILE"] = os.path.join(self.tmp.name, "state.json")
+        os.environ["AGENTCTL_REDS_DIR"] = os.path.join(self.tmp.name, "reds")
+        self.addCleanup(lambda: [os.environ.pop(k, None) for k in ("AGENTCTL_STATE_FILE", "AGENTCTL_REDS_DIR")])
+
+        def run(n, ok=False):
+            return {"number": n, "databaseId": 1000 + n, "status": "completed",
+                    "conclusion": "success" if ok else "failure"}
+
+        def signed(n, line):
+            A.write_json(A.reds_dir("runsig", f"{1000 + n}.json"), {"classifier": A.classifier_version(),
+                         "sigs": [{"job": "Unit tests", "kind": "test", "line": line}]})
+        runs = [run(8), run(7), run(6), run(5, ok=True), run(4)]
+        for n, line in ((8, "Failed: A"), (7, "Failed: A"), (6, "Failed: B"), (4, "Failed: A")):
+            signed(n, line)
+        A.state_update(ci={"repo": "pawelkrupinski/movies", "at": time.time(), "gate": [
+            {"name": "Main", "decided": runs[0], "newer": [], "since": "2026-11-25T10:00:00Z", "count": 3, "runs": runs}]})
+        self.st.put_item("red", "k8", "leased", {"key": "k8", "workflow": "Main", "gate": True, "red_kind": "test",
+                                                "job": "Unit tests", "line": "Failed: A", "runs": ["8"]})
+        facts = A.queue_facts({"8"}, self.st)
+        by = lambda n: A.classify_change({"fixes": [n]}, facts)
+        self.assertTrue(by("7")["gate_fix"], "a run of the same episode and signature")
+        self.assertFalse(by("6")["red_fix"], "a run failing another way")
+        self.assertFalse(by("4")["red_fix"], "a run of the older episode")
+
     def test_the_gate_decides_with_the_gate_s_reds_alone(self):
         self.red("r-out", ["6"])
         k = A.classify_change({"fixes": ["6"]}, A.queue_facts(set(), self.st))
