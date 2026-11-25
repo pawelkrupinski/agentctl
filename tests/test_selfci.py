@@ -36,11 +36,11 @@ class SelfCiTest(unittest.TestCase):
     def check(self, runs, pin=None, behind=0):
         newest_green = next((r["headSha"] for r in runs or [] if r["conclusion"] == "success"), "a" * 40)
         pin = pin or newest_green
-        for f in ("selfci-runs.json", "selfci-pin.json"):
+        for f in ("selfci-runs.json", "selfci-pin.json", "selfci-why.json"):
             p = A.state_root(f)
             if os.path.exists(p):
                 os.unlink(p)
-        return A.inv_wa(self.clock, None, runs=lambda: runs, pin=lambda: pin, behind=lambda rev: behind)
+        return A.inv_wa(self.clock, None, runs=lambda: runs, pin=lambda: pin, behind=lambda rev: behind, failure=lambda rid: None)
 
     def test_green_ci_and_a_current_pin_hold(self):
         ok, detail = self.check([run(9, "success", 5), run(8, "failure", 60)])
@@ -115,6 +115,23 @@ class SelfCiTest(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         A.readings(NOW + 1900, lambda: [], None)
         self.assertEqual(len(calls), 2)
+
+    def test_a_red_names_the_failing_test_the_seed_and_the_replay_command(self):
+        log = ("suite\tstep\t2026 FAIL: test_reds.BackgroundSessionTest.test_x\nsuite\tstep\tseed: 4242 (replay)\n"
+               "suite\tstep\tREPLAY: python3 tests/run.py --seed 4242 --shard 0/2\n")
+        for f in ("selfci-runs.json", "selfci-pin.json", "selfci-why.json"):
+            p = A.state_root(f)
+            if os.path.exists(p):
+                os.unlink(p)
+        seen = []
+        ok, detail = A.inv_wa(self.clock, None, runs=lambda: [dict(run(9, "failure", 100), databaseId=77)], pin=lambda: sha(9),
+                              behind=lambda rev: 0, failure=lambda rid: seen.append(rid) or log)
+        self.assertFalse(ok)
+        self.assertIn("failing: test_reds.BackgroundSessionTest.test_x", detail)
+        self.assertIn("seed 4242", detail)
+        self.assertIn("replay: python3 tests/run.py --seed 4242 --shard 0/2", detail)
+        self.assertIn("never rerun", detail)
+        self.assertEqual(seen, [77])
 
     def test_the_watchdog_registers_it(self):
         self.assertIn("WA", A.INVARIANTS)

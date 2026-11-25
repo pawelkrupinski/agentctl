@@ -18,7 +18,7 @@ from agentctl.core import env_num, fmt_age, git, host_role, run_cmd, state_root
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record, write_json
 from agentctl.cistate import state_read
-from agentctl.forge import gh_json
+from agentctl.forge import forge_argv, forge_env, gh_json
 from agentctl.fixerland import bin_repo
 
 SELF_REPO = "pawelkrupinski/agentctl"
@@ -96,7 +96,29 @@ def cached(path: str, now_: float, read: Callable[[], Any], every: float) -> Any
     return value
 
 
-def red_problem(runs: list[dict[str, Any]], now_: float) -> tuple[str | None, float | None]:
+def read_failure(run_id: Any) -> str | None:
+    """The failing steps' log of a tests.yml run, as `gh run view --log-failed` prints it; None when it cannot say."""
+    try:
+        r = run_cmd(forge_argv(SELF_REPO, "run", "view", str(run_id), "--log-failed"), timeout=90, env=forge_env(SELF_REPO))
+    except OSError:  # no gh
+        return None
+    return r.stdout if r.returncode == 0 and r.stdout.strip() else None
+
+
+def diagnosis(log: str | None) -> str:
+    """What a red run's log says to do about it (tests/run.py prints `seed:`, `FAIL: <id>` and `REPLAY: <command>`): the
+    failing tests, the seed and the command that replays the order; '' when the log has none of them."""
+    if not log:
+        return ""
+    fails = list(dict.fromkeys(re.findall(r"FAIL: (\S+)", log)))
+    seed = re.search(r"seed: (\d+)", log)
+    replay = re.search(r"REPLAY: (python3 tests/run\.py[^\r\n]*)", log)
+    parts = [f"failing: {', '.join(fails[:3])}{' ...' if len(fails) > 3 else ''}" if fails else "",
+             f"seed {seed.group(1)}" if seed else "", f"replay: {replay.group(1).strip()}" if replay else ""]
+    return "; ".join(p for p in parts if p)
+
+
+def red_problem(runs: list[dict[str, Any]], now_: float, why: str = "") -> tuple[str | None, float | None]:
     """(what is wrong, how long the streak has been red) of tests.yml's runs: wrong only past WA_RED_MAX."""
     red = red_since(runs)
     if not red:
@@ -106,28 +128,31 @@ def red_problem(runs: list[dict[str, Any]], now_: float) -> tuple[str | None, fl
         return None, age
     return (f"agentctl's tests.yml has been red on main for {fmt_age(age)} (run #{red[1].get('number')} "
             f"{red[1].get('conclusion')} at {str(red[1].get('headSha'))[:7]}): ci-runner's auto-pin holds on a red run, "
-            f"so no agentctl commit since is deployed"), age
+            f"so no agentctl commit since is deployed" + (f" -- {why}; fix the test, never rerun it" if why else "")), age
 
 
 def pins(pin_rev: str, sha: Any) -> bool:
     return str(sha).startswith(pin_rev[:12])
 
 
-def unpinned_problem(runs: list[dict[str, Any]], pin_rev: str | None, now_: float) -> str | None:
-    """The newest green run, when it is not the pin, the pin is not a newer run, and it has been decided for over
-    WA_UNPINNED_MAX: the auto-pin is stuck."""
-    if not pin_rev:
-        return None
+def newest_unpinned_green(runs: list[dict[str, Any]], pin_rev: str) -> dict[str, Any] | None:
+    """The newest green run, unless it is the pin or the pin is a newer run."""
     for r in runs:
         if pins(pin_rev, r.get("headSha")):
             return None
         if decided(r) and r["conclusion"] == "success":
-            done = iso_epoch(r.get("updatedAt") or r.get("createdAt"))
-            if done is not None and now_ - done > env_num("AGENTCTL_WA_UNPINNED_MAX", WA_UNPINNED_MAX):
-                return (f"ci-runner's pin {pin_rev[:7]} has not followed the green run #{r.get('number')} at "
-                        f"{str(r.get('headSha'))[:7]} for {fmt_age(now_ - done)}: the auto-pin is stuck")
-            return None
+            return r
     return None
+
+
+def unpinned_problem(runs: list[dict[str, Any]], pin_rev: str | None, now_: float) -> str | None:
+    """The newest green run left unpinned for over WA_UNPINNED_MAX: the auto-pin is stuck."""
+    green = newest_unpinned_green(runs, pin_rev) if pin_rev else None
+    done = iso_epoch((green or {}).get("updatedAt") or (green or {}).get("createdAt"))
+    if green is None or done is None or now_ - done <= env_num("AGENTCTL_WA_UNPINNED_MAX", WA_UNPINNED_MAX):
+        return None
+    return (f"ci-runner's pin {str(pin_rev)[:7]} has not followed the green run #{green.get('number')} at "
+            f"{str(green.get('headSha'))[:7]} for {fmt_age(now_ - done)}: the auto-pin is stuck")
 
 
 def undecided_problem(runs: list[dict[str, Any]], now_: float) -> str | None:
@@ -141,6 +166,20 @@ def undecided_problem(runs: list[dict[str, Any]], now_: float) -> str | None:
     if began is None or now_ - began <= env_num("AGENTCTL_WA_UNDECIDED_MAX", WA_UNDECIDED_MAX):
         return None
     return f"no tests.yml run has decided for main's head in {fmt_age(now_ - began)}: CI is stuck or queued"
+
+
+def red_why(runs: list[dict[str, Any]], now_: float, failure: Callable[[Any], str | None] | None) -> str:
+    """The diagnosis of the red streak's newest run (read once per run, kept), once the streak is past WA_RED_MAX."""
+    red = red_since(runs)
+    if not red or now_ - red[0] <= env_num("AGENTCTL_WA_RED_MAX", WA_RED_MAX):
+        return ""
+    run_id = red[1].get("databaseId") or red[1].get("number")
+    path = state_root("selfci-why.json")
+    kept = read_record(path) or {}
+    if kept.get("run") != run_id:
+        kept = {"run": run_id, "why": diagnosis((failure or read_failure)(run_id))}
+        write_json(path, kept)
+    return str(kept.get("why") or "")
 
 
 def readings(now_: float, runs: Callable[[], Any] | None, pin: Callable[[], str | None] | None) -> tuple[Any, str | None]:
@@ -159,7 +198,8 @@ def holding_words(red_age: float | None, pin_rev: str | None, lag: int | None) -
 
 
 def inv_wa(clock: Any, st: Any, runs: Callable[[], Any] | None = None, pin: Callable[[], str | None] | None = None,
-           behind: Callable[[str], int | None] | None = None) -> tuple[bool | None, str]:
+           behind: Callable[[str], int | None] | None = None,
+           failure: Callable[[Any], str | None] | None = None) -> tuple[bool | None, str]:
     """WA: deploys are not stuck: agentctl's own main CI has not been red past WA_RED_MAX, the newest green run is
     pinned within WA_UNPINNED_MAX, and the head has had a decided run within WA_UNDECIDED_MAX. The commit lag is
     informational. Read from the laptop (ci-runner reads itself through its auto-pin)."""
@@ -169,7 +209,7 @@ def inv_wa(clock: Any, st: Any, runs: Callable[[], Any] | None = None, pin: Call
     runs_now, pin_rev = readings(now_, runs, pin)
     if runs_now is None:
         return None, f"cannot read {SELF_REPO}'s tests.yml runs"
-    red_words, red_age = red_problem(runs_now, now_)
+    red_words, red_age = red_problem(runs_now, now_, red_why(runs_now, now_, failure))
     lag = (behind or commits_behind)(pin_rev) if pin_rev else None
     problems = [p for p in (red_words, unpinned_problem(runs_now, pin_rev, now_), undecided_problem(runs_now, now_)) if p]
     if problems:

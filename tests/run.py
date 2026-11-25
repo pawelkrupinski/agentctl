@@ -13,7 +13,7 @@
   every thread first), and the test is reported as WORKER DIED. The suite as a whole is bounded too (--suite-timeout, default 600 s).
 - PATTERN: only tests whose id (module.Class.test) contains one of the patterns.
 Exit 0 when every test passed, 1 otherwise. The hermetic harness (HOME, PATH, git config, timeout) is tests/harness.py."""
-import argparse, json, os, shutil, signal, subprocess, sys, tempfile, threading, time, traceback, unittest
+import argparse, json, os, random, shutil, signal, subprocess, sys, tempfile, threading, time, traceback, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DURATIONS = os.path.join(os.path.expanduser("~"), ".cache", "agentctl-tests", "durations.json")
@@ -64,6 +64,27 @@ def list_tests(patterns):
                         out[tid] = None
         walk(loader.loadTestsFromName(mod))
     return [t for t in out if not patterns or any(p in t for p in patterns)]
+
+
+def fresh_seed():
+    return random.SystemRandom().randrange(1, 10**9)
+
+
+def seeded_order(classes, seed, repeat=1):
+    """The queue order: the test ids, `repeat` times each, shuffled by `seed` (the same seed, the same order)."""
+    order = sorted(classes) * repeat
+    random.Random(seed).shuffle(order)
+    return order
+
+
+def replay_command(a):
+    """The command that replays this run's whole queue order (an order-dependent flake needs the tests around it)."""
+    parts = ["python3 tests/run.py", f"--seed {a.seed}"]
+    if a.shard:
+        parts.append(f"--shard {a.shard}")
+    if a.repeat != 1:
+        parts.append(f"--repeat {a.repeat}")
+    return " ".join(parts + list(a.patterns))
 
 
 def worker(timeout):
@@ -191,6 +212,11 @@ def main():
     ap.add_argument("--list", action="store_true", help="print the test ids and exit")
     ap.add_argument("--shard", metavar="K/N", help="run only shard K (0-based) of N: a disjoint 1/N of the tests, every "
                     "Nth by id (CI's matrix: the whole suite outgrew one 4-cpu runner's bound)")
+    ap.add_argument("--seed", type=int, default=None, help="the order's seed (default: a fresh one, printed): the same "
+                    "seed, shard and patterns replay the same queue order, so an order- or leak-dependent flake can be replayed")
+    ap.add_argument("--repeat", type=int, default=1, metavar="K", help="run every selected test K times (the stress lane)")
+    ap.add_argument("--budget", type=float, default=0, metavar="S", help="stop dispatching after S s: tests not reached are "
+                    "no failure (the stress lane's bound)")
     ap.add_argument("patterns", nargs="*")
     a = ap.parse_args()
     shard = None
@@ -218,7 +244,9 @@ def main():
         print("\n".join(classes))
         return 0
     past = load_durations()
-    order = sorted(classes, key=lambda c: -past.get(c, 5.0))
+    a.seed = fresh_seed() if a.seed is None else a.seed
+    order = seeded_order(classes, a.seed, a.repeat)
+    print(f"seed: {a.seed} (replay this order: {replay_command(a)})", flush=True)
     lock, todo, results, t0 = threading.Lock(), list(order), [], time.monotonic()
     procs = []
 
@@ -229,7 +257,7 @@ def main():
         procs.append(p)
         while True:
             with lock:
-                if not todo:
+                if not todo or (a.budget and time.monotonic() - t0 > a.budget):
                     break
                 cid = todo.pop(0)
             p.stdin.write(cid + "\n")
@@ -265,6 +293,8 @@ def main():
     fails = [f for r in results for f in r["failures"]]
     for tid, tb in fails:
         print("=" * 70 + f"\nFAIL: {tid}\n" + "-" * 70 + f"\n{tb}")
+    if fails:
+        print(f"REPLAY: {replay_command(a)}")
     if timed_out:
         print(f"SUITE TIMEOUT after {a.suite_timeout} s; not run: {', '.join(todo) or '-'}")
     if leaked:
@@ -278,7 +308,8 @@ def main():
     skipped = sum(r["skipped"] for r in results)
     print(f"Ran {nrun} tests in {took:.1f}s ({a.jobs} workers)" +
           (f", {skipped} skipped" if skipped else ""))
-    ok = not fails and not timed_out and not leaked and len(results) == len(classes)
+    cut = bool(a.budget) and took > a.budget
+    ok = not fails and not timed_out and not leaked and (cut or len(results) == len(classes) * a.repeat)
     if ok and not a.patterns and not shard:
         save_json(SUITE_WALL, {"wall": round(took, 1), "jobs": a.jobs, "tests": nrun})
     print("OK" if ok else f"FAILED (failures={len(fails)})")

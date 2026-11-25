@@ -37,6 +37,17 @@ except Exception: print(0)' 2>/dev/null)
     rc=1
   else
     tail -2 "$tmp/out" >&2
+    # THE STRESS LANE (tests/stress.py, 2026-11-25): the tests this push touches, 5 more times each, shuffled, under a
+    # raised test-clock lag, at most ~45 s: a newly flaky test fails the push (its seed and REPLAY line are printed).
+    if [ $rc -eq 0 ] && [ "$_rsha" != "$z" ] && git cat-file -e "$_rsha^{commit}" 2>/dev/null && [ -f "$tmp/tree/tests/stress.py" ]; then
+      if ! (cd "$tmp/tree" && timeout --foreground -s KILL 300 python3 tests/stress.py --range "$_rsha..$lsha" >"$tmp/stress" 2>&1); then
+        tail -30 "$tmp/stress" >&2
+        echo "pre-push: REFUSED -- the stress lane fails on $lsha (a test of this push is flaky: replay with the REPLAY line)" >&2
+        rc=1
+      else
+        tail -2 "$tmp/stress" >&2
+      fi
+    fi
     # THE SIMULATOR GATE (tests/sim_gate.py): no invariant kind's violations rise against the remote's main, and no
     # invariant changes beside the code it measures. Against the remote's sha when this clone has it, else alone. Its
     # chunks run under a suite ticket of their own (THE GOVERNED FAN-OUT): the KILL bound leaves its 900 s wait room.
