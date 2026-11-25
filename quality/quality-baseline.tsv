@@ -9,7 +9,6 @@ cognitive	_await_entry	35
 cognitive	_gh_api_once	19
 cognitive	_push_batch_item	41
 cognitive	_tick_changes_pass	62
-cognitive	_watch	46
 cognitive	_watch_group	28
 cognitive	adjust_cap	24
 cognitive	alert_item	30
@@ -153,7 +152,6 @@ cognitive	transcript_paths	26
 cognitive	tunnel_watch	32
 cognitive	wait_all	41
 cognitive	waiting_run	37
-cognitive	watch_landed	23
 cognitive	watch_look	20
 cognitive	with_inbox	25
 cognitive	workflow_jobs	26
@@ -173,7 +171,6 @@ cyclomatic	_await_entry	20
 cyclomatic	_gh_api_once	18
 cyclomatic	_push_batch_item	33
 cyclomatic	_tick_changes_pass	37
-cyclomatic	_watch	24
 cyclomatic	_watch_group	21
 cyclomatic	adjust_cap	36
 cyclomatic	alert_item	27
@@ -319,7 +316,6 @@ cyclomatic	transcript_paths	19
 cyclomatic	tunnel_watch	30
 cyclomatic	wait_all	26
 cyclomatic	waiting_run	27
-cyclomatic	watch_landed	20
 cyclomatic	watch_look	11
 cyclomatic	with_inbox	26
 cyclomatic	workflow_jobs	19
@@ -329,7 +325,6 @@ cyclomatic	write_snapshot	23
 inner-defs	sync_steps	7
 method-lines	_push_batch_item	72
 method-lines	_tick_changes_pass	86
-method-lines	_watch	81
 method-lines	alert_probe	55
 method-lines	cmd_gov	69
 method-lines	cmd_maintain	56
