@@ -4,6 +4,7 @@
 import os
 import time
 from contextlib import suppress
+from typing import Any
 from agentctl.core import env_num, err, git, host_role, reds_dir, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -125,6 +126,18 @@ def network_requeue(repo, head, out, log_path, clock, store, a=None):
     return 0
 
 
+def _baseline_cached(rec: Any, main: Any) -> Any:
+    """{check: lines} of a cached baseline record; one made under another main with the same tree (main moved by a
+    commit that left it alone) also gets this main's output file, which the hook looks up by its sha (2c7673)."""
+    if rec.get("main") and rec["main"] != main:
+        with suppress(OSError, IndexError):
+            with open(reds_dir("baseline-out", rec["main"])) as f:
+                old = f.read().split("\n", 1)[1]
+            if not os.path.exists(reds_dir("baseline-out", main)):
+                write_baseline_out(main, old)
+    return {k: set(v) for k, v in rec["fails"].items()}
+
+
 def baseline_failures(repo, hook, head, log_path):
     """The change's checks run on plain origin/main's tree: {check: lines} failing there (cached per main tree and
     change paths), or None when it could not be run."""
@@ -135,14 +148,7 @@ def baseline_failures(repo, hook, head, log_path):
     cache = reds_dir("baseline", f"{key}.json")
     rec = read_record(cache)
     if rec is not None:
-        if rec.get("main") and rec["main"] != main:  # another main with the same tree (main moved by a commit that left
-            # it alone): the hook looks this main's baseline up by its sha, so it gets the same output (2c7673)
-            with suppress(OSError, IndexError):
-                with open(reds_dir("baseline-out", rec["main"])) as f:
-                    old = f.read().split("\n", 1)[1]
-                if not os.path.exists(reds_dir("baseline-out", main)):
-                    write_baseline_out(main, old)
-        return {k: set(v) for k, v in rec["fails"].items()}
+        return _baseline_cached(rec, main)
     synth = git(repo, "commit-tree", f"{main}^{{tree}}", "-p", head, "-m", f"agentctl baseline: {remote()}/main {main[:10]}",
                 check=False)
     if synth.returncode != 0:

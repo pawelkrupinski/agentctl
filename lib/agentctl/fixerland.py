@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import glob
+import itertools
 import json
 import os
 import re
@@ -283,23 +284,28 @@ def session_activity_dirs(transcript, bid=None):
     return out
 
 
-def session_activity(transcript, bid=None):
-    """':act <bytes>@<newest mtime>' over session_activity_dirs, '' when there is none: a mark part that moves while
-    the session's sub-agents, commands or job files grow."""
-    total, newest, n = 0, 0.0, 0
+def _activity_files(transcript: Any, bid: Any) -> Any:
     for d in session_activity_dirs(transcript, bid):
         for root, _dirs, files in os.walk(d):
             for fn in files:
-                n += 1
-                if n > SESSION_ACTIVITY_FILES:
-                    break
-                try:
-                    s = os.stat(os.path.join(root, fn))
-                except OSError:
-                    continue
-                total += s.st_size
-                newest = max(newest, s.st_mtime)
-    return f":act {total}@{int(newest)}" if newest else ""
+                yield os.path.join(root, fn)
+
+
+def _activity_stats(transcript: Any, bid: Any) -> Any:
+    """os.stat of the first SESSION_ACTIVITY_FILES files under session_activity_dirs that can still be read."""
+    stats = []
+    for path in itertools.islice(_activity_files(transcript, bid), SESSION_ACTIVITY_FILES):
+        with suppress(OSError):
+            stats.append(os.stat(path))
+    return stats
+
+
+def session_activity(transcript, bid=None):
+    """':act <bytes>@<newest mtime>' over session_activity_dirs, '' when there is none: a mark part that moves while
+    the session's sub-agents, commands or job files grow."""
+    stats = _activity_stats(transcript, bid)
+    newest = max((s.st_mtime for s in stats), default=0.0)
+    return f":act {sum(s.st_size for s in stats)}@{int(newest)}" if newest else ""
 
 
 def fixer_meta_sent(st, leases, meta):

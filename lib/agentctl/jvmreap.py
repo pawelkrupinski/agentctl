@@ -9,6 +9,7 @@ import signal
 import subprocess
 import time
 from contextlib import suppress
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, env_num, pid_alive, run_cmd, state_root
 from agentctl.timefmt import ts
@@ -78,20 +79,29 @@ def sbt_warm_state():
     return os.environ.get("KINOWO_SBT_WARM_STATE") or os.path.join(HOME, ".cache", "kinowo-sbt-warm")
 
 
+def _read_serving(path: Any) -> Any:
+    """(checkout root, the fields of its .serving mark) of one sbt-warm mark; None when it cannot be read."""
+    try:
+        with open(path) as f:
+            parts = f.read().split(None, 2)
+        with open(path[: -len(".serving")] + ".root") as f:
+            return f.read().strip(), parts
+    except OSError:
+        return None
+
+
+def _serving_row(parts: Any) -> Any:
+    owner = int(parts[1]) if parts[1].isdigit() else None  # `-`: no owner
+    return int(parts[0]) if parts[0].isdigit() else 0, owner, parts[2].strip() if len(parts) > 2 else ""
+
+
 def sbt_serving():
     """{checkout root: (serving sbt-warm pid, owner pid or None, command)} from sbt-warm's .serving marks."""
     out = {}
     for path in glob.glob(os.path.join(sbt_warm_state(), "*.serving")):
-        try:
-            with open(path) as f:
-                parts = f.read().split(None, 2)
-            with open(path[: -len(".serving")] + ".root") as f:
-                root = f.read().strip()
-        except OSError:
-            continue
-        if len(parts) >= 2:
-            owner = None if parts[1] == "-" else int(parts[1]) if parts[1].isdigit() else None
-            out[root] = (int(parts[0]) if parts[0].isdigit() else 0, owner, parts[2].strip() if len(parts) > 2 else "")
+        seen = _read_serving(path)
+        if seen and len(seen[1]) >= 2:
+            out[seen[0]] = _serving_row(seen[1])
     return out
 
 

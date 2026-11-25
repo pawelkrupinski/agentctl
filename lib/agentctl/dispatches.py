@@ -259,9 +259,11 @@ def owner_text(rec, short=False):
         return "NOBODY (no owner record, no worktree holds its commit)"
     wt = rec.get("worktree") or ""
     who = rec.get("agent") or (f"session {rec['session'][:8]}" if rec.get("session") else None)
+    if not wt:
+        return who or "?"
     if short:
-        return os.path.basename(wt) if wt else (who or "?")
-    return wt.replace(HOME, "~") + (f" ({who})" if who and who != os.path.basename(wt) else "") if wt else (who or "?")
+        return os.path.basename(wt)
+    return wt.replace(HOME, "~") + (f" ({who})" if who and who != os.path.basename(wt) else "")
 
 
 # -- an ORPHAN branch red closes itself (the owner, 2026-10-29: `branch reds: 3 → NOBODY` -- identity runs #2365, #2370,

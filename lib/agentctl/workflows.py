@@ -38,13 +38,8 @@ def workflow_triggers(txt: str) -> set[str]:
     return set()
 
 
-def fix_workflow_jobs(text: str) -> dict[str, tuple[str, str]]:
-    """{job key: (its block's text, its `name:`)} of a workflow file, by indentation (no YAML parser here)."""
-    lines = text.splitlines()
-    try:
-        start = next(i for i, l in enumerate(lines) if re.match(r"^jobs:\s*$", l))
-    except StopIteration:
-        return {}
+def _workflow_job_lines(lines: list[str], start: int) -> dict[str, Any]:
+    """{job key: the lines of its block} of the `jobs:` section opening at lines[start], by indentation."""
     jobs: dict[str, Any] = {}
     ind: int | None = None
     cur: str | None = None
@@ -58,8 +53,18 @@ def fix_workflow_jobs(text: str) -> dict[str, tuple[str, str]]:
             continue
         if cur:
             jobs[cur].append(l)
+    return jobs
+
+
+def fix_workflow_jobs(text: str) -> dict[str, tuple[str, str]]:
+    """{job key: (its block's text, its `name:`)} of a workflow file, by indentation (no YAML parser here)."""
+    lines = text.splitlines()
+    try:
+        start = next(i for i, l in enumerate(lines) if re.match(r"^jobs:\s*$", l))
+    except StopIteration:
+        return {}
     out = {}
-    for k, ls in jobs.items():
+    for k, ls in _workflow_job_lines(lines, start).items():
         body = "\n".join(ls)
         nm = re.search(r"^\s+name:\s*['\"]?([^'\"\n]+)", body, re.M)
         out[k] = (body, (nm.group(1).strip() if nm else k))

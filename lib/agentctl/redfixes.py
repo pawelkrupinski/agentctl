@@ -300,6 +300,19 @@ def red_fix_on_main(fix, repo):
     return fix if on == fix["sha"] else {**fix, "sha": on, "recut": fix["sha"]}
 
 
+def _counted_fix(fix: Any, facts: Any, d: Any, store: Any, since: Any) -> Any:
+    """A fix candidate as red_fix_of counts it (corrected by its store item and by main), or None when it counts no more."""
+    if fix.get("via") and not (red_sha_on_main(facts.get("repo"), fix["sha"]) if facts.get("repo") else
+                               red_sha_on_main_api(d.get("repo"), fix["sha"])):
+        return None  # a fixer's LANDED counts once its commit is on main (a verdict alone proves nothing)
+    if store is not None:
+        fix = red_fix_fresh(store, fix)
+    fix = red_fix_on_main(fix, facts.get("repo"))
+    if fix and fix.get("status") == "landed" and fix.get("at") is not None and float(fix["at"]) < since:
+        return None  # landed before this spell opened: the run that opened it already outlived it
+    return fix
+
+
 def red_fix_of(it, facts, store=None):
     """The fix on its way for this red, or None: {entry, status, sha?, at?}. A refuted or unverified fix -- by sha or
     by content -- counts no more, and is never the reason a later fix is not seen. store: each candidate corrected by
@@ -308,15 +321,8 @@ def red_fix_of(it, facts, store=None):
     d = it["data"]
     aside = red_set_aside(d, facts)
     since = float(d.get("opened_at") or 0) - 3600
-    for fix in red_fix_candidates(d, facts):
-        if fix.get("via") and not (red_sha_on_main(facts.get("repo"), fix["sha"]) if facts.get("repo") else
-                                   red_sha_on_main_api(d.get("repo"), fix["sha"])):
-            continue  # a fixer's LANDED counts once its commit is on main (a verdict alone proves nothing)
-        if store is not None:
-            fix = red_fix_fresh(store, fix)
-        fix = red_fix_on_main(fix, facts.get("repo"))
-        if fix and fix.get("status") == "landed" and fix.get("at") is not None and float(fix["at"]) < since:
-            continue  # landed before this spell opened: the run that opened it already outlived it
+    for candidate in red_fix_candidates(d, facts):
+        fix = _counted_fix(candidate, facts, d, store, since)
         if fix and not (fix.get("sha") and red_fix_is_set_aside(fix["sha"], aside, facts)):
             return fix
     return None

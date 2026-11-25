@@ -73,21 +73,26 @@ class Terminated(SystemExit):
 PROC_ROOT = "/proc"  # Linux: every process's cwd is <PROC_ROOT>/<pid>/cwd
 
 
+def _proc_cwds(pids: Any) -> dict[int, str]:
+    res: dict[int, str] = {}
+    for pid in pids:
+        try:
+            cwd = os.readlink(os.path.join(PROC_ROOT, str(pid), "cwd"))
+        except OSError:  # gone, or not ours to read
+            continue
+        if allowed_path(cwd):
+            res[pid] = cwd
+    return res
+
+
 def lsof_cwds(pids: Any) -> dict[int, str]:
     """{pid: cwd} keeping only allowed paths: on Linux from /proc/<pid>/cwd (review 2026-11-18: a Linux host with no
     lsof -- python:3.14's Debian image -- crashed `cleanup` and `orphans` with FileNotFoundError), elsewhere through ONE
     `lsof -a -p <pids> -d cwd` (always pid-scoped)."""
     pids = [int(x) for x in pids]
-    res = {}
     if os.path.isdir(os.path.join(PROC_ROOT, "self")):
-        for pid in pids:
-            try:
-                cwd = os.readlink(os.path.join(PROC_ROOT, str(pid), "cwd"))
-            except OSError:  # gone, or not ours to read
-                continue
-            if allowed_path(cwd):
-                res[pid] = cwd
-        return res
+        return _proc_cwds(pids)
+    res = {}
     for i in range(0, len(pids), 200):
         r = run_cmd(["lsof", "-nP", "-a", "-p", ",".join(map(str, pids[i:i + 200])), "-d", "cwd", "-Fpn"])
         pid = None

@@ -27,6 +27,19 @@ STEP_ECHO = re.compile(r"^(?:\S+Z )?(?:\x1b|\^\[)\[36;1m")
 STEP_HEADER_MAX = 500  # an unterminated header (a truncated slice) stops hiding lines after this many
 
 
+def _in_step_header(header: Any, job: Any, line: Any) -> Any:
+    """True while `line` of `job` sits in a runner step-script header (above); header tracks each job's open one."""
+    if line.startswith("##[group]Run "):
+        header[job] = 0
+        return True
+    if job not in header:
+        return False
+    header[job] += 1
+    if line.startswith("##[endgroup]") or header[job] > STEP_HEADER_MAX:
+        header.pop(job)
+    return True
+
+
 def log_entries(log_text):
     """(job, line) of a `gh run view --log` / `--log-failed` output (job<TAB>step<TAB>line, or bare lines: job `?`),
     timestamps and colours off, blank lines and the runner's step-script headers (above) left out."""
@@ -36,17 +49,17 @@ def log_entries(log_text):
         job, line = (parts[0], parts[2]) if len(parts) == 3 else ("?", raw)
         echoed = bool(STEP_ECHO.match(line.lstrip("﻿")))
         line = LOG_TS.sub("", ANSI.sub("", line.lstrip("﻿"))).rstrip()
-        if line.startswith("##[group]Run "):
-            header[job] = 0
-            continue
-        if job in header:
-            header[job] += 1
-            if line.startswith("##[endgroup]") or header[job] > STEP_HEADER_MAX:
-                header.pop(job)
-            continue
-        if echoed or not line:
-            continue
-        yield job, line
+        if not _in_step_header(header, job, line) and not echoed and line:
+            yield job, line
+
+
+def _line_kind(line: Any) -> Any:
+    """"strong" or "weak" for a line that reads as a failure (see relevant_lines), else None."""
+    if NOT_A_FAILURE.search(line):
+        return None
+    if STRONG.search(line) and not re.search(r"Setting level of logger|-INFO in ch\.qos", line):
+        return "strong"
+    return "weak" if WEAK.search(line) and not NOISE.search(line) else None
 
 
 def relevant_lines(log_text, tail, strong_jobs=None):
@@ -55,20 +68,15 @@ def relevant_lines(log_text, tail, strong_jobs=None):
     has none, and never from INFO/DEBUG log lines. strong_jobs, a set: the jobs with a STRONG line are added to it."""
     strong, weak, follow = {}, {}, {}
     for job, line in log_entries(log_text):
-        if not line:
-            continue
         if follow.get(job):  # the 2 lines after a scalatest `*** FAILED ***` carry its reason
             follow[job] -= 1
             strong.setdefault(job, []).append(line[:300])
             continue
         if "*** FAILED ***" in line:
             follow[job] = 2
-        if NOT_A_FAILURE.search(line):
-            continue
-        if STRONG.search(line) and not re.search(r"Setting level of logger|-INFO in ch\.qos", line):
-            strong.setdefault(job, []).append(line[:300])
-        elif WEAK.search(line) and not NOISE.search(line):
-            weak.setdefault(job, []).append(line[:300])
+        kind = _line_kind(line)
+        if kind:
+            {"strong": strong, "weak": weak}[kind].setdefault(job, []).append(line[:300])
     if strong_jobs is not None:
         strong_jobs.update(strong)
     return {j: (strong.get(j) or weak.get(j))[-tail:] for j in set(strong) | set(weak)}
@@ -212,11 +220,15 @@ def failed_steps(job):
     return [s for s in (job or {}).get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
 
 
+def _step_windows(steps: Any) -> Any:
+    return [(str(s.get("startedAt") or "")[:19], str(s.get("completedAt") or "")[:19], s.get("name") or "?")
+            for s in steps if s.get("startedAt") and s.get("completedAt")]
+
+
 def step_window_lines(log, steps):
     """The lines of a REST job log (`<ts> <line>`) inside the windows of `steps` (startedAt..completedAt, to the
     second): [(step name, line)]; a line with no timestamp goes with the line before it. [] when no step has times."""
-    wins = [(str(s.get("startedAt") or "")[:19], str(s.get("completedAt") or "")[:19], s.get("name") or "?")
-            for s in steps if s.get("startedAt") and s.get("completedAt")]
+    wins = _step_windows(steps)
     if not wins:
         return []
     out, cur = [], None
@@ -380,6 +392,21 @@ def hook_lines(o_r, run_id, job, tail):
     return hits[:tail * 4]
 
 
+def _job_lines(o_r: Any, run_id: Any, jd: Any, per: Any, tail: Any, may_fetch: Any) -> Any:
+    """(the relevant lines of one failed job, whether a log fetch was spent on it)."""
+    job = jd["name"] if isinstance(jd, dict) else jd
+    lines: Any = per.get(job) or next((v for k, v in per.items() if k in job or job in k), [])
+    if lines or not may_fetch or not isinstance(jd, dict):
+        return lines, False
+    return job_log_lines(o_r, run_id, jd, tail), True
+
+
+def _failure_head(job: Any, lines: Any) -> Any:
+    if not lines:
+        return f"  -- {job}: no FAILED/error/assert line in its log (0-length log or setup failure? see `agentctl ci-why`)"
+    return f"  -- {job}: last {len(lines)} relevant line(s)"
+
+
 def failure_detail(o_r, run_id, failed, tail):
     """failed: job dicts (name, databaseId) or names."""
     if not failed or tail <= 0:
@@ -390,12 +417,9 @@ def failure_detail(o_r, run_id, failed, tail):
         return [f"  (could not read the failed log: {e})"]
     out, fetched = [], 0
     for jd in failed:
-        job = jd["name"] if isinstance(jd, dict) else jd
-        lines = per.get(job) or next((v for k, v in per.items() if k in job or job in k), [])
-        if not lines and fetched < MAX_JOB_LOG_FETCHES and isinstance(jd, dict):
-            fetched += 1
-            lines = job_log_lines(o_r, run_id, jd, tail)
-        out.append(f"  -- {job}: " + ("no FAILED/error/assert line in its log (0-length log or setup failure? see `agentctl ci-why`)" if not lines else f"last {len(lines)} relevant line(s)"))
+        lines, spent = _job_lines(o_r, run_id, jd, per, tail, fetched < MAX_JOB_LOG_FETCHES)
+        fetched += spent
+        out.append(_failure_head(jd["name"] if isinstance(jd, dict) else jd, lines))
         out += [f"     {l}" for l in lines]
     return out
 

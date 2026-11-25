@@ -3,6 +3,7 @@
 
 import os
 import time
+from typing import Any
 from agentctl.core import env_num, err, slug
 from agentctl.timefmt import parse_time
 from agentctl.forge import gh_json, is_cancelled
@@ -140,22 +141,26 @@ def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None)
     return seen
 
 
+def _watch_red_lines(o_r: Any, sha: Any, flows: Any, reds: Any) -> Any:
+    lines = []
+    for kind, r in reds:
+        try:
+            failed = failed_jobs(o_r, r["databaseId"])
+        except (Exception, SystemExit) as e:  # the verdict stands without the job names
+            err(f"could not read the jobs of run {r['databaseId']} ({str(e)[:120]})")
+            failed = []
+        lines.append(f"WATCH RED: {flows[kind][0]} #{r.get('number')} {', '.join(failed) or r.get('conclusion')} "
+                     f"(it contains your {sha[:10]}: if your change broke it, fix forward now with `Fixes-Red: "
+                     f"{r.get('number')}`)")
+    return "\n".join(lines)
+
+
 def watch_verdict(o_r, sha, flows, done):
     """('red', lines, [(workflow, number)]) when a decided run is red, ('ok', line, []) when every flow is decided
     green (or the convergence never started), else None."""
     reds = [(k, r) for k, (r, ok) in done.items() if ok is False]
     if reds:
-        lines = []
-        for kind, r in reds:
-            try:
-                failed = failed_jobs(o_r, r["databaseId"])
-            except (Exception, SystemExit) as e:  # the verdict stands without the job names
-                err(f"could not read the jobs of run {r['databaseId']} ({str(e)[:120]})")
-                failed = []
-            lines.append(f"WATCH RED: {flows[kind][0]} #{r.get('number')} {', '.join(failed) or r.get('conclusion')} "
-                         f"(it contains your {sha[:10]}: if your change broke it, fix forward now with `Fixes-Red: "
-                         f"{r.get('number')}`)")
-        return "red", "\n".join(lines), [(flows[k][0], r.get("number")) for k, r in reds]
+        return "red", _watch_red_lines(o_r, sha, flows, reds), [(flows[k][0], r.get("number")) for k, r in reds]
     if len(done) == len(flows):
         parts = [f"{flows[k][0].split()[0] if k == 'main' else k} " +
                  (f"#{r.get('number')} green" if r else "none started") for k, (r, ok) in done.items()]

@@ -129,6 +129,19 @@ def red_joined_idle(store, row, t):
             f"(no commit, land or note for it within {fmt_age(idle)}): offered to a fixer of its own")
 
 
+def _renew_target(store: Any, row: Any, m: Any, t: Any) -> Any:
+    """(mark, ttl) a live claim or sibling row renews with, or None: another kind, or a sibling revoked here."""
+    if m.get("kind") == "claim":
+        return red_wt_mark(m.get("worktree")), m.get("ttl") or RED_CLAIM_TTL
+    if m.get("kind") != "sibling":
+        return None
+    prim = store.get(m.get("primary") or "")  # held by its run's fixer: lives exactly as long as that fixer's own lease
+    if not lease_is_live(prim, t) or prim["holder"] != row["holder"]:
+        store.revoke(row["name"], "its run's fixer ended")
+        return None
+    return f"with {prim['renewed_at']}", RED_FIXER_TTL
+
+
 def red_renew_holders(store, t):
     """Each live interactive claim renewed by its worktree's activity (no activity: it lapses at its TTL); each sibling
     exactly as long as its run's fixer's own lease; a joined red released when it shows no progress (red_joined_idle)."""
@@ -140,19 +153,9 @@ def red_renew_holders(store, t):
         if why:
             store.revoke(row["name"], why)
             continue
-        if m.get("kind") == "claim":
-            mark = red_wt_mark(m.get("worktree"))
-            ttl = m.get("ttl") or RED_CLAIM_TTL
-        elif m.get("kind") == "sibling":  # held by its run's fixer: lives exactly as long as that fixer's own lease
-            prim = store.get(m.get("primary") or "")
-            if not lease_is_live(prim, t) or prim["holder"] != row["holder"]:
-                store.revoke(row["name"], "its run's fixer ended")
-                continue
-            mark, ttl = f"with {prim['renewed_at']}", RED_FIXER_TTL
-        else:
-            continue
-        if mark:
-            store.renew(row["name"], row["epoch"], row["secret"], mark, ttl)
+        target = _renew_target(store, row, m, t)
+        if target and target[0]:
+            store.renew(row["name"], row["epoch"], row["secret"], *target)
 
 
 # -- the dispatcher (the phase-2 shape: offers and leases only)

@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 from contextlib import suppress
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, process_cache, reds_dir
 from agentctl.timefmt import iso_epoch
@@ -69,6 +70,13 @@ def status_tail(path, lines=STATUS_LOG_TAIL, max_bytes=64 << 10):
     return live_mask_text("\n".join(data.splitlines()[-lines:]))
 
 
+def _assistant_texts(content: Any) -> Any:
+    """The text blocks of a transcript message's content (a list of blocks, or one string)."""
+    if isinstance(content, list):
+        return [c.get("text") for c in content if isinstance(c, dict) and c.get("type") == "text" and c.get("text")]
+    return [content] if isinstance(content, str) else []
+
+
 def status_transcript_last(path, max_bytes=256 << 10):
     """(the last assistant text, its time) of a claude transcript (.jsonl): what the agent last said it is doing."""
     try:
@@ -82,9 +90,7 @@ def status_transcript_last(path, max_bytes=256 << 10):
             continue
         if rec.get("type") != "assistant":
             continue
-        content = (rec.get("message") or {}).get("content")
-        texts = [c.get("text") for c in content if isinstance(c, dict) and c.get("type") == "text" and c.get("text")] \
-            if isinstance(content, list) else [content] if isinstance(content, str) else []
+        texts = _assistant_texts((rec.get("message") or {}).get("content"))
         if texts:
             return live_mask_text(texts[-1][-600:]), rec.get("timestamp")
     return None, None
@@ -128,37 +134,50 @@ _status_said = process_cache({})           # transcript path -> ((size, mtime), 
 _status_wt_lock = threading.Lock()
 
 
+def _git_dirs(wt: Any) -> Any:
+    """(git dir, common git dir) of worktree wt read from its files; None when its `.git` file is no gitdir pointer."""
+    gd = os.path.join(wt, ".git")
+    if os.path.isfile(gd):
+        with open(gd) as f:
+            line = f.read().strip()
+        if not line.startswith("gitdir:"):
+            return None
+        gd = os.path.normpath(os.path.join(wt, line[7:].strip()))
+    common = gd
+    if os.path.isfile(os.path.join(gd, "commondir")):
+        with open(os.path.join(gd, "commondir")) as f:
+            common = os.path.normpath(os.path.join(gd, f.read().strip()))
+    return gd, common
+
+
+def _ref_sha(gd: Any, common: Any, ref: Any) -> Any:
+    """The sha a ref names, from its loose file in the git dir or the common one, else from packed-refs."""
+    for base in (gd, common):
+        with suppress(OSError):
+            with open(os.path.join(base, ref)) as f:
+                return f.read().strip() or None
+    with open(os.path.join(common, "packed-refs")) as f:
+        for ln in f:
+            parts = ln.split()
+            if len(parts) == 2 and parts[1] == ref:
+                return parts[0]
+    return None
+
+
 def status_head(wt):
     """The worktree's HEAD sha from its files (no git, no subprocess); None when it cannot be read that way."""
     try:
-        gd = os.path.join(wt, ".git")
-        if os.path.isfile(gd):
-            with open(gd) as f:
-                line = f.read().strip()
-            if not line.startswith("gitdir:"):
-                return None
-            gd = os.path.normpath(os.path.join(wt, line[7:].strip()))
-        common = gd
-        if os.path.isfile(os.path.join(gd, "commondir")):
-            with open(os.path.join(gd, "commondir")) as f:
-                common = os.path.normpath(os.path.join(gd, f.read().strip()))
+        dirs = _git_dirs(wt)
+        if dirs is None:
+            return None
+        gd, common = dirs
         with open(os.path.join(gd, "HEAD")) as f:
             head = f.read().strip()
         if not head.startswith("ref:"):
             return head if re.fullmatch(r"[0-9a-f]{40,64}", head) else None
-        ref = head[4:].strip()
-        for base in (gd, common):
-            with suppress(OSError):
-                with open(os.path.join(base, ref)) as f:
-                    return f.read().strip() or None
-        with open(os.path.join(common, "packed-refs")) as f:
-            for ln in f:
-                parts = ln.split()
-                if len(parts) == 2 and parts[1] == ref:
-                    return parts[0]
+        return _ref_sha(gd, common, head[4:].strip())
     except OSError:
         return None
-    return None
 
 
 def status_git(wt, *args, timeout=None):
@@ -168,17 +187,23 @@ def status_git(wt, *args, timeout=None):
     return r.stdout if r.returncode == 0 else ""
 
 
+def _worktree_log(wt: Any) -> Any:
+    """([the last 3 commits as {sha, when, subject}], the files they touched, newest first, deduplicated) of a worktree."""
+    commits = [dict(zip(("sha", "when", "subject"), ln.split("\x1f", 2)))
+               for ln in status_git(wt, "log", "-3", "--format=%h\x1f%cr\x1f%s").splitlines() if ln]
+    recent = []
+    for ln in status_git(wt, "log", "-3", "--name-only", "--format=").splitlines():
+        if ln and ln not in recent:
+            recent.append(ln)
+    return commits, recent
+
+
 def status_worktree_read(wt, head):
     """One background read of a worktree into _status_wt: the commits again only when HEAD moved (or is unknown)."""
     c = dict(_status_wt.get(wt) or {})
     try:
         if head is None or c.get("head") != head or "commits" not in c:
-            commits = [dict(zip(("sha", "when", "subject"), ln.split("\x1f", 2)))
-                       for ln in status_git(wt, "log", "-3", "--format=%h\x1f%cr\x1f%s").splitlines() if ln]
-            recent = []
-            for ln in status_git(wt, "log", "-3", "--name-only", "--format=").splitlines():
-                if ln and ln not in recent:
-                    recent.append(ln)
+            commits, recent = _worktree_log(wt)
             c.update(head=head, commits=commits, recent_files=recent[:20])
         if time.time() - float(c.get("dirty_at") or 0) >= STATUS_DIRTY_TTL:
             c["dirty"] = [ln for ln in status_git(wt, "status", "--porcelain").splitlines() if ln][:20]

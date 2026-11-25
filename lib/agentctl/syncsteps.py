@@ -144,20 +144,36 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequenc
 _regen_answered = process_cache({})  # (change id, head, round) -> True: its `agentctl land` started
 
 
+def _regen_held(it: Any) -> Any:
+    dd = it.get("data") or {}
+    if it["state"] != "queued" or ((dd.get("hold") or {}).get("kind")) != "regen":
+        return None
+    return dd.get("worktree"), dd.get("head"), int(dd.get("regen_round") or 0)
+
+
+def _regen_answerable(it: Any) -> Any:
+    """(worktree, head, round) of a queued regen-held change this laptop can answer now, else None."""
+    held = _regen_held(it)
+    if not held:
+        return None
+    wt, head, rnd = held
+    if not wt or not head or (it["id"], head, rnd) in _regen_answered or not os.path.isdir(wt):
+        return None
+    if git(wt, "rev-parse", "HEAD", check=False).stdout.strip() != head \
+            or git(wt, "status", "--porcelain", check=False).stdout.strip():
+        return None  # its agent's: moved on, or at work in it
+    return wt, head, rnd
+
+
 def answer_regen_holds(d: str, st: Any) -> list[str]:
     """The laptop's step (above): `agentctl land` started in the worktree of each regen-held change it can answer; its
     lines."""
     out = []
     for it in st.items("change"):
-        dd = it.get("data") or {}
-        if it["state"] != "queued" or ((dd.get("hold") or {}).get("kind")) != "regen":
+        target = _regen_answerable(it)
+        if not target:
             continue
-        wt, head, rnd = dd.get("worktree"), dd.get("head"), int(dd.get("regen_round") or 0)
-        if not wt or not head or (it["id"], head, rnd) in _regen_answered or not os.path.isdir(wt):
-            continue
-        if git(wt, "rev-parse", "HEAD", check=False).stdout.strip() != head \
-                or git(wt, "status", "--porcelain", check=False).stdout.strip():
-            continue  # its agent's: moved on, or at work in it
+        wt, head, rnd = target
         _regen_answered[(it["id"], head, rnd)] = True
         with suppress(Exception):  # said for the owner's escalation only; the land runs all the same
             st.update_item("change", it["id"], it["version"], {"regen_answered": rnd})
@@ -172,20 +188,23 @@ def answer_regen_holds(d: str, st: Any) -> list[str]:
 # 995f01ed's hook fix, so the main session's .claude hooks kept raising a false 'WAITING ON YOU'). Nobody works in the
 # root checkout (movies CLAUDE.md), so the sync fast-forwards it to <remote>/main each cycle -- only on `main`, clean
 # (tracked files), no rebase, merge or cherry-pick in progress, never anything but a fast-forward.
-def root_checkout_ff(repo):
-    """Fast-forward clone repo's own checkout (its root, not a worktree) to <remote>/main when that is safe; its lines."""
-    if not repo or not os.path.isdir(repo):
-        return []
+def _root_checkout_ff_safe(repo: Any) -> Any:
+    """repo is a root checkout (no linked worktree: some agent's) on main, clean, with no rebase, merge or pick going."""
     common = git(repo, "rev-parse", "--path-format=absolute", "--git-common-dir", check=False).stdout.strip()
     gitdir = git(repo, "rev-parse", "--path-format=absolute", "--git-dir", check=False).stdout.strip()
     if not common or os.path.realpath(common) != os.path.realpath(gitdir):
-        return []  # a linked worktree: some agent's, never touched here
+        return False
     if git(repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip() != "main":
-        return []
+        return False
     if any(os.path.exists(os.path.join(gitdir, x)) for x in ("rebase-merge", "rebase-apply", "MERGE_HEAD",
                                                             "CHERRY_PICK_HEAD", "REVERT_HEAD")):
-        return []
-    if git(repo, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
+        return False
+    return not git(repo, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip()
+
+
+def root_checkout_ff(repo):
+    """Fast-forward clone repo's own checkout (its root, not a worktree) to <remote>/main when that is safe; its lines."""
+    if not repo or not os.path.isdir(repo) or not _root_checkout_ff_safe(repo):
         return []
     ref = f"refs/remotes/{remote()}/main"
     head = git(repo, "rev-parse", "HEAD", check=False).stdout.strip()

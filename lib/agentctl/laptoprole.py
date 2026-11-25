@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import process_cache
 from agentctl.timefmt import day_hhmmz
@@ -135,27 +136,39 @@ def laptop_role_step(store):
     return False
 
 
+def _laptop_status(st: Any) -> Any:
+    row = st.get(LAPTOP_ROLE_LEASE)
+    line = laptop_role_standby(st)
+    if line:
+        print(line)
+    elif row and row.get("holder"):
+        print(f"laptop role held by this machine ({role_host()}, {machine_id()}) since "
+              f"{day_hhmmz(lease_meta(row).get('since') or 0)}")
+    else:
+        print("laptop role: free (the next sync pass takes it)")
+    return 0
+
+
+def _laptop_take_declined(line: Any, yes: Any) -> Any:
+    """A standby laptop's `take` goes on only confirmed (--yes, or `yes` typed); the reason printed when it does not."""
+    if not line or yes:
+        return False
+    if not sys.stdin.isatty():
+        print(f"{line}\nNOT TAKEN: confirm with `agentctl laptop take --yes`")
+        return True
+    if input(f"{line}\nTake the laptop role for {role_host()}? Type yes: ").strip() != "yes":
+        print("NOT TAKEN")
+        return True
+    return False
+
+
 def cmd_laptop(a, st):
     """`agentctl laptop status|take [--yes]`: who holds the laptop role; take it for this machine."""
     if a.lcmd == "status":
-        row = st.get(LAPTOP_ROLE_LEASE)
-        line = laptop_role_standby(st)
-        if line:
-            print(line)
-        elif row and row.get("holder"):
-            print(f"laptop role held by this machine ({role_host()}, {machine_id()}) since "
-                  f"{day_hhmmz(lease_meta(row).get('since') or 0)}")
-        else:
-            print("laptop role: free (the next sync pass takes it)")
-        return 0
+        return _laptop_status(st)
     line = laptop_role_standby(st)
-    if line and not a.yes:
-        if not sys.stdin.isatty():
-            print(f"{line}\nNOT TAKEN: confirm with `agentctl laptop take --yes`")
-            return 1
-        if input(f"{line}\nTake the laptop role for {role_host()}? Type yes: ").strip() != "yes":
-            print("NOT TAKEN")
-            return 1
+    if _laptop_take_declined(line, a.yes):
+        return 1
     held, row = laptop_role(st, take=bool(line))
     print(f"TAKEN: laptop role held by {role_host()} ({machine_id()})" if held else f"NOT TAKEN: {laptop_role_line(row)}")
     return 0 if held else 1

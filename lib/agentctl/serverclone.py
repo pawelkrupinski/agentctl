@@ -128,25 +128,34 @@ def clone_into_tmp(repo, url):
     return tmp
 
 
+def _clone_server_repo(repo: str) -> None:
+    """Make the server's clone at repo from $AGENTCTL_MOVIES_REMOTE, whatever is there kept aside."""
+    url = os.environ.get("AGENTCTL_MOVIES_REMOTE")
+    if not url:
+        raise SystemExit(f"agentctl tick: no clone at {repo} and no $AGENTCTL_MOVIES_REMOTE to clone it from")
+    tmp = clone_into_tmp(repo, url)
+    if os.path.isdir(repo) and not os.listdir(repo):
+        os.rmdir(repo)
+    elif os.path.lexists(repo):  # something that is no clone: kept aside, never overwritten
+        os.rename(repo, f"{repo}.broken-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}")
+    os.rename(tmp, repo)
+
+
+def _verify_server_clone(repo: str, store: Any) -> None:
+    server_clone_remote(repo)
+    if heal_enabled(repo):  # at startup: a clone that does not verify is repaired before the first tick
+        ok, detail = clone_verify(repo)
+        if not ok:
+            repair_clone(repo, f"at startup the clone did not verify: {detail}", store)
+
+
 def ensure_server_clone(repo: str | None, store: Any) -> str:
     repo = repo or server_repo()
     clean_clone_tmps(repo)
-    if not os.path.isdir(os.path.join(repo, ".git")):
-        url = os.environ.get("AGENTCTL_MOVIES_REMOTE")
-        if not url:
-            raise SystemExit(f"agentctl tick: no clone at {repo} and no $AGENTCTL_MOVIES_REMOTE to clone it from")
-        tmp = clone_into_tmp(repo, url)
-        if os.path.isdir(repo) and not os.listdir(repo):
-            os.rmdir(repo)
-        elif os.path.lexists(repo):  # something that is no clone: kept aside, never overwritten
-            os.rename(repo, f"{repo}.broken-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}")
-        os.rename(tmp, repo)
+    if os.path.isdir(os.path.join(repo, ".git")):
+        _verify_server_clone(repo, store)
     else:
-        server_clone_remote(repo)
-        if heal_enabled(repo):  # at startup: a clone that does not verify is repaired before the first tick
-            ok, detail = clone_verify(repo)
-            if not ok:
-                repair_clone(repo, f"at startup the clone did not verify: {detail}", store)
+        _clone_server_repo(repo)
     return repo
 
 
@@ -220,42 +229,45 @@ def probe_clone_health(a):
         return ok, ("fetched and verified: " if ok else "") + detail
 
 
+def _relink_worktree(repo: Any, old: Any, name: Any, main_sha: Any) -> Any:
+    """One of the broken clone's worktrees (admin dir `old`) as a worktree of the new clone; its path, None when unreadable."""
+    try:
+        with open(os.path.join(old, "gitdir")) as f:
+            gitfile = f.read().strip()
+        with open(os.path.join(old, "HEAD")) as f:
+            head = f.read().strip()
+    except OSError:
+        return None
+    tree = os.path.dirname(gitfile)
+    if not os.path.isfile(gitfile):
+        return None
+    new = os.path.join(repo, ".git", "worktrees", name)
+    os.makedirs(new, exist_ok=True)
+    with open(os.path.join(new, "gitdir"), "w") as f:
+        f.write(gitfile + "\n")
+    with open(os.path.join(new, "commondir"), "w") as f:
+        f.write("../..\n")
+    ref = head[5:].strip() if head.startswith("ref: ") else None
+    with open(os.path.join(new, "HEAD"), "w") as f:
+        f.write((f"ref: {ref}" if ref and git_ok(repo, "rev-parse", "--verify", "-q", ref) else main_sha) + "\n")
+    with open(gitfile, "w") as f:
+        f.write(f"gitdir: {new}\n")
+    git(tree, "reset", "-q", check=False)  # the index from the new HEAD; the tree's files (its build) stay
+    return tree
+
+
 def relink_worktrees(repo, broken):
     """The broken clone's worktrees (the check and waiting trees) as worktrees of the new clone: their admin dirs made
     anew (the same paths: the clone's path did not change), HEAD on their branch when the new clone has it (carried
     over from the broken copy where readable), else detached at main, and their index rebuilt. Returns their paths."""
-    out = []
     main_sha = git(repo, "rev-parse", f"{remote()}/main").strip()
     for b in git(broken, "for-each-ref", "--format=%(refname:short)", "refs/heads/", check=False).stdout.split():
         if b != "main":
             git(repo, "fetch", "--quiet", "--no-tags", broken, f"+refs/heads/{b}:refs/heads/{b}", check=False)
     admin_root = os.path.join(broken, ".git", "worktrees")
-    for name in sorted(os.listdir(admin_root)) if os.path.isdir(admin_root) else []:
-        old = os.path.join(admin_root, name)
-        try:
-            with open(os.path.join(old, "gitdir")) as f:
-                gitfile = f.read().strip()
-            with open(os.path.join(old, "HEAD")) as f:
-                head = f.read().strip()
-        except OSError:
-            continue
-        tree = os.path.dirname(gitfile)
-        if not os.path.isfile(gitfile):
-            continue
-        new = os.path.join(repo, ".git", "worktrees", name)
-        os.makedirs(new, exist_ok=True)
-        with open(os.path.join(new, "gitdir"), "w") as f:
-            f.write(gitfile + "\n")
-        with open(os.path.join(new, "commondir"), "w") as f:
-            f.write("../..\n")
-        ref = head[5:].strip() if head.startswith("ref: ") else None
-        with open(os.path.join(new, "HEAD"), "w") as f:
-            f.write((f"ref: {ref}" if ref and git_ok(repo, "rev-parse", "--verify", "-q", ref) else main_sha) + "\n")
-        with open(gitfile, "w") as f:
-            f.write(f"gitdir: {new}\n")
-        git(tree, "reset", "-q", check=False)  # the index from the new HEAD; the tree's files (its build) stay
-        out.append(tree)
-    return out
+    trees = [_relink_worktree(repo, os.path.join(admin_root, name), name, main_sha)
+             for name in (sorted(os.listdir(admin_root)) if os.path.isdir(admin_root) else [])]
+    return [t for t in trees if t]
 
 
 def prune_broken(repo, keep):

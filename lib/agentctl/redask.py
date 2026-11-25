@@ -111,6 +111,20 @@ def decide_cmd(key, answer="<your answer>"):
     return f'~/bin/agentctl decide {key} "{answer}"'
 
 
+def _ask_how(m: Any, key: Any, q: Any, until: Any) -> Any:
+    """(q, how) of the owner's question for a block's meta m, or None when the block asks nothing of the owner's."""
+    if m.get("decision"):
+        q = q or m.get("decide") or "decide how this red is fixed"
+        return q, f"answer: `! {decide_cmd(key)}` (look: `{m.get('cmd') or '~/bin/agentctl red status -v'}`)"
+    if m.get("vault"):  # red_vault_block: ONE item per vault, resumed by one line (an unlock elsewhere is not theirs)
+        return q, (f"at the machine: `! {vault_decide_cmd(m['vault'])}` resumes every red on it; each fixer's first "
+                   "signature then asks Touch ID for its OWN session (your `secrets unlock` never unlocks theirs): answer it")
+    if str(m.get("cmd") or "").strip():
+        q = q or (f"run `! {m['cmd']}` ({OWNER_CAUSES.get(m.get('owner_cause'), 'an action only you can take')})")
+        return q, f"it clears itself when {until}; or once done: `! {decide_cmd(key, 'done')}`"
+    return None
+
+
 def red_ask(it, b):
     """{q, how, until} of the owner's question for red `it` held by block b (red_block_of), or None when the block
     waits on nothing the owner does (a spent quota resets on its own)."""
@@ -124,17 +138,10 @@ def red_ask(it, b):
     category = ask_category(m)
     if ask_refusal(category, m.get("decide") or q):  # OWNER-ONLY: no category, no ask (a harness fault's block either)
         return None
-    if m.get("decision"):
-        q = q or m.get("decide") or "decide how this red is fixed"
-        how = f"answer: `! {decide_cmd(key)}` (look: `{m.get('cmd') or '~/bin/agentctl red status -v'}`)"
-    elif m.get("vault"):  # red_vault_block: ONE item per vault, resumed by one line (an unlock elsewhere is not theirs)
-        how = (f"at the machine: `! {vault_decide_cmd(m['vault'])}` resumes every red on it; each fixer's first "
-               "signature then asks Touch ID for its OWN session (your `secrets unlock` never unlocks theirs): answer it")
-    elif str(m.get("cmd") or "").strip():
-        q = q or (f"run `! {m['cmd']}` ({OWNER_CAUSES.get(m.get('owner_cause'), 'an action only you can take')})")
-        how = f"it clears itself when {until}; or once done: `! {decide_cmd(key, 'done')}`"
-    else:
+    asked = _ask_how(m, key, q, until)
+    if not asked:
         return None
+    q, how = asked
     return {"q": " ".join(str(q).split()).replace(HOME, "~"), "how": how.replace(HOME, "~"), "until": until,
             "category": category}
 

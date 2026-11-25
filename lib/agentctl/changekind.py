@@ -4,6 +4,7 @@
 from operator import itemgetter
 import time
 from contextlib import suppress
+from typing import Any
 from agentctl.core import fmt_age
 from agentctl.redrecord import RED_TERMINAL, red_names
 from agentctl.queueslots import checker_alive
@@ -182,6 +183,16 @@ def change_past_deadline(it, t):
     return t - float(it.get("entered_at") or t) > machine_state("change", it["state"]).deadline
 
 
+def _unheld_issue_text(tag: Any, it: Any, d: Any, t: Any) -> Any:
+    k = d.get("change_kind") or {}
+    return (f"{tag} change {it['id']} ({d.get('worktree')}) is {it['state']} "
+            f"{fmt_age(t - float(it.get('entered_at') or t))}, past its deadline, and nothing recorded why it waits "
+            f"(kind: {k.get('priority') or '?'}{'; ' + kind_text(k) if kind_text(k) else ''}). Every wait records "
+            "its hold (queuebatch.py note_hold); find the path that held it silently in a ~/bin-wt-<name> worktree, "
+            "test-first in tests/queue_sim.py, and close this issue with the fix's sha. "
+            f"`agentctl land status`; the change's events: `agentctl store events change {it['id']}`")
+
+
 def file_unheld_change(st, it, t, by):
     """File the agentctl issue for change item it, past its deadline with no recorded hold, once (an open one, or the
     item's `unheld_issue`, is reused). Returns the issue id."""
@@ -192,14 +203,7 @@ def file_unheld_change(st, it, t, by):
     iid = next((i["id"] for i in st.items("issue", ("open",))
                 if str((i.get("data") or {}).get("text") or "").startswith(tag)), None)
     if iid is None:
-        k = d.get("change_kind") or {}
-        text = (f"{tag} change {it['id']} ({d.get('worktree')}) is {it['state']} "
-                f"{fmt_age(t - float(it.get('entered_at') or t))}, past its deadline, and nothing recorded why it waits "
-                f"(kind: {k.get('priority') or '?'}{'; ' + kind_text(k) if kind_text(k) else ''}). Every wait records "
-                "its hold (queuebatch.py note_hold); find the path that held it silently in a ~/bin-wt-<name> worktree, "
-                "test-first in tests/queue_sim.py, and close this issue with the fix's sha. "
-                f"`agentctl land status`; the change's events: `agentctl store events change {it['id']}`")
-        iid = issue_open(st, text, by, now_=t)["id"]
+        iid = issue_open(st, _unheld_issue_text(tag, it, d, t), by, now_=t)["id"]
     with suppress(StaleVersion, Exception):
         cur = st.item("change", it["id"])
         if cur and not machine_state("change", cur["state"]).terminal:

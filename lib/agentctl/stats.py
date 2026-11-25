@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+from typing import Any
 from agentctl.timefmt import iso_at
 from agentctl.statsrecords import CHANGE_EXITS, _num, landing_records, state_spans, watch_record
 from agentctl.core import env_num, err, git, host_role
@@ -181,17 +182,17 @@ def stats_echo(recs, out=None):
             print(f"{r['record']} {json.dumps(r, sort_keys=True)}", file=out or sys.stdout, flush=True)
 
 
+def _change_waiting_spans(st: Any, c: Any, now: Any) -> Any:
+    evs = item_events(st, "change", c["id"])
+    if not any(e.get("to_state") == "waiting" for e in evs):
+        return []
+    spans = state_spans(evs, _num((c["data"] or {}).get("submitted_at")) or c["entered_at"])
+    return [(c["id"], a, b if b is not None else now) for s, a, b, _e in spans if s == "waiting"]
+
+
 def change_waits(st, changes, now):
     """[(change id, entered waiting, left)] over every change item's events."""
-    out = []
-    for c in changes:
-        evs = item_events(st, "change", c["id"])
-        if not any(e.get("to_state") == "waiting" for e in evs):
-            continue
-        for s, a, b, _e in state_spans(evs, _num((c["data"] or {}).get("submitted_at")) or c["entered_at"]):
-            if s == "waiting":
-                out.append((c["id"], a, b if b is not None else now))
-    return out
+    return [w for c in changes for w in _change_waiting_spans(st, c, now)]
 
 
 def gate_runs_pass(st, url, t, since, cap, out=None):

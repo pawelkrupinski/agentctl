@@ -4,6 +4,7 @@
 import os
 import subprocess
 import sys
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, NO_SIGN, git, reds_dir, remote
 from agentctl.timefmt import ts
@@ -141,6 +142,28 @@ def blame_status(d):
     return f"culprit: {blame_change_name(g)}, landed by {who}", f"culprit {g.get('change') or g['commits'][0][:9]}"
 
 
+def _note_lander_tried(store: Any, it_id: Any, b: Any) -> Any:
+    """The red's item carries the blame record and that its lander was tried."""
+    it = store.item("red", it_id)
+    if it:
+        store.update_item("red", it_id, it["version"], {"blame": b, "lander_tried": True})
+
+
+def _revert_line(pic: Any, g: Any, who: Any, rv: Any, u: Any) -> Any:
+    line = (f"RED REVERT: {red_what(pic)}: {blame_change_name(g)} ({', '.join(c[:10] for c in g['commits'][:5])}), "
+            f"landed by {lander_name(g.get('lander')) if who == 'lander' else 'the owner, by hand'}: {rv['msg']}")
+    if who == "owner" and rv.get("ok"):
+        line += (" -- OWNER: it was yours (no agent session landed it); re-apply it with a fix once you know why "
+                 f"(`git revert <the revert>`), see `~/bin/agentctl ci-why {u['run'].get('databaseId')}`")
+    return line
+
+
+def _announce_revert(store: Any, off: Any, took: Any, u: Any, line: Any, quiet: Any) -> Any:
+    inbox_write("red", line, [line], [], 0 if quiet else 1)
+    dispatch_log(u, line)
+    store.note(off["lease"], took["epoch"], took["secret"], line[:300])
+
+
 def lander_spawn(store, o_r, repo, off, took, u):
     """Tier `lander` (the decision rule's determined culprit), under the taken lease: the culprit reverted, then its
     lander revived; an owner's change (no session): reverted and the owner told. Whatever cannot be done falls back to
@@ -153,17 +176,9 @@ def lander_spawn(store, o_r, repo, off, took, u):
     who, why = blame_decision(b)
     rv = b.get("revert") or blame_revert(o_r, repo, u, b)
     b["revert"] = rv
-    line = (f"RED REVERT: {red_what(pic)}: {blame_change_name(g)} ({', '.join(c[:10] for c in g['commits'][:5])}), "
-            f"landed by {lander_name(g.get('lander')) if who == 'lander' else 'the owner, by hand'}: {rv['msg']}")
-    if who == "owner" and rv.get("ok"):
-        line += (" -- OWNER: it was yours (no agent session landed it); re-apply it with a fix once you know why "
-                 f"(`git revert <the revert>`), see `~/bin/agentctl ci-why {u['run'].get('databaseId')}`")
-    inbox_write("red", line, [line], [], 0 if rv.get("ok") and who != "owner" else 1)
-    dispatch_log(u, line)
-    store.note(off["lease"], took["epoch"], took["secret"], line[:300])
-    it = store.item("red", it_id)
-    if it:
-        store.update_item("red", it_id, it["version"], {"blame": b, "lander_tried": True})
+    line = _revert_line(pic, g, who, rv, u)
+    _announce_revert(store, off, took, u, line, bool(rv.get("ok")) and who != "owner")
+    _note_lander_tried(store, it_id, b)
     if who == "owner" and rv.get("ok"):
         return True, line  # nobody to revive: the lease lapses by its TTL, the revert's Fixes-Red holds the red meanwhile
     if who == "lander" and (rv.get("ok") or rv.get("conflict")):  # a revert that conflicts: it fixes forward instead
@@ -175,10 +190,7 @@ def lander_spawn(store, o_r, repo, off, took, u):
 def lander_fallback(store, o_r, repo, off, took, u, b, why):
     """A FRESH FIXER, under the same lease: the decision rule's only other way -- the culprit or its lander could not be
     acted on. Briefed with the change (blame_note)."""
-    it_id = off["item"].split(":", 1)[1]
-    it = store.item("red", it_id)
-    if it:
-        store.update_item("red", it_id, it["version"], {"blame": b, "lander_tried": True})
+    _note_lander_tried(store, off["item"].split(":", 1)[1], b)
     u = dict(u, blame_note=blame_note(b))
     return red_dispatch(o_r, repo, u, why=f"tier lander: {why} -> a fresh fixer", lease=off["lease"], took=took)
 

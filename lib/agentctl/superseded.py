@@ -122,46 +122,70 @@ def close_superseded(repo, wt, why):
     return True, line
 
 
+def _supersede_one(repo: Any, store: Any, wt: Any, m: Any, dry_run: Any, did: Any) -> Any:
+    """One open or landed mark's pass (see superseded_duty): what it did is appended to `did`; True when the mark changed."""
+    name = os.path.basename(wt)
+    try:
+        state, why = successor_state(m, repo, store)
+    except (Exception, SystemExit) as e:  # the store unread: no verdict, the mark stands
+        did.append(f"superseded {name}: could not read its successor ({str(e)[:120]})")
+        return False
+    if dry_run:
+        did.append(f"superseded {name} by {m['by']}: {state} ({why})")
+        return False
+    if state == "lapsed":
+        m.update(state="lapsed", why=why, decided=ts())
+        did.append(f"superseded {name}: the mark lapsed ({why}); the orphan rules apply again")
+        return True
+    if state != "landed":
+        return False
+    changed = m.get("state") != "landed"
+    if changed:
+        m.update(state="landed", why=why, decided=ts())
+    closed, line = close_superseded(repo, wt, f"by {m['by']}, which landed ({why})")
+    if closed:
+        m.update(state="closed", closed=ts(), why=why)
+        did.append(f"superseded {name}: {m['by']} landed ({why}): {line}")
+        inbox_write("maintain", f"CLOSED {wt.replace(HOME, '~')}: superseded by {m['by']}, which landed ({why})",
+                    [], [line], 0, cwd=wt)
+        return True
+    if m.get("said") != line:
+        m["said"] = line
+        did.append(f"superseded {name}: {m['by']} landed ({why}); {line}")
+        return True
+    return changed
+
+
 def superseded_duty(repo, store, dry_run=False):
     """One maintain pass over the marks: each successor read again; a landed one's worktree closed, a lapsed mark said
     (the orphan rules take it back). Returns what it did."""
     marks = superseded_marks()
-    did, changed = [], False
-    for wt, m in sorted(marks.items()):
-        if m.get("state") not in ("open", "landed"):
-            continue
-        name = os.path.basename(wt)
-        try:
-            state, why = successor_state(m, repo, store)
-        except (Exception, SystemExit) as e:  # the store unread: no verdict, the mark stands
-            did.append(f"superseded {name}: could not read its successor ({str(e)[:120]})")
-            continue
-        if dry_run:
-            did.append(f"superseded {name} by {m['by']}: {state} ({why})")
-            continue
-        if state == "lapsed":
-            m.update(state="lapsed", why=why, decided=ts())
-            changed = True
-            did.append(f"superseded {name}: the mark lapsed ({why}); the orphan rules apply again")
-            continue
-        if state == "landed":
-            if m.get("state") != "landed":
-                m.update(state="landed", why=why, decided=ts())
-                changed = True
-            closed, line = close_superseded(repo, wt, f"by {m['by']}, which landed ({why})")
-            if closed:
-                m.update(state="closed", closed=ts(), why=why)
-                changed = True
-                did.append(f"superseded {name}: {m['by']} landed ({why}): {line}")
-                inbox_write("maintain", f"CLOSED {wt.replace(HOME, '~')}: superseded by {m['by']}, which landed ({why})",
-                            [], [line], 0, cwd=wt)
-            elif m.get("said") != line:
-                m["said"] = line
-                changed = True
-                did.append(f"superseded {name}: {m['by']} landed ({why}); {line}")
-    if changed:
+    did: list[str] = []
+    changes = [_supersede_one(repo, store, wt, m, dry_run, did) for wt, m in sorted(marks.items())
+               if m.get("state") in ("open", "landed")]
+    if any(changes):
         write_json(superseded_path(), marks)
     return did
+
+
+def _successor_worktree(path: Any, by: Any) -> Any:
+    top = git(path, "rev-parse", "--show-toplevel", check=False).stdout.strip()
+    if not top:
+        raise ValueError(f"{by} is no git worktree")
+    _c, left = cherry_landed(top, f"refs/remotes/{remote()}/main", "HEAD")
+    if not left:
+        raise ValueError(f"{os.path.basename(top)} carries nothing that is not on main yet: mark it superseded once "
+                         "its successor holds the work (commit it there first)")
+    return os.path.basename(top), None, os.path.realpath(top), git(top, "rev-parse", "HEAD").strip()
+
+
+def _successor_change(by: Any, store: Any) -> Any:
+    its = [i for i in store.items("change") if i["id"] == by] or [i for i in store.items("change") if by in i["id"]]
+    if len(its) != 1:
+        raise ValueError(f"--by {by}: no worktree of that name, and {'no' if not its else len(its)} change ids match it")
+    it = its[0]
+    wt = it["data"].get("worktree")
+    return it["id"], it["id"], os.path.realpath(wt) if wt else None, it["data"].get("head")
 
 
 def resolve_successor(by, repo, store):
@@ -170,22 +194,8 @@ def resolve_successor(by, repo, store):
     cands = [os.path.expanduser(by), os.path.join(os.path.dirname(os.path.realpath(repo)), by)]
     path = next((c for c in cands if os.path.isdir(c)), None)
     if path:
-        top = git(path, "rev-parse", "--show-toplevel", check=False).stdout.strip()
-        if not top:
-            raise ValueError(f"{by} is no git worktree")
-        _c, left = cherry_landed(top, f"refs/remotes/{remote()}/main", "HEAD")
-        if not left:
-            raise ValueError(f"{os.path.basename(top)} carries nothing that is not on main yet: mark it superseded once "
-                             "its successor holds the work (commit it there first)")
-        return os.path.basename(top), None, os.path.realpath(top), git(top, "rev-parse", "HEAD").strip()
-    st = store
-    its = [i for i in st.items("change") if i["id"] == by] or [i for i in st.items("change") if by in i["id"]]
-    if len(its) != 1:
-        raise ValueError(f"--by {by}: no worktree of that name, and {'no' if not its else len(its)} change id"
-                         f"{'s' if len(its) != 1 else ''} match{'es' if len(its) == 1 else ''} it")
-    it = its[0]
-    wt = it["data"].get("worktree")
-    return it["id"], it["id"], os.path.realpath(wt) if wt else None, it["data"].get("head")
+        return _successor_worktree(path, by)
+    return _successor_change(by, store)
 
 
 def cmd_supersede(a: argparse.Namespace, store: Any) -> int:

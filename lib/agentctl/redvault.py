@@ -105,6 +105,20 @@ def red_vault_resume(store, it, ns, answer, t):
     return [f"resumed {red_what(d)} (the {ns} vault)"]
 
 
+def _vault_resume_key(store: Any, key: Any, ns: Any, answer: Any, t: Any) -> Any:
+    """red_vault_resume's lines for the red `key` names, while it still waits on the vault ([] once it does not)."""
+    for _try in range(10):  # StaleVersion: the store ticks meanwhile -- re-read and re-apply
+        it = red_of_key(store, key)
+        if not it or it["state"] not in ("blocked-external", "offered") or \
+                (it["state"] == "offered" and red_decision(it["data"])):
+            return []
+        try:
+            return red_vault_resume(store, it, ns, answer, t)
+        except StaleVersion:
+            continue
+    return []
+
+
 def red_vault_decide(store, ns, answer):
     """`agentctl decide vault-<ns> "<answer>"`: every red on vault ns's lease resumed (red_vault_resume), the lease
     released. (rc, lines)."""
@@ -118,18 +132,7 @@ def red_vault_decide(store, ns, answer):
     # bare -- and the decide, finding no red still blocked, said "NOT DECIDED" while its red went on without the
     # signing brief). While the lease is live no invariant touches its reds; one the tick re-offered meanwhile (offered,
     # no decision of its own) is still the owner's answer's: resumed too.
-    out = []
-    for key in keys:
-        for _try in range(10):  # StaleVersion: the store ticks meanwhile -- re-read and re-apply
-            it = red_of_key(store, key)
-            if not it or it["state"] not in ("blocked-external", "offered") or \
-                    (it["state"] == "offered" and red_decision(it["data"])):
-                break
-            try:
-                out += red_vault_resume(store, it, ns, answer, t)
-                break
-            except StaleVersion:
-                continue
+    out = [line for key in keys for line in _vault_resume_key(store, key, ns, answer, t)]
     store.revoke(lname, f"RELEASED: DECIDED by the owner: {answer[:200]}")
     if not out:
         return 1, [f"NOT DECIDED: the {ns} vault's lease held no red still waiting on it (released)"]
@@ -232,6 +235,26 @@ def block_verdict_note(it, t, store):
             f"superseded, `agentctl red unblock {d.get('key')} --why \"<what changed>\"`")
 
 
+def _unblock_one(store: Any, it: Any, who: Any, why: Any, t: Any) -> Any:
+    """Unblock one red (see red_unblock); the line saying what was done."""
+    d = it["data"]
+    blk = red_block_of(it, store)
+    if blk:
+        row = store.get(blk["name"])
+        keep = [k for k in lease_meta(row).get("keys") or [] if k != d.get("key")]
+        if keep:  # an outage's ONE lease holding other reds too: only this red leaves it
+            store.set_meta(row["name"], row["epoch"], row["secret"], {"keys": keep})
+        else:
+            store.revoke(row["name"], f"RELEASED: unblocked by {who}: {why}")
+    elif not red_blocked_verdict(d):
+        return f"{red_what(d)} ({d.get('key')}): not blocked on the owner -- left as it is"
+    cur = store.item("red", it["id"])
+    h = {"at": iso_at(t), "holder": who, "outcome": f"UNBLOCKED: {why}"}
+    store.update_item("red", it["id"], cur["version"], {"history": (cur["data"].get("history") or []) + [h]})
+    return (f"unblocked {red_what(d)} ({d.get('key')})" + (f": ended {blk['name']}" if blk else
+                                                         ": its BLOCKED ON OWNER verdict struck") + f" -- {why}")
+
+
 def red_unblock(store, o_r, target, why, who=None):
     """(rc, lines) of `red unblock`: the reds a target names are no longer the owner's -- a live block lease holding
     them is ended (RELEASED: the tick offers them again, never escalated) and an UNBLOCKED entry ends their history, so a
@@ -243,26 +266,7 @@ def red_unblock(store, o_r, target, why, who=None):
         return 1, [f"NOT UNBLOCKED: #{target} names no open red"]
     who = who or claimant(safe_cwd())
     t = store.clock()
-    lines = []
-    for it in items:
-        d = it["data"]
-        blk = red_block_of(it, store)
-        if blk:
-            row = store.get(blk["name"])
-            keep = [k for k in lease_meta(row).get("keys") or [] if k != d.get("key")]
-            if keep:  # an outage's ONE lease holding other reds too: only this red leaves it
-                store.set_meta(row["name"], row["epoch"], row["secret"], {"keys": keep})
-            else:
-                store.revoke(row["name"], f"RELEASED: unblocked by {who}: {why}")
-        elif not red_blocked_verdict(d):
-            lines.append(f"{red_what(d)} ({d.get('key')}): not blocked on the owner -- left as it is")
-            continue
-        cur = store.item("red", it["id"])
-        h = {"at": iso_at(t), "holder": who, "outcome": f"UNBLOCKED: {why}"}
-        store.update_item("red", it["id"], cur["version"], {"history": (cur["data"].get("history") or []) + [h]})
-        lines.append(f"unblocked {red_what(d)} ({d.get('key')})" + (f": ended {blk['name']}" if blk else
-                                                                    ": its BLOCKED ON OWNER verdict struck") + f" -- {why}")
-    return 0, lines
+    return 0, [_unblock_one(store, it, who, why, t) for it in items]
 
 
 class NotBlocked(Exception):

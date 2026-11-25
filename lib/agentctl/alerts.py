@@ -264,17 +264,22 @@ def alert_ask_digest(rec):
     return hashlib_sha1(alert_norm(" ".join(m.group(1).split())))[:16]
 
 
-def alert_close_family(d, idx, rec, family, why):
-    """A closing verdict: its item's live alerts of that family are closed (acked, `closed` recorded)."""
+def _family_item_match(family: Any, rec: Any) -> Any:
+    """Whether an index item is one a closing verdict of `family` closes."""
     item = rec.get("item") or ""
     if family == "land":
-        hits = [i for i in idx.get("items") or {} if i == item]
-    elif family == "watch":
+        return lambda i: i == item
+    if family == "watch":
         base = item.split(":watch", 1)[0] + ":watch"
-        hits = [i for i in idx.get("items") or {} if i == base or i.startswith(base + ":")]
-    else:  # red: the run it names, and its red item
-        hits = [i for i in idx.get("items") or {} if i == item or (rec.get("item_id") and i == f"red:{rec['item_id']}")]
-    for i in hits:
+        return lambda i: i == base or i.startswith(base + ":")
+    red_item = f"red:{rec['item_id']}" if rec.get("item_id") else None  # red: the run it names, and its red item
+    return lambda i: i == item or i == red_item
+
+
+def alert_close_family(d, idx, rec, family, why):
+    """A closing verdict: its item's live alerts of that family are closed (acked, `closed` recorded)."""
+    match = _family_item_match(family, rec)
+    for i in [i for i in idx.get("items") or {} if match(i)]:
         alert_close(d, idx, i, why)
 
 

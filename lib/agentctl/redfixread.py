@@ -350,23 +350,25 @@ def fix_top_reads(top, text, steps, files):
     return {f"{top}/{m.group(1)}".rstrip("/") for m in named.finditer(text)}
 
 
+def _fix_top_unread(p: Any, rd: Any) -> Any:
+    """p lies in a top-level directory the job reads only in part, and not in that part."""
+    top = p.split("/", 1)[0]
+    if top not in FIX_UNREAD_TOP:
+        return False
+    tr = rd["tops"][top]
+    return tr is not True and not any(p == x or p.startswith(x + "/") for x in tr)
+
+
 def fix_path_unread(p, rd):
     """True when the job plainly does not read path p."""
     if p in rd["files"] or any(p.startswith(f.rstrip("/") + "/") for f in rd["files"]):
         return False
-    if FIX_WORKFLOW_FILE.match(p):
+    if FIX_WORKFLOW_FILE.match(p) or _fix_top_unread(p, rd):
         return True
     if FIX_UNREAD_DOC.search(p) and p not in rd["text"]:
         return True
-    top = p.split("/", 1)[0]
-    if top in FIX_UNREAD_TOP:
-        tr = rd["tops"][top]
-        if tr is not True and not any(p == x or p.startswith(x + "/") for x in tr):
-            return True
     m = FIX_SPEC_FILE.search(p)
-    if m and not rd["broad"] and m.group(3) not in rd["named"]:
-        return True
-    return False
+    return bool(m and not rd["broad"] and m.group(3) not in rd["named"])
 
 
 FIX_RULES = 3  # the reading rules' version (2: per red, per failing step; 3: what a self-test reads): a verdict cached under another is read again

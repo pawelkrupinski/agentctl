@@ -43,20 +43,27 @@ def first_failed_step(job: Any) -> Any:
 _run_jobs = process_cache({})
 
 
+def _red_run_jobs(o_r: Any, run_id: Any, read_jobs: Any) -> Any:
+    """The jobs of a red's run: read_jobs' when given, else cached per process, else read through gh (None: unread)."""
+    jobs = None if read_jobs else _run_jobs.get((o_r, str(run_id)))
+    if jobs is not None:
+        return jobs
+    try:
+        jobs = (read_jobs or (lambda: gh_json(o_r, "run", "view", str(run_id), "--json", "jobs").get("jobs")))()
+        if jobs and not read_jobs:
+            _run_jobs[(o_r, str(run_id))] = jobs
+        return jobs
+    except (Exception, SystemExit):
+        return None
+
+
 def red_url(d, read_jobs=None):
     """The click target of red data d: failing step's line, else the failing job, else the run, else None."""
     run_id = (d.get("last_run") or {}).get("databaseId")
     if not run_id:
         return None
     o_r = red_repo_of(d)
-    jobs = None if read_jobs else _run_jobs.get((o_r, str(run_id)))
-    if jobs is None:
-        try:
-            jobs = (read_jobs or (lambda: gh_json(o_r, "run", "view", str(run_id), "--json", "jobs").get("jobs")))()
-            if jobs and not read_jobs:
-                _run_jobs[(o_r, str(run_id))] = jobs
-        except (Exception, SystemExit):
-            jobs = None
+    jobs = _red_run_jobs(o_r, run_id, read_jobs)
     job_id, step = failing_job_step(jobs, set(str(j) for j in d.get("jobs") or [d.get("job")] if j))
     return job_step_url(o_r, run_id, job_id, step) if job_id else run_page_url(o_r, run_id)
 

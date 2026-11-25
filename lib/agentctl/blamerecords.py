@@ -131,6 +131,27 @@ def blame_only_reverts(repo, wt, change=None):
     return shas
 
 
+def _revert_worktree_blocker(repo: Any, rw: Any, change: Any) -> Any:
+    """Why blame's revert worktree rw must stay (said after `kept: `), else None: it holds other commits, is in use, or is dirty."""
+    if blame_only_reverts(repo, rw, change) is None:
+        return "it holds commits that are not blame's revert"
+    mine = own_ancestry()
+    busy = [p for p, c in process_cwds().items() if p not in mine and (c == rw or c.startswith(rw + "/"))]
+    if busy:
+        return f"in use by pid {busy[:3]}"
+    dirty = git(rw, "status", "--porcelain", "--untracked-files=no", check=False)
+    return "uncommitted changes" if dirty.returncode or dirty.stdout.strip() else None
+
+
+def _blame_drop_branch(root: Any, branch: Any, head: Any, why: Any) -> Any:
+    """' and branch X' once the revert's branch is deleted (unprotected, ref still at head), else ''."""
+    if not branch or branch in PROTECTED_BRANCHES or \
+            git(root, "update-ref", "-d", f"refs/heads/{branch}", head, check=False).returncode != 0:
+        return ""
+    log_deletion("branch", os.path.basename(root), branch, head, f"blame revert never landing: {why}")
+    return f" and branch {branch}"
+
+
 def blame_drop_revert_worktree(repo, wt, change, why, store):
     """Remove the worktree blame made for a revert that will never land, and its branch: only when its commits are all
     blame's reverts (blame_only_reverts), its tree clean and nobody in it; its open queue entries cancelled. Logged in
@@ -138,16 +159,9 @@ def blame_drop_revert_worktree(repo, wt, change, why, store):
     if not wt or not os.path.isdir(wt):
         return f"revert worktree {str(wt or '?').replace(HOME, '~')} already gone"
     rw = os.path.realpath(wt)
-    shas = blame_only_reverts(repo, rw, change)
-    if shas is None:
-        return f"revert worktree {rw.replace(HOME, '~')} kept: it holds commits that are not blame's revert"
-    mine = own_ancestry()
-    busy = [p for p, c in process_cwds().items() if p not in mine and (c == rw or c.startswith(rw + "/"))]
-    if busy:
-        return f"revert worktree {rw.replace(HOME, '~')} kept: in use by pid {busy[:3]}"
-    dirty = git(rw, "status", "--porcelain", "--untracked-files=no", check=False)
-    if dirty.returncode or dirty.stdout.strip():
-        return f"revert worktree {rw.replace(HOME, '~')} kept: uncommitted changes"
+    kept = _revert_worktree_blocker(repo, rw, change)
+    if kept:
+        return f"revert worktree {rw.replace(HOME, '~')} kept: {kept}"
     cancelled = blame_cancel_changes_of(rw, why, store)
     branch = git(rw, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
     head = git(rw, "rev-parse", "HEAD", check=False).stdout.strip()
@@ -156,11 +170,7 @@ def blame_drop_revert_worktree(repo, wt, change, why, store):
     if r.returncode:
         return f"revert worktree {rw.replace(HOME, '~')} kept: git worktree remove refused: {r.stderr.strip()[:160]}"
     log_deletion("worktree", os.path.basename(root), rw, head, f"blame revert never landing: {why}")
-    msg = f"removed revert worktree {rw.replace(HOME, '~')}"
-    if branch and branch not in PROTECTED_BRANCHES and \
-            git(root, "update-ref", "-d", f"refs/heads/{branch}", head, check=False).returncode == 0:
-        log_deletion("branch", os.path.basename(root), branch, head, f"blame revert never landing: {why}")
-        msg += f" and branch {branch}"
+    msg = f"removed revert worktree {rw.replace(HOME, '~')}" + _blame_drop_branch(root, branch, head, why)
     return msg + (f"; cancelled {', '.join(cancelled)}" if cancelled else "")
 
 

@@ -277,6 +277,24 @@ def status_dispatcher(st, t):
             "escalated": [{"type": typ, "id": it["id"], "words": words} for typ, it, words in escalated_now(st)]}
 
 
+def _red_view_text(st: Any, it: Any, t: Any) -> Any:
+    """(text, short) of a red's view; a view that fails says so."""
+    try:
+        return red_view(st, it, t)
+    except (Exception, SystemExit) as e:
+        return f"(view failed: {str(e)[:120]})", it["state"]
+
+
+def _history_tail(d: Any) -> Any:
+    """A red's last 5 history entries, their outcomes cut."""
+    return [{"at": h.get("at"), "holder": h.get("holder"), "outcome": str(h.get("outcome"))[:300]}
+            for h in (d.get("history") or [])[-5:]]
+
+
+def _red_note(st: Any, it: Any, t: Any, lease: Any) -> Any:
+    return (lease or {}).get("note") or block_verdict_note(it, t, st) or red_history_note(it)
+
+
 def status_reds(st, t, repo=None):
     """Every open red: its machine state, its run, its holder and when the hold lapses, its last note."""
     leases = {r["name"]: r for r in st.list("red/")}
@@ -284,12 +302,8 @@ def status_reds(st, t, repo=None):
     for it in sorted(red_active(st).values(), key=lambda i: (not i["data"].get("gate"), i["entered_at"])):
         d = it["data"]
         key = d.get("key") or it["id"]
-        try:
-            text, short = red_view(st, it, t)
-        except (Exception, SystemExit) as e:
-            text, short = f"(view failed: {str(e)[:120]})", it["state"]
+        text, short = _red_view_text(st, it, t)
         lease = status_strip_lease(leases.get(red_lease(key)), t)
-        hist = d.get("history") or []
         lr = d.get("last_run") or {}
         opened = d.get("opened_at") or it["entered_at"]
         out.append({"key": key, "id": it["id"], "state": it["state"], "short": short, "text": text,
@@ -299,10 +313,9 @@ def status_reds(st, t, repo=None):
                     "opened_at": opened, "age": t - float(opened), "entered_at": it["entered_at"],
                     "deadline": it["deadline"], "level": it.get("level"), "lease": lease,
                     "fix": d.get("fix"), "attempts": d.get("attempts"), "family": red_family(d),
-                    "note": (lease or {}).get("note") or block_verdict_note(it, t, st) or red_history_note(it),
+                    "note": _red_note(st, it, t, lease),
                     "what": red_what(d),
-                    "history": [{"at": h.get("at"), "holder": h.get("holder"), "outcome": str(h.get("outcome"))[:300]}
-                                for h in hist[-5:]]})
+                    "history": _history_tail(d)})
     return out
 
 

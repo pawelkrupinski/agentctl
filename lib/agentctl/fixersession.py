@@ -60,17 +60,8 @@ def claude_config_path():
     return os.path.join(d, ".claude.json") if d else os.path.join(HOME, ".claude.json")
 
 
-def claude_trust_gap(path):
-    """None when claude trusts `path` (a checkout or worktree) for a background session -- or its config cannot be
-    read (no verdict: the launch decides) -- else why not, with the owner's one-liner that trusts it."""
-    try:
-        with open(claude_config_path()) as f:
-            projects = (json.load(f) or {}).get("projects")
-    except (OSError, ValueError, AttributeError):
-        return None
-    if not isinstance(projects, dict) or not path or not os.path.isdir(path):
-        return None
-    p = os.path.realpath(path)
+def _trust_candidates(p: Any) -> Any:
+    """(the main checkout of path p, every directory whose trust covers p: p up to its top, and the main checkout)."""
     r = git(p, "rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir", check=False)
     out = r.stdout.splitlines() if r.returncode == 0 else []
     top = os.path.realpath(out[0]) if out else p
@@ -82,6 +73,20 @@ def claude_trust_gap(path):
         if q == top or q == os.path.dirname(q):
             break
         q = os.path.dirname(q)
+    return main, cands
+
+
+def claude_trust_gap(path):
+    """None when claude trusts `path` (a checkout or worktree) for a background session -- or its config cannot be
+    read (no verdict: the launch decides) -- else why not, with the owner's one-liner that trusts it."""
+    try:
+        with open(claude_config_path()) as f:
+            projects = (json.load(f) or {}).get("projects")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(projects, dict) or not path or not os.path.isdir(path):
+        return None
+    main, cands = _trust_candidates(os.path.realpath(path))
     if any(isinstance(projects.get(c), dict) and projects[c].get("hasTrustDialogAccepted") is True for c in cands):
         return None
     return (f"claude does not trust {main.replace(HOME, '~')} (`claude --bg` refuses an untrusted workspace; a "
@@ -242,6 +247,28 @@ def turn_entry(e: object) -> tuple[str | None, str]:
     return ("closed" if e.get("type") == "system" and e.get("subtype") == "turn_duration" else None), ""
 
 
+def _scan_bg_turn(path: Any) -> Any:
+    """bg_turn's reading of the transcript at path (OSError: unreadable)."""
+    final, reported, closed = "", set(), False
+    started: list[str] = []
+    with open(path, errors="replace") as f:
+        for line in f:
+            try:
+                kind, t = turn_entry(json.loads(line))
+            except ValueError:
+                continue
+            if kind in ("prompt", "notification"):  # new input: the turn's answer is what comes after it
+                final, closed = "", False
+                started = [] if kind == "prompt" else started  # a new turn (a resume is a new process: no older task)
+            elif kind == "answer":
+                final, closed = t, False
+            elif kind == "closed":
+                closed = bool(final)
+            started += ["".join(g) for g in BG_TASK_STARTED.findall(line)]
+            reported.update(BG_TASK_REPORTED.findall(line) + BG_TASK_STOPPED.findall(line))
+    return {"final": final, "pending": [x for x in dict.fromkeys(started) if x not in reported], "closed": closed}
+
+
 def bg_turn(path: str | None) -> dict[str, Any]:
     """What the transcript says of the session's current turn: {"final": its last answer since the latest input (a
     prompt or a task notification), "pending": its background tasks started since its prompt and neither reported
@@ -255,27 +282,10 @@ def bg_turn(path: str | None) -> dict[str, Any]:
     hit = _BG_TURN_CACHE.get(path)
     if hit and hit[0] == sig:
         return hit[1]
-    final, reported, closed = "", set(), False
-    started: list[str] = []
     try:
-        with open(path, errors="replace") as f:
-            for line in f:
-                try:
-                    kind, t = turn_entry(json.loads(line))
-                except ValueError:
-                    continue
-                if kind in ("prompt", "notification"):  # new input: the turn's answer is what comes after it
-                    final, closed = "", False
-                    started = [] if kind == "prompt" else started  # a new turn (a resume is a new process: no older task)
-                elif kind == "answer":
-                    final, closed = t, False
-                elif kind == "closed":
-                    closed = bool(final)
-                started += ["".join(g) for g in BG_TASK_STARTED.findall(line)]
-                reported.update(BG_TASK_REPORTED.findall(line) + BG_TASK_STOPPED.findall(line))
+        out = _scan_bg_turn(path)
     except OSError:
         return empty
-    out = {"final": final, "pending": [x for x in dict.fromkeys(started) if x not in reported], "closed": closed}
     _BG_TURN_CACHE[path] = (sig, out)
     return out
 

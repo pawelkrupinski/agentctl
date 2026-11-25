@@ -48,6 +48,11 @@ LEASE_DONE = re.compile(r"(red (cleared|verified|retired)|fix submitted)\b")
 LEASE_RETAKE_DROP = ("outcome", "notes", "released_at", "revoked", "paused")
 
 
+def _lease_gone(row: Any, m: Any, out: Any, holder: Any) -> Any:
+    """The lease was ended or taken: an outcome, a revoke, or another holder."""
+    return bool(out or m.get("revoked") or (row.get("holder") and row["holder"] != holder))
+
+
 def lease_loss(row, epoch, holder, t):
     """('lapsed', None), ('done', outcome) or ('lost', why) for a lease held at `epoch` by `holder` that reads lost."""
     m = lease_meta(row)
@@ -56,7 +61,7 @@ def lease_loss(row, epoch, holder, t):
     out = str(m.get("outcome") or "")
     if m.get("revoked") and LEASE_DONE.match(out):
         return "done", out
-    if out or m.get("revoked") or (row.get("holder") and row["holder"] != holder):
+    if _lease_gone(row, m, out, holder):
         return "lost", out or "taken by another holder"
     if t >= float(row.get("max_until") or 0):
         return "lost", "past its max hold"

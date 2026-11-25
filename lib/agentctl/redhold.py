@@ -4,6 +4,7 @@
 import re
 import time
 from contextlib import suppress
+from typing import Any
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.core import SHORT, env_num, fmt_age
 from agentctl.repos import red_repo_of
@@ -52,22 +53,26 @@ def change_progress(st, it, t):
     return None
 
 
+def _red_streak_names(g: Any) -> Any:
+    """The names (number, id) of one gate workflow's newest decided run and its failed streak, when that run is red."""
+    d = g.get("decided") or {}
+    if not d or d.get("conclusion") == "success":
+        return set()
+    out = {str(d.get("number")), str(d.get("databaseId"))}
+    for r in g.get("runs") or []:
+        if r.get("conclusion") == "success":
+            break
+        if r.get("conclusion") in ("failure", "timed_out"):
+            out |= {str(r.get("number")), str(r.get("databaseId"))}
+    return out
+
+
 def snap_reds(snap):
     """The names (numbers and ids) of the gate's red runs on main in a CI snapshot: each red gate workflow's newest
     decided run and the failed runs of its streak since its last green; None when there is no snapshot (unread)."""
     if not snap:
         return None
-    out = set()
-    for g in snap.get("gate") or []:
-        d = g.get("decided") or {}
-        if not d or d.get("conclusion") == "success":
-            continue
-        out |= {str(d.get("number")), str(d.get("databaseId"))}
-        for r in g.get("runs") or []:
-            if r.get("conclusion") == "success":
-                break
-            if r.get("conclusion") in ("failure", "timed_out"):
-                out |= {str(r.get("number")), str(r.get("databaseId"))}
+    out = set().union(*(_red_streak_names(g) for g in snap.get("gate") or []))
     return out - {"None"}
 
 
@@ -195,33 +200,38 @@ def red_fix_gone_why(store, it, t):
     return f"INVARIANT: no fix on its way for {fmt_age(t - it['entered_at'])} in fix-pending"
 
 
+def _enforce_unheld(store: Any, it: Any, t: Any, acts: Any) -> Any:
+    """red_enforce's step for one unheld red, its actions appended to `acts` as they are taken."""
+    d, st = it["data"], it["state"]
+    if st == "offered":
+        off = store.offer_of(f"red:{it['id']}")
+        if offer_names_holder(off):  # a stated holder with no live lease: no holder at all
+            store.offer_reason(off["id"], None)
+            acts.append(f"INVARIANT: {red_what(d)}: its offer named a holder with no live lease "
+                        f"({str(off.get('reason'))[:120]}): offered again")
+        else:
+            red_put_offer(store, it)  # an offered red always has its open offer
+            acts.append(f"INVARIANT: {red_what(d)}: its offer reopened")
+    elif st == "fix-pending":
+        acts += red_fix_unverifiable(store, it, red_fix_gone_why(store, it, t), t)
+    elif st == "leased":
+        acts += red_lease_ended(store, it, store.get(red_lease(d["key"])), red_block_of(it, store), t)
+    else:
+        acts.append(f"INVARIANT: {red_what(d)}: {st} with no holder: offered")
+        red_offer(store, it, f"INVARIANT: {red_what(d)}: {st} with no holder for "
+                             f"{fmt_age(t - it['entered_at'])}: offered", escalate=st != "red",
+                  data={"cause": None, "block": None} if st == "blocked-external" else None)
+
+
 def red_enforce(store, facts, t):
     """THE INVARIANT, SELF-RECOVERING (the owner, 2026-10-29): a red with no live holder (red_unheld) is offered again,
     escalated, its dead fix set aside -- the dispatcher, next in the same tick, gives it a fixer. Runs after every red's
     own step, so it only catches what the step's own transitions left resting."""
-    acts = []
+    acts: list[str] = []
     for it in red_unheld(store, t, facts):
         it = store.item("red", it["id"])
         if not it or it["state"] in RED_TERMINAL:
             continue
-        d, st = it["data"], it["state"]
         with suppress(StaleVersion):
-            if st == "offered":
-                off = store.offer_of(f"red:{it['id']}")
-                if offer_names_holder(off):  # a stated holder with no live lease: no holder at all
-                    store.offer_reason(off["id"], None)
-                    acts.append(f"INVARIANT: {red_what(d)}: its offer named a holder with no live lease "
-                                f"({str(off.get('reason'))[:120]}): offered again")
-                else:
-                    red_put_offer(store, it)  # an offered red always has its open offer
-                    acts.append(f"INVARIANT: {red_what(d)}: its offer reopened")
-            elif st == "fix-pending":
-                acts += red_fix_unverifiable(store, it, red_fix_gone_why(store, it, t), t)
-            elif st == "leased":
-                acts += red_lease_ended(store, it, store.get(red_lease(d["key"])), red_block_of(it, store), t)
-            else:
-                acts.append(f"INVARIANT: {red_what(d)}: {st} with no holder: offered")
-                red_offer(store, it, f"INVARIANT: {red_what(d)}: {st} with no holder for "
-                                     f"{fmt_age(t - it['entered_at'])}: offered", escalate=st != "red",
-                          data={"cause": None, "block": None} if st == "blocked-external" else None)
+            _enforce_unheld(store, it, t, acts)
     return acts

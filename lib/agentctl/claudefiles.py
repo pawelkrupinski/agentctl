@@ -19,8 +19,8 @@ FIXER_VERDICT = re.compile(r"^\W*(LANDED [0-9a-f]{7,40}|WAITS ON [0-9a-f]{7,40}.
                            r"BLOCKED ON OWNER:.*|DIAGNOSED:.*)", re.M)
 
 
-def fixer_verdict(text: str) -> str | None:
-    """The fixer's verdict: the last verdict line of its final answer (stream-json's `result`), else of its output."""
+def _stream_result(text: str) -> str | None:
+    """The `result` of the last stream-json result line of text, else None."""
     final = None
     for line in text.splitlines():
         if line.startswith("{"):
@@ -30,6 +30,12 @@ def fixer_verdict(text: str) -> str | None:
                 continue
             if o.get("type") == "result":
                 final = o.get("result") or ""
+    return final
+
+
+def fixer_verdict(text: str) -> str | None:
+    """The fixer's verdict: the last verdict line of its final answer (stream-json's `result`), else of its output."""
+    final = _stream_result(text)
     for t in ([final] if final else []) + [text]:
         found = FIXER_VERDICT.findall(t)
         if found:

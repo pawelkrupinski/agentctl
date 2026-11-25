@@ -105,6 +105,23 @@ def probe_drift(repo, commit, run, wall):
     return _seed_checked(v, said, r)
 
 
+def _poll_probe_run(o_r: Any, rem: Any, branch: Any, wall: Any, clock: Any) -> Any:
+    """rem (the probe branch's remote state) polled until its run has a status or `wall` s pass; the branch is deleted."""
+    t0 = clock.time()
+    try:
+        for delay in backoff(30, 300):
+            try:
+                rem = remote_poll(o_r, rem, clock.time())
+            except (Exception, SystemExit) as e:
+                err(f"blame probe {branch}: {str(e)[:160]}")
+            if rem.get("status") or clock.time() - t0 > wall:
+                break
+            clock.sleep(delay)
+    finally:
+        delete_check_branch(o_r, branch)
+    return rem
+
+
 def probe_checks(repo, o_r, commit, run, tokens, wall, clock):
     """The boundary's TREE through precommit-check.yml on CI: a commit holding it on top of <remote>/main pushed as
     `check/blame-<run>-<sha>` (the change's paths -- everything after the boundary, undone -- select the checks, as
@@ -121,18 +138,7 @@ def probe_checks(repo, o_r, commit, run, tokens, wall, clock):
     if r.returncode != 0:
         return {"verdict": "none", "evidence": f"push of {branch} failed: {r.stderr.strip()[:200]}"}
     rem = {"branch": branch, "tip": tip, "run": None, "status": None}
-    t0 = clock.time()
-    try:
-        for delay in backoff(30, 300):
-            try:
-                rem = remote_poll(o_r, rem, clock.time())
-            except (Exception, SystemExit) as e:
-                err(f"blame probe {branch}: {str(e)[:160]}")
-            if rem.get("status") or clock.time() - t0 > wall:
-                break
-            clock.sleep(delay)
-    finally:
-        delete_check_branch(o_r, branch)
+    rem = _poll_probe_run(o_r, rem, branch, wall, clock)
     st = rem.get("status")
     name = f"{REMOTE_WORKFLOW} run {rem.get('run')} on the tree of {commit[:10]}"
     if st == "failure":

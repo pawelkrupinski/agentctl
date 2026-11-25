@@ -104,7 +104,7 @@ mypy-errors	queueuntil	18
 mypy-errors	recordingpins	23
 mypy-errors	recovery	54
 mypy-errors	red	49
-mypy-errors	redask	19
+mypy-errors	redask	18
 mypy-errors	redauthors	12
 mypy-errors	redblock	23
 mypy-errors	redclaim	29
@@ -153,7 +153,7 @@ mypy-errors	snapshot	9
 mypy-errors	statemachines	32
 mypy-errors	stats	37
 mypy-errors	status	85
-mypy-errors	statusagents	39
+mypy-errors	statusagents	38
 mypy-errors	statusline	4
 mypy-errors	statuspage	55
 mypy-errors	store	77

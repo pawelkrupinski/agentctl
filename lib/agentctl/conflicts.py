@@ -144,14 +144,20 @@ def first_hunk(base: str, ours: str, theirs: str) -> tuple[int, str, str] | None
     return at + 1, (o[0].strip() if o else "(nothing)"), (t[0].strip() if t else "(nothing)")
 
 
-def hunk_take(o, b, t):
-    """(lines, what) for one diff3 hunk (ours, base, theirs lines) when it resolves, else None."""
+def _common_edges(o: Any, t: Any) -> Any:
+    """(leading, trailing) line counts two sides of a hunk share."""
     n = 0
     while n < min(len(o), len(t)) and o[n] == t[n]:
         n += 1
     m = 0
     while m < min(len(o), len(t)) - n and o[-1 - m] == t[-1 - m]:
         m += 1
+    return n, m
+
+
+def hunk_take(o, b, t):
+    """(lines, what) for one diff3 hunk (ours, base, theirs lines) when it resolves, else None."""
+    n, m = _common_edges(o, t)
     if n + m < len(b):  # a base line one side changed otherwise than the other: a real conflict
         return None
     mo, mt = o[n:len(o) - m], t[n:len(t) - m]

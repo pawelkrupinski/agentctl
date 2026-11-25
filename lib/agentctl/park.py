@@ -171,6 +171,24 @@ def park_target(path):
     return os.path.realpath(top), (os.path.dirname(common) if common.endswith("/.git") else common)
 
 
+def _park_until(a: Any, repo: Any, store: Any) -> Any:
+    """The mark's `until` for the park command's one condition; None (said) when it does not resolve or parse."""
+    if a.until_landed:
+        try:
+            return {"kind": "landed", **resolve_blocker(a.until_landed, repo, store)}
+        except ValueError as e:
+            print(f"park: {e}")
+            return None
+    if a.until:
+        try:
+            when = dt.datetime.fromisoformat(a.until.replace("Z", "+00:00"))
+        except ValueError:
+            print(f"park: --until {a.until}: not a date (YYYY-MM-DD or an ISO-8601 time)")
+            return None
+        return {"kind": "date", "at": a.until, "epoch": when.timestamp()}
+    return {"kind": "owner"}
+
+
 def cmd_park(a: argparse.Namespace, store: Any) -> int:
     marks = parked_marks()
     if not a.worktree:
@@ -186,21 +204,9 @@ def cmd_park(a: argparse.Namespace, store: Any) -> int:
         print('usage: agentctl park <worktree> --reason "<why>" (--until-landed <change id|commit> | --until <date> | '
               "--owner-decision)")
         return 2
-    if a.until_landed:
-        try:
-            until = {"kind": "landed", **resolve_blocker(a.until_landed, repo, store)}
-        except ValueError as e:
-            print(f"park: {e}")
-            return 2
-    elif a.until:
-        try:
-            when = dt.datetime.fromisoformat(a.until.replace("Z", "+00:00"))
-        except ValueError:
-            print(f"park: --until {a.until}: not a date (YYYY-MM-DD or an ISO-8601 time)")
-            return 2
-        until = {"kind": "date", "at": a.until, "epoch": when.timestamp()}
-    else:
-        until = {"kind": "owner"}
+    until = _park_until(a, repo, store)
+    if until is None:
+        return 2
     marks[wt] = {"reason": a.reason, "until": until, "at": time.time(), "parked": ts(), "state": "parked", "repo": repo}
     write_json(parked_path(), marks)
     print(f"PARKED {wt.replace(HOME, '~')} {park_until_text(marks[wt])}: {a.reason} -- no orphan escalation")

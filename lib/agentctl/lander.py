@@ -236,19 +236,24 @@ def lander_records(store, o_r=None):
     return out
 
 
+def _record_index_keys(rec: Any) -> Any:
+    """The index keys one lander record answers to (see lander_index)."""
+    keys = [("sha", sha) for sha in rec.get("landed_commits") or {}]
+    for k in rec.get("commit_keys") or []:
+        if k.get("sha"):
+            keys.append(("sha", k["sha"]))
+        if k.get("patch_id"):
+            keys.append(("pid", k["patch_id"]))
+        if k.get("subject") and k.get("at"):
+            keys.append(("subj", k["subject"], k["at"]))
+    return keys
+
+
 def lander_index(records):
     """{key: record} by main sha, sha, patch-id and (subject, author time); a landed change outranks any other."""
     idx = {}
     for rec in sorted(records, key=lambda r: r["state"] == "landed"):  # landed last: it wins
-        for sha in rec.get("landed_commits") or {}:
-            idx[("sha", sha)] = rec
-        for k in rec.get("commit_keys") or []:
-            if k.get("sha"):
-                idx[("sha", k["sha"])] = rec
-            if k.get("patch_id"):
-                idx[("pid", k["patch_id"])] = rec
-            if k.get("subject") and k.get("at"):
-                idx[("subj", k["subject"], k["at"])] = rec
+        idx.update(dict.fromkeys(_record_index_keys(rec), rec))
     return idx
 
 

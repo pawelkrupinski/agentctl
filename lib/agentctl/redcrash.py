@@ -411,19 +411,29 @@ def red_newer_probe(it, d):
                                                   "run": (d.get("last_run") or {}).get("number"), "repo": d.get("repo")}}
 
 
+def _red_latest_run(a: Any) -> Any:
+    """The newest decided run of the red's workflow on main in the CI snapshot, or None."""
+    snap = ci_state_load(a.get("repo") or SHORT["movies"])
+    return ((snap or {}).get("latest") or {}).get(a.get("workflow"))
+
+
+def _red_still_fails(a: Any, last: Any, store: Any) -> Any:
+    """The red's own last run is `last`: it still fails the way the red does."""
+    it = store.item("red", a.get("item")) if a.get("item") else None
+    return bool(it and str((it["data"].get("last_run") or {}).get("databaseId")) == str(last.get("databaseId")))
+
+
 def probe_red_newer_verdict(a, store):
     """A newer decided run of the red's workflow on main changed its verdict: green, or no longer attached to the red
     (a run failing the same way is attached to it by the tick's observation, before the blocks are probed)."""
-    snap = ci_state_load(a.get("repo") or SHORT["movies"])
-    last = ((snap or {}).get("latest") or {}).get(a.get("workflow"))
+    last = _red_latest_run(a)
     if not last:
         return None, f"no decided run of {a.get('workflow')} on main in the snapshot"
     if int(last.get("databaseId") or 0) <= int(a.get("run_id") or 0):
         return False, f"no {a.get('workflow')} run newer than #{a.get('run')}"
     if last.get("conclusion") == "success":
         return True, f"{a.get('workflow')} #{last.get('number')} green"
-    it = store.item("red", a.get("item")) if a.get("item") else None
-    if it and str((it["data"].get("last_run") or {}).get("databaseId")) == str(last.get("databaseId")):
+    if _red_still_fails(a, last, store):
         return False, f"{a.get('workflow')} #{last.get('number')} still fails this way"
     return True, f"{a.get('workflow')} #{last.get('number')} {last.get('conclusion')}, no longer this failure"
 

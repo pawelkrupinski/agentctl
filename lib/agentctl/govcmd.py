@@ -138,23 +138,31 @@ def gov_status() -> int:
     return 0
 
 
+def _checks_level_line(level: Any, rs: Any) -> Any:
+    """The stats table's row for the check runs that saw `level` checks running."""
+    dur, wait = [r["duration"] for r in rs], [r["waited"] for r in rs]
+    mem = [r["pressure"] for r in rs if r.get("pressure") is not None]
+    swp = [r["swap_mb"] for r in rs if r.get("swap_mb") is not None]
+    return (f"{level:>7} {len(rs):>5} {pct(dur, .5):>7.0f}s {pct(dur, .9):>7.0f}s {pct(wait, .5):>8.0f}s "
+            f"{pct(wait, .9):>8.0f}s {max(mem) if mem else '-':>8} {int(max(swp)) if swp else '-':>8}")
+
+
+def _checks_stats(a: Any) -> Any:
+    runs = check_runs(a.days)
+    cap = checks_cap()
+    st = cap_state()
+    print(f"check slots: cap {cap}" + (" ($AGENTCTL_MAX_CHECKS)" if os.environ.get("AGENTCTL_MAX_CHECKS") else
+                                      f" (auto; last change: {st.get('reason', 'none')})")
+          + f"; running now: {len(slot_holders(cap))}; {len(runs)} check run(s) in {a.days} d")
+    print(f"{'running':>7} {'runs':>5} {'p50 dur':>8} {'p90 dur':>8} {'p50 wait':>9} {'p90 wait':>9} {'max mem%':>8} {'max swap':>8}")
+    for level in sorted({r.get("running", 0) for r in runs}):
+        print(_checks_level_line(level, [r for r in runs if r.get("running", 0) == level]))
+    return 0
+
+
 def cmd_checks(a):
     if a.ccmd == "stats":
-        runs = check_runs(a.days)
-        cap = checks_cap()
-        st = cap_state()
-        print(f"check slots: cap {cap}" + (" ($AGENTCTL_MAX_CHECKS)" if os.environ.get("AGENTCTL_MAX_CHECKS") else
-                                          f" (auto; last change: {st.get('reason', 'none')})")
-              + f"; running now: {len(slot_holders(cap))}; {len(runs)} check run(s) in {a.days} d")
-        print(f"{'running':>7} {'runs':>5} {'p50 dur':>8} {'p90 dur':>8} {'p50 wait':>9} {'p90 wait':>9} {'max mem%':>8} {'max swap':>8}")
-        for level in sorted({r.get("running", 0) for r in runs}):
-            rs = [r for r in runs if r.get("running", 0) == level]
-            dur, wait = [r["duration"] for r in rs], [r["waited"] for r in rs]
-            mem = [r["pressure"] for r in rs if r.get("pressure") is not None]
-            swp = [r["swap_mb"] for r in rs if r.get("swap_mb") is not None]
-            print(f"{level:>7} {len(rs):>5} {pct(dur, .5):>7.0f}s {pct(dur, .9):>7.0f}s {pct(wait, .5):>8.0f}s "
-                  f"{pct(wait, .9):>8.0f}s {max(mem) if mem else '-':>8} {int(max(swp)) if swp else '-':>8}")
-        return 0
+        return _checks_stats(a)
     if a.ccmd == "status":
         cap = checks_cap()
         holders = slot_holders(cap)

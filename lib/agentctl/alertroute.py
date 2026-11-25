@@ -185,19 +185,28 @@ def alert_tier(rec, red):
     return f"{alert_kind_of(rec)}/{d.get('tier') or ''}"
 
 
-def event_audience(st, ev, it, t=None):
-    """The audience of a store event (the notifier's question): routed like the inbox entry it projects."""
+def _event_record(ev: Any) -> Any:
+    """The inbox-entry shape of a store event, which the audience is routed on."""
     refs = ev.get("refs") or {}
     verdict = refs.get("verdict") or ev.get("text") or ev["kind"]
-    rec = {"verdict": verdict, "kind": inbox_kind(verdict, refs.get("final", True)), "final": refs.get("final", True),
-           "item_type": ev.get("item_type"), "item_id": ev.get("item_id"), "at": ev["at"], "command": refs.get("command")}
+    return {"verdict": verdict, "kind": inbox_kind(verdict, refs.get("final", True)), "final": refs.get("final", True),
+            "item_type": ev.get("item_type"), "item_id": ev.get("item_id"), "at": ev["at"], "command": refs.get("command")}
+
+
+def _condition_audience(rec: Any, it: Any, t: Any) -> Any:
+    d = (it or {}).get("data") or {}
+    rec["verdict"] = d.get("text") or rec["verdict"]
+    rec["kind"] = d.get("kind") or rec["kind"]
+    return alert_route(rec, t=t, condition=d)[0] if rec["kind"] in CONDITION_KINDS else "owner"
+
+
+def event_audience(st, ev, it, t=None):
+    """The audience of a store event (the notifier's question): routed like the inbox entry it projects."""
+    rec = _event_record(ev)
     if ev.get("item_type") == "red":
         return alert_route(rec, st=st, t=t, red=it)[0]
     if ev.get("item_type") == "condition":
-        d = (it or {}).get("data") or {}
-        rec["verdict"] = d.get("text") or verdict
-        rec["kind"] = d.get("kind") or rec["kind"]
-        return alert_route(rec, t=t, condition=d)[0] if rec["kind"] in CONDITION_KINDS else "owner"
+        return _condition_audience(rec, it, t)
     if ev.get("item_type") == "change":
         return "owner"  # a change stuck in the pipeline: nobody but the owner unsticks the pipeline
     aud = alert_route(rec, st=st, t=t)[0]
