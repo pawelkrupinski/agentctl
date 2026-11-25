@@ -131,7 +131,7 @@ def branch_state(o_r, repo, prev=None):
     return out
 
 
-def carry_over_reds(latest, prev):
+def carry_over_reds(latest: Any, prev: Any) -> Any:
     """A red past the listed window stays one (put into latest) until its branch goes or turns green."""
     for e in prev or []:
         k = (e["branch"], e["workflow"])
@@ -139,7 +139,7 @@ def carry_over_reds(latest, prev):
             latest[k] = dict(e["run"], headBranch=e["branch"], workflowName=e["workflow"])
 
 
-def newest_branch_runs(o_r):
+def newest_branch_runs(o_r: Any) -> Any:
     """({(branch, workflow): its newest completed run}, {workflow: main's newest completed run}) from the newest
     BRANCH_RUNS_LIMIT runs listed and the gate and outside workflows' lists."""
     runs = gh_json(o_r, "run", "list", "--limit", str(BRANCH_RUNS_LIMIT), "--json", RUN_FIELDS + ",headBranch,event")
@@ -157,7 +157,7 @@ def newest_branch_runs(o_r):
     return latest, newest_main
 
 
-def newer_gate_mains(newest_main):
+def newer_gate_mains(newest_main: Any) -> Any:
     """The gate and outside workflows' own lists of main's runs, a newer completed one replacing the listing's."""
     for wf, rs in list(_gate_lists.items()) + list(_outside_lists.items()):
         m = next((r for r in rs if r.get("status") == "completed"), None)
@@ -165,7 +165,7 @@ def newer_gate_mains(newest_main):
             newest_main[wf] = m
 
 
-def red_branch_facts(o_r, repo, b, r, rec, m, inputs):
+def red_branch_facts(o_r: Any, repo: Any, b: Any, r: Any, rec: Any, m: Any, inputs: Any) -> Any:
     """What a red branch run adds to its entry: its owner, base, whether it predicts main red (and why), whether it
     is an orphan, main's run and whether the recording is newer."""
     base = branch_base(b, r)
@@ -200,7 +200,7 @@ def settle_branch_reds(o_r, snap, store):
     return out + retire_branch_reds(st, o_r, live)
 
 
-def settle_branch_red(st, e, iid, it):
+def settle_branch_red(st: Any, e: Any, iid: Any, it: Any) -> Any:
     """One live red branch run: closed when it is an orphan, reopened when it found an owner; the event text, or None."""
     r = e["run"]
     what = f"{e['workflow']} #{r.get('number')} on {e['branch']}"
@@ -226,7 +226,7 @@ def settle_branch_red(st, e, iid, it):
     return text
 
 
-def retire_branch_reds(st, o_r, live):
+def retire_branch_reds(st: Any, o_r: Any, live: Any) -> Any:
     """The repo's open or orphaned branch reds gone from the snapshot (its branch deleted or green) or past their
     deadline: retired, the event texts."""
     out = []

@@ -210,7 +210,7 @@ def cmd_orphans(a):
     return 0
 
 
-def reap_found(kill, found, procs, cwds):
+def reap_found(kill: Any, found: Any, procs: Any, cwds: Any) -> Any:
     """The orphans found, listed; terminated with --kill."""
     for kind, pid, etime, why, what in found:
         print(f"{kind:9} pid {pid:<6} up {etime:>11}  {why}\n          {what}")
@@ -218,7 +218,7 @@ def reap_found(kill, found, procs, cwds):
         kill_orphan(kind, pid, found, procs, cwds)
 
 
-def cmd_owner_orphans(a):
+def cmd_owner_orphans(a: Any) -> Any:
     """The owners' orphans: with --safe (the scheduled reaper) never an owner merely on old code (it re-execs itself):
     a dead owner's record and runs only."""
     safe = getattr(a, "safe", False)
@@ -229,7 +229,7 @@ def cmd_owner_orphans(a):
     return owners
 
 
-def run_finished(status_cache, repo, rid):
+def run_finished(status_cache: Any, repo: Any, rid: Any) -> Any:
     """Whether the run is completed (None: unreadable), asked of GitHub once."""
     k = (repo, rid)
     if k not in status_cache:
@@ -240,7 +240,7 @@ def run_finished(status_cache, repo, rid):
     return status_cache[k]
 
 
-def wait_loop_orphans(procs, cwds, me):
+def wait_loop_orphans(procs: Any, cwds: Any, me: Any) -> Any:
     """Wait loops whose owner is gone, whose worktree is missing, whose runs all finished, or that duplicate another."""
     status_cache, seen_targets, found = {}, {}, []
     for pid, ppid, etime, cmd in sorted((p for p in procs if p[0] not in me and is_wait_loop(p[3])), key=lambda p: p[0]):
@@ -255,7 +255,7 @@ def wait_loop_orphans(procs, cwds, me):
     return found
 
 
-def wait_loop_target_reasons(pid, body, status_cache, seen_targets):
+def wait_loop_target_reasons(pid: Any, body: Any, status_cache: Any, seen_targets: Any) -> Any:
     """The loop waits on runs that all finished, or on the same runs as an earlier loop (seen_targets notes each)."""
     repo, ids = loop_targets(body)
     if not (repo and ids):
@@ -271,7 +271,7 @@ def wait_loop_target_reasons(pid, body, status_cache, seen_targets):
     return reasons
 
 
-def ps_cpu_tree():
+def ps_cpu_tree() -> Any:
     """({pid: cpu seconds}, {ppid: [child pids]}) of every process."""
     procs_cpu, children = {}, {}
     for line in run_cmd(["ps", "-A", "-o", "pid=,ppid=,time="]).stdout.splitlines():
@@ -296,7 +296,7 @@ class SbtView:
     swap_free: Any
 
 
-def sbt_view(procs, cwds, cpu_state):
+def sbt_view(procs: Any, cwds: Any, cpu_state: Any) -> Any:
     procs_cpu, children = ps_cpu_tree()
     clients: dict[str, list[int]] = {}
     for pid, _ppid, _etime, cmd in procs:
@@ -307,11 +307,11 @@ def sbt_view(procs, cwds, cpu_state):
                    swap_free_mb() if sbt_reaping() else None)
 
 
-def sbt_reaping():
+def sbt_reaping() -> Any:
     return os.environ.get("AGENTCTL_SBT_REAP") != "0"  # tests: "0"
 
 
-def sbt_orphans(procs, cwds, me):
+def sbt_orphans(procs: Any, cwds: Any, me: Any) -> Any:
     """Stuck sbt servers, and sbt processes whose directory is gone, no longer a checkout or whose worktree is missing."""
     cpu_path = state_root("sbt-cpu.json")
     view = sbt_view(procs, cwds, read_record(cpu_path, {}))
@@ -329,19 +329,19 @@ def sbt_orphans(procs, cwds, me):
     return found
 
 
-def sbt_server(cmd):
+def sbt_server(cmd: Any) -> Any:
     """The process is an sbt JVM the reaper judges (not an sbt client, nor the tests' no-reap run)."""
     return "java" in cmd.split(" ", 1)[0] and sbt_reaping()
 
 
-def sbt_reasons(pid, ppid, cmd, cwd, view):
+def sbt_reasons(pid: Any, ppid: Any, cmd: Any, cwd: Any, view: Any) -> Any:
     stuck = sbt_stuck_reasons(pid, cwd, tree_cpu(pid, view.procs_cpu, view.children), view.clients, view.serving,
                               view.cpu_state, view.now, ppid=ppid, kept=view.kept,
                               swap_free_mb=view.swap_free) if sbt_server(cmd) else []
     return stuck + sbt_directory_reasons(cwd, cmd)
 
 
-def save_sbt_cpu(path, cpu_state, live):
+def save_sbt_cpu(path: Any, cpu_state: Any, live: Any) -> Any:
     """The cpu state of the servers still live (the tests' no-reap run, with none, leaves the real state alone)."""
     try:
         if not live and os.environ.get("AGENTCTL_SBT_REAP") == "0":
@@ -351,7 +351,7 @@ def save_sbt_cpu(path, cpu_state, live):
         pass
 
 
-def sbt_directory_reasons(cwd, cmd):
+def sbt_directory_reasons(cwd: Any, cmd: Any) -> Any:
     reasons = []
     if cwd and not os.path.isdir(cwd):
         reasons.append(f"cwd gone: {cwd}")
@@ -363,7 +363,7 @@ def sbt_directory_reasons(cwd, cmd):
     return reasons
 
 
-def fixture_orphans(procs, me):
+def fixture_orphans(procs: Any, me: Any) -> Any:
     """Stale test fixture servers: listed first, reaped, logged."""
     out = []
     for pid, ppid, etime, cmd in procs:
@@ -373,7 +373,7 @@ def fixture_orphans(procs, me):
     return out
 
 
-def stale_jvms(found):
+def stale_jvms(found: Any) -> Any:
     """The stale JVMs the scan finds, the ones already found as sbt orphans left out."""
     if not (os.environ.get("AGENTCTL_SBT_REAP") != "0" or os.environ.get("AGENTCTL_JVM_PS")):
         return []
@@ -386,14 +386,14 @@ def stale_jvms(found):
         return []
 
 
-def terminate(pid):
+def terminate(pid: Any) -> Any:
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
 
 
-def kill_orphan(kind, pid, found, procs, cwds):
+def kill_orphan(kind: Any, pid: Any, found: Any, procs: Any, cwds: Any) -> Any:
     """One orphan terminated with its children (an sbt server's thread dump taken first), logged."""
     if kind == "sbt" and "java" in (next((c for p, _pp, _e, c in procs if p == pid), "").split(" ", 1)[0]):
         print(f"thread dump of sbt server pid {pid}: {thread_dump(pid, cwds.get(pid, ''))}")
@@ -404,5 +404,5 @@ def kill_orphan(kind, pid, found, procs, cwds):
     reap_log(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else "") + ": " + orphan_detail(found, pid))
 
 
-def orphan_detail(found, pid):
+def orphan_detail(found: Any, pid: Any) -> Any:
     return next((f"{w} | {what}" for k, p, _e, w, what in found if p == pid), "")

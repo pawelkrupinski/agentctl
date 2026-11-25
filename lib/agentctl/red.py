@@ -250,7 +250,7 @@ def red_verify_run_on_way(o_r, repo, f):
     return None
 
 
-def run_since_slot(r, f):
+def run_since_slot(r: Any, f: Any) -> Any:
     """The run was created since the scheduled fix's slot (a minute's grace)."""
     try:
         return parse_time(r.get("createdAt")).timestamp() >= float(f.get("next_run_at") or 0) - 60

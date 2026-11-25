@@ -132,7 +132,7 @@ def cmd_watchdog(a, clock, store):
     return 1 if any(violated) else 0
 
 
-def check_invariant(wid, st, misses, woke, clock, store):
+def check_invariant(wid: Any, st: Any, misses: Any, woke: Any, clock: Any, store: Any) -> Any:
     """One invariant probed and printed: a violation counted and told, a restored one's condition closed, a silent
     processor kicked (W5). True when it is violated."""
     r = run_probe("invariant", {"id": wid})
@@ -151,11 +151,11 @@ def check_invariant(wid, st, misses, woke, clock, store):
     return r.ok is False
 
 
-def probe_word(ok):
+def probe_word(ok: Any) -> Any:
     return "ok" if ok else "cannot tell" if ok is None else "VIOLATED"
 
 
-def report_violation(wid, r, cond, st, missed, clock, store):
+def report_violation(wid: Any, r: Any, cond: Any, st: Any, missed: Any, clock: Any, store: Any) -> Any:
     """HYSTERESIS (THE ALERT MODEL, 2026-11-04: W5/WM/W7 fired 31 times in a week on a single missed beat, each cleared
     by itself): a self-healing invariant opens its condition only at WATCHDOG_MISSES consecutive misses, and is told to
     the owner only once open past its bound (alerts.py: the notifier, ESCALATED). An open one is RE-DESCRIBED each pass
@@ -168,7 +168,7 @@ def report_violation(wid, r, cond, st, missed, clock, store):
         tell_violation(st, wid, r.detail, cond, heals, clock.time())
 
 
-def kick_silent_processor(st, woke, clock):
+def kick_silent_processor(st: Any, woke: Any, clock: Any) -> Any:
     """Only for a processor silent past 3 x W5_MAX of AWAKE time (a beat the laptop slept through is no silence:
     2026-11-15 16:58, a dark wake), at most every WATCHDOG_KICK_GAP; the kick keeps its token."""
     silent = min(beat_age("processor") or 0, clock.time() - woke)
@@ -178,7 +178,7 @@ def kick_silent_processor(st, woke, clock):
         print(f"W5: kickstarted {SERVICE_LABEL} ({kick_processor()})")
 
 
-def print_unheld(store, clock):
+def print_unheld(store: Any, clock: Any) -> Any:
     try:
         for line in watchdog_unheld(store, now_=clock.time()):
             print(f"unheld: {line}")

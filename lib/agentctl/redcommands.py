@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
+from typing import Any
 from agentctl.core import reds_dir
 from agentctl.timefmt import ts
 from agentctl.repos import scan_repo_for
@@ -19,23 +20,23 @@ from agentctl.redstatus import red_status
 from agentctl.offerdispatch import red_dispatcher
 
 
-def red_cmd_block(a, st, o_r):
+def red_cmd_block(a: Any, st: Any, o_r: Any) -> Any:
     return red_block(st, o_r, a)
 
 
-def red_cmd_unblock(a, st, o_r):
+def red_cmd_unblock(a: Any, st: Any, o_r: Any) -> Any:
     rc, lines = red_unblock(st, o_r, a.run, a.why)
     print("\n".join(lines))
     return rc
 
 
-def red_cmd_owner_push(a, st, o_r):
+def red_cmd_owner_push(a: Any, st: Any, o_r: Any) -> Any:
     rc, lines = red_owner_push(st, o_r, a.run, a.note or "", getattr(a, "worktree", None))
     print("\n".join(lines))
     return rc
 
 
-def red_cmd_lease(a, st, o_r):
+def red_cmd_lease(a: Any, st: Any, o_r: Any) -> Any:
     """`red claim|beat|release`: the lease's line(s) and exit code."""
     if a.rcmd == "claim":
         if not claimed_by_its_fixer(a):
@@ -49,7 +50,7 @@ def red_cmd_lease(a, st, o_r):
     return rc
 
 
-def claimed_by_its_fixer(a):
+def claimed_by_its_fixer(a: Any) -> Any:
     """The dispatched fixer says who it is (its prompt): its record must be a live one of this session (bound to it).
     False, said, when it is not; True for a claim naming no fixer."""
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
@@ -59,11 +60,11 @@ def claimed_by_its_fixer(a):
     return True
 
 
-def red_cmd_status(a, st, o_r):
+def red_cmd_status(a: Any, st: Any, o_r: Any) -> Any:
     return red_status(st, getattr(a, "verbose", False), getattr(a, "live", False))
 
 
-def red_cmd_auto(a, st, o_r):
+def red_cmd_auto(a: Any, st: Any, o_r: Any) -> Any:
     """`red auto [on|off]`: the one repo's dispatch (the owner, 2026-11-19: "no bitcashier builds"), in the store: the
     server's tick reads it; else the automatic dispatch as a whole, a file."""
     if getattr(a, "repo", None):
@@ -85,7 +86,7 @@ def red_cmd_auto(a, st, o_r):
     return 0
 
 
-def red_cmd_unblame(a, st, o_r):
+def red_cmd_unblame(a: Any, st: Any, o_r: Any) -> Any:
     items = red_targets(st, o_r, a.run, create=False)
     if not items:
         print(f"NOT WITHDRAWN: #{a.run} names no red")
@@ -98,7 +99,7 @@ def red_cmd_unblame(a, st, o_r):
     return rc
 
 
-def red_cmd_dispatch(a, st, o_r):
+def red_cmd_dispatch(a: Any, st: Any, o_r: Any) -> Any:
     """`red dispatch <run>`: its reds offered at top priority, the dispatcher run now."""
     b = dispatch_blocker()
     if b:
@@ -117,7 +118,7 @@ def red_cmd_dispatch(a, st, o_r):
     return 0 if lines else 1
 
 
-def offer_by_hand(st, it):
+def offer_by_hand(st: Any, it: Any) -> Any:
     """One red offered at top priority (the dispatcher takes it now)."""
     if it["state"] == "red":
         it = red_offer(st, it, f"{red_what(it['data'])}: dispatched by hand")

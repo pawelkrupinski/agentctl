@@ -278,7 +278,7 @@ def hook_selection(tree, paths):
     return out
 
 
-def hook_mode_selections(hook, tree, paths):
+def hook_mode_selections(hook: Any, tree: Any, paths: Any) -> Any:
     """{mode: words} of each dry-run mode the hook has, or None when the hook or a mode it has cannot be read."""
     try:
         with open(hook or "") as f:
@@ -295,7 +295,7 @@ def hook_mode_selections(hook, tree, paths):
     return out
 
 
-def local_test_lines(tree, plan):
+def local_test_lines(tree: Any, plan: Any) -> Any:
     """local-tests.txt's lines for the areas the hook's plan runs (the basic tests with sbt in it)."""
     areas = {"basic"} if "sbt" in plan else set()
     areas |= set(plan)

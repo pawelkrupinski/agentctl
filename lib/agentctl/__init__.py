@@ -31,4 +31,4 @@ MODULES = ("procrunner", "govpool", "usage", "core", "timefmt", "statefile", "mo
            "superseded", "park", "queuepush", "orphans", "maintain", "invariants", "watchdog", "batchpush",
            "snapshot", "batch", "batchcheck", "landqueue", "status", "statuspage", "redstatus", "batchtick",
            "syncsteps", "queueenter", "landdryrun", "slots", "cliparser", "redcommands", "redtick", "serversteps",
-           "processor", "cleanuppass", "cli")
+           "processor", "cleanuppass", "cli", "configfile")

@@ -91,7 +91,7 @@ def status_sources(sources, bound, keep=False):
     return status_answers(threads, out, keep)
 
 
-def status_read(name, fn, out, keep):
+def status_read(name: Any, fn: Any, out: Any, keep: Any) -> Any:
     """One source read in its thread: its answer (or its error) and how long it took, into out (and, keep, the last)."""
     t0 = time.time()
     try:
@@ -103,7 +103,7 @@ def status_read(name, fn, out, keep):
         _status_last[name] = out[name]
 
 
-def status_answers(threads, out, keep):
+def status_answers(threads: Any, out: Any, keep: Any) -> Any:
     """Each source's answer once the deadline passed: its read, else (keep) its last finished one marked stale, else an
     error."""
     res, stale, took = {}, {}, {}

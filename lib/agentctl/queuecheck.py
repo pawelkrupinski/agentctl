@@ -25,11 +25,16 @@ from agentctl.blamerecords import blame_land_refusal
 from agentctl.queuediff import CHECK_TIMEOUT, TIMEOUT_RETRIES, judge_failure, keys_text, rebase_in_tree
 
 
+def regen_commands(tree: Any, files: Any) -> Any:
+    """The regen commands of the generated files the check tree kept main's rows of."""
+    return sorted({" ".join(g["regen"]) for g in (generated_entry(tree, f) for f in files) if g and g.get("regen")})
+
+
 def provisional_hint(tree, e):
     """`; its F kept main's rows ...: rebase, run `regen`, land again` for a change whose generated files the check
     tree merged keeping main's side of a row both changed (MAIN'S ROW, PROVISIONALLY, waiting.py); '' otherwise."""
     files = e.get("provisional") or []
-    cmds = sorted({" ".join(g["regen"]) for g in (generated_entry(tree, f) for f in files) if g and g.get("regen")})
+    cmds = regen_commands(tree, files)
     return (f"; its {', '.join(files)} kept {remote()}/main's rows where both sides changed them (no regen command "
             f"runs where the queue does): rebase onto {remote()}/main, run {' and '.join(f'`{c}`' for c in cmds) or 'the regen command'}, "
             "commit and land again") if files else ""
@@ -47,7 +52,7 @@ def regen_hold(st, d, e, tree, failing, out):
     """Hold change e for its agent's regeneration (above): queued with retry_after at the hold's end, `regen_hold` on
     its entry, its author told the one command (the event's inbox entry). Returns 1 (nothing pushed)."""
     files = e.get("provisional") or []
-    cmds = sorted({" ".join(g["regen"]) for g in (generated_entry(tree, f) for f in files) if g and g.get("regen")})
+    cmds = regen_commands(tree, files)
     cmd = f"cd {e['worktree']} && ~/bin/agentctl land"
     t = time.time()
     why = (f"REGEN NEEDED {e['id']}: its {', '.join(files)} kept {remote()}/main's rows where both sides changed them "

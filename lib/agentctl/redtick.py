@@ -5,6 +5,7 @@ import functools
 import os
 import threading
 import time
+from typing import Any
 from agentctl.core import NoReadAccess, env_num, err, process_cache, run_bounded, slug
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
@@ -56,7 +57,7 @@ _red_lock = threading.Lock()
 _last_red_tick = [0.0]
 
 
-def tick_stage(what, stage, default=None, after=""):
+def tick_stage(what: Any, stage: Any, default: Any = None, after: Any = "") -> Any:
     """One stage of the tick: its result, or `default` once its failure is told (one stage never stops the tick)."""
     try:
         return stage()
@@ -94,7 +95,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
     return acts
 
 
-def tick_observation(store, o_r, repo, snap, t, primary, early):
+def tick_observation(store: Any, o_r: Any, repo: Any, snap: Any, t: Any, primary: Any, early: Any) -> Any:
     """(observed reds or None for an unread gate, the untracked ones): the gate observed, early reds added
     (redearly.py), and A CHECK NEVER GREEN ON MAIN set apart as untracked (reduntracked.py: listed for red status -v)."""
     obs = None
@@ -110,7 +111,7 @@ def tick_observation(store, o_r, repo, snap, t, primary, early):
     return obs, untracked
 
 
-def tick_prelude(store, o_r, repo, snap, t, primary, facts):
+def tick_prelude(store: Any, o_r: Any, repo: Any, snap: Any, t: Any, primary: Any, facts: Any) -> Any:
     """(what the primary's pre-passes did, the fix facts): the model migration, main brought up to date (when no facts
     were handed in), the facts, and THE LANDER's note of each landed change's commits (lander.py), made while its keys
     still find them."""
@@ -127,7 +128,7 @@ def tick_prelude(store, o_r, repo, snap, t, primary, facts):
     return acts, facts
 
 
-def tick_open_reds(store, o_r, repo, t, obs, acts):
+def tick_open_reds(store: Any, o_r: Any, repo: Any, t: Any, obs: Any, acts: Any) -> Any:
     """The store's active reds of the repo, each observed red attached to its red or opened as one (acts told)."""
     active = red_active_of(store, o_r)
     settled_of = functools.cache(lambda: red_settled_runs(store))
@@ -136,7 +137,7 @@ def tick_open_reds(store, o_r, repo, t, obs, acts):
     return active
 
 
-def open_observed(store, o_r, repo, t, key, ob, active, settled_of, acts):
+def open_observed(store: Any, o_r: Any, repo: Any, t: Any, key: Any, ob: Any, active: Any, settled_of: Any, acts: Any) -> Any:
     it = active.get(key)
     if it:
         active[key] = red_attach_obs(store, early_attach(store, it, ob, repo, o_r, t, acts), ob)
@@ -146,7 +147,7 @@ def open_observed(store, o_r, repo, t, key, ob, active, settled_of, acts):
         active[key] = early_opened(red_open(store, ob, repo, t, o_r), acts)  # a retired check's run opens no red
 
 
-def step_red(store, o_r, repo, snap, facts, key, it, obs, untracked, t):
+def step_red(store: Any, o_r: Any, repo: Any, snap: Any, facts: Any, key: Any, it: Any, obs: Any, untracked: Any, t: Any) -> Any:
     """One red's step (what it did): untracked, or its run ended or cleared, then its own step. A failure is told and
     stops only this red; a version another writer moved waits for the next tick."""
     try:
@@ -162,7 +163,7 @@ def step_red(store, o_r, repo, snap, facts, key, it, obs, untracked, t):
         return []
 
 
-def renew_and_reap(store, t):
+def renew_and_reap(store: Any, t: Any) -> Any:
     red_renew_holders(store, t)
     return red_reap_orphans(store, t)
 

@@ -7,8 +7,9 @@ import operator
 import os
 import re
 from typing import Any, Callable
-from agentctl.core import CONFIG_ERRORS, CONFIG_SOURCE, HOME, config_files
+from agentctl.core import HOME
 from agentctl.selfcode import TOOL_PATH, code_files
+from agentctl.configfile import CONFIG_ERRORS, CONFIG_SOURCE, config_files
 
 
 # ---------------------------------------------------------------- config: every knob, generated from the code

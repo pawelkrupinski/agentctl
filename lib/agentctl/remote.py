@@ -222,7 +222,7 @@ def remote_check_lines(c, t):
     return [remote_check_head(c, t)] + [remote_job_line(j, t) for j in c.get("jobs") or [] if j.get("conclusion") != "skipped"]
 
 
-def remote_check_head(c, t):
+def remote_check_head(c: Any, t: Any) -> Any:
     return (f"check: {REMOTE_WORKFLOW} " + (f"run {c['run']}" if c.get("run") else "run not started yet")
             + f" on {c.get('branch')}, pushed {fmt_age(t - float(c.get('pushed_at') or t))} ago"
             + (f", {c['run_status']}" if c.get("run_status") else "")
@@ -231,7 +231,7 @@ def remote_check_head(c, t):
                if c.get("unlisted_at") else ""))
 
 
-def remote_job_line(j, t):
+def remote_job_line(j: Any, t: Any) -> Any:
     try:
         since = fmt_age(t - parse_time(j["started_at"]).timestamp()) if j.get("started_at") else None
     except (ValueError, TypeError):
