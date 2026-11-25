@@ -125,42 +125,62 @@ def cmd_watchdog(a, clock, store):
     st = watchdog_state()
     woke = awake_since(st, clock.time())
     write_beat("watchdog")
-    rc = 0
     misses = dict(st.get("misses") or {})
-    for wid in INVARIANTS:
-        r = run_probe("invariant", {"id": wid})
-        key = f"invariant-{wid}"
-        cond = next((c for c in open_conditions(store) if c["key"] == key), None)
-        print(f"{wid}: {'ok' if r.ok else 'cannot tell' if r.ok is None else 'VIOLATED'} -- {r.detail}")
-        if r.ok is False:
-            rc = 1
-            misses[wid] = int(misses.get(wid) or 0) + 1
-            # HYSTERESIS (THE ALERT MODEL, 2026-11-04: W5/WM/W7 fired 31 times in a week on a single missed beat, each
-            # cleared by itself): a self-healing invariant opens its condition only at WATCHDOG_MISSES consecutive
-            # misses, and is told to the owner only once open past its bound (alerts.py: the notifier, ESCALATED)
-            heals = wid in ALERT_SELF_HEALING_INVARIANTS
-            # an open one is RE-DESCRIBED each pass (2026-11-16: invariant-W1.6 named a change landed 6 h before,
-            # while another one violated W1): its text, escalations and the ESCALATED line say what violates it now
-            if cond or not heals or misses[wid] >= env_num("AGENTCTL_WATCHDOG_MISSES", WATCHDOG_MISSES):
-                open_condition("INVARIANT", f"INVARIANT {wid} violated: {r.detail}", r, [], key=key, command="watchdog",
-                               store=store)
-                tell_violation(st, wid, r.detail, cond, heals, clock.time())
-            # only for a processor silent past 3 x W5_MAX of AWAKE time (a beat the laptop slept through is no
-            # silence: 2026-11-15 16:58, a dark wake), at most every WATCHDOG_KICK_GAP; the kick keeps its token
-            silent = min(beat_age("processor") or 0, clock.time() - woke)
-            if wid == "W5" and silent > 3 * env_num("AGENTCTL_W5_MAX", W5_MAX) \
-                    and clock.time() - float(st.get("kicked_at") or 0) >= WATCHDOG_KICK_GAP:
-                st["kicked_at"] = clock.time()
-                write_json(state_root("watchdog.json"), {**watchdog_state(), "kicked_at": st["kicked_at"]})
-                print(f"W5: kickstarted {SERVICE_LABEL} ({kick_processor()})")
-        elif r.ok and cond:
+    violated = [check_invariant(wid, st, misses, woke, clock, store) for wid in INVARIANTS]
+    print_unheld(store, clock)
+    write_json(state_root("watchdog.json"), {**watchdog_state(), "misses": misses, "awake_since": woke})
+    return 1 if any(violated) else 0
+
+
+def check_invariant(wid, st, misses, woke, clock, store):
+    """One invariant probed and printed: a violation counted and told, a restored one's condition closed, a silent
+    processor kicked (W5). True when it is violated."""
+    r = run_probe("invariant", {"id": wid})
+    key = f"invariant-{wid}"
+    cond = next((c for c in open_conditions(store) if c["key"] == key), None)
+    print(f"{wid}: {probe_word(r.ok)} -- {r.detail}")
+    if r.ok is False:
+        misses[wid] = int(misses.get(wid) or 0) + 1
+        report_violation(wid, r, cond, st, misses[wid], clock, store)
+        if wid == "W5":
+            kick_silent_processor(st, woke, clock)
+    elif r.ok:
+        misses.pop(wid, None)
+        if cond:
             close_condition(cond, r, store)
-        if r.ok:
-            misses.pop(wid, None)
+    return r.ok is False
+
+
+def probe_word(ok):
+    return "ok" if ok else "cannot tell" if ok is None else "VIOLATED"
+
+
+def report_violation(wid, r, cond, st, missed, clock, store):
+    """HYSTERESIS (THE ALERT MODEL, 2026-11-04: W5/WM/W7 fired 31 times in a week on a single missed beat, each cleared
+    by itself): a self-healing invariant opens its condition only at WATCHDOG_MISSES consecutive misses, and is told to
+    the owner only once open past its bound (alerts.py: the notifier, ESCALATED). An open one is RE-DESCRIBED each pass
+    (2026-11-16: invariant-W1.6 named a change landed 6 h before, while another one violated W1): its text, escalations
+    and the ESCALATED line say what violates it now."""
+    heals = wid in ALERT_SELF_HEALING_INVARIANTS
+    if cond or not heals or missed >= env_num("AGENTCTL_WATCHDOG_MISSES", WATCHDOG_MISSES):
+        open_condition("INVARIANT", f"INVARIANT {wid} violated: {r.detail}", r, [], key=f"invariant-{wid}",
+                       command="watchdog", store=store)
+        tell_violation(st, wid, r.detail, cond, heals, clock.time())
+
+
+def kick_silent_processor(st, woke, clock):
+    """Only for a processor silent past 3 x W5_MAX of AWAKE time (a beat the laptop slept through is no silence:
+    2026-11-15 16:58, a dark wake), at most every WATCHDOG_KICK_GAP; the kick keeps its token."""
+    silent = min(beat_age("processor") or 0, clock.time() - woke)
+    if silent > 3 * env_num("AGENTCTL_W5_MAX", W5_MAX) and clock.time() - float(st.get("kicked_at") or 0) >= WATCHDOG_KICK_GAP:
+        st["kicked_at"] = clock.time()
+        write_json(state_root("watchdog.json"), {**watchdog_state(), "kicked_at": st["kicked_at"]})
+        print(f"W5: kickstarted {SERVICE_LABEL} ({kick_processor()})")
+
+
+def print_unheld(store, clock):
     try:
         for line in watchdog_unheld(store, now_=clock.time()):
             print(f"unheld: {line}")
     except (Exception, SystemExit) as e:  # the store unreadable: the invariants above already say so
         print(f"unheld: cannot tell ({str(e)[:160]})")
-    write_json(state_root("watchdog.json"), {**watchdog_state(), "misses": misses, "awake_since": woke})
-    return rc

@@ -114,7 +114,34 @@ def branch_state(o_r, repo, prev=None):
     """[entry] per tracked (branch, workflow): the newest completed run, its owner, whether its branch is alive, and for
     a red one whether it PREDICTS MAIN RED (why not). A red no longer listed carries over from prev until its branch
     is gone."""
-    # listing: the newest BRANCH_RUNS_LIMIT; a red no longer listed carries over from prev until its branch is gone
+    latest, newest_main = newest_branch_runs(o_r)
+    carry_over_reds(latest, prev)
+    reds = {k: r for k, r in latest.items() if r.get("conclusion") in RED_CONCLUSIONS}
+    recs = {r["databaseId"]: owner_of(repo, b, r) for (b, _wf), r in reds.items()}
+    mains = {wf: newest_main.get(wf) for (_b, wf) in reds}
+    inputs = run_inputs(list(reds.values()) + [m for m in mains.values() if m], recs)
+    out = []
+    for (b, wf), r in sorted(latest.items()):
+        e = {"branch": b, "workflow": wf, "run": {k: r.get(k) for k in ("databaseId", "number", "conclusion", "headSha",
+                                                                          "updatedAt", "url", "event")},
+             "red": (b, wf) in reds}
+        if e["red"]:
+            e.update(red_branch_facts(o_r, repo, b, r, recs.get(r["databaseId"]), mains.get(wf), inputs))
+        out.append(e)
+    return out
+
+
+def carry_over_reds(latest, prev):
+    """A red past the listed window stays one (put into latest) until its branch goes or turns green."""
+    for e in prev or []:
+        k = (e["branch"], e["workflow"])
+        if e.get("red") and k not in latest and e.get("alive"):
+            latest[k] = dict(e["run"], headBranch=e["branch"], workflowName=e["workflow"])
+
+
+def newest_branch_runs(o_r):
+    """({(branch, workflow): its newest completed run}, {workflow: main's newest completed run}) from the newest
+    BRANCH_RUNS_LIMIT runs listed and the gate and outside workflows' lists."""
     runs = gh_json(o_r, "run", "list", "--limit", str(BRANCH_RUNS_LIMIT), "--json", RUN_FIELDS + ",headBranch,event")
     recorded = {r.get("branch") for r in dispatch_records() if r.get("branch")}
     latest, newest_main = {}, {}
@@ -126,34 +153,29 @@ def branch_state(o_r, repo, prev=None):
             newest_main.setdefault(wf, r)
         elif tracked_branch(b, recorded):
             latest.setdefault((b, wf), r)
+    newer_gate_mains(newest_main)
+    return latest, newest_main
+
+
+def newer_gate_mains(newest_main):
+    """The gate and outside workflows' own lists of main's runs, a newer completed one replacing the listing's."""
     for wf, rs in list(_gate_lists.items()) + list(_outside_lists.items()):
         m = next((r for r in rs if r.get("status") == "completed"), None)
         if m and (wf not in newest_main or m["databaseId"] > newest_main[wf]["databaseId"]):
             newest_main[wf] = m
-    for e in prev or []:  # a red past the listed window stays one until its branch goes or turns green
-        k = (e["branch"], e["workflow"])
-        if e.get("red") and k not in latest and e.get("alive"):
-            latest[k] = dict(e["run"], headBranch=e["branch"], workflowName=e["workflow"])
-    reds = {k: r for k, r in latest.items() if r.get("conclusion") in RED_CONCLUSIONS}
-    recs = {r["databaseId"]: owner_of(repo, b, r) for (b, _wf), r in reds.items()}
-    mains = {wf: newest_main.get(wf) for (_b, wf) in reds}
-    inputs = run_inputs(list(reds.values()) + [m for m in mains.values() if m], recs)
-    out = []
-    for (b, wf), r in sorted(latest.items()):
-        e = {"branch": b, "workflow": wf, "run": {k: r.get(k) for k in ("databaseId", "number", "conclusion", "headSha",
-                                                                          "updatedAt", "url", "event")},
-             "red": (b, wf) in reds}
-        if e["red"]:
-            rec, m = recs.get(r["databaseId"]), mains.get(wf)
-            base = branch_base(b, r)
-            mine, theirs = inputs.get(r["databaseId"]), inputs.get(m["databaseId"]) if m else None
-            pred, why = predicts_main(repo, base, m, mine, theirs)
-            e.update(owner=rec, owner_gone=owner_gone(rec), base=base, alive=branch_exists(o_r, b), predicts=pred,
-                     why=why, orphan=orphan_why(repo, rec, base, main_runs_it=bool(m),
-                                                  main_since=m.get("number") if m and m["databaseId"] > r["databaseId"] else None), main_run=m and {"databaseId": m["databaseId"], "number": m.get("number")},
-                     newer_recording=newer_recording(mine, theirs) if mine is not None and theirs is not None else None)
-        out.append(e)
-    return out
+
+
+def red_branch_facts(o_r, repo, b, r, rec, m, inputs):
+    """What a red branch run adds to its entry: its owner, base, whether it predicts main red (and why), whether it
+    is an orphan, main's run and whether the recording is newer."""
+    base = branch_base(b, r)
+    mine, theirs = inputs.get(r["databaseId"]), inputs.get(m["databaseId"]) if m else None
+    pred, why = predicts_main(repo, base, m, mine, theirs)
+    main_since = m.get("number") if m and m["databaseId"] > r["databaseId"] else None
+    return {"owner": rec, "owner_gone": owner_gone(rec), "base": base, "alive": branch_exists(o_r, b), "predicts": pred,
+            "why": why, "orphan": orphan_why(repo, rec, base, main_runs_it=bool(m), main_since=main_since),
+            "main_run": m and {"databaseId": m["databaseId"], "number": m.get("number")},
+            "newer_recording": newer_recording(mine, theirs) if mine is not None and theirs is not None else None}
 
 
 def branch_reds(snap):
@@ -170,32 +192,44 @@ def settle_branch_reds(o_r, snap, store):
     for e in (snap or {}).get("branches") or []:
         if not e.get("red") or not e.get("alive"):
             continue
-        r = e["run"]
-        iid = branch_red_id(o_r, r["databaseId"])
+        iid = branch_red_id(o_r, e["run"]["databaseId"])
         live.add(iid)
-        what = f"{e['workflow']} #{r.get('number')} on {e['branch']}"
-        refs = {"run": r.get("number"), "workflow": e["workflow"], "branch": e["branch"]}
-        it = st.item("branch-red", iid)
-        if e.get("orphan"):
-            if it and it["state"] == "orphaned":
-                continue
-            it = it or st.put_item("branch-red", iid, "open", {"branch": e["branch"], "workflow": e["workflow"],
-                                                                "run": r})
-            cleanup = "; its finished branch is for `agentctl cleanup`" if e["branch"].startswith("measure/") else ""
-            text = f"branch red closed itself: {what}: {e['orphan']}{cleanup}"
-            st.transition("branch-red", iid, "orphaned", it["version"], data={"why": e["orphan"]},
-                          event={"text": text, "refs": refs})
+        text = settle_branch_red(st, e, iid, st.item("branch-red", iid))
+        if text:
             out.append(text)
-        elif it and it["state"] == "orphaned":
-            text = f"branch red reopened: {what} → owner {owner_text(e.get('owner'))}"
-            st.transition("branch-red", iid, "open", it["version"], data={"why": None},
-                          event={"text": text, "refs": refs})
-            try:
-                os.unlink(routed_path(r["databaseId"]))
-            except OSError:
-                pass
-            e["reopened"] = True
-            out.append(text)
+    return out + retire_branch_reds(st, o_r, live)
+
+
+def settle_branch_red(st, e, iid, it):
+    """One live red branch run: closed when it is an orphan, reopened when it found an owner; the event text, or None."""
+    r = e["run"]
+    what = f"{e['workflow']} #{r.get('number')} on {e['branch']}"
+    refs = {"run": r.get("number"), "workflow": e["workflow"], "branch": e["branch"]}
+    if e.get("orphan"):
+        if it and it["state"] == "orphaned":
+            return None
+        it = it or st.put_item("branch-red", iid, "open", {"branch": e["branch"], "workflow": e["workflow"], "run": r})
+        cleanup = "; its finished branch is for `agentctl cleanup`" if e["branch"].startswith("measure/") else ""
+        text = f"branch red closed itself: {what}: {e['orphan']}{cleanup}"
+        st.transition("branch-red", iid, "orphaned", it["version"], data={"why": e["orphan"]},
+                      event={"text": text, "refs": refs})
+        return text
+    if not (it and it["state"] == "orphaned"):
+        return None
+    text = f"branch red reopened: {what} → owner {owner_text(e.get('owner'))}"
+    st.transition("branch-red", iid, "open", it["version"], data={"why": None}, event={"text": text, "refs": refs})
+    try:
+        os.unlink(routed_path(r["databaseId"]))
+    except OSError:
+        pass
+    e["reopened"] = True
+    return text
+
+
+def retire_branch_reds(st, o_r, live):
+    """The repo's open or orphaned branch reds gone from the snapshot (its branch deleted or green) or past their
+    deadline: retired, the event texts."""
+    out = []
     t = st.clock()
     for it in st.items("branch-red", ["open", "orphaned"]):
         if not it["id"].startswith(f"{o_r}#"):

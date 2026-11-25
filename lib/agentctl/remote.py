@@ -219,24 +219,30 @@ def remote_check_lines(c, t):
     """`land status <id>`'s lines for a checking change's remote check summary c (remote_mirror)."""
     if not c:
         return []
-    out = [f"check: {REMOTE_WORKFLOW} " + (f"run {c['run']}" if c.get("run") else "run not started yet")
-           + f" on {c.get('branch')}, pushed {fmt_age(t - float(c.get('pushed_at') or t))} ago"
-           + (f", {c['run_status']}" if c.get("run_status") else "")
-           + (f", last progress {fmt_age(t - float(c['progress_at']))} ago" if c.get("progress_at") else "")
-           + (f"; not in GitHub's run listing for {fmt_age(t - float(c['unlisted_at']))} (no runner can take it)"
-              if c.get("unlisted_at") else "")]
-    for j in c.get("jobs") or []:
-        if j.get("conclusion") == "skipped":
-            continue
-        try:
-            since = fmt_age(t - parse_time(j["started_at"]).timestamp()) if j.get("started_at") else None
-        except (ValueError, TypeError):
-            since = None
-        what = j.get("conclusion") if j.get("status") == "completed" else (
-            f"running {since}" if j.get("status") == "in_progress" and since else "waiting for a runner slot"
-            if j.get("status") == "queued" else j.get("status"))
-        out.append(f"  {j.get('name')}: {what}")
-    return out
+    return [remote_check_head(c, t)] + [remote_job_line(j, t) for j in c.get("jobs") or [] if j.get("conclusion") != "skipped"]
+
+
+def remote_check_head(c, t):
+    return (f"check: {REMOTE_WORKFLOW} " + (f"run {c['run']}" if c.get("run") else "run not started yet")
+            + f" on {c.get('branch')}, pushed {fmt_age(t - float(c.get('pushed_at') or t))} ago"
+            + (f", {c['run_status']}" if c.get("run_status") else "")
+            + (f", last progress {fmt_age(t - float(c['progress_at']))} ago" if c.get("progress_at") else "")
+            + (f"; not in GitHub's run listing for {fmt_age(t - float(c['unlisted_at']))} (no runner can take it)"
+               if c.get("unlisted_at") else ""))
+
+
+def remote_job_line(j, t):
+    try:
+        since = fmt_age(t - parse_time(j["started_at"]).timestamp()) if j.get("started_at") else None
+    except (ValueError, TypeError):
+        since = None
+    if j.get("status") == "completed":
+        what = j.get("conclusion")
+    elif j.get("status") == "in_progress" and since:
+        what = f"running {since}"
+    else:
+        what = "waiting for a runner slot" if j.get("status") == "queued" else j.get("status")
+    return f"  {j.get('name')}: {what}"
 
 
 def delete_check_branch(o_r, branch):
