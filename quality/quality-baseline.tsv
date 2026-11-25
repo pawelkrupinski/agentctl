@@ -49,7 +49,6 @@ cognitive	generated_parse	16
 cognitive	gov_fits	20
 cognitive	gov_replay	27
 cognitive	hold_for_overlap	21
-cognitive	inv_w1	44
 cognitive	job_ever_green	21
 cognitive	jvm_candidates	36
 cognitive	jvm_reap	37
@@ -184,7 +183,6 @@ cyclomatic	generated_parse	17
 cyclomatic	gov_fits	21
 cyclomatic	gov_replay	39
 cyclomatic	hold_for_overlap	14
-cyclomatic	inv_w1	34
 cyclomatic	job_ever_green	20
 cyclomatic	jobs_verdict	23
 cyclomatic	jvm_candidates	35

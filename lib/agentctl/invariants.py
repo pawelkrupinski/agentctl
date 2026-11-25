@@ -103,7 +103,62 @@ def w1_carried(st: Any, r: dict[str, Any], t: float) -> Optional[str]:
     return f"carried by batch {b['id']} ({b['state']}" + (", past its deadline" if late else "") + ")"
 
 
-def inv_w1(clock, st):
+class W1Judge:
+    """W1's verdict on one open change: whether it is off, and why -- stranded, without an item, carried by a batch
+    past its deadline, what its state's table says, held by the red gate -- or within what its state allows."""
+
+    def __init__(self, st: Any, t: float, red_since: float, holding: Any) -> None:
+        self.st, self.t, self.red_since, self.holding = st, t, red_since, holding
+        self.lim = env_num("AGENTCTL_W1_MAX", W1_MAX)
+        self.conds = open_conditions(st)
+
+    def _off(self, r: dict[str, Any], it: dict[str, Any], carried: Optional[str]) -> Optional[str]:
+        """Why the change is off, from what stops it first; None when its state's table has no complaint."""
+        stranded = any(c["key"] == f"change-stranded-{r['id']}" for c in self.conds)
+        if stranded:
+            return "STRANDED, no queue entry carries it"
+        if not it:
+            return "no item"
+        if carried and r["state"] == "checking":
+            return carried
+        return change_progress(self.st, it, self.t)
+
+    def _under_gate(self, off: Optional[str], r: dict[str, Any]) -> Optional[str]:
+        """off, as a waiting change's words say the gate holds it."""
+        if off is None and r["state"] == "waiting" and not self.red_since:
+            return "waiting for green while the gate is green" if self.holding is not None else \
+                "waiting for green, the gate unread (no CI snapshot)"
+        if r["state"] == "waiting" and self.holding:
+            return (f"{off}; " if off else "") + f"held by the red gate: {self.holding}"
+        return off
+
+    def _due(self, age: float) -> bool:
+        """Whether a change of this age is past what W1 allows before it looks (while main is red, from the red's start)."""
+        return age >= self.lim and not (self.red_since and age < self.red_since + self.lim)
+
+    def _progressing(self, age: float, it: dict[str, Any]) -> bool:
+        """A change with no complaint is let go within the hard bound, and past it when a hold recovers itself (a REGEN
+        NEEDED hold: its own recovery escalates it once, queueclose.py regen_hold_overdue)."""
+        return age < W1_HARD_FACTOR * self.lim + (self.red_since or 0) or \
+            bool(it and hold_recovers_itself(change_hold_visible(self.st, it, {}, self.t)))
+
+    def offence(self, r: dict[str, Any]) -> Optional[tuple[float, str]]:
+        """(its age, why it is off) when the change is overdue and off, else None."""
+        age = self.t - r["since"]
+        if not self._due(age):
+            return None
+        it = self.st.item("change", r["id"]) or {}
+        carried = w1_carried(self.st, r, self.t)
+        if carried == "":
+            return None  # its batch carries it, within the batch's own deadline: the batch's bounds judge it
+        off = self._off(r, it, carried)
+        off = self._under_gate(carried if off is None and carried else off, r)
+        if off is None and self._progressing(age, it):
+            return None
+        return age, off or f"past {W1_HARD_FACTOR} x its bound, though its state still says it progresses"
+
+
+def inv_w1(clock: Clock, st: Any) -> tuple[bool, str]:
     """W1: no UNLANDED change of the one queue (the store's open items, after the landed-by-content look) older than
     W1_MAX (while main is red: past the red's own start) is outside what its state's table allows (change_progress);
     none at all older than W1_HARD_FACTOR x that. Names the change and why it has not landed."""
@@ -116,40 +171,16 @@ def inv_w1(clock, st):
     t = clock.time()
     oldest = min(open_, key=lambda r: r["since"])
     red_since, holding = w1_gate_reds(SHORT["movies"], t)
-    lim = env_num("AGENTCTL_W1_MAX", W1_MAX)
-    conds = open_conditions(st)
-    bad = None
+    judge = W1Judge(st, t, red_since, holding)
     for r in sorted(open_, key=lambda r: r["since"]):
-        age = t - r["since"]
-        if age < lim or (red_since and age < red_since + lim):
-            continue
-        it = st.item("change", r["id"]) or {}
-        carried = w1_carried(st, r, t)
-        if carried == "":
-            continue  # its batch carries it, within the batch's own deadline: the batch's bounds judge it
-        stranded = any(c["key"] == f"change-stranded-{r['id']}" for c in conds)
-        off = "STRANDED, no queue entry carries it" if stranded else "no item" if not it \
-            else carried if carried and r["state"] == "checking" else change_progress(st, it, t)
-        off = carried if off is None and carried else off
-        if off is None and r["state"] == "waiting" and not red_since:
-            off = "waiting for green while the gate is green" if holding is not None else \
-                "waiting for green, the gate unread (no CI snapshot)"
-        elif r["state"] == "waiting" and holding:
-            off = f"{off}; " if off else ""
-            off += f"held by the red gate: {holding}"
-        if off is None and age < W1_HARD_FACTOR * lim + (red_since or 0):
-            continue
-        if off is None and it and hold_recovers_itself(change_hold_visible(st, it, {}, t)):
-            continue  # a REGEN NEEDED hold: its own recovery escalates it once (queueclose.py regen_hold_overdue)
-        bad = (r, age, off or f"past {W1_HARD_FACTOR} x its bound, though its state still says it progresses")
-        break
-    if not bad:
-        age = t - oldest["since"]
-        return True, (f"oldest unlanded change {oldest['id']} ({oldest['state']}) is {fmt_age(age)} old, "
-                      "within what its state's table allows")
-    r, age, off = bad
-    return False, f"unlanded change {r['id']} ({r['state']}: {off}) is {fmt_age(age)} old" + \
-        (f", the gate red for {fmt_age(red_since)} ({holding})" if red_since else "")
+        bad = judge.offence(r)
+        if bad:
+            age, off = bad
+            return False, f"unlanded change {r['id']} ({r['state']}: {off}) is {fmt_age(age)} old" + \
+                (f", the gate red for {fmt_age(red_since)} ({holding})" if red_since else "")
+    age = t - oldest["since"]
+    return True, (f"oldest unlanded change {oldest['id']} ({oldest['state']}) is {fmt_age(age)} old, "
+                  "within what its state's table allows")
 
 
 def inv_w2(clock, st):
