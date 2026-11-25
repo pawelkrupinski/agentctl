@@ -76,6 +76,17 @@ class WatchClaim:
     def lease(self, t):
         return {"followed_by": self.me, "followed_until": t + env_num("AGENTCTL_WATCH_FOLLOW_LEASE", WATCH_FOLLOW_LEASE)}
 
+    def held(self, it: Any, t: Any) -> Any:
+        """'decided' | 'mine' | 'theirs' when the watch item is settled or leased now, None when it is ours to claim."""
+        dd = it.get("data") or {}
+        if watch_outcome(it) in ("ok", "red"):
+            return "decided"
+        if dd.get("followed_by") == self.me:
+            return "mine"
+        if dd.get("followed_by") and float(dd.get("followed_until") or 0) > t:
+            return "theirs"
+        return None
+
     def look(self):
         """('mine' | 'theirs' | 'decided', item), or (None, None) when the store did not answer."""
         t = self.clock.time()
@@ -84,13 +95,9 @@ class WatchClaim:
             it = start_watch(st, self.repo, self.sha, self.pushed_at, worktree=self.repo, close=self.close, o_r=self.o_r,
                              session=os.environ.get("CLAUDE_CODE_SESSION_ID"), follower=self.lease(t))
             for _ in range(3):
-                dd = it.get("data") or {}
-                if watch_outcome(it) in ("ok", "red"):
-                    return "decided", it
-                if dd.get("followed_by") == self.me:
-                    return "mine", it
-                if dd.get("followed_by") and float(dd.get("followed_until") or 0) > t:
-                    return "theirs", it
+                held = self.held(it, t)
+                if held:
+                    return held, it
                 try:  # unclaimed (the batch's, the tick's) or lapsed: ours now
                     st.update_item("watch", self.sha, it["version"], self.lease(t))
                     return "mine", st.item("watch", self.sha)

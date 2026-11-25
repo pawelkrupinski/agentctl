@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import time
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, _bounded, env_num, reds_dir, run_bounded, state_root
 from agentctl.timefmt import ts
@@ -82,6 +83,21 @@ def agentctl_logs():
     return sorted(p for p in out if os.path.isfile(p) and not os.path.islink(p))
 
 
+def _truncate_keeping_late(path: Any, pos: Any) -> None:
+    """Truncate the log; the instant's appends after pos are written back at the new end."""
+    with open(path, "r+b") as f:
+        f.seek(pos)
+        late = f.read()
+        f.truncate(0)
+    if not late:
+        return
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+    try:
+        os.write(fd, late)
+    finally:
+        os.close(fd)
+
+
 def rotate_log(path, max_bytes=None, keep=None):
     """Rotate one log when it is over max_bytes (see LOGS ROTATE BY SIZE): its newest max_bytes become .1, older parts
     shift, the file is truncated in place (no line lost to an O_APPEND writer but those appended in the instant between
@@ -111,16 +127,7 @@ def rotate_log(path, max_bytes=None, keep=None):
     with open(tmp, "wb") as f:
         f.write(data)
     os.replace(tmp, f"{path}.1")
-    with open(path, "r+b") as f:  # the instant's appends, then the truncate: they are written back at the new end
-        f.seek(pos)
-        late = f.read()
-        f.truncate(0)
-    if late:
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND)
-        try:
-            os.write(fd, late)
-        finally:
-            os.close(fd)
+    _truncate_keeping_late(path, pos)
     return (f"rotated {path.replace(HOME, '~')} ({size >> 20} MB): its newest {len(data) >> 10} KB kept as .1"
             + (f", {start >> 20} MB older dropped" if start > (1 << 20) else "") + (f", .{keep} dropped" if gone else ""))
 
@@ -176,6 +183,17 @@ def run_upkeep(store):
     return lines
 
 
+def _disk_invariant(store: Any, pr: Any, min_gb: Any, low: Any) -> Any:
+    """WD lines: the upkeep ran (none is running) and the disk is still low: the owner's to free."""
+    t_up = _bounded.get("upkeep")
+    if not low or (t_up and t_up.is_alive()):
+        return []
+    open_condition("INVARIANT", f"INVARIANT WD: the disk is low -- {pr.detail} (under {min_gb:.0f} GB) after the "
+                                "upkeep's cleanup: free space by hand (`du -sh ~/* ~/Library/* | sort -h | tail`)",
+                   pr, [], key="disk-free", store=store)
+    return [f"WD: {pr.detail}"]
+
+
 def maybe_upkeep(store, now_=None):
     """The tick's upkeep step: at most every UPKEEP_EVERY s, or within 10 min when the disk is low (DISK_MIN_GB); and
     WD, the disk invariant: still low with the last upkeep done, an INVARIANT condition whose probe is that same
@@ -192,10 +210,5 @@ def maybe_upkeep(store, now_=None):
         out.append(f"{'done' if done else 'started'}{' (the disk is low: ' + pr.detail + ')' if low else ''} "
                    f"(log {state_root('upkeep.log')})")
         return out
-    t_up = _bounded.get("upkeep")
-    if low and not (t_up and t_up.is_alive()):  # the upkeep ran and the disk is still low: the owner's to free
-        open_condition("INVARIANT", f"INVARIANT WD: the disk is low -- {pr.detail} (under {min_gb:.0f} GB) after the "
-                                    "upkeep's cleanup: free space by hand (`du -sh ~/* ~/Library/* | sort -h | tail`)",
-                       pr, [], key="disk-free", store=store)
-        out.append(f"WD: {pr.detail}")
+    out += _disk_invariant(store, pr, min_gb, low)
     return out

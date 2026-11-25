@@ -152,22 +152,29 @@ def group_runs_hook(pgid):
     return False
 
 
+def _group_gone_on(p: Any, sig: Any) -> Any:
+    """Signal the step's group; True when the step is over already (no such group, or no leader left to signal)."""
+    try:
+        os.killpg(p.pid, sig)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        if p.poll() is not None:
+            return True
+        try:
+            p.send_signal(sig)
+        except ProcessLookupError:
+            return True
+    return False
+
+
 def _end_group(p):
     """SIGTERM, then SIGKILL, the step's process group. macOS answers EPERM for a group whose members have all exited
     but are not reaped yet (2026-11-22: a quiet step ending as its watch ended it, at load 290): the step is over then;
     a live leader it refuses is signalled alone."""
     for sig, grace in ((signal.SIGTERM, 10), (signal.SIGKILL, 5)):
-        try:
-            os.killpg(p.pid, sig)
-        except ProcessLookupError:
+        if _group_gone_on(p, sig):
             return
-        except PermissionError:
-            if p.poll() is not None:
-                return
-            try:
-                p.send_signal(sig)
-            except ProcessLookupError:
-                return
         try:
             p.wait(timeout=grace)
             return

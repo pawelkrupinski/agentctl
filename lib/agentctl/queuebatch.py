@@ -29,7 +29,7 @@ from agentctl.redseen import gate_reds
 from agentctl.remote import remote_check, remote_checks_supported, remote_matches
 from agentctl.statemachines import StaleVersion, change_event, machine_state
 from agentctl.holdgraph import (
-    as_own, cycle_breaker, cycle_text, dependency_between, hold_cycles, recorded_hold_edges)
+    as_own, cycle_breaker, cycle_text, dependency_between, hold_cycles, hold_record, recorded_hold_edges)
 
 
 # OVERLAPPING CHANGES ARE CHECKED AS ONE (the coordinator, 2026-11-18: B1 against the CI-workflows change, the scraper
@@ -238,9 +238,7 @@ def note_hold(st, e, kind, why, t, blocker=None, files=None, batch=None):
     cur = (it.get("data") or {}).get("hold") or {}
     if (cur.get("why") or None) == why:
         return
-    rec = None if not why else {"kind": kind, "why": why, "blocker": blocker, "files": files, "batch": batch,
-                                "since": cur.get("since") if cur.get("kind") == kind and cur.get("blocker") == blocker
-                                else t}
+    rec = hold_record(cur, kind, why, blocker, files, batch, t)
     with suppress(StaleVersion):  # the next tick records it
         st.update_item("change", e["id"], it["version"], {"hold": rec})
 

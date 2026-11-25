@@ -53,6 +53,20 @@ DEADLINE_TICKS = {"change": "tick_changes", "batch": "tick_batch", "watch": "tic
 QUIET_DEADLINE_TYPES = tuple(k for k, v in DEADLINE_TICKS.items() if v == "tick_quiet_deadlines")
 
 
+def _expire(st: Any, typ: Any, it: Any, t: Any) -> Any:
+    """Move item it to its deadline state when it is past it (an info event); the line saying so, else None."""
+    spec = machine_state(typ, it["state"])
+    if spec.terminal or it["deadline"] > t:
+        return None
+    try:
+        st.transition(typ, it["id"], spec.on_deadline, it["version"],
+                      event={"text": f"{typ} {it['id']}: {it['state']} past its deadline -> {spec.on_deadline}",
+                             "severity": "info"})
+    except (StaleVersion, TerminalState):
+        return None
+    return f"{typ} {it['id']}: {spec.on_deadline}"
+
+
 def tick_quiet_deadlines(st, now_=None):
     """The reconciler's step: each lander record past its 14 days goes `gone` (blame reads landings that recent) and
     each forgotten explorer flip `closed`, an info event apiece (no inbox entry, no notification). Returns what it did."""
@@ -60,16 +74,9 @@ def tick_quiet_deadlines(st, now_=None):
     did = []
     for typ in QUIET_DEADLINE_TYPES:
         for it in st.items(typ):
-            spec = machine_state(typ, it["state"])
-            if spec.terminal or it["deadline"] > t:
-                continue
-            try:
-                st.transition(typ, it["id"], spec.on_deadline, it["version"],
-                              event={"text": f"{typ} {it['id']}: {it['state']} past its deadline -> {spec.on_deadline}",
-                                     "severity": "info"})
-            except (StaleVersion, TerminalState):
-                continue
-            did.append(f"{typ} {it['id']}: {spec.on_deadline}")
+            line = _expire(st, typ, it, t)
+            if line:
+                did.append(line)
     return did
 
 

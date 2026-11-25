@@ -10,7 +10,7 @@ import signal
 import subprocess
 import sys
 import time
-from typing import Sequence
+from typing import Any, Sequence
 from agentctl.procrunner import process_runner
 from agentctl.core import SHORT, env_num, err, git, process_cache, run_cmd, slug, state_root
 from agentctl.timefmt import ts
@@ -197,6 +197,30 @@ def smoke_check(path):
     return True, ""
 
 
+def _file_holds(path: Any, data: Any) -> Any:
+    """The file at path holds exactly data."""
+    try:
+        with open(path, "rb") as f:
+            return f.read() == data
+    except OSError:
+        return False
+
+
+def _smoke_committed(head: Any, shown: Any) -> None:
+    """Smoke-check the committed code (shown: part -> bytes) in a tree of its own, once per commit: a failing commit is
+    refused with one inbox entry naming it."""
+    import tempfile
+    with tempfile.TemporaryDirectory() as t:
+        for rel, data in shown.items():
+            os.makedirs(os.path.dirname(os.path.join(t, rel)), exist_ok=True)
+            with open(os.path.join(t, rel), "wb") as f:
+                f.write(data)
+        _smoked[head] = smoke_check(os.path.join(t, "agentctl"))
+    if not _smoked[head][0]:
+        line = f"CODE REFUSED: agentctl commit {head[:9]} fails its smoke check ({_smoked[head][1]}); services keep running the old code"
+        inbox_write("code", line, [line], [], 1)
+
+
 def restart_gate():
     """(ok, why) for a re-exec onto the code on disk: only COMMITTED code (the file equals ~/bin's HEAD version) that
     passes the smoke check. A dirty working-tree edit is never picked up; a commit that fails the smoke check is refused
@@ -209,27 +233,20 @@ def restart_gate():
     shown = {}
     for rel, p in code_files(TOOL_PATH):  # every part, each equal to HEAD's: a dirty or untracked part is no code
         r = run_cmd(["git", "-C", d, "show", f"HEAD:{rel}"], text=False)
-        try:
-            with open(p, "rb") as f:
-                same = r.returncode == 0 and f.read() == r.stdout
-        except OSError:
-            same = False
-        if not same:
+        if not (r.returncode == 0 and _file_holds(p, r.stdout)):
             return False, f"the working-tree {rel} is not ~/bin's HEAD {head[:9]} (uncommitted edit)"
         shown[rel] = r.stdout
     if head not in _smoked:
-        import tempfile
-        with tempfile.TemporaryDirectory() as t:
-            for rel, data in shown.items():  # the whole code, as committed, in a tree of its own
-                os.makedirs(os.path.dirname(os.path.join(t, rel)), exist_ok=True)
-                with open(os.path.join(t, rel), "wb") as f:
-                    f.write(data)
-            _smoked[head] = smoke_check(os.path.join(t, "agentctl"))
-        if not _smoked[head][0]:
-            line = f"CODE REFUSED: agentctl commit {head[:9]} fails its smoke check ({_smoked[head][1]}); services keep running the old code"
-            inbox_write("code", line, [line], [], 1)
+        _smoke_committed(head, shown)
     ok, why = _smoked[head]
     return ok, ("" if ok else f"commit {head[:9]} fails its smoke check ({why})")
+
+
+def _note_restart_refused(why: Any) -> None:
+    """Say once per reason why the new code is not picked up."""
+    if why and why != _restart_refused[0]:
+        _restart_refused[0] = why
+        err(f"agentctl changed on disk but not restarted: {why}")
 
 
 def restart_if_changed(owned: Sequence["Owned"] = (), argv: list[str] | None = None) -> None:
@@ -245,9 +262,7 @@ def restart_if_changed(owned: Sequence["Owned"] = (), argv: list[str] | None = N
         return
     ok, why = restart_gate()
     if not ok:  # a dirty edit, or a commit that fails the smoke check: the old code keeps running
-        if why and why != _restart_refused[0]:
-            _restart_refused[0] = why
-            err(f"agentctl changed on disk but not restarted: {why}")
+        _note_restart_refused(why)
         return
     err(f"agentctl changed on disk ({START_CODE[:8]} -> {now_code[:8]}): restarting on the new code, pid {os.getpid()}")
     for o in owned:

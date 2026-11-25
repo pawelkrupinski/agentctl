@@ -86,6 +86,13 @@ def store_grace(st, now_=None):
     return gap if gap > 60 else 0
 
 
+def _conflict_rejected_at(last: Any) -> Any:
+    """Epoch of the entry's rejection for a conflict; None when it was not rejected for one (or is no entry)."""
+    if not last or last.get("status") != "rejected" or last.get("conflict_files") is None:
+        return None
+    return iso_epoch(last.get("decided"))
+
+
 def conflict_bounced(every, e, now_=None):
     """The newest entry of e's worktree and branch, when it was rejected for a conflict within CONFLICT_PLACE_KEPT s
     (and nothing of that source was queued since), or is still held for its regeneration (queueclose.py regen_hold): the
@@ -94,12 +101,17 @@ def conflict_bounced(every, e, now_=None):
     last = max(mine, key=lambda x: x["seq"], default=None)
     if last and last.get("regen_hold") and last.get("status") == "queued":
         return last
-    if not last or last.get("status") != "rejected" or last.get("conflict_files") is None:
-        return None
-    at = iso_epoch(last.get("decided"))
+    at = _conflict_rejected_at(last)
     if at is None:
         return None
     return last if (now_ or now().timestamp()) - at <= CONFLICT_PLACE_KEPT else None
+
+
+def supersede_older(st: Any, d: Any, e: Any) -> None:
+    """RE-QUEUEING REPLACES: only the newest entry per worktree and branch runs."""
+    for old in queued_entries(d):
+        if old["id"] != e["id"] and same_change_source(old, e["worktree"], e.get("branch")):
+            supersede(st, d, old, e["id"], f"{e['worktree']} queued again ({e['head'][:10]}); only the newest entry runs")
 
 
 def queue_change(st, d, fields, entry_id=None):
@@ -123,9 +135,7 @@ def queue_change(st, d, fields, entry_id=None):
             e.update(seq=bounced["seq"], requeued_from=bounced["id"],
                      queued_since=entry_queued_since(bounced) or entry_queued_since(e))
         save_entry(d, e)
-        for old in queued_entries(d):  # RE-QUEUEING REPLACES: only the newest entry per worktree and branch runs
-            if old["id"] != e["id"] and same_change_source(old, e["worktree"], e.get("branch")):
-                supersede(st, d, old, e["id"], f"{e['worktree']} queued again ({e['head'][:10]}); only the newest entry runs")
+        supersede_older(st, d, e)
     return e, max(len(queued_entries(d)) - 1, 0)
 
 

@@ -248,19 +248,23 @@ def waiting_batch_max():
 # change's check, cut check time 8% but put the p90 wait at 274 ticks against 158 (the red's idle trees went unused);
 # checked alone first, then pre-checked as one: p90 100. A red fix keeps its lane (2026-11-17..20: a red fix landed
 # in a median 14 min, a batch member in 56).
+def _precheck_stands(it: Any, order: Any) -> Any:
+    """AGAIN ONLY WHEN ITS MEMBERS CHANGE: main moving while red (a tools-only change, the fix) is judged once, at green,
+    by MINIMAL RECHECKS -- pre-checking again on every move cost the simulated 2026-11-18..20 ~20% more check time. A
+    pre-check that failed as it is stands too: changes must come or go."""
+    ids = [e["id"] for e in order]
+    return (it["data"].get("prechecked") or {}).get("members") == ids \
+        or (it["data"].get("precheck_failed") or [None])[1:] == ids
+
+
 def red_precheck(repo, d, st, it, waiting, reds):
     """The blocked-red waiting batch's step: pre-check every waiting change as one tree when its membership or main
     changed since the last pre-check and a check tree is free (THE BATCH IS THE MECHANISM, above)."""
     order = [e for e in batch_order(repo, waiting, reds, st) if must_wait(repo, e["commits"], reds, st)][:waiting_batch_max()]
     if not order:
         return []
-    # AGAIN ONLY WHEN ITS MEMBERS CHANGE: main moving while red (a tools-only change, the fix) is judged once, at green,
-    # by MINIMAL RECHECKS -- pre-checking again on every move cost the simulated 2026-11-18..20 ~20% more check time
-    pre = it["data"].get("prechecked") or {}
-    if pre.get("members") == [e["id"] for e in order]:
+    if _precheck_stands(it, order):
         return []
-    if (it["data"].get("precheck_failed") or [None])[1:] == [e["id"] for e in order]:  # failed as it is: changes must
-        return []  # come or go
     slot = check_tree_slot(st, repo, d)
     if not slot:
         return [f"batch {it['id']}: its red pre-check waits for a check tree"]
@@ -283,12 +287,17 @@ def red_precheck(repo, d, st, it, waiting, reds):
     return [f"batch {it['id']}: red pre-check of {len(kept)} change(s) at {tip[:10]}"]
 
 
+def _is_precheck_of(pre: Any, kept: Any) -> Any:
+    """The recorded red pre-check (with its base) was of exactly these members."""
+    return bool(pre) and pre.get("members") == [e["id"] for e in kept] and bool(pre.get("base"))
+
+
 def green_batch_depth(tree, it, kept, base, tip):
     """(depth, why) of the waiting batch at green (THE BATCH IS THE MECHANISM): `kept` when its members are exactly its
     red pre-check's and no check of theirs reads what main changed since, else `fast` (the combined tree's fast check,
     as before)."""
     pre = it["data"].get("prechecked") or {}
-    if not pre or pre.get("members") != [e["id"] for e in kept] or not pre.get("base"):
+    if not _is_precheck_of(pre, kept):
         return "fast", "not its red pre-check's members"
     if pre["base"] == base:
         return "kept", f"pre-checked as one on {base[:10]}, main unchanged since"

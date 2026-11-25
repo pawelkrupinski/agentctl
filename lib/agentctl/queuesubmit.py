@@ -6,7 +6,7 @@ import re
 import subprocess
 import sys
 import time
-from typing import Optional
+from typing import Any, Optional
 from agentctl.core import env_num, err, fmt_age, git, git_ok, remote, scratch, spawn_detached
 from agentctl.classify import (
     TransientNetwork, credential_failure, is_transient_network, net_retry, redact_credentials)
@@ -295,16 +295,22 @@ def landed_sha_of(eid, data):
     return data.get("tip") or next(iter(data.get("landed_commits") or {}), "") or data.get("head")
 
 
+def _change_or_blip(store: Any, eid: Any) -> Any:
+    """(the change's item, None), or (None, why) when the store did not answer."""
+    try:
+        return store.item("change", eid), None
+    except StoreUnavailable as e:
+        return None, f"the store did not answer ({str(e)[:80]})"
+
+
 def await_verdict(eid, bound, clock, store):
     """Block until queued change eid is decided (its store item; through a store blip, asked again), at most `bound` s:
     (state, its item's data, seconds waited); state `landed`, another terminal state, or the last open one read."""
     t0, delays = clock.time(), backoff(*FIXER_LAND_POLL)
     state, data = "unread", {}
     while True:
-        try:
-            it = store.item("change", eid)
-        except StoreUnavailable as e:
-            it, state = None, f"the store did not answer ({str(e)[:80]})"
+        it, blip = _change_or_blip(store, eid)
+        state = blip or state
         if it:
             state, data = it["state"], it.get("data") or {}
             if machine_state("change", state).terminal:

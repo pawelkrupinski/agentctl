@@ -6,6 +6,7 @@ import datetime as dt
 import os
 import subprocess
 import time
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import (
     MAX_FOREIGN, NO_SIGN, branch_of, cherry_landed, env_num, err, fmt_age, git, git_ok, host_role, process_cache,
@@ -126,6 +127,19 @@ def cmd_land_precheck(a, store):
     return 1
 
 
+def queue_here(repo: Any, main_ref: Any, head: Any, d: Any, a: Any, store: Any, waits: Any, after_queued: Any) -> Any:
+    """Queue the change in this checkout's own store (no server): QUEUED line, its processor started. Returns 0."""
+    fields = change_fields(repo, main_ref, head, a, store)
+    e, ahead = queue_change(store, d, fields)
+    submit_ref(repo, d, e)
+    print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the "
+          f"background; {queued_tail(waits)}", flush=True)
+    after_queued(e["id"])
+    spawn_waiting_processor(repo)
+    offer_token(repo)
+    return 0
+
+
 def enqueue(repo, main_ref, sh, a, clock, store):
     """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor. A red
     fixer's land then waits for the verdict (fixer_land)."""
@@ -146,15 +160,7 @@ def enqueue(repo, main_ref, sh, a, clock, store):
             rc = submit_to_server(repo, d, change_fields(repo, main_ref, head, a, store), store, after_queued=after_queued,
                                   waits=waits)
     else:
-        fields = change_fields(repo, main_ref, head, a, store)
-        e, ahead = queue_change(store, d, fields)
-        submit_ref(repo, d, e)
-        print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the "
-              f"background; {queued_tail(waits)}", flush=True)
-        after_queued(e["id"])
-        spawn_waiting_processor(repo)
-        offer_token(repo)
-        rc = 0
+        rc = queue_here(repo, main_ref, head, d, a, store, waits, after_queued)
     if rc != 0 or not waits or not a.queued_id:
         return rc
     if not fixer:  # land --until-done: its caller waits (land_until_done)

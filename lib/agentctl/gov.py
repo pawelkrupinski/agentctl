@@ -118,6 +118,17 @@ def gov_starved(busy: float, measured: float, n: int) -> bool:
     return busy > env_num("AGENTCTL_GOV_STARVED", GOV_STARVED) * n or measured >= GOV_SATURATED * n
 
 
+def _capacity_state(busy: Any, measured: Any, n: Any, prev: Any) -> Any:
+    """starved | spare | ok for busy of n cores; between GOV_RESUME and GOV_STARVED the previous state is kept."""
+    if gov_starved(busy, measured, n):
+        return "starved"
+    if busy < env_num("AGENTCTL_GOV_SPARE", GOV_SPARE) * n:
+        return "spare"
+    if busy < env_num("AGENTCTL_GOV_RESUME", GOV_RESUME) * n:
+        return "ok"
+    return "starved" if prev == "starved" else "ok"
+
+
 def gov_capacity(tickets=None, m=None):
     """{state: starved | ok | spare, busy, charged, measured, cores, load1}: the laptop's CPU now, with hysteresis (the
     last state kept in <gov>/capacity.json between GOV_RESUME and GOV_STARVED)."""
@@ -127,14 +138,7 @@ def gov_capacity(tickets=None, m=None):
     busy = max(charged, measured)
     path = os.path.join(gov_dir(), "capacity.json")
     prev = (read_record(path) or {}).get("state", "ok")
-    if gov_starved(busy, measured, n):
-        state = "starved"
-    elif busy < env_num("AGENTCTL_GOV_SPARE", GOV_SPARE) * n:
-        state = "spare"
-    elif busy < env_num("AGENTCTL_GOV_RESUME", GOV_RESUME) * n:
-        state = "ok"
-    else:
-        state = "starved" if prev == "starved" else "ok"
+    state = _capacity_state(busy, measured, n, prev)
     if state != prev:
         with suppress(OSError):
             write_json(path, {"state": state, "busy": busy, "at": time.time()})

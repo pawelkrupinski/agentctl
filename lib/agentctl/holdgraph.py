@@ -152,3 +152,14 @@ def recorded_hold_edges(st: Any, todo: List[Dict[str, Any]]) -> Any:
 def waits_on_another(e: Dict[str, Any], blocker: Optional[str], ids: Set[str]) -> bool:
     """Whether change e's recorded blocker is another change among ids whose wait no cycle break dropped."""
     return blocker in ids and blocker != e["id"] and blocker not in (e.get("cycle_ignore") or [])
+
+
+def hold_record(cur: Dict[str, Any], kind: Optional[str], why: Optional[str], blocker: Optional[str],
+                files: Any, batch: Any, t: float) -> Optional[Dict[str, Any]]:
+    """The hold to record on a change's item (None: no hold now); it keeps its `since` while the kind and blocker stay
+    the same as the recorded `cur`."""
+    if not why:
+        return None
+    same = cur.get("kind") == kind and cur.get("blocker") == blocker
+    return {"kind": kind, "why": why, "blocker": blocker, "files": files, "batch": batch,
+            "since": cur.get("since") if same else t}

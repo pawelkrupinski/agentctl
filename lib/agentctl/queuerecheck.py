@@ -136,6 +136,12 @@ def compiled_path(path):
 SOURCE_CONFIGS = {"test": "Test", "it": "It", "page": "Page"}  # <module>/src/<dir>/ -> the config compiling it
 
 
+def _config_word(parts: Any) -> str:
+    """`<module>/<Config>/compile` of a path's split parts: its source dir's config, else the module's Test config."""
+    config = SOURCE_CONFIGS.get(parts[2], "Test") if len(parts) > 3 and parts[1] == "src" else ""
+    return f"{parts[0]}/{config}/compile"
+
+
 def own_configs(plan, paths):
     """The configs of a compile plan (`<module>/<Config>/compile` words) standing for the paths' OWN code, as compiled:
     `<module>/src/test|it|page/` its config; `src/main/` (and fixtures) its module's Test config, which compiles main
@@ -149,7 +155,7 @@ def own_configs(plan, paths):
         module = {w for w in plan if w.split("/", 1)[0] == parts[0]} if len(parts) > 1 else set()
         if not module:
             return set(plan)
-        word = f"{parts[0]}/{SOURCE_CONFIGS.get(parts[2], 'Test') if len(parts) > 3 and parts[1] == 'src' else ''}/compile"
+        word = _config_word(parts)
         out |= {word} if word in module else module
     return out
 
