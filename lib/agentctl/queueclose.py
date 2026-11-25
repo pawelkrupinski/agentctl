@@ -191,12 +191,14 @@ def _change_row(i: dict[str, Any]) -> dict[str, Any]:
             "hold": (data.get("hold") or {}).get("why") if i["state"] in HOLD_SHOWN else None,
             "kind": kind_text(data.get("change_kind")) or None,
             "resolved": data.get("autoresolved") if i["state"] == "checking" else None,
-            "since": float(data.get("submitted_at") or i.get("entered_at") or 0)}
+            "since": float(data.get("submitted_at") or i.get("entered_at") or 0),
+            "created": float(data.get("entry_created_at") or data.get("submitted_at") or i.get("entered_at") or 0)}
 
 
 def change_rows(store: Any) -> list[dict[str, Any]]:
     """THE QUEUE as everyone reads it (`land status`, the status line, the page): the store's open change items,
-    by id, as {id, state, worktree, head, deadline, level, hold, kind (a red fix's, changekind.py), since (submitted)}."""
+    by id, as {id, state, worktree, head, deadline, level, hold, kind (a red fix's, changekind.py), since (submitted: the queue age a kept place
+    inherits), created (this entry's own creation)}."""
     rows = [_change_row(i) for i in store.items("change") if not machine_state("change", i["state"]).terminal]
     return sorted(rows, key=lambda r: r["id"])
 

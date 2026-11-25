@@ -34,7 +34,8 @@ def run(module, script):
             return ret(*a, **k) if callable(ret) else ret
         return fake
 
-    rows = [{"id": i, "state": s, "since": NOW - age * HOUR} for i, s, age in script.get("rows", [])]
+    rows = [{"id": i, "state": s, "since": NOW - age * HOUR, **({"created": NOW - made * HOUR} if made is not None else {})}
+            for i, s, age, *rest in script.get("rows", []) for made in [rest[0] if rest else None]]
     items = copy.deepcopy(script.get("items", {}))
 
     class Store:
@@ -123,6 +124,23 @@ class InvariantW1Test(unittest.TestCase):
         for name, script in SCENARIOS.items():
             with self.subTest(name):
                 self.assertEqual(run(module, script), EXPECTED[name], name)
+
+
+    def test_a_requeued_change_is_aged_from_its_own_entry_not_the_place_it_kept(self):
+        # 2026-11-25: an entry queued minutes before, in the place of a predecessor rejected 19 h earlier (queue age
+        # `since` carried over), was reported "19 h old"; the age is the entry's own creation
+        module = __import__("agentctl.invariants", fromlist=["x"])
+        kept = dict(rows=[("c1", "checked", 19, 0.1)])
+        self.assertEqual(run(module, kept)[0][0], True, run(module, kept)[0])
+        self.assertEqual(run(module, dict(rows=[("c1", "checked", 19)]))[0][0], False)  # no creation read: the queue age
+
+    def test_a_change_item_carries_its_entry_creation_beside_the_queue_age_it_inherited(self):
+        from agentctl.queueclose import _change_row
+        from agentctl.queueslots import change_item_fields
+        e = {"id": "x", "created": "2026-11-25T22:17:40Z", "queued_since": 1000.0}
+        data = change_item_fields(e)
+        row = _change_row({"id": "x", "state": "checked", "deadline": 0, "level": 0, "data": data, "entered_at": 5.0})
+        self.assertEqual((row["since"], row["created"] > 1_000_000), (1000.0, True))
 
 
 def results():

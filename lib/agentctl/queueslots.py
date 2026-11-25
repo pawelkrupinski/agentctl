@@ -110,11 +110,21 @@ def change_item_fields(e):
     (`fixes`: the watchdog's WR reads them; a red fix never waits for green), and when it was submitted (`submitted_at`:
     its queue age -- an entry queued again after a conflict keeps its first one, entry_queued_since)."""
     since = entry_queued_since(e)
+    created = entry_created_at(e)
     return {"worktree": e.get("worktree"), "head": e.get("head"), **lander_fields(e),
             **({"fixes": sorted(e["fixes"])} if e.get("fixes") else {}),
             **({"diagnoses": sorted(e["diagnoses"])} if e.get("diagnoses") else {}),
             **({"replays": e["replays"]} if e.get("replays") else {}),
-            **({"submitted_at": since} if since else {})}
+            **({"submitted_at": since} if since else {}),
+            **({"entry_created_at": created} if created else {})}
+
+
+def entry_created_at(e):
+    """When this very entry was created (epoch), whatever place and queue age it inherited; None when it does not read."""
+    try:
+        return parse_time(e["created"]).timestamp() if e.get("created") else None
+    except (ValueError, TypeError):
+        return None
 
 
 def entry_queued_since(e):
@@ -122,10 +132,7 @@ def entry_queued_since(e):
     its `created`; None when neither reads."""
     if e.get("queued_since"):
         return float(e["queued_since"])
-    try:
-        return parse_time(e["created"]).timestamp() if e.get("created") else None
-    except (ValueError, TypeError):
-        return None
+    return entry_created_at(e)
 
 
 def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any] | None = None,

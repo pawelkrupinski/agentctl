@@ -103,6 +103,13 @@ def w1_carried(st: Any, r: dict[str, Any], t: float) -> Optional[str]:
     return f"carried by batch {b['id']} ({b['state']}" + (", past its deadline" if late else "") + ")"
 
 
+def w1_since(r: dict[str, Any]) -> float:
+    """When W1 starts a change's clock: its queue entry's own creation. A re-queued change keeps its place's queue age
+    (`since`: ordering, stats), but a rejected predecessor's hours are no time this entry waited (2026-11-25: an entry
+    queued minutes before read "19 h old")."""
+    return float(r.get("created") or r["since"])
+
+
 class W1Judge:
     """W1's verdict on one open change: whether it is off, and why -- stranded, without an item, carried by a batch
     past its deadline, what its state's table says, held by the red gate -- or within what its state allows."""
@@ -144,7 +151,7 @@ class W1Judge:
 
     def offence(self, r: dict[str, Any]) -> Optional[tuple[float, str]]:
         """(its age, why it is off) when the change is overdue and off, else None."""
-        age = self.t - r["since"]
+        age = self.t - w1_since(r)
         if not self._due(age):
             return None
         it = self.st.item("change", r["id"]) or {}
@@ -169,16 +176,16 @@ def inv_w1(clock: Clock, st: Any) -> tuple[bool, str]:
     if not open_:
         return True, "no change waits"
     t = clock.time()
-    oldest = min(open_, key=lambda r: r["since"])
+    oldest = min(open_, key=w1_since)
     red_since, holding = w1_gate_reds(SHORT["movies"], t)
     judge = W1Judge(st, t, red_since, holding)
-    for r in sorted(open_, key=lambda r: r["since"]):
+    for r in sorted(open_, key=w1_since):
         bad = judge.offence(r)
         if bad:
             age, off = bad
             return False, f"unlanded change {r['id']} ({r['state']}: {off}) is {fmt_age(age)} old" + \
                 (f", the gate red for {fmt_age(red_since)} ({holding})" if red_since else "")
-    age = t - oldest["since"]
+    age = t - w1_since(oldest)
     return True, (f"oldest unlanded change {oldest['id']} ({oldest['state']}) is {fmt_age(age)} old, "
                   "within what its state's table allows")
 
