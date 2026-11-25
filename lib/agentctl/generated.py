@@ -120,7 +120,7 @@ def table_parse(text, whole_line=False):
     """(header lines, [(key, line)]) of a generated table: `#` and blank lines head it, every other line a row keyed
     by all its tab-separated columns but the last (whole_line: by the whole line -- a SET table, one fact a line, like
     coupling-fanout-refs.tsv's `<class><TAB><target>`); None when a header line follows a row or a key repeats."""
-    head, rows, keys = [], [], set()
+    head, rows = [], []
     for line in text.splitlines(True):
         bare = line.rstrip("\n")
         if not bare.strip() or bare.startswith("#") or "\t" not in bare:
@@ -128,11 +128,9 @@ def table_parse(text, whole_line=False):
                 return None
             head.append(line)
             continue
-        key = bare if whole_line else bare.rsplit("\t", 1)[0]
-        if key in keys:
-            return None
-        keys.add(key)
-        rows.append((key, line if line.endswith("\n") else line + "\n"))
+        rows.append((bare if whole_line else bare.rsplit("\t", 1)[0], bare + "\n"))
+    if len({key for key, _ in rows}) != len(rows):
+        return None
     return head, rows
 
 

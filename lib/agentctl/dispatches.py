@@ -5,6 +5,7 @@ import glob
 import os
 import re
 import time
+from typing import Any
 from agentctl.core import HOME, PROTECTED_BRANCHES, dispatches_dir, git, git_ok, remote
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -62,14 +63,19 @@ def save_dispatch(rec, key=None):
     return rec
 
 
+def _claude_pid() -> Any:
+    """The Claude process that made the dispatch ($CLAUDE_PID), else this process's parent."""
+    cp = os.environ.get("CLAUDE_PID") or ""
+    return int(cp) if cp.isdigit() else os.getppid()
+
+
 def record_dispatch(branch=None, run_id=None, workflow=None, purpose="", inputs=None, worktree=None, sha=None,
                     agent=None, pid=None, key=None, source="registered"):
     """The owner record of a dispatch made from here: who (agent name, Claude session, pid) and where (worktree)."""
     if not branch and not run_id:
         raise SystemExit("agentctl: a dispatch is recorded by its branch or its run id")
     wt = worktree or worktree_of(safe_cwd())
-    cp = os.environ.get("CLAUDE_PID") or ""
-    pid = pid or (int(cp) if cp.isdigit() else os.getppid())
+    pid = pid or _claude_pid()
     return save_dispatch({"branch": branch, "run_id": int(run_id) if str(run_id or "").isdigit() else None,
                           "workflow": workflow, "purpose": purpose, "inputs": inputs, "worktree": wt, "sha": sha,
                           "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,

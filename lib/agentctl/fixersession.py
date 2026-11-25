@@ -385,19 +385,25 @@ def bg_failure(bid):
     return "" if detail == job["state"] else detail
 
 
+def _assistant_text(line: Any) -> Any:
+    """The text blocks of one transcript line when it is an assistant message, else ''."""
+    try:
+        e = json.loads(line)
+    except ValueError:
+        return ""
+    m = e.get("message") if e.get("type") == "assistant" else None
+    if isinstance(m, dict) and isinstance(m.get("content"), list):
+        return "\n".join(b.get("text") or "" for b in m["content"] if b.get("type") == "text")
+    return ""
+
+
 def bg_final_text(path):
     """The session's last assistant answer (its text blocks), '' when there is none."""
     last = ""
     with suppress(OSError, TypeError):
         with open(path, errors="replace") as f:
             for line in f:
-                try:
-                    e = json.loads(line)
-                except ValueError:
-                    continue
-                m = e.get("message") if e.get("type") == "assistant" else None
-                if isinstance(m, dict) and isinstance(m.get("content"), list):
-                    t = "\n".join(b.get("text") or "" for b in m["content"] if b.get("type") == "text")
-                    if t.strip():
-                        last = t
+                t = _assistant_text(line)
+                if t.strip():
+                    last = t
     return last

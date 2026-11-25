@@ -293,14 +293,20 @@ def owner_intro(owner):
               "Any other question is yours: proceed under the repo's standing rules and checked-in policies. ")
 
 
+def _lander_continuation(l: Any, name: Any) -> str:
+    """The prompt's opening for a lander revived from its own transcript, else ''."""
+    if l.get("mode") != "transcript":
+        return ""
+    return (f"YOU ARE THE AGENT THAT LANDED {name}, continued from your transcript {l.get('transcript')} (subagent "
+            f"{l.get('agent')} of session {str(l.get('session'))[:8]}): read its last part first, it is your own context. ")
+
+
 def lander_prompt(u, wt):
     """The revived lander's task (fixer_prompt's, for tier `lander`)."""
     l = u["lander"]
     num, rid = u["run"].get("number"), u["run"].get("databaseId")
     name = l.get("change")
-    head = (f"YOU ARE THE AGENT THAT LANDED {name}, continued from your transcript {l.get('transcript')} (subagent "
-            f"{l.get('agent')} of session {str(l.get('session'))[:8]}): read its last part first, it is your own context. "
-            if l.get("mode") == "transcript" else "")
+    head = _lander_continuation(l, name)
     moved = (f"Your old worktree {l['moved_from']} is gone: work in {wt} (off {remote()}/main). " if l.get("moved_from")
              else "")
     why = f"\n\n`agentctl ci-why {rid}` says:\n{l['ci_why']}\n\n" if l.get("ci_why") else " "

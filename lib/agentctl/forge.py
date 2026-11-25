@@ -75,6 +75,17 @@ def gh_tally_site():
     return ">".join(reversed(names)) or "?"
 
 
+def _print_tally(calls: Any, freed: Any, span: Any) -> None:
+    """The one-line tally of gh processes by repo and by call site, busiest first."""
+    top = sorted(calls.items(), key=lambda kv: -kv[1])
+    per_repo = {}
+    for k, n in top:
+        per_repo[k.split(" ", 1)[0]] = per_repo.get(k.split(" ", 1)[0], 0) + n
+    err(f"github calls (pid {os.getpid()}, {span:.0f} s): {sum(calls.values())} gh processes "
+        f"({', '.join(f'{r} {n}' for r, n in sorted(per_repo.items(), key=lambda kv: -kv[1]))}), {freed} of them 304 "
+        f"(free): " + "; ".join(f"{n} {k}" for k, n in top))
+
+
 def gh_tally(kind=None, free=False, now_=None, o_r=None):
     """Count one gh process (or, `free`, mark the last one a 304) against its caller, and print the tally once
     GH_TALLY_SECONDS have passed since the last. `kind` names what ran; None: what gh_json/_gh_api_once said."""
@@ -92,13 +103,7 @@ def gh_tally(kind=None, free=False, now_=None, o_r=None):
         calls, freed, span = st["calls"], st["free"], t - st["since"]
         st.update(since=t, calls={}, free=0)
     if calls:
-        top = sorted(calls.items(), key=lambda kv: -kv[1])
-        per_repo = {}
-        for k, n in top:
-            per_repo[k.split(" ", 1)[0]] = per_repo.get(k.split(" ", 1)[0], 0) + n
-        err(f"github calls (pid {os.getpid()}, {span:.0f} s): {sum(calls.values())} gh processes "
-            f"({', '.join(f'{r} {n}' for r, n in sorted(per_repo.items(), key=lambda kv: -kv[1]))}), {freed} of them 304 "
-            f"(free): " + "; ".join(f"{n} {k}" for k, n in top))
+        _print_tally(calls, freed, span)
 
 
 @contextlib.contextmanager
@@ -244,6 +249,10 @@ WORKFLOW_NAMES_TTL = 600
 _workflow_names = process_cache({})
 
 
+def _workflow_name_index(flows: Any) -> Any:
+    return {k: w["name"] for w in flows if w.get("name") for k in (w.get("id"), w.get("path")) if k}
+
+
 def forge_workflow_names(o_r):
     """{workflow id: name, workflow path: name} of o_r's workflows; {} when the page cannot be read (a run then keeps
     REST's own `name`)."""
@@ -251,7 +260,7 @@ def forge_workflow_names(o_r):
     if names is None or time.time() - at >= WORKFLOW_NAMES_TTL:
         try:
             flows = (api(o_r, "GET", "actions/workflows", {"per_page": 100}) or {}).get("workflows") or []
-            names = {k: w["name"] for w in flows if w.get("name") for k in (w.get("id"), w.get("path")) if k}
+            names = _workflow_name_index(flows)
         except (Exception, SystemExit) as e:
             err(f"forge: could not read {o_r}'s workflows ({str(e)[:120]}): runs keep their run-names")
             names = names or {}
@@ -361,6 +370,11 @@ def forge_actions_run(o_r, rid):
     return run_record(r) if r else {}
 
 
+def _commit_time(o_r: Any, sha: Any) -> Any:
+    c = api(o_r, "GET", f"commits/{sha}") or {}
+    return parse_time(((c.get("commit") or {}).get("committer") or {}).get("date"))
+
+
 def forge_branches(o_r, prefix=""):
     """[(name, sha, commit time)] of the repo's branches starting with prefix (the time costs one commit read per
     matching branch, so only matching ones are read)."""
@@ -371,9 +385,7 @@ def forge_branches(o_r, prefix=""):
             if not b["name"].startswith(prefix):
                 continue
             sha = b["commit"]["sha"]
-            c = api(o_r, "GET", f"commits/{sha}") or {}
-            when = ((c.get("commit") or {}).get("committer") or {}).get("date")
-            out.append((b["name"], sha, parse_time(when)))
+            out.append((b["name"], sha, _commit_time(o_r, sha)))
         if len(bs) < per:
             return out
         page += 1

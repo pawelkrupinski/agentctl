@@ -4,6 +4,7 @@
 import datetime as dt
 import os
 import re
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import scratch
 from agentctl.timefmt import iso_epoch
@@ -132,6 +133,11 @@ ESCAPE_FLAG = "--allow-escape-sequences"
 ESCAPE_REFUSAL = re.compile(r"\A\s*the response contains terminal escape sequences")
 
 
+def _flag_refused(flag: Any, stderr: Any) -> Any:
+    """This gh does not know the escape-sequence flag (so the call is made again without it)."""
+    return bool(flag) and "unknown flag" in (stderr or "") and ESCAPE_FLAG in (stderr or "")
+
+
 def fetch_job_log_api(o_r, job_id):
     """A job's whole log through the REST API (`gh run view --log` can hit stream cancels, and truncates: below); raises
     with stderr. gh's escape-sequence refusal is a failed read, never the log (a 99-byte "log", 2026-11-19)."""
@@ -142,7 +148,7 @@ def fetch_job_log_api(o_r, job_id):
                            text=True, env=env, timeout=300)
         if r.returncode == 0 and not ESCAPE_REFUSAL.match(r.stdout or ""):
             return r.stdout
-        if flag and "unknown flag" in (r.stderr or "") and ESCAPE_FLAG in (r.stderr or ""):
+        if _flag_refused(flag, r.stderr):
             flag = []
     raise RuntimeError((r.stderr.strip().splitlines() or r.stdout.strip().splitlines()
                         or [f"exit {r.returncode}"])[-1][:200])

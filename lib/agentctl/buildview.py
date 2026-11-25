@@ -3,6 +3,7 @@
 
 import os
 import re
+from typing import Any
 from agentctl.core import git, git_ok
 
 
@@ -242,18 +243,22 @@ def build_view(tree, rev, module_dirs):
     return {":".join(str(x) for x in u): t for u, t in view.items()}
 
 
+def _selection_words(selection: Any) -> Any:
+    """Every word of a hook selection's modes but the compile and lint plans."""
+    for key, words in (selection or {}).items():
+        if key not in ("--compile-plan", "--lint-plan"):
+            yield from " ".join(words or []).split()
+
+
 def selection_modules(selection, module_dirs):
     """The module directories a hook selection (hook_selection: {mode: words}, local-tests lines) names: a word or line
     token `<module>/...` of a known module. The compile and lint plans are left out: the verification runs them, under
     the new build."""
     out = set()
-    for key, words in (selection or {}).items():
-        if key in ("--compile-plan", "--lint-plan"):
-            continue
-        for w in " ".join(words or []).split():
-            head = w.split("/", 1)[0]
-            if "/" in w and head in module_dirs:
-                out.add(head)
+    for w in _selection_words(selection):
+        head = w.split("/", 1)[0]
+        if "/" in w and head in module_dirs:
+            out.add(head)
     return out
 
 

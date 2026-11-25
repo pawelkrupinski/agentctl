@@ -5,6 +5,7 @@ import os
 import re
 import time
 from contextlib import suppress
+from typing import Any
 from agentctl.core import HOME, fmt_age, git, git_ok, remote
 from agentctl.timefmt import ts
 from agentctl.store import StoreUnavailable
@@ -310,6 +311,14 @@ def revert_notes(st):
     return out
 
 
+def print_reverts(items: Any, t: Any, show_all: Any) -> None:
+    """One line a revert, newest id last; or that none are recorded (--all) / open."""
+    for i in sorted(items, key=lambda i: i["id"]):
+        print(revert_line(i, t))
+    if not items:
+        print("reverts: none recorded" if show_all else "reverts: none open")
+
+
 def cmd_revert(a, st):
     """agentctl revert [list] [--all] | ack ID --rework|--drop [--note N]"""
     t = time.time()
@@ -322,8 +331,5 @@ def cmd_revert(a, st):
     except StoreUnavailable as e:
         print(f"agentctl revert: the store did not answer ({str(e)[:200]})")
         return 2
-    for i in sorted(items, key=lambda i: i["id"]):
-        print(revert_line(i, t))
-    if not items:
-        print("reverts: none recorded" if getattr(a, "all", False) else "reverts: none open")
+    print_reverts(items, t, getattr(a, "all", False))
     return 0

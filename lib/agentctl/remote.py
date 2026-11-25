@@ -49,32 +49,38 @@ REMOTE_GHOST = 10 * 60  # s ($AGENTCTL_REMOTE_GHOST)
 REMOTE_LISTED_PAGES = 5  # pages of 100 of each status read before a ghost check says it cannot tell
 
 
+def _status_lists(o_r: Any, status: Any, rid: Any) -> Any:
+    """True: GitHub's listing of runs in this status names rid; False: it does not (paged to its end); None: more pages
+    than REMOTE_LISTED_PAGES, so absent from what was read proves nothing (never a ghost)."""
+    for page in range(1, REMOTE_LISTED_PAGES + 1):
+        runs = (api(o_r, "GET", "actions/runs", {"status": status, "per_page": 100, "page": page}) or {}) \
+            .get("workflow_runs") or []
+        if any(str(r.get("id")) == str(rid) for r in runs):
+            return True
+        if len(runs) < 100:
+            return False
+    return None
+
+
 def remote_run_listed(o_r, rid):
     """GitHub's queued or in-progress run listing names run rid (what the runner scheduler reads); True when it cannot
     be read (unsure: never a ghost)."""
     try:
-        for status in ("queued", "in_progress"):
-            for page in range(1, REMOTE_LISTED_PAGES + 1):
-                # listing: paged to its end; past REMOTE_LISTED_PAGES it cannot tell, which is never a ghost
-                runs = (api(o_r, "GET", "actions/runs", {"status": status, "per_page": 100, "page": page}) or {}) \
-                    .get("workflow_runs") or []
-                if any(str(r.get("id")) == str(rid) for r in runs):
-                    return True
-                if len(runs) < 100:
-                    break
-            else:
-                return True  # more than the pages read: absent from what was read proves nothing
-        return False
+        return any(_status_lists(o_r, status, rid) is not False for status in ("queued", "in_progress"))
     except (Exception, SystemExit):
         return True
+
+
+def _check_job_started(jobs: Any) -> Any:
+    """Some job but the plan's has left the queue (and was not skipped)."""
+    return any(j.get("name") != "plan" and j.get("status") != "queued" and j.get("conclusion") != "skipped"
+               for j in jobs or [])
 
 
 def remote_ghost(o_r, rem, jobs, t):
     """rem with `unlisted_at` kept while its run waits with no check job started and GitHub's listings leave it out (a
     GHOST, above); status `abandoned` (+ `ghost`) past REMOTE_GHOST of that."""
-    started = [j for j in jobs or [] if j.get("name") != "plan" and (j.get("status") != "queued")
-               and j.get("conclusion") != "skipped"]
-    if started or not jobs or remote_run_listed(o_r, rem["run"]):
+    if _check_job_started(jobs) or not jobs or remote_run_listed(o_r, rem["run"]):
         return {k: v for k, v in rem.items() if k != "unlisted_at"}
     rem = {**rem, "unlisted_at": rem.get("unlisted_at") or t}
     if t - float(rem["unlisted_at"]) >= env_num("AGENTCTL_REMOTE_GHOST", REMOTE_GHOST):

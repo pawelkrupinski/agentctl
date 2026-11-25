@@ -4,6 +4,7 @@
 import fnmatch
 import re
 import time
+from typing import Any
 from agentctl.timefmt import parse_time
 from agentctl.forge import api
 from agentctl.workflows import workflow_job_names, workflow_job_timeouts
@@ -146,19 +147,23 @@ def remote_read_bounds(o_r, sha):
     return remote_job_bounds(timeouts, remote_job_p90s(time.time() - REMOTE_P90_WINDOW))
 
 
+def _runs_in_time(j: Any, t: Any, bounds: Any) -> Any:
+    """Job j still runs inside its own expected duration."""
+    if j.get("status") != "in_progress" or not j.get("started_at"):
+        return False
+    try:
+        started = parse_time(j["started_at"]).timestamp()
+    except (ValueError, TypeError):
+        return False
+    return t - started < remote_job_expected(bounds, j.get("name"))
+
+
 def remote_progress(rem, run, jobs, t, bounds=None):
     """rem with progress_at moved to t when the run's jobs (or its update time) differ from the last poll's, or a job
     still runs inside its own expected duration (remote_job_expected over bounds)."""
     sig = [run.get("updated_at") or run.get("updatedAt")] + sorted(f"{j.get('name')}:{j.get('status')}" for j in jobs or [])
     if sig != rem.get("progress_sig"):
         return {**rem, "progress_sig": sig, "progress_at": t}
-    for j in jobs or []:
-        if j.get("status") != "in_progress" or not j.get("started_at"):
-            continue
-        try:
-            started = parse_time(j["started_at"]).timestamp()
-        except (ValueError, TypeError):
-            continue
-        if t - started < remote_job_expected(bounds, j.get("name")):
-            return {**rem, "progress_at": t}
+    if any(_runs_in_time(j, t, bounds) for j in jobs or []):
+        return {**rem, "progress_at": t}
     return rem

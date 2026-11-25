@@ -4,7 +4,7 @@
 import fnmatch
 import os
 import subprocess
-from typing import Optional
+from typing import Any, Optional
 from agentctl.core import NO_SIGN, git
 from agentctl.worktrees import WorktreeGuard
 from agentctl.patches import deliberate_empty, equivalent_on, is_empty_commit, patch_id, upstream_patch_ids
@@ -265,14 +265,21 @@ def conflict_paths(conflicts):
     return [c.split(" (generated: ", 1)[0] for c in conflicts or []]
 
 
+def _main_change(repo: Any, since: Any, main: Any, path: Any) -> Any:
+    """`<sha> <subject>` of path's newest commit in since..main ('' when unknown)."""
+    if not (since and main):
+        return ""
+    return git(repo, "log", "-1", "--format=%h %s", "--abbrev=10", f"{since}..{main}", "--", path,
+               check=False).stdout.strip()
+
+
 def conflict_cause(repo, since, main, conflicts, n=3):
     """`; it conflicts in F (changed on main by <sha> <subject>), ...` for the conflict list, each file's newest
     commit in since..main; '' when none is known."""
     out = []
     for c in (conflicts or [])[:n]:
         path = c.split(" (generated: ", 1)[0]
-        line = git(repo, "log", "-1", "--format=%h %s", "--abbrev=10", f"{since}..{main}", "--", path,
-                   check=False).stdout.strip() if since and main else ""
+        line = _main_change(repo, since, main, path)
         out.append(f"{c} (changed on main by {line[:90]})" if line else c)
     more = len(conflicts or []) - n
     return f"; it conflicts in {', '.join(out)}" + (f" (+{more} more)" if more > 0 else "") if out else ""
