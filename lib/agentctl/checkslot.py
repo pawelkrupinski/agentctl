@@ -5,6 +5,7 @@ import contextlib
 import json
 import os
 import time
+from typing import Any
 from agentctl.core import env_num, err, pct
 from agentctl.timefmt import ts
 from agentctl.statefile import write_json
@@ -85,7 +86,7 @@ PRESSURE_LOW, PRESSURE_HIGH = 50, 75
 SWAP_GROWTH_HIGH_MB = 512
 
 
-def adjust_cap(runs, cap, max_cap, last_change, now):
+def adjust_cap(runs: Any, cap: Any, max_cap: Any, last_change: Any, now: Any) -> Any:
     """(new cap, reason) from the last day's check runs, or (cap, None). At most one change a day. Lower by 1 (to 1)
     when memory pressure or swap rises, or when p90 duration at the current level is over 1.5x the p90 at the level
     below; raise by 1 (to max_cap) when slot waits are common and memory pressure and swap stay low."""
@@ -94,23 +95,56 @@ def adjust_cap(runs, cap, max_cap, last_change, now):
     day = [r for r in runs if r.get("at", 0) >= now - 86400]
     if not day:
         return cap, None
-    pressures = [r["pressure"] for r in day if r.get("pressure") is not None]
-    growth = [(r["swap_mb"] or 0) - (r.get("swap_mb_start") or 0) for r in day if r.get("swap_mb") is not None]
-    if (pressures and max(pressures) >= PRESSURE_HIGH) or (growth and max(growth) >= SWAP_GROWTH_HIGH_MB):
-        if cap > 1:
-            return cap - 1, (f"memory pressure up to {max(pressures) if pressures else '?'}% or swap growing up to "
-                             f"{int(max(growth)) if growth else 0} MB during a check")
-        return cap, None
-    at = [r["duration"] for r in runs if r.get("running") == cap]
-    below = [r["duration"] for r in runs if r.get("running") == cap - 1]
-    if cap > 1 and len(at) >= 5 and len(below) >= 5 and pct(at, 0.9) > 1.5 * pct(below, 0.9):
-        return cap - 1, f"p90 check duration with {cap} running is {pct(at, 0.9):.0f}s, over 1.5x the {pct(below, 0.9):.0f}s with {cap - 1}"
-    waited = [r for r in day if r.get("waited", 0) > 60]
-    if (cap < max_cap and len(day) >= 5 and len(waited) / len(day) >= SLOT_WAIT_COMMON
-            and (not pressures or max(pressures) < PRESSURE_LOW) and (not growth or max(growth) < 64)):
-        return cap + 1, (f"{len(waited)} of {len(day)} checks today waited over a minute for a slot, memory pressure "
-                         f"under {PRESSURE_LOW}% and swap steady")
-    return cap, None
+    return CapReview(runs, day, cap, max_cap).verdict()
+
+
+class CapReview:
+    """The last day's check runs (`day`, of all the `runs`) read for the cap: strain, a slowdown, slot waits."""
+
+    def __init__(self, runs: Any, day: Any, cap: Any, max_cap: Any) -> None:
+        self.runs, self.day, self.cap, self.max_cap = runs, day, cap, max_cap
+        self.pressures = [r["pressure"] for r in day if r.get("pressure") is not None]
+        self.growth = [(r["swap_mb"] or 0) - (r.get("swap_mb_start") or 0) for r in day if r.get("swap_mb") is not None]
+
+    def verdict(self) -> Any:
+        cap = self.cap
+        if self.strained():
+            return (cap - 1, self.strain_reason()) if cap > 1 else (cap, None)
+        slower = self.slowdown()
+        if slower:
+            return cap - 1, slower
+        waits = self.slot_waits()
+        return (cap + 1, waits) if waits else (cap, None)
+
+    def strained(self) -> Any:
+        """Memory pressure or swap growth at their high marks during a check."""
+        return bool((self.pressures and max(self.pressures) >= PRESSURE_HIGH) or (self.growth and max(self.growth) >= SWAP_GROWTH_HIGH_MB))
+
+    def strain_reason(self) -> Any:
+        return (f"memory pressure up to {max(self.pressures) if self.pressures else '?'}% or swap growing up to "
+                f"{int(max(self.growth)) if self.growth else 0} MB during a check")
+
+    def slowdown(self) -> Any:
+        """Why the cap is too high: p90 duration with `cap` running is over 1.5x the p90 with one fewer; else None."""
+        cap = self.cap
+        at = [r["duration"] for r in self.runs if r.get("running") == cap]
+        below = [r["duration"] for r in self.runs if r.get("running") == cap - 1]
+        if cap > 1 and len(at) >= 5 and len(below) >= 5 and pct(at, 0.9) > 1.5 * pct(below, 0.9):
+            return f"p90 check duration with {cap} running is {pct(at, 0.9):.0f}s, over 1.5x the {pct(below, 0.9):.0f}s with {cap - 1}"
+        return None
+
+    def calm(self) -> Any:
+        """Memory pressure and swap growth both low."""
+        return (not self.pressures or max(self.pressures) < PRESSURE_LOW) and (not self.growth or max(self.growth) < 64)
+
+    def slot_waits(self) -> Any:
+        """Why the cap is too low: slot waits are common while the machine stays calm; else None."""
+        day = self.day
+        waited = [r for r in day if r.get("waited", 0) > 60]
+        if self.cap < self.max_cap and len(day) >= 5 and len(waited) / len(day) >= SLOT_WAIT_COMMON and self.calm():
+            return (f"{len(waited)} of {len(day)} checks today waited over a minute for a slot, memory pressure "
+                    f"under {PRESSURE_LOW}% and swap steady")
+        return None
 
 
 def maybe_adjust_cap(now=None):
