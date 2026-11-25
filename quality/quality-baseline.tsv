@@ -47,8 +47,6 @@ cognitive	change_hold_stuck	13
 cognitive	change_rows	11
 cognitive	change_waits	14
 cognitive	check_batch	75
-cognitive	ci_state_refresh	12
-cognitive	ci_why	113
 cognitive	classify_change	41
 cognitive	classify_job	27
 cognitive	claude_trust_gap	14
@@ -311,8 +309,6 @@ cyclomatic	change_hold_stuck	12
 cyclomatic	change_paths	14
 cyclomatic	change_rows	15
 cyclomatic	check_batch	56
-cyclomatic	ci_state_refresh	17
-cyclomatic	ci_why	90
 cyclomatic	classify_change	27
 cyclomatic	classify_job	34
 cyclomatic	claude_trust_gap	16
@@ -533,7 +529,6 @@ method-lines	_watch	81
 method-lines	alert_probe	55
 method-lines	build_view	65
 method-lines	check_batch	117
-method-lines	ci_why	182
 method-lines	cmd_gov	69
 method-lines	cmd_maintain	56
 method-lines	dry_run	53

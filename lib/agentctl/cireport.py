@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import time
+from typing import Any, Optional
 from agentctl.core import err, remote
 from agentctl.forge import RED_CONCLUSIONS, is_cancelled
 from agentctl.repos import gated_repo, scan_repo_for
@@ -28,191 +29,279 @@ from agentctl.runexplain import explain_run, explain_run_jobs
 from agentctl.outsideflows import main_callable_flows, outside_gate
 
 
-def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None, *, store):
+Row = tuple[Any, ...]  # a gate row (name, decided, newer, (since, count)), an outside one (name, run, since, count)
+
+
+def ci_why(o_r: str, tail: int = 6, run_id: Any = None, repo: Optional[str] = None, summary: bool = False,
+           snap: Optional[dict[str, Any]] = None, *, store: Any) -> tuple[bool, str]:
     """(red, text). run_id: explain that one run; else the gating workflows' newest decided runs on main, each red row
     followed by who holds it (`fixing: <its state, holder or offer>`; never NOBODY). summary: text is the status line's one line."""
     if run_id:
-        rid, said = run_target(o_r, run_id)
-        try:
-            lines, _ = explain_run(o_r, {"databaseId": int(rid)}, tail, repo)
-        except RuntimeError as e:
-            if "HTTP 404" not in str(e):
-                raise
-            lines = [f"  no such run: {str(e)[:200]}"]
-        return True, f"run {o_r}#{rid}\n" + "".join(f"  {l}\n" for l in said) + "\n".join(lines)
-    out, red, rows, units_of, parts, untracked = [], False, [], {}, [], {}
-    gate = gate_from_snap(snap) if snap else gate_runs(o_r)
-    others, others_err = [], None
+        return True, run_report(o_r, run_id, tail, repo)
+    r = GateReport(o_r, tail, repo, summary, snap, store)
+    r.gate_rows()
+    r.local_rows()
+    r.flake_rows()
+    head = f"ci-why {o_r}: " + ("main is RED for the gate" if r.red else "main is green for the gate")
+    r.outside_rows()
+    r.branch_rows()
+    return r.red, (r.summary_line() if summary else "\n".join([head] + r.out))
+
+
+def run_report(o_r: str, run_id: Any, tail: int, repo: Optional[str]) -> str:
+    """One run explained (`agentctl ci-why <run>`); a run GitHub does not know says so."""
+    rid, said = run_target(o_r, run_id)
+    try:
+        lines, _ = explain_run(o_r, {"databaseId": int(rid)}, tail, repo)
+    except RuntimeError as e:
+        if "HTTP 404" not in str(e):
+            raise
+        lines = [f"  no such run: {str(e)[:200]}"]
+    return f"run {o_r}#{rid}\n" + "".join(f"  {l}\n" for l in said) + "\n".join(lines)
+
+
+def outside_runs(o_r: str, snap: Optional[dict[str, Any]]) -> tuple[list[Row], Any]:
+    """(the reds outside the gate, why they could not be listed or None): from the snapshot when given."""
     if snap:
-        others, others_err = outside_from_snap(snap), snap.get("outside_error")
-    elif gated_repo(o_r):
-        try:
-            others = outside_gate(o_r)
-        except Exception as e:  # the gate's verdict stands without them
-            others_err = e
-    lrepo = scan_repo_for(o_r, repo)
-    lstale = local_stale(lrepo)
-    bsnap = snap or ci_state_load(o_r)  # the branch reds come from the snapshot only (the processor writes it)
-    explained = {}
-    for name, decided, newer, _streak in gate:
-        if decided and decided.get("conclusion") in RED_CONCLUSIONS:
-            if summary:  # THE ONE-LINE SUMMARY NEVER RE-READS A DECIDED RUN'S LOGS (2026-10-29: ci-runner's gate summary
+        return outside_from_snap(snap), snap.get("outside_error")
+    if not gated_repo(o_r):
+        return [], None
+    try:
+        return outside_gate(o_r), None
+    except Exception as e:  # the gate's verdict stands without them
+        return [], e
+
+
+def outage_cause(st: Optional[dict[str, Any]]) -> Optional[str]:
+    """The outage a red is blocked on, None for any other state. A decision or the fixers' crash loop is no outage: its
+    red reads WAITING ON YOU: <question>."""
+    cause = (st or {}).get("cause") if (st or {}).get("state") == "blocked-external" else None
+    return cause if cause and cause not in (DECISION_CAUSE, CRASH_LOOP_CAUSE) else None
+
+
+def outage_line(cause: str, until: Any, names: list[str], ask: tuple[Any, Any]) -> str:
+    """ONE line per outage, naming the reds it blocks."""
+    return (f"{cause} down \u2192 blocks: {', '.join(names)}" + (f" (auto-clears when {until})" if until else "")
+            + (f" -- WAITING ON YOU: {trim_words(ask[0])} -- {ask[1]}" if ask and ask[0] else ""))
+
+
+def capped(reds: list[str]) -> list[str]:
+    """The first SUMMARY_MAX_REDS, and how many more."""
+    if len(reds) > SUMMARY_MAX_REDS:
+        return reds[:SUMMARY_MAX_REDS] + [f"+{len(reds) - SUMMARY_MAX_REDS} more"]
+    return reds
+
+
+def short(st: Optional[dict[str, Any]]) -> str:
+    return st["short"] if st else "?"
+
+
+class GateReport:
+    """ci-why's reading of main: the gate's newest decided runs, the local checks, the flakes, the reds outside the gate
+    and the branch reds, each red with who holds it (its item in the store: the tick acts, ci-why only renders). out:
+    the report's lines; parts: each gate row's word for the one-line summary."""
+
+    def __init__(self, o_r: str, tail: int, repo: Optional[str], summary: bool, snap: Optional[dict[str, Any]],
+                 store: Any) -> None:
+        self.o_r, self.tail, self.repo, self.summary, self.store = o_r, tail, repo, summary, store
+        self.out: list[str] = []
+        self.parts: list[str] = []
+        self.red = False
+        self.gate = gate_from_snap(snap) if snap else gate_runs(o_r)
+        others, self.others_err = outside_runs(o_r, snap)
+        self.lrepo = scan_repo_for(o_r, repo)
+        self.lstale = local_stale(self.lrepo)
+        self.bsnap = snap or ci_state_load(o_r)  # the branch reds come from the snapshot only (the processor writes it)
+        self.explained = self._explain_reds()
+        self.states: dict[Any, Any] = {}
+        self.units_of: dict[Any, list[Any]] = {}
+        self.flakes: list[Any] = []
+        self.untracked: dict[Any, Any] = {}
+        self._read_holders(others)
+        self.proven, self.others, self.never = self._sort_outside(others)
+
+    def _explain_reds(self) -> dict[str, tuple[list[str], Any]]:
+        """Each red gate run's explanation, its signatures cached (run_sigs)."""
+        explained = {}
+        for name, decided, _newer, _streak in self.gate:
+            if not (decided and decided.get("conclusion") in RED_CONCLUSIONS):
+                continue
+            if self.summary:  # THE ONE-LINE SUMMARY NEVER RE-READS A DECIDED RUN'S LOGS (2026-10-29: ci-runner's gate summary
                 # read convergence #2473's failed log and five job logs, ~8 s each, every 45 s -- "gate summary: still
                 # running after 20 s" at every tick). Its line shows no log line; the run's signatures are cached once
                 # per run and classifier (run_sigs), which is all the red units below read.
-                run_sigs(o_r, decided, name)
+                run_sigs(self.o_r, decided, name)
                 continue
-            lines, num, per_job = explain_run_jobs(o_r, decided, tail, repo)
+            lines, num, per_job = explain_run_jobs(self.o_r, decided, self.tail, self.repo)
             explained[name] = (lines, num)
             if not any("LOG UNREADABLE" in l for l in lines):
-                save_run_sigs(o_r, decided, name, per_job)
-    states, units, flakes_ = {}, [], []
-    try:  # who holds each red: its item in the store (the tick acts; ci-why only renders)
-        rows = [(n, d, _gate_lists.get(n, []), not gate_report_only(o_r, n, d)[0]) for n, d, _nw, _s in gate]
-        units = gate_red_units(o_r, rows, [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in others],
-                               rereads=0 if summary else None)
-        units += local_units(lrepo) + predict_units(o_r, bsnap)
-        for u in units:
-            units_of.setdefault((u["workflow"], u["run"].get("databaseId")), []).append(u)
-        states = red_view_of_units(store, units)
-        flakes_ = [it for it in red_active(store).values() if it["data"].get("red_kind") == "flake"]
-        untracked = red_untracked_runs(store, o_r, units)
-    except (Exception, SystemExit) as e:  # who is fixing is information: the gate's verdict stands without it
-        err(f"red: could not tell who is fixing ({str(e)[:160]})")
+                save_run_sigs(self.o_r, decided, name, per_job)
+        return explained
 
-    def fixing(name, run, indent="  "):
-        st = states.get((name, run.get("databaseId")))
-        return red_lines(st, indent), st
+    def _read_holders(self, others: list[Row]) -> None:
+        try:  # who holds each red: its item in the store (the tick acts; ci-why only renders)
+            rows = [(n, d, _gate_lists.get(n, []), not gate_report_only(self.o_r, n, d)[0]) for n, d, _nw, _s in self.gate]
+            units = gate_red_units(self.o_r, rows, [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in others],
+                                   rereads=0 if self.summary else None)
+            units += local_units(self.lrepo) + predict_units(self.o_r, self.bsnap)
+            for u in units:
+                self.units_of.setdefault((u["workflow"], u["run"].get("databaseId")), []).append(u)
+            self.states = red_view_of_units(self.store, units)
+            self.flakes = [it for it in red_active(self.store).values() if it["data"].get("red_kind") == "flake"]
+            self.untracked = red_untracked_runs(self.store, self.o_r, units)
+        except (Exception, SystemExit) as e:  # who is fixing is information: the gate's verdict stands without it
+            err(f"red: could not tell who is fixing ({str(e)[:160]})")
 
-    def short(st):
-        return st["short"] if st else "?"
+    def state_of(self, name: str, run: dict[str, Any]) -> Any:
+        return self.states.get((name, run.get("databaseId")))
 
-    # A RUN ITS CALLERS PROVED FIXED is no red, though it stays its callable-only workflow's newest run on main for good
-    proven = [o for o in others if (fixing(o[0], o[1])[1] or {}).get("state") == "verified"]
-    others = [o for o in others if o not in proven and not red_run_retired(o_r, o[0], o[1])]
-    never = [o for o in others if (o[0], o[1].get("databaseId")) in untracked]  # never green on main: untracked
-    others = [o for o in others if o not in never]
+    def holder_lines(self, name: str, run: dict[str, Any], indent: str = "  ") -> list[str]:
+        return list(red_lines(self.state_of(name, run), indent))
 
-    for name, decided, newer, (since, count) in gate:
-        pending = f"; newer run {newer['databaseId']} (#{newer.get('number')}) {newer.get('status')} may clear it" if newer else ""
-        nov = _gate_no_verdict.get(name)
-        if nov and not summary:
-            out.append(f"{name}: newest run {nov['databaseId']} #{nov.get('number')}: NO VERDICT (incomplete: only "
-                       "`verdict complete` failed -- a takes row skipped, cancelled or missing; no red, no fixer); the "
-                       "gate reads the newest complete run, and the next complete run decides")
+    def _sort_outside(self, others: list[Row]) -> tuple[list[Row], list[Row], list[Row]]:
+        """(proven fixed, red, never green on main) of the runs outside the gate."""
+        proven = [o for o in others if self._proven_fixed(o)]
+        reds = [o for o in others if o not in proven and not red_run_retired(self.o_r, o[0], o[1])]
+        never = [o for o in reds if (o[0], o[1].get("databaseId")) in self.untracked]  # never green on main: untracked
+        return proven, [o for o in reds if o not in never], never
+
+    def _proven_fixed(self, o: Row) -> bool:
+        """A RUN ITS CALLERS PROVED FIXED is no red, though it stays its callable-only workflow's newest run on main for
+        good."""
+        return bool((self.state_of(o[0], o[1]) or {}).get("state") == "verified")
+
+    def gate_rows(self) -> None:
+        for name, decided, newer, (since, count) in self.gate:
+            nov = _gate_no_verdict.get(name)
+            if nov and not self.summary:
+                self.out.append(f"{name}: newest run {nov['databaseId']} #{nov.get('number')}: NO VERDICT (incomplete: "
+                                "only `verdict complete` failed -- a takes row skipped, cancelled or missing; no red, no "
+                                "fixer); the gate reads the newest complete run, and the next complete run decides")
+            self._gate_row(name, decided, newer, since, count)
+
+    def _gate_row(self, name: str, decided: Any, newer: Any, since: Any, count: Any) -> None:
         if not decided:
-            out.append(f"{name}: no decided run on main")
-            parts.append(f"{short_flow(name)} ?")
-            continue
+            self.out.append(f"{name}: no decided run on main")
+            self.parts.append(f"{short_flow(name)} ?")
+            return
+        run = f"run {decided['databaseId']} #{decided.get('number')}"
         if decided["conclusion"] == "success":
-            out.append(f"{name}: GREEN (run {decided['databaseId']} #{decided.get('number')})")
-            parts.append(f"{short_flow(name)} green")
-            continue
-        retired = red_run_retired(o_r, name, decided)
+            self.out.append(f"{name}: GREEN ({run})")
+            self.parts.append(f"{short_flow(name)} green")
+            return
+        retired = red_run_retired(self.o_r, name, decided)
         if retired:  # its check is gone from main: no run can clear it, it gates nothing and no fixer is offered it
-            out.append(f"{name}: RETIRED (run {decided['databaseId']} #{decided.get('number')}, {decided['conclusion']}): "
-                       f"{retired} -- no red")
-            parts.append(f"{short_flow(name)} retired")
-            continue
-        report, why = gate_report_only(o_r, name, decided)
+            self.out.append(f"{name}: RETIRED ({run}, {decided['conclusion']}): {retired} -- no red")
+            self.parts.append(f"{short_flow(name)} retired")
+            return
+        report, why = gate_report_only(self.o_r, name, decided)
         if report:  # red only in checks the registry calls unproven: it reports, it holds no push
-            out.append(f"{name}: RED, REPORT ONLY (run {decided['databaseId']} #{decided.get('number')}, "
-                       f"{decided['conclusion']}): {why} ({GATING_CHECKS_FILE}) -- holds no push")
-            out += fixing(name, decided)[0]
-            parts.append(f"{short_flow(name)} report-only")
-            continue
-        red = True
+            self.out.append(f"{name}: RED, REPORT ONLY ({run}, {decided['conclusion']}): {why} ({GATING_CHECKS_FILE}) "
+                            "-- holds no push")
+            self.out += self.holder_lines(name, decided)
+            self.parts.append(f"{short_flow(name)} report-only")
+            return
+        self._red_row(name, decided, newer, since, count)
+
+    def _red_row(self, name: str, decided: Any, newer: Any, since: Any, count: Any) -> None:
+        self.red = True
+        pending = f"; newer run {newer['databaseId']} (#{newer.get('number')}) {newer.get('status')} may clear it" if newer else ""
         streak = f"; red for {red_for(since)} ({count} failed run{'s' if count != 1 else ''})" if count else ""
-        out.append(f"{name}: RED (run {decided['databaseId']} #{decided.get('number')}, {decided['conclusion']}{streak}){pending}")
-        flines, finfos = fixing(name, decided)
-        out += flines
-        if summary:
-            parts.append(f"{short_flow(name)} #{decided.get('number')} \u2192 {short(finfos)}")
-            continue
-        lines, num = explained.get(name) or explain_run(o_r, decided, tail, repo)
-        out += lines
-        out.append(f"  clears when: a later {name} run on main is green, or every pushed commit touching a production path "
-                   f"carries `Fixes-Red: {num}` (or `Fixes-Red: {decided['databaseId']}`) or names another run of this red episode "
-                   f"failing the same way; tools-only commits land while red")
-        parts.append(f"{short_flow(name)} #{decided.get('number')} \u2192 {short(finfos)}")
-    lus = local_units(lrepo)
-    local = [u for u in units_of.get((LOCAL_FLOW, (lus or [{"run": {}}])[0]["run"].get("databaseId")), [])]
-    if lstale:
-        out.append(f"{LOCAL_FLOW}: stale, rechecking (recorded on {str(local_red().get('main'))[:10]}; "
-                   f"{remote()}/main is {lstale[:10]} now)")
-        parts.append("local \u2192 stale, rechecking")
-    if local:
-        lr = local_red()
-        main = str(lr.get("main"))[:10]
-        out.append(f"{LOCAL_FLOW}: RED on plain {remote()}/main {main} ({', '.join(u['job'] for u in local)}: pre-push fails "
-                   f"there without any change) -- claim: `agentctl red claim local`")
-        flines, finfos = fixing(LOCAL_FLOW, local[0]["run"])
-        out += flines
-        for u in local:
-            out.append(f"  [{u['job']}] {u['line'][:160]}")
-        parts.append(f"local checks \u2192 {short(finfos)}")
-    if flakes_:
-        out.append("Flaky (passed on the next run with no fix; a red until a fix lands and a run proves it):")
-        for it in flakes_:
-            out.append(f"  {red_what(it['data'])}: {str(it['data'].get('line'))[:120]}")
-            out.append(f"    fixing: {red_view(store, it)[0]}")
-    head = f"ci-why {o_r}: " + ("main is RED for the gate" if red else "main is green for the gate")
-    if others_err is not None:
-        out.append(f"outside the gate: could not list main's runs ({others_err})")
-    if others:
-        out.append(f"Outside the gate (red, not blocking a push; oldest first):")
-        for name, r, since, count in others:
-            out.append(f"  {name}: RED for {red_for(since)} since {since} ({count} failed run{'s' if count != 1 else ''}; "
-                       f"newest run {r['databaseId']} #{r.get('number')}) -- `agentctl ci-why {r['databaseId']}`")
-            out += fixing(name, r, "    ")[0]
-    if never:
-        out.append("Untracked (never green on main: no red, no fixer, no alert until its first green run):")
-        for name, r, _since, _count in never:
-            out.append(f"  {name}: newest run {r['databaseId']} #{r.get('number')}: "
-                       f"{untracked[(name, r.get('databaseId'))]}")
-    if proven:
-        out.append("Proven fixed outside the gate (no red; it runs only when called, so its newest run on main stays red):")
-        for name, r, _since, _count in proven:
-            out.append(f"  {name}: newest run {r['databaseId']} #{r.get('number')} -- `agentctl ci-why {r['databaseId']}`")
-            out += fixing(name, r, "    ")[0]
-    blines = branch_lines(bsnap)
-    if blines:
-        out += blines
-        for u in units_of.values():
-            for x in u:
-                if x.get("predicts"):
-                    out += fixing(x["workflow"], x["run"], "    ")[0]
-                    break
-    if summary:
-        line = "gate RED" if red else "gate green"
-        if red:
-            line += " (" + "; ".join(p_ for p_ in parts if not p_.startswith("local")) + ")"
-        reds_, causes = [], {}
-        for name, r, _since, _count in others:
-            st = fixing(name, r)[1]
-            cause = (st or {}).get("cause") if (st or {}).get("state") == "blocked-external" else None
-            if cause and cause not in (DECISION_CAUSE, CRASH_LOOP_CAUSE):  # ONE line per outage, naming the reds it
-                # blocks; a decision or the fixers' crash loop is no outage: its red reads WAITING ON YOU: <question>
+        self.out.append(f"{name}: RED (run {decided['databaseId']} #{decided.get('number')}, {decided['conclusion']}"
+                        f"{streak}){pending}")
+        self.out += self.holder_lines(name, decided)
+        if not self.summary:
+            lines, num = self.explained.get(name) or explain_run(self.o_r, decided, self.tail, self.repo)
+            self.out += lines
+            self.out.append(f"  clears when: a later {name} run on main is green, or every pushed commit touching a "
+                            f"production path carries `Fixes-Red: {num}` (or `Fixes-Red: {decided['databaseId']}`) or "
+                            "names another run of this red episode failing the same way; tools-only commits land while red")
+        self.parts.append(f"{short_flow(name)} #{decided.get('number')} \u2192 {short(self.state_of(name, decided))}")
+
+    def local_rows(self) -> None:
+        """The local checks (pre-push on plain main): stale, or red."""
+        lus = local_units(self.lrepo)
+        local = list(self.units_of.get((LOCAL_FLOW, (lus or [{"run": {}}])[0]["run"].get("databaseId")), []))
+        if self.lstale:
+            self.out.append(f"{LOCAL_FLOW}: stale, rechecking (recorded on {str(local_red().get('main'))[:10]}; "
+                            f"{remote()}/main is {self.lstale[:10]} now)")
+            self.parts.append("local \u2192 stale, rechecking")
+        if not local:
+            return
+        main = str(local_red().get("main"))[:10]
+        self.out.append(f"{LOCAL_FLOW}: RED on plain {remote()}/main {main} ({', '.join(u['job'] for u in local)}: "
+                        "pre-push fails there without any change) -- claim: `agentctl red claim local`")
+        self.out += self.holder_lines(LOCAL_FLOW, local[0]["run"])
+        self.out += [f"  [{u['job']}] {u['line'][:160]}" for u in local]
+        self.parts.append(f"local checks \u2192 {short(self.state_of(LOCAL_FLOW, local[0]['run']))}")
+
+    def flake_rows(self) -> None:
+        if not self.flakes:
+            return
+        self.out.append("Flaky (passed on the next run with no fix; a red until a fix lands and a run proves it):")
+        for it in self.flakes:
+            self.out.append(f"  {red_what(it['data'])}: {str(it['data'].get('line'))[:120]}")
+            self.out.append(f"    fixing: {red_view(self.store, it)[0]}")
+
+    def outside_rows(self) -> None:
+        """The reds outside the gate, the never-green runs and the ones proven fixed."""
+        if self.others_err is not None:
+            self.out.append(f"outside the gate: could not list main's runs ({self.others_err})")
+        if self.others:
+            self.out.append("Outside the gate (red, not blocking a push; oldest first):")
+        for name, r, since, count in self.others:
+            self.out.append(f"  {name}: RED for {red_for(since)} since {since} ({count} failed run"
+                            f"{'s' if count != 1 else ''}; newest run {r['databaseId']} #{r.get('number')}) -- "
+                            f"`agentctl ci-why {r['databaseId']}`")
+            self.out += self.holder_lines(name, r, "    ")
+        if self.never:
+            self.out.append("Untracked (never green on main: no red, no fixer, no alert until its first green run):")
+        for name, r, _since, _count in self.never:
+            self.out.append(f"  {name}: newest run {r['databaseId']} #{r.get('number')}: "
+                            f"{self.untracked[(name, r.get('databaseId'))]}")
+        if self.proven:
+            self.out.append("Proven fixed outside the gate (no red; it runs only when called, so its newest run on main "
+                            "stays red):")
+        for name, r, _since, _count in self.proven:
+            self.out.append(f"  {name}: newest run {r['databaseId']} #{r.get('number')} -- `agentctl ci-why {r['databaseId']}`")
+            self.out += self.holder_lines(name, r, "    ")
+
+    def branch_rows(self) -> None:
+        """The branch reds (from the snapshot), each run's predicting unit with who holds it."""
+        blines = branch_lines(self.bsnap)
+        if not blines:
+            return
+        self.out += blines
+        for units in self.units_of.values():
+            x = next((x for x in units if x.get("predicts")), None)
+            if x:
+                self.out += self.holder_lines(x["workflow"], x["run"], "    ")
+
+    def summary_line(self) -> str:
+        local = [p_ for p_ in self.parts if p_.startswith("local")]
+        head = "gate RED (" + "; ".join(p_ for p_ in self.parts if p_ not in local) + ")" if self.red else "gate green"
+        return head + self._summary_tail(capped(self._outside_summary() + local), branch_summary(self.bsnap))
+
+    def _summary_tail(self, reds: list[str], bsum: str) -> str:
+        quiet = not reds and not bsum and not self.red and self.others_err is None
+        return ((" \u00b7 reds: " + "; ".join(reds) if reds else "") + (" \u00b7 no reds" if quiet else "")
+                + (" \u00b7 " + bsum if bsum else ""))
+
+    def _outside_summary(self) -> list[str]:
+        """The reds outside the gate, ONE line per outage naming the reds it blocks."""
+        reds: list[str] = []
+        causes: dict[str, tuple[Any, list[str], tuple[Any, Any]]] = {}
+        for name, r, _since, _count in self.others:
+            st = self.state_of(name, r)
+            cause = outage_cause(st)
+            if cause:
                 causes.setdefault(cause, (st.get("until"), [], (st.get("ask"), st.get("ask_how"))))[1].append(name)
                 continue
-            reds_.append(f"{name} #{r.get('number')} \u2192 {short(st)}")
-        reds_ = [f"{c} down \u2192 blocks: {', '.join(ns)}" + (f" (auto-clears when {u_})" if u_ else "")
-                 + (f" -- WAITING ON YOU: {trim_words(q_[0])} -- {q_[1]}" if q_ and q_[0] else "") for c, (u_, ns, q_) in causes.items()] + reds_
-        reds_ += [p_ for p_ in parts if p_.startswith("local")]
-        if len(reds_) > SUMMARY_MAX_REDS:
-            reds_ = reds_[:SUMMARY_MAX_REDS] + [f"+{len(reds_) - SUMMARY_MAX_REDS} more"]
-        if reds_:
-            line += " \u00b7 reds: " + "; ".join(reds_)
-        bsum = branch_summary(bsnap)
-        if not reds_ and not bsum and not red and others_err is None:
-            line += " \u00b7 no reds"
-        if bsum:
-            line += " \u00b7 " + bsum
-        return red, line
-    return red, "\n".join([head] + out)
+            reds.append(f"{name} #{r.get('number')} \u2192 {short(st)}")
+        return [outage_line(c, u_, ns, q_) for c, (u_, ns, q_) in causes.items()] + reds
 
 
-def ci_state_refresh(o_r, write=True):
+def ci_state_refresh(o_r: str, write: bool = True) -> dict[str, Any]:
     """Read the gate and every other workflow on main once, write the snapshot (unless write=False: ci_state_write
     later), return it. Raises when the gate cannot be read (nothing is written: the old snapshot ages out)."""
     gate = gate_runs(o_r)
@@ -220,27 +309,42 @@ def ci_state_refresh(o_r, write=True):
             "gate": [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
                       "runs": _gate_lists.get(n, []), "no_verdict": _gate_no_verdict.get(n)} for n, d, nw, st in gate]}
     if gated_repo(o_r):
-        try:
-            snap["outside"] = [{"name": n, "decided": r, "since": since, "count": count,
-                                "runs": _outside_lists.get(n, [])} for n, r, since, count in outside_gate(o_r)]
-        except Exception as e:
-            snap["outside_error"] = str(e)[:200]
+        snap.update(outside_snap(o_r))
         snap["callable_only"] = sorted(main_callable_flows(o_r))  # their reds wait for red_callable_evidence
-    try:  # the branch runs: measure/*, check/*, red fixers' and every recorded dispatch's (after the main lists)
-        prev = (state_read().get("ci") or {}).get("branches") or []
-        snap["branches"] = branch_state(o_r, scan_repo_for(o_r), prev)
-    except (Exception, SystemExit) as e:
-        snap["branches_error"] = str(e)[:200]
-    latest = {}  # each workflow's newest decided run on main: what workflow_green probes read
-    for name, runs in list(_outside_lists.items()) + list(_gate_lists.items()):
-        d = next((r for r in runs if r.get("status") == "completed" and not is_cancelled(r)
-                  and not (name in NO_VERDICT_FLOWS and run_no_verdict(o_r, r))), None)
-        if d:
-            latest[name] = {k: d.get(k) for k in ("number", "databaseId", "conclusion", "headSha", "updatedAt")}
-    snap["latest"] = latest
+    snap.update(branches_snap(o_r))
+    snap["latest"] = latest_decided(o_r)
     snap["stuck"] = stuck_runs({**_outside_lists, **_gate_lists}, o_r=o_r)  # audit #8: undecided far past their workflow's p90
     if write:
         ci_state_write(snap)
     return snap
 
 
+def outside_snap(o_r: str) -> dict[str, Any]:
+    try:
+        return {"outside": [{"name": n, "decided": r, "since": since, "count": count, "runs": _outside_lists.get(n, [])}
+                            for n, r, since, count in outside_gate(o_r)]}
+    except Exception as e:
+        return {"outside_error": str(e)[:200]}
+
+
+def branches_snap(o_r: str) -> dict[str, Any]:
+    """The branch runs: measure/*, check/*, red fixers' and every recorded dispatch's (after the main lists)."""
+    try:
+        prev = (state_read().get("ci") or {}).get("branches") or []
+        return {"branches": branch_state(o_r, scan_repo_for(o_r), prev)}
+    except (Exception, SystemExit) as e:
+        return {"branches_error": str(e)[:200]}
+
+
+def latest_decided(o_r: str) -> dict[str, Any]:
+    """Each workflow's newest decided run on main: what workflow_green probes read."""
+    latest = {}
+    for name, runs in list(_outside_lists.items()) + list(_gate_lists.items()):
+        d = next((r for r in runs if decided_on_main(o_r, name, r)), None)
+        if d:
+            latest[name] = {k: d.get(k) for k in ("number", "databaseId", "conclusion", "headSha", "updatedAt")}
+    return latest
+
+
+def decided_on_main(o_r: str, name: str, r: dict[str, Any]) -> bool:
+    return r.get("status") == "completed" and not is_cancelled(r) and not (name in NO_VERDICT_FLOWS and run_no_verdict(o_r, r))
