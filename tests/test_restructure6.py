@@ -158,6 +158,125 @@ class CleanupTest(unittest.TestCase):
         check(self, "sweep_repo", build, call, 4000)
 
 
+class JvmReapTest(unittest.TestCase):
+    def test_sbt_stuck_reasons(self):
+        def build(case):
+            r = case.rng
+            case.fake("pid_alive", lambda rng, pid: rng.random() < 0.5)
+            case.fake("env_num", lambda rng, name, default: rng.choice([default, 1, 5, 30]))
+            now = r.choice([0, 600, 5000, 90000])
+            state = {}
+            for pid in ("7", "8"):
+                if r.random() < 0.7:
+                    state[pid] = {k: v for k, v in (("cpu", r.choice([0.0, 5.0, 100.0, 400.0])), ("at", now - r.choice([-60, 0, 30, 300, 1200, 5000])),
+                                                    ("since", now - r.choice([0, 60, 900, 1800, 7200]))) if k == "since" or r.random() < 0.9}
+            serving = {"/wt": r.choice([(5, 6, "sbt compile"), (5, None, "cmd"), (5, 6, "x" * 90)])} if r.random() < 0.4 else {}
+            clients = {"/wt": [42, 43]} if r.random() < 0.5 else {}
+            kwargs = {"ppid": r.choice([None, 1, 1, 9]), "kept": r.choice([(), ("/wt",), {"/z"}]), "swap_free_mb": r.choice([None, 100, 9000])}
+            args = (r.choice([7, 8, 9]), r.choice(["/wt", "/other"]), r.choice([0.0, 100.0, 100.3, 401.0, 50.0]), clients, serving, state, now)
+
+            return args + (kwargs["ppid"], kwargs["kept"], kwargs["swap_free_mb"])
+
+        def call(A):
+            def run(*args):
+                state = args[5]
+                before = {k: dict(v) for k, v in state.items()}
+                out = A.sbt_stuck_reasons(*args)
+                return out, state, before
+            return run
+        check(self, "sbt_stuck_reasons", build, call, 5000)
+
+    def test_jvm_candidates(self):
+        def build(case):
+            r = case.rng
+            case.fake("jvm_knob", lambda rng, name, default: rng.choice([default, default, "1", "30", "0"]) if name in ("HOG_MIN_AGE_SECONDS", "HOG_MIN_CPU_PERCENT", "ORPHAN_MIN_AGE_SECONDS", "HOG_REQUIRE_NO_TTY", "PROTECTED_PORT_MAX_CPU_PERCENT") else default)
+            argss = ["java -jar sbt-launch.jar --detach-stdio", "java sbt.ForkMain 1", "java -cp x sbt.internal.worker.WorkerMain", "java Foo", "/usr/bin/java IntelliJ x",
+                     "sbt-launch.jar --detach-stdio -Dx", "bash java", "java org.scala.sbt.ForkMain", "python x"]
+            rows = [(r.choice([1, 2, 3, 4, 5, 6, 7, 8, 9]), r.choice([1, 1, 50]), r.choice(["??", "ttys001", "-"]), r.choice(["02:00", "11:00", "01:30:00", "2-03:00:00", "x"]),
+                     r.choice(["00:10", "01:00:00", "00:00", "00:01:30", "1-00:00:00"]), r.choice(argss)) for _ in range(r.randint(0, 7))]
+            cwd = {p: r.choice(["/a", "/b", "/a.part", "/g"]) for p in range(1, 10) if r.random() < 0.7}
+            kept = {d for d in ("/a", "/b") if r.random() < 0.3}
+            ports = {p for p in range(1, 10) if r.random() < 0.15}
+            isdir = lambda d: d in r.choice([("/a", "/b"), ("/a",), ("/b", "/a.part"), ()])  # noqa: E731
+            return (rows, cwd, kept, ports, r.choice([0, 5]), isdir)
+        check(self, "jvm_candidates", build, lambda A: A.jvm_candidates, 6000)
+
+    def test_jvm_scan(self):
+        def build(case):
+            r = case.rng
+            files = {}
+            env = {}
+
+            def make(name, lines):
+                path = f"/f/{name}"
+                files[path] = "\n".join(lines)
+                env[name] = path
+            if r.random() < 0.5:
+                make("AGENTCTL_JVM_PS", [r.choice(["10 1 ?? 01:00 00:10 java -jar sbt-launch.jar --detach-stdio", "11 10 ttys0 00:20 00:01 sbt-warm --keep x", "x y z", "12 1 ?? 1 2 bash",
+                                                   "13 1 ?? 02:00 00:30 /usr/bin/java Foo"]) for _ in range(r.randint(0, 5))])
+            if r.random() < 0.4:
+                make("AGENTCTL_JVM_CWD", [r.choice(["10 /a", "13 /b", "x /c", "11 /not-allowed", "10"]) for _ in range(r.randint(0, 3))])
+            if r.random() < 0.4:
+                make("AGENTCTL_JVM_KEPT", [r.choice(["/a", " /b ", "", "/not-allowed"]) for _ in range(r.randint(0, 3))])
+            case.put("os", types.SimpleNamespace(environ=env, path=os.path, getpgid=os.getpgid, makedirs=os.makedirs, kill=os.kill, getpid=os.getpid))
+            case.fake("run_cmd", lambda rng, cmd, **kw: types.SimpleNamespace(stdout=rng.choice(["10 1 ?? 01:00 00:10 java -jar x\n11 2 ?? 1 2 java y\nbad\n", "", "5\n6\nx\n"]), returncode=0))
+            case.fake("lsof_cwds", lambda rng, pids: {p: rng.choice(["/a", "/b", "/zz"]) for p in pids if rng.random() < 0.7})
+            case.fake("allowed_path", lambda rng, p: p != "/not-allowed")
+            case.fake("jvm_knob", lambda rng, name, default: rng.choice([default, "9000 9001", ""]))
+            return (files,)
+
+        def call(A):
+            import io
+            from unittest import mock
+
+            def run(files):
+                with mock.patch("builtins.open", lambda path, *a, **k: io.StringIO(files[path]) if path in files else open_real(path, *a, **k)):
+                    rows, cwd, kept, ports = A.jvm_scan()
+                return rows, cwd, kept, ports
+            open_real = open
+            return run
+        check(self, "jvm_scan", build, call, 4000)
+
+    def test_jvm_reap(self):
+        def build(case):
+            r = case.rng
+            alive = {}
+            sig = []
+            case.fake("jvm_knob", lambda rng, name, default: rng.choice([default, "0.6", "5"]))
+            case.fake("pid_alive", lambda rng, pid: alive.setdefault((pid, len(sig)), rng.random() < 0.6) if rng.random() < 0.3 else rng.random() < 0.6)
+            case.fake("run_cmd", lambda rng, cmd, **kw: types.SimpleNamespace(stdout=rng.choice(["1.0\n", "50\n", "x\n", ""]), returncode=0))
+            case.fake("agent_work", lambda rng, pid, procs: maybe(rng, f"pid 3 ({'c' * 70})", 0.3))
+            case.fake("thread_dump", lambda rng, pid, cwd: f"/dump/{pid}")
+            case.fake("reap_log", lambda rng, line: None)
+
+            def getpgid(pid):
+                v = r.choice([0, 1, 2, "gone"])
+                if v == "gone":
+                    raise OSError("no")
+                return v
+
+            def kill(pid, s):
+                sig.append((pid, s))
+                if r.random() < 0.15:
+                    raise ProcessLookupError()
+            case.put("os", types.SimpleNamespace(getpgid=lambda pid: 0 if pid == 0 else getpgid(pid), kill=kill, path=os.path))
+            case.put("time", types.SimpleNamespace(sleep=lambda s: None, time=lambda: 1.0))
+            cands = [(r.choice([5, 6, 7, 8]), 1, r.choice([4000, 90000]), 10.0, r.choice([1.0, 55.5]), r.choice(["orphan", "hog", "dup-sbt-server", "dup-sbt-gone-dir"]),
+                      r.choice(["java sbt-launch.jar", "java -Duser.country=PL -Duser.language=pl x " + "y" * 200, "java xsbt.boot", "java Foo"])) for _ in range(r.randint(0, 4))]
+            return (cands, r.choice([True, True, False]), [(1, 0, "e", "c")])
+
+        def call(A):
+            import contextlib, io
+
+            def run(*args):
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    out = A.jvm_reap(*args)
+                return out, buf.getvalue()
+            return run
+        check(self, "jvm_reap", build, call, 5000)
+
+
 def raising(rng, p, value=None):
     if rng.random() < p:
         raise RuntimeError("boom")

@@ -55,7 +55,7 @@ mypy-errors	identitychange	11
 mypy-errors	inbox	17
 mypy-errors	invariants	33
 mypy-errors	issues	6
-mypy-errors	jvmreap	42
+mypy-errors	jvmreap	8
 mypy-errors	land	22
 mypy-errors	landdryrun	46
 mypy-errors	lander	33
@@ -68,7 +68,7 @@ mypy-errors	leases	1
 mypy-errors	live	36
 mypy-errors	livestream	42
 mypy-errors	localrecheck	32
-mypy-errors	maint	34
+mypy-errors	maint	26
 mypy-errors	maintain	9
 mypy-errors	netwatch	20
 mypy-errors	notifier	26

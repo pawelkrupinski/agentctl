@@ -49,9 +49,6 @@ cognitive	gov_fits	20
 cognitive	gov_replay	27
 cognitive	hold_for_overlap	21
 cognitive	job_ever_green	21
-cognitive	jvm_candidates	36
-cognitive	jvm_reap	37
-cognitive	jvm_scan	24
 cognitive	land_calls	19
 cognitive	land_status_entry	25
 cognitive	land_until_done	28
@@ -103,7 +100,6 @@ cognitive	refresh_pinned_recording	16
 cognitive	regen_hold_overdue	22
 cognitive	run_local_recheck	14
 cognitive	run_verdict	20
-cognitive	sbt_stuck_reasons	24
 cognitive	session_worktrees	25
 cognitive	set_change	16
 cognitive	spotlight_exclude	19
@@ -179,9 +175,6 @@ cyclomatic	gov_replay	39
 cyclomatic	hold_for_overlap	14
 cyclomatic	job_ever_green	20
 cyclomatic	jobs_verdict	23
-cyclomatic	jvm_candidates	35
-cyclomatic	jvm_reap	21
-cyclomatic	jvm_scan	25
 cyclomatic	land_calls	12
 cyclomatic	land_status_entry	25
 cyclomatic	land_until_done	25
@@ -234,7 +227,6 @@ cyclomatic	refresh_pinned_recording	18
 cyclomatic	regen_hold_overdue	21
 cyclomatic	run_local_recheck	18
 cyclomatic	run_verdict	26
-cyclomatic	sbt_stuck_reasons	17
 cyclomatic	session_worktrees	18
 cyclomatic	set_change	18
 cyclomatic	spotlight_exclude	15
@@ -256,7 +248,6 @@ cyclomatic	workflow_triggers	12
 cyclomatic	write_snapshot	23
 inner-defs	sync_steps	7
 method-lines	dry_run	53
-method-lines	jvm_reap	57
 method-lines	live_stream	51
 method-lines	red_dispatch	59
 method-lines	sync_onto_main	61
