@@ -84,30 +84,34 @@ def owner_cmd_target_unscoped(arg):
     return None
 
 
-def owner_cmd_unsafe(cmd):
-    """Why the owner must not be handed this command as it stands (it deletes unscoped or unguarded), or None."""
-    flat = str(cmd or "").replace("'", " ").replace('"', " ")
-    segments = [s.split() for s in OWNER_CMD_SPLIT.split(flat)]
-    deleting, guarded = [], False
-    for words in segments:
-        verbs = [w for w in words if w not in ("sudo", "exec", "command", "nice", "ionice") and not w.startswith("-")]
-        if not verbs:
-            continue
-        head = verbs[0]
-        guarded = guarded or bool(OWNER_CMD_GUARDS & {words[0], head})
-        if head in ("docker", "podman") and "prune" in words or head == "find" and "-delete" in words or \
-                head == "kubectl" and "delete" in words and ("--all" in words or "-A" in words) or \
-                re.search(r"\bdrop(Database|Collection)\b|\b(DROP|TRUNCATE)\s+(TABLE|DATABASE)\b", " ".join(words)):
-            return (f"unscoped: `{' '.join(words)[:80]}` deletes whatever it matches, not named paths -- hand the owner "
-                    "a command naming each thing it removes")
-        if OWNER_CMD_DELETES.match(head) or head == "git" and ("clean" in words or "--hard" in words) or \
-                head in ("docker", "podman", "kubectl") and ({"rm", "rmi", "delete"} & set(words)):
-            targets = verbs[1:] if OWNER_CMD_DELETES.match(head) else []
-            for arg in targets:
-                why = owner_cmd_target_unscoped(arg)
-                if why:
-                    return f"unscoped: {why}"
-            deleting.append((targets, guarded))
+OWNER_CMD_WRAPPERS = ("sudo", "exec", "command", "nice", "ionice")
+OWNER_CMD_BLIND = re.compile(r"\bdrop(Database|Collection)\b|\b(DROP|TRUNCATE)\s+(TABLE|DATABASE)\b")
+
+
+def _blind_deletion(head: str, words: list[str]) -> str | None:
+    """Why one command deletes whatever it matches instead of named paths (a prune, find -delete, kubectl delete --all, a
+    DROP), or None."""
+    prunes = head in ("docker", "podman") and "prune" in words
+    finds = head == "find" and "-delete" in words
+    sweeps = head == "kubectl" and "delete" in words and ("--all" in words or "-A" in words)
+    if prunes or finds or sweeps or OWNER_CMD_BLIND.search(" ".join(words)):
+        return (f"unscoped: `{' '.join(words)[:80]}` deletes whatever it matches, not named paths -- hand the owner "
+                "a command naming each thing it removes")
+    return None
+
+
+def _deletion_targets(head: str, words: list[str], verbs: list[str]) -> list[str] | None:
+    """The paths one command deletes by name ([] when it deletes without naming a path), None when it deletes nothing."""
+    if OWNER_CMD_DELETES.match(head):
+        return verbs[1:]
+    resets = head == "git" and ("clean" in words or "--hard" in words)
+    removes = head in ("docker", "podman", "kubectl") and bool({"rm", "rmi", "delete"} & set(words))
+    return [] if resets or removes else None
+
+
+def _unsafe_deletions(deleting: list[tuple[list[str], bool]], flat: str) -> str | None:
+    """Why the deletions found (their targets, and whether a check came before) are not safe to hand the owner, or None:
+    one inside a CI runner's workspace skips no busy slot, or one runs with no check before it."""
     for targets, was_guarded in deleting:
         if any(OWNER_CMD_RUNNER_WS.search(t) for t in targets) and "Runner.Worker" not in flat:
             return ("it deletes inside a CI runner's workspace without skipping a busy slot: check each slot's "
@@ -117,6 +121,37 @@ def owner_cmd_unsafe(cmd):
             return ("unguarded: it deletes with no check before it (if / test / [ / pgrep): the owner runs it whenever "
                     "he gets to it, so it must check what it removes is still unused then")
     return None
+
+
+def _segment_deletion(head: str, words: list[str], verbs: list[str]) -> tuple[str | None, list[str] | None]:
+    """(why one command is unsafe or None, the paths it deletes by name -- None when it deletes nothing)."""
+    blind = _blind_deletion(head, words)
+    if blind:
+        return blind, None
+    targets = _deletion_targets(head, words, verbs)
+    if targets is None:
+        return None, None
+    unscoped = next(filter(None, map(owner_cmd_target_unscoped, targets)), None)
+    return (f"unscoped: {unscoped}" if unscoped else None), targets
+
+
+def owner_cmd_unsafe(cmd: Any) -> str | None:
+    """Why the owner must not be handed this command as it stands (it deletes unscoped or unguarded), or None."""
+    flat = str(cmd or "").replace("'", " ").replace('"', " ")
+    deleting: list[tuple[list[str], bool]] = []
+    guarded = False
+    for words in [s.split() for s in OWNER_CMD_SPLIT.split(flat)]:
+        verbs = [w for w in words if w not in OWNER_CMD_WRAPPERS and not w.startswith("-")]
+        if not verbs:
+            continue
+        head = verbs[0]
+        guarded = guarded or bool(OWNER_CMD_GUARDS & {words[0], head})
+        why, targets = _segment_deletion(head, words, verbs)
+        if why:
+            return why
+        if targets is not None:
+            deleting.append((targets, guarded))
+    return _unsafe_deletions(deleting, flat)
 
 
 def tried_summary(its: list[Any]) -> str:
@@ -157,79 +192,144 @@ BLOCK_PROBE_EVERY = 60
 WAIT_CAUSES = {"quota": "an outside service's quota for the run's key, spent; it resets on its own"}
 
 
-def block_invalid(store, it, m, t):
-    """Why this block no longer justifies holding red `it`, or None (checked at the block AND every tick)."""
-    d = it["data"]
-    if m.get("vault"):  # it waits on a vault (red_vault_block): the owner's `decide vault-<ns>`, any red kind
-        row = store.get(red_lease(d["key"]))
-        return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
-    if m.get("crash_loop") or m.get("decision"):  # the fixers crash-looped on it (red_crash_loop), or it waits on the
-        # owner's decision (red_decision_block): the harness, or the owner's call, never the code, holds it
-        if m.get("decision") and ask_refusal(ask_category(m), m.get("decide") or m.get("question")):
-            return "its question names no owner-only category (ask.py OWNER_ONLY): its fixers proceed"
-        if m.get("crash_loop") and not m.get("harness"):  # an owner block of a crash loop from before 2026-11-19
-            return "a fixer crash loop is a harness fault, agentctl's own, never the owner's"
-        iss = store.item("issue", m["issue"]) if m.get("issue") else None
-        if iss and iss["state"] == "closed":  # A HARNESS FAULT FIXED: its maintainer closed the issue (redcrash.py)
-            return f"its harness issue {m['issue']} is closed ({str((iss.get('data') or {}).get('note') or '')[:120]})"
-        row = store.get(red_lease(d["key"]))
-        return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
-    if m.get("wait_cause") in WAIT_CAUSES:  # an external wait (a spent quota): no owner cause, no owner command
-        if d.get("kind") == "test":
-            return "its red is a TEST FAILURE: a code red is a fixer's"
-        row = store.get(red_lease(d["key"]))
-        return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
-    if QUOTA_LOG.search(str(d.get("line") or "")) or QUOTA_LOG.search(str(m.get("details") or m.get("text") or "")):
-        return "a spent quota resets on its own: an external wait, never the owner's"
+def _live_fixer(store: Any, d: dict[str, Any], t: float) -> str | None:
+    """Why a red's block is not justified for a fixer works on it (its red lease is live), or None."""
+    row = store.get(red_lease(d["key"]))
+    return f"a live fixer is on it: {row['holder']}" if lease_is_live(row, t) else None
+
+
+def _harness_refusal(m: dict[str, Any]) -> str | None:
+    """Why a decision block or a crash-loop block of the harness is not justified (its question is no owner-only one; a
+    crash loop is the harness's own fault), or None."""
+    if m.get("decision") and ask_refusal(ask_category(m), m.get("decide") or m.get("question")):
+        return "its question names no owner-only category (ask.py OWNER_ONLY): its fixers proceed"
+    if m.get("crash_loop") and not m.get("harness"):  # an owner block of a crash loop from before 2026-11-19
+        return "a fixer crash loop is a harness fault, agentctl's own, never the owner's"
+    return None
+
+
+def _harness_block_invalid(store: Any, d: dict[str, Any], m: dict[str, Any], t: float) -> str | None:
+    """block_invalid of a block the fixers' crash loop (red_crash_loop) or the owner's decision (red_decision_block) holds:
+    the harness, or the owner's call, never the code, holds it."""
+    refused = _harness_refusal(m)
+    if refused:
+        return refused
+    iss = store.item("issue", m["issue"]) if m.get("issue") else None
+    if iss and iss["state"] == "closed":  # A HARNESS FAULT FIXED: its maintainer closed the issue (redcrash.py)
+        return f"its harness issue {m['issue']} is closed ({str((iss.get('data') or {}).get('note') or '')[:120]})"
+    return _live_fixer(store, d, t)
+
+
+def _wait_block_invalid(store: Any, d: dict[str, Any], t: float) -> str | None:
+    """block_invalid of an external wait (a spent quota): no owner cause, no owner command."""
+    if d.get("kind") == "test":
+        return "its red is a TEST FAILURE: a code red is a fixer's"
+    return _live_fixer(store, d, t)
+
+
+def _owner_cause_invalid(m: dict[str, Any]) -> str | None:
+    """Why a block's owner cause and command do not justify handing the owner the red (no cause of his, no command, an
+    unsafe one), or None."""
     if m.get("owner_cause") not in OWNER_CAUSES:
         return f"no owner cause (one of {', '.join(OWNER_CAUSES)}): only the owner's causes may block on the owner"
     if not str(m.get("cmd") or "").strip():
         return "no owner command"
     unsafe = owner_cmd_unsafe(m.get("cmd"))
-    if unsafe:
-        return f"its owner command is unsafe: {unsafe}"
+    return f"its owner command is unsafe: {unsafe}" if unsafe else None
+
+
+def _owner_block_invalid(store: Any, d: dict[str, Any], m: dict[str, Any], t: float) -> str | None:
+    """block_invalid of a block on the owner: his cause, his exact and safe command, never a spent quota or a test failure."""
+    if QUOTA_LOG.search(str(d.get("line") or "")) or QUOTA_LOG.search(str(m.get("details") or m.get("text") or "")):
+        return "a spent quota resets on its own: an external wait, never the owner's"
+    unjustified = _owner_cause_invalid(m)
+    if unjustified:
+        return unjustified
     if d.get("kind") == "test":
         return "its red is a TEST FAILURE: a code red is never the owner's"
-    row = store.get(red_lease(d["key"]))
-    if lease_is_live(row, t):
-        return f"a live fixer is on it: {row['holder']}"
-    return None
+    return _live_fixer(store, d, t)
 
 
-def red_renew_blocks(store, t):
+def block_invalid(store: Any, it: dict[str, Any], m: dict[str, Any], t: float) -> str | None:
+    """Why this block no longer justifies holding red `it`, or None (checked at the block AND every tick)."""
+    d = it["data"]
+    if m.get("vault"):  # it waits on a vault (red_vault_block): the owner's `decide vault-<ns>`, any red kind
+        return _live_fixer(store, d, t)
+    if m.get("crash_loop") or m.get("decision"):
+        return _harness_block_invalid(store, d, m, t)
+    if m.get("wait_cause") in WAIT_CAUSES:
+        return _wait_block_invalid(store, d, t)
+    return _owner_block_invalid(store, d, m, t)
+
+
+class BlockRenewal:
+    """The tick's look at every live block, a method per step: which of its reds are still justified (justified), the
+    renewal that follows (tend) and its probe (probe). `out` collects the lines the tick reports."""
+
+    def __init__(self, store: Any, t: float) -> None:
+        self.store, self.t, self.out = store, t, []
+        self.active = {it["data"]["key"]: it for it in red_active(store).values()}
+
+    def run(self) -> list[str]:
+        for row in self.store.list("block/"):
+            if lease_is_live(row, self.t):
+                self.tend(row, lease_meta(row))
+        return self.out
+
+    def _meta(self, row: dict[str, Any], fields: dict[str, Any]) -> None:
+        self.store.set_meta(row["name"], row["epoch"], row["secret"], fields)
+
+    def _renew(self, row: dict[str, Any], note: str) -> None:
+        self.store.renew(row["name"], row["epoch"], row["secret"], note, BLOCK_TTL)
+
+    def judge(self, m: dict[str, Any]) -> tuple[list[str], list[tuple[str, str]]]:
+        """(the block's reds that are still open, those of them block_invalid no longer justifies, each with why)."""
+        keys = [k for k in m.get("keys") or [] if k in self.active]
+        judged = [(k, block_invalid(self.store, self.active[k], m, self.t)) for k in keys]
+        return keys, [(k, why) for k, why in judged if why]
+
+    def justified(self, row: dict[str, Any], m: dict[str, Any]) -> list[str] | None:
+        """The reds of the block that stay held (the ones that lost their justification are detached, each reported), or
+        None once none is left: the block lapses now, revoked with the reason."""
+        keys, dropped = self.judge(m)
+        for k, why in dropped:
+            self.out.append(f"dropped the owner block of {red_what(self.active[k]['data'])}: {why}")
+        keep = [k for k in keys if k not in {k_ for k_, _w in dropped}]
+        if keep:
+            return keep
+        why = dropped[0][1] if dropped else "it holds no open red"
+        self.store.revoke(row["name"], f"INVALID: {why}")
+        self.out.append(f"block {row['name']} lapsed: {why}")
+        return None
+
+    def tend(self, row: dict[str, Any], m: dict[str, Any]) -> None:
+        """One live block: its justified reds kept, then renewed on the spot (its probe ran lately) or probed."""
+        keep = self.justified(row, m)
+        if keep is None:
+            return
+        if keep != m.get("keys"):
+            self._meta(row, {"keys": keep})
+        if self.t - float(m.get("probed_at") or 0) < BLOCK_PROBE_EVERY:
+            self._renew(row, f"held@{int(self.t // BLOCK_PROBE_EVERY)}")
+            return
+        self.probe(row, m)
+
+    def probe(self, row: dict[str, Any], m: dict[str, Any]) -> None:
+        """Run the block's probe: passing, the block lapses (RECOVERED); failing, it is renewed on the probe's result."""
+        pr = m.get("probe") or {}
+        r = run_probe(pr.get("kind"), pr.get("args")) if pr.get("kind") in PROBES else None
+        self._meta(row, {"probed_at": self.t, "last": r.detail if r else "no probe"})
+        if r is not None and r.ok:
+            self.store.revoke(row["name"], f"PROBE PASSED: {r.detail}")
+            self.out.append(f"RECOVERED: {m.get('until')} ({r.detail}): the block {row['name']} lapsed")
+            line = f"RECOVERED: {m.get('until')} ({r.detail}): {m.get('text', '')[:200]}"
+            inbox_write("recover", line, [line], [], 0)
+            return
+        self._renew(row, f"{r.detail if r else 'cannot tell'}@{int(self.t)}")
+
+
+def red_renew_blocks(store: Any, t: float) -> list[str]:
     """The tick's look at every live block: its probe (at most every BLOCK_PROBE_EVERY s) and its justification per red.
     Still failing and still justified: renewed (the probe's fresh failing result is its progress). Otherwise it lapses
     now (revoked, the reason in its outcome) or a red that lost its justification is detached from it."""
-    out = []
-    active = {it["data"]["key"]: it for it in red_active(store).values()}
-    for row in store.list("block/"):
-        if not lease_is_live(row, t):
-            continue
-        m = lease_meta(row)
-        keys = [k for k in m.get("keys") or [] if k in active]
-        dropped = [(k, block_invalid(store, active[k], m, t)) for k in keys]
-        dropped = [(k, why) for k, why in dropped if why]
-        keep = [k for k in keys if k not in {k_ for k_, _w in dropped}]
-        for k, why in dropped:
-            out.append(f"dropped the owner block of {red_what(active[k]['data'])}: {why}")
-        if not keep:
-            why = dropped[0][1] if dropped else "it holds no open red"
-            store.revoke(row["name"], f"INVALID: {why}")
-            out.append(f"block {row['name']} lapsed: {why}")
-            continue
-        if keep != m.get("keys"):
-            store.set_meta(row["name"], row["epoch"], row["secret"], {"keys": keep})
-        if t - float(m.get("probed_at") or 0) < BLOCK_PROBE_EVERY:
-            store.renew(row["name"], row["epoch"], row["secret"], f"held@{int(t // BLOCK_PROBE_EVERY)}", BLOCK_TTL)
-            continue
-        pr = m.get("probe") or {}
-        r = run_probe(pr.get("kind"), pr.get("args")) if pr.get("kind") in PROBES else None
-        store.set_meta(row["name"], row["epoch"], row["secret"], {"probed_at": t, "last": r.detail if r else "no probe"})
-        if r is not None and r.ok:
-            store.revoke(row["name"], f"PROBE PASSED: {r.detail}")
-            out.append(f"RECOVERED: {m.get('until')} ({r.detail}): the block {row['name']} lapsed")
-            line = f"RECOVERED: {m.get('until')} ({r.detail}): {m.get('text', '')[:200]}"
-            inbox_write("recover", line, [line], [], 0)
-            continue
-        store.renew(row["name"], row["epoch"], row["secret"], f"{r.detail if r else 'cannot tell'}@{int(t)}", BLOCK_TTL)
-    return out
+    return BlockRenewal(store, t).run()
