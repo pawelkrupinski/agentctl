@@ -4,7 +4,7 @@
 import os
 import re
 import time
-from agentctl.core import env_num, git, git_ok
+from agentctl.core import attempt, env_num, git, git_ok
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.allowedpaths import allowed_path
 from agentctl.procs import lsof_cwds, proc_alive, ps
@@ -101,10 +101,7 @@ def red_authors(repo, u, now_=None):
         a = by_wt.setdefault(os.path.realpath(h["worktree"]), {"worktree": h["worktree"], "shas": [], "pids": set(),
                                                                "session": h.get("session")})
         a["shas"].append(c)
-    try:
-        entries = inbox_entries()
-    except OSError:
-        entries = []
+    entries = attempt(inbox_entries, [], catch=(OSError,))
     running = agent_pids_in(list(by_wt))
     active = env_num("AGENTCTL_AUTHOR_ACTIVE_MIN", AUTHOR_ACTIVE_MIN) * 60
     out = []

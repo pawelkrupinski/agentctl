@@ -8,7 +8,7 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.core import err, git, git_ok, process_cache, reds_dir, remote
+from agentctl.core import attempt, err, git, git_ok, process_cache, reds_dir, remote
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import gh_json
 from agentctl.repos import red_repo_of
@@ -442,10 +442,8 @@ def fix_check(repo, sha, values, store):
             bad[v] = c.get("why") or "touches nothing its job reads"
     if not todo:
         return ok, bad
-    try:
-        items = [it for it in store.items("red") if it["data"].get("key")]
-    except (Exception, SystemExit):  # SystemExit: NoToken (the laptop's land with no token: the server checks again)
-        items = []
+    # SystemExit: NoToken (the laptop's land with no token: the server checks again)
+    items = attempt(lambda: [it for it in store.items("red") if it["data"].get("key")], [], catch=(Exception, SystemExit))
     changed = None
     fresh = {}
     for v in todo:

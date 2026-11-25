@@ -1,6 +1,7 @@
 # agentctl, part `redworkflow`: a red named by its workflow (renamed in place when its run says another)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.core import attempt
 from agentctl.timefmt import iso_at
 from agentctl.forge import forge_actions_run
 from agentctl.workflows import LOCAL_FLOW
@@ -20,10 +21,7 @@ def red_workflow_named(store, it, o_r):
     files = main_workflow_files(o_r)
     if not files or d.get("workflow") in files:
         return it
-    try:
-        run = forge_actions_run(o_r, rid)
-    except (Exception, SystemExit):
-        run = None
+    run = attempt(lambda: forge_actions_run(o_r, rid), None, catch=(Exception, SystemExit))
     if not run:
         return it  # unread now: tried again next tick
     name = {f: n for n, f in files.items()}.get(run.get("workflow_id"))

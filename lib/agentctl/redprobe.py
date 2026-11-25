@@ -6,7 +6,7 @@ import re
 import subprocess
 import time
 from agentctl.procrunner import process_runner
-from agentctl.core import env_num, err, git, remote, slug
+from agentctl.core import attempt, env_num, err, git, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import write_json
 from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
@@ -135,11 +135,9 @@ def probe_checks(repo, o_r, commit, run, tokens, wall, clock):
         return {"verdict": "none", "evidence": f"{name}: {st or 'undecided'}"}
     if not tokens:
         return {"verdict": "none", "evidence": f"{name}: success, but the red names no test to look for in its log"}
-    try:
-        log = process_runner().run(forge_argv(o_r, "run", "view", str(rem["run"]), "--log"), capture_output=True, text=True,
-                             env=forge_env(o_r), timeout=GH_JSON_TIMEOUT).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        log = ""
+    log = attempt(lambda: process_runner().run(forge_argv(o_r, "run", "view", str(rem["run"]), "--log"), capture_output=True,
+                                               text=True, env=forge_env(o_r), timeout=GH_JSON_TIMEOUT).stdout,
+                  "", catch=(OSError, subprocess.TimeoutExpired))
     seen = [t for t in tokens if t in log]
     if not seen:
         return {"verdict": "none", "evidence": f"{name}: success, but it never ran {', '.join(tokens)}"}

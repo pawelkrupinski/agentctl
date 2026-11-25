@@ -6,7 +6,7 @@ import os
 import threading
 import time
 from typing import Any
-from agentctl.core import NoReadAccess, env_num, err, process_cache, run_bounded, slug
+from agentctl.core import NoReadAccess, attempt, env_num, err, process_cache, run_bounded, slug
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
 from agentctl.redretired import red_retired
@@ -368,10 +368,8 @@ def cmd_red(a, clock, st):
 def maybe_publish_gate(repo, store):
     """The processor's loop, at most every GATE_PUBLISH_INTERVAL s: read the gate (it holds the token) and publish the
     summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
-    try:  # a push to main since the last publish (mark_gate_dirty): publish now, not at the 45 s mark
-        marked = os.path.getmtime(gate_dirty_path()) > _last_gate_publish[0]
-    except OSError:
-        marked = False
+    # a push to main since the last publish (mark_gate_dirty): publish now, not at the 45 s mark
+    marked = attempt(lambda: os.path.getmtime(gate_dirty_path()) > _last_gate_publish[0], False, catch=(OSError,))
     if not marked and time.time() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
         return
     _last_gate_publish[0] = time.time()

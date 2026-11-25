@@ -4,7 +4,7 @@
 import re
 import time
 from contextlib import suppress
-from agentctl.core import cherry_landed, git, git_ok, process_cache, remote
+from agentctl.core import attempt, cherry_landed, git, git_ok, process_cache, remote
 from agentctl.timefmt import parse_time, ts
 from agentctl.forge import gh_json
 from agentctl.trailers import trailer_values
@@ -51,11 +51,9 @@ def red_fix_facts(repo, store):
     try:
         d, _c, _w = waiting_state(repo)
         for e in waiting_entries(d, open_only=False):
-            try:
-                recent = e.get("status") in FIX_OPEN or (e.get("status") == "landed" and time.time() - parse_time(
-                    e.get("landed_at") or e.get("updated") or e.get("created") or ts()).timestamp() < 7 * 86400)
-            except (ValueError, TypeError):
-                recent = False
+            recent = attempt(lambda: e.get("status") in FIX_OPEN or (e.get("status") == "landed" and time.time() - parse_time(
+                e.get("landed_at") or e.get("updated") or e.get("created") or ts()).timestamp() < 7 * 86400), False,
+                catch=(ValueError, TypeError))
             fx = entry_fixes(repo, e, store) if recent or e.get("fixes") else None
             if fx and not red_unrelated(repo, e):
                 entries.append({**e, "fixes": fx})
@@ -65,10 +63,7 @@ def red_fix_facts(repo, store):
         queue_unread = str(ex)[:200] or type(ex).__name__
     else:
         queue_unread = None
-    try:
-        landed = landed_fix_commits(store, repo)
-    except (Exception, SystemExit):
-        landed = []
+    landed = attempt(lambda: landed_fix_commits(store, repo), [], catch=(Exception, SystemExit))
     key_runs, key_aside = {}, {}
     with suppress(Exception):
         for it in (store.items("red") if store is not None else []):
@@ -85,10 +80,7 @@ def red_fix_facts(repo, store):
             shas |= set(it["data"].get("refuted") or []) | set(it["data"].get("unverified") or [])
     patches = {}
     for sha in shas:
-        try:
-            pid = patch_id(repo, sha)
-        except (Exception, SystemExit):
-            pid = None
+        pid = attempt(lambda: patch_id(repo, sha), None, catch=(Exception, SystemExit))
         if pid:
             patches[sha] = pid
     landed_at = {}
@@ -182,10 +174,8 @@ def red_fix_candidates(d, facts):
             yield {"entry": None, "status": "landed", "sha": sha, "at": ct}
     for h in reversed(d.get("history") or []):
         m = RED_LANDED_VERDICT.match(str(h.get("outcome") or ""))
-        try:
-            at = parse_time(h.get("at")).timestamp() if m and h.get("at") else None
-        except (ValueError, TypeError):
-            at = None
+        at = attempt(lambda: parse_time(h.get("at")).timestamp() if m and h.get("at") else None, None,
+                     catch=(ValueError, TypeError))
         if m and at is not None and at >= since and its_own(set(), [m.group(1)]):  # an owner's turn held every red
             yield {"entry": None, "status": "landed", "sha": m.group(1), "at": at, "via": "its fixer's LANDED"}
 
@@ -288,10 +278,8 @@ def red_main_equivalent(repo, sha):
         elif left:
             _main_equivalents[key] = None
         else:
-            try:
-                _main_equivalents[key] = equivalent_on(repo, sha, ref) or sha
-            except (Exception, SystemExit):
-                _main_equivalents[key] = sha
+            _main_equivalents[key] = attempt(lambda: equivalent_on(repo, sha, ref) or sha, sha,
+                                             catch=(Exception, SystemExit))
     return _main_equivalents[key]
 
 

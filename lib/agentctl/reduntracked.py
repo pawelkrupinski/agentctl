@@ -3,7 +3,7 @@
 
 import json
 import time
-from agentctl.core import env_num, err, process_cache
+from agentctl.core import attempt, env_num, err, process_cache
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.redrecord import RED_TERMINAL
 from agentctl.gating import main_workflow_files
@@ -118,10 +118,7 @@ def job_ever_green(store, o_r, workflow, job, runs=(), now_=None):
     decided = decided_runs(runs)
     cands = sorted(decided, key=lambda r: r.get("conclusion") != "success")[:EVER_GREEN_JOB_RUNS]
     if not any(r.get("conclusion") == "success" for r in cands):
-        try:
-            g = newest_green_main(o_r, workflow)
-        except (Exception, SystemExit):
-            g = None
+        g = attempt(lambda: newest_green_main(o_r, workflow), None, catch=(Exception, SystemExit))
         cands = ([g] if g else []) + cands
     if not any(r.get("conclusion") == "success" for r in cands):
         return None  # no green run to read its jobs from: unknown, tracked
