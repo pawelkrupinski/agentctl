@@ -159,30 +159,36 @@ NOTE_PRECHECK_DELAYS = (5, 15, 30, 60)
 NOTE_PRECHECK_WAIT = 110  # s a precheck's note waits at most for the store or its item (the delays above, cut at this)
 
 
+def _note_precheck_once(store: Any, eid: Any, rec: Any) -> Any:
+    """(True, "") when `rec` was merged onto change eid's item, else (False, why not)."""
+    try:
+        for _ in range(3):  # a compare-and-set: the reconciler may move the item meanwhile
+            it = store.item("change", eid)
+            if not it:
+                return False, "its item does not exist"
+            try:
+                store.update_item("change", eid, it["version"], rec)
+                return True, ""
+            except StaleVersion:
+                why = "its item kept moving"
+    except (Exception, SystemExit) as e:
+        why = str(e)[:120]
+    return False, why
+
+
 def note_precheck(eid, secs, rc, out, store, sleep=time.sleep):
     """The precheck's duration and outcome on its change item (`precheck`: the landing record's precheck_* fields),
     before a refusal cancels it; never fatal."""
     outcome, step = precheck_outcome(rc, out)
     rec = {"precheck": {"duration_s": round(secs, 1), "outcome": outcome, **({"step": step} if step else {})}}
-    why, cap, delays = "its item does not exist", env_num("AGENTCTL_NOTE_PRECHECK_WAIT", NOTE_PRECHECK_WAIT), []
+    cap, delays = env_num("AGENTCTL_NOTE_PRECHECK_WAIT", NOTE_PRECHECK_WAIT), []
     for d in NOTE_PRECHECK_DELAYS:
         if sum(delays) + d <= cap:
             delays.append(d)
     for delay in (*delays, None):
-        try:
-            st = store
-            for _ in range(3):  # a compare-and-set: the reconciler may move the item meanwhile
-                it = st.item("change", eid)
-                if not it:
-                    why = "its item does not exist"
-                    break
-                try:
-                    st.update_item("change", eid, it["version"], rec)
-                    return True
-                except StaleVersion:
-                    why = "its item kept moving"
-        except (Exception, SystemExit) as e:
-            why = str(e)[:120]
+        done, why = _note_precheck_once(store, eid, rec)
+        if done:
+            return True
         if delay is None:
             break
         sleep(delay)

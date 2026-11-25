@@ -270,7 +270,7 @@ def break_cycle_at(st, d, e, it, blocker, text):
         pass  # its entry carries the break: the hold is re-derived without that wait all the same
 
 
-def restart_hold(st, e, t):
+def restart_hold(st: Any, e: Any, t: Any) -> Any:
     """The recorded hold of change e, its clock (since) restarted at t: re-derived this tick (stuck_recovery)."""
     it = st.item("change", e["id"])
     hold = ((it or {}).get("data") or {}).get("hold")
@@ -291,7 +291,7 @@ def unheld_stuck(it: dict[str, Any], t: float) -> Optional[str]:
     return "nothing holds it, yet it has not " + ("pushed" if it["state"] == "checked" else "started")
 
 
-def change_hold_stuck(st, hold, it, t):
+def change_hold_stuck(st: Any, hold: Any, it: Any, t: Any) -> Any:
     """Why a queued or checked change's hold is stuck (an escalation), or None (a legitimate wait: quiet)."""
     if not hold:
         return unheld_stuck(it, t)
@@ -299,6 +299,11 @@ def change_hold_stuck(st, hold, it, t):
         return None  # its own recovery runs at its bound (regen_hold_overdue): never a stuck lap, the owner told once
     if t - float(it.get("entered_at") or t) > env_num("AGENTCTL_CHANGE_HOLD_MAX", CHANGE_HOLD_MAX):
         return f"held for over {fmt_age(env_num('AGENTCTL_CHANGE_HOLD_MAX', CHANGE_HOLD_MAX))}"
+    return _hold_blocker_or_bound_stuck(st, hold, t)
+
+
+def _hold_blocker_or_bound_stuck(st: Any, hold: Any, t: Any) -> Any:
+    """Why a hold is stuck on its blocking change or past its kind's bound, or None."""
     if hold.get("blocker"):
         b = st.item("change", hold["blocker"])
         if b is None or machine_state("change", b["state"]).terminal:
@@ -315,7 +320,7 @@ def hold_recovers_itself(hold):
     return bool(hk) and hk.recovery == "recover"
 
 
-def stuck_recovery(hold, stuck):
+def stuck_recovery(hold: Any, stuck: Any) -> Any:
     """What the change tick does with a stuck hold (THE HOLD TABLE's recovery): `rederive` -- the recorded hold is
     dropped and this tick decides afresh -- when its blocker is gone or its kind's own bound passed and the table says
     so; else `escalate` (nothing recorded, the 6-h cap: the wait is real, or agentctl's bug)."""

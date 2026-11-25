@@ -4,29 +4,28 @@
 import os
 import re
 import time
-from contextlib import suppress
-from agentctl.core import attempt, env_num, fmt_age, git, host_role, remote
+from typing import Any
 from agentctl.timefmt import day_hhmmz, hhmmz
-from agentctl.policy import policy_blocks
+from agentctl.statemachines import ENTRY_STATE
+from agentctl.holdgraph import OPEN_PARENT_STATES, push_due, stack_map, waiting_on_changes
+from agentctl.core import attempt, env_num, git, host_role, remote
 from agentctl.waitingdir import waiting_entries
+from agentctl.policy import policy_blocks
 from agentctl.queueslots import change_item_fields, check_tree_slot, checker_alive, queue_verdict, set_change
 from agentctl.queue import requeue_infra
 from agentctl.conflicts import conflict_cause, conflict_paths
 from agentctl.queuerecheck import queued_entries, same_change_source, verdict_kept
 from agentctl.identitychange import identity_model_commits
-from agentctl.changekind import (
-    change_hold_visible, classify_change, classify_queue, file_unheld_change, kind_order, queue_facts,
-    record_change_kind)
+from agentctl.changekind import classify_change, classify_queue, kind_order, queue_facts, record_change_kind
 from agentctl.waiting import supersede
 from agentctl.redseen import gate_reds
-from agentctl.holdgraph import OPEN_PARENT_STATES, push_due, stack_map, waiting_on_changes
+from agentctl.recovery import current_batch
 from agentctl.queuebatch import (
-    _behind_said, batch_queued, batch_round, break_hold_cycles, change_hold_stuck, hold_for_overlap, kind_of, main_conflict, note_hold,
-    overlap_hold, restart_hold, spawn_executor, stuck_recovery)
+    _behind_said, batch_queued, batch_round, break_hold_cycles, hold_for_overlap, kind_of, main_conflict,
+    note_hold, overlap_hold, spawn_executor)
 from agentctl.queuediff import push_change
 from agentctl.queueclose import regen_hold_overdue
-from agentctl.recovery import current_batch
-from agentctl.statemachines import ENTRY_STATE, StaleVersion
+from agentctl.queueclose import lap_change_deadline
 
 
 # THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16, workermem: fully checked by 09:15, then its combined tree verified
@@ -233,14 +232,10 @@ def retry_hold(e):
     return "retry", f"its check is retried at {hhmmz(e['retry_after'])} (an infra failure{': ' + why[:200] if why else ''})"
 
 
-def _push_checked(repo, d, st, clock, t, e, fix, todo, pheld, kinds=None):
-    """The change tick's step for checked entry e: pushed, unless its push is held -- before an open batch it is not
-    in (THE BATCH GOES FIRST), for the next push batch, or behind an older change's combined-tree verification; a red
-    fix (fix) is held by none of them. The hold is recorded on its item (`land status` prints it) and its deadline laps
-    quietly while it is live; a checked change past its deadline that nothing holds escalates (lap_change_deadline)."""
+def _note_push_hold(st: Any, e: Any, first: Any, older: Any, pheld: Any, t: Any) -> Any:
+    """The hold a checked entry's push waits under (the batch it is not in, the push batch, an older change's
+    verification), recorded on its item; the lines to say, if any."""
     did = []
-    first = None if fix else batch_goes_first(st, d)  # a red fix goes before the batch
-    older = None if fix or first or e["id"] in pheld else older_verifying(todo, e, t, kinds, waiting_on_changes(st, todo))
     if first:  # a solo push now moves main under the batch, and its whole check is thrown away
         did += behind_batch(e, first, "push")
         note_hold(st, e, "batch", f"its push waits for batch {first['id']} ({first['state']}), which it is not in", t,
@@ -254,6 +249,18 @@ def _push_checked(repo, d, st, clock, t, e, fix, todo, pheld, kinds=None):
         did.append(f"{e['id']}: its push waits for {older['id']}'s combined-tree verification")
         note_hold(st, e, "verify", f"its push waits for {older['id']}'s combined-tree verification", t,
                   blocker=older["id"])
+    return did
+
+
+def _push_checked(repo: Any, d: Any, st: Any, clock: Any, t: Any, e: Any, fix: Any, todo: Any, pheld: Any, kinds: Any = None) -> Any:
+    """The change tick's step for checked entry e: pushed, unless its push is held -- before an open batch it is not
+    in (THE BATCH GOES FIRST), for the next push batch, or behind an older change's combined-tree verification; a red
+    fix (fix) is held by none of them. The hold is recorded on its item (`land status` prints it) and its deadline laps
+    quietly while it is live; a checked change past its deadline that nothing holds escalates (lap_change_deadline)."""
+    did = []
+    first = None if fix else batch_goes_first(st, d)  # a red fix goes before the batch
+    older = None if fix or first or e["id"] in pheld else older_verifying(todo, e, t, kinds, waiting_on_changes(st, todo))
+    did += _note_push_hold(st, e, first, older, pheld, t)
     if first or older or e["id"] in pheld:
         lap_change_deadline(st, e, "checked", t)
         return did
@@ -269,47 +276,6 @@ def _push_checked(repo, d, st, clock, t, e, fix, todo, pheld, kinds=None):
         note_hold(st, e, None, None, t)
     lap_change_deadline(st, e, "checked", t, f"its last push: {out}")
     return did + [f"{e['id']}: {out}"]
-
-
-def lap_change_deadline(st, e, state, t, note=None):
-    """A queued or checked change past its deadline: said and re-deadlined -- quietly while its hold is live, an
-    escalation when it is stuck (change_hold_stuck: nothing holds it, its blocker is gone, held too long). note: what
-    else the line says (a checked change's last push)."""
-    it = st.item("change", e["id"])
-    if not it or it["state"] != state or t <= it["deadline"]:
-        return
-    hold = change_hold_visible(st, it, e, t)
-    stuck = change_hold_stuck(st, hold, it, t)
-    if stuck and stuck_recovery(hold, stuck) == "rederive":
-        # SELF-HEALING (2026-11-20, THE HOLD TABLE): a hold that describes a world that moved -- its blocker ended, or
-        # its kind's bound passed -- is dropped, and the tick decides afresh (it records the hold again if one still
-        # applies, its clock restarted); said quietly on the change's events, never a page
-        # NEVER UNHELD BETWEEN TWO READINGS (2026-11-23, W1's "nothing holds it"): kept, its clock restarted
-        restart_hold(st, e, t)
-        with suppress(StaleVersion):
-            it = st.item("change", e["id"]) or it
-            st.transition("change", e["id"], state, it["version"],
-                          event={"kind": "change.rederived", "severity": "info",
-                                 "text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}; its hold "
-                                         f"({hold.get('why')}) was stuck -- {stuck} -- so it is decided afresh"})
-        return
-    issue = None if hold else file_unheld_change(st, it, t, "agentctl (the change tick)")  # agentctl's bug: an issue,
-    # A HELD LAP IS NO INBOX ENTRY (2026-11-19 08:39Z, 08:55Z: movies-fix-replay's "queued for 15 min / 30 min, held:
-    # ..." reached the inbox every 15 min -- 93 of the day's 442 entries -- because the lap's event named the worktree
-    # as its audience, and the projector writes every event with one). A live hold's lap is an event with no audience:
-    # `land status` and the change's events say it; only a stuck or unheld lap goes to its author.
-    quiet = bool(hold) and not stuck
-    # never an owner page (changekind.py, A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD); a stale version: the next
-    # tick says it
-    with suppress(StaleVersion):
-        it = st.item("change", e["id"]) or it
-        st.transition("change", e["id"], state, it["version"],
-                      event={"text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}, "
-                                     + (f"held: {hold['why']}" if hold else "nothing holds it")
-                                     + (f" -- STUCK: {stuck}" if stuck else "") + (f" ({note})" if note else "")
-                                     + (f" -- filed as agentctl issue {issue}" if issue else ""),
-                             **({} if quiet else {"audience": {"worktree": e.get("worktree")}}),
-                             **({} if stuck and not issue else {"severity": "info"})})
 
 
 # ---------------------------------------------------------------- the backlog batch (the owner, 2026-11-17)
@@ -395,22 +361,36 @@ def backlog_held(repo, d, reds, st, t=None, facts=None):
 PUSH_BATCH_MIN = 2  # changes owing a verify round that make a push batch
 
 
-def push_batchable(st, repo, d, e, t, main, facts=None):
-    """Whether entry e would need a verify round on main (THE PUSH BATCH above) and may share one: its KIND lets it (no
-    red fix, no --no-batch, batch_alone, push_alone or known red: changekind.py) and it is checked on an older main, or
-    queued for its verify round with no checker on it."""
+def _queued_owes_verify_round(st: Any, e: Any) -> Any:
+    """Whether a queued entry waits for its verify round with no run of its own and no checker on it."""
     rem = e.get("remote") or {}
-    if e.get("backlog_batch") or float(e.get("retry_after") or 0) > t:
-        return False
-    if kind_of(st, repo, e, facts, t)["push_batch"] is not None:
-        return False
-    if e.get("status") == "checked":  # one keeping its verdict on main (MINIMAL RECHECKS) owes no verify round
-        return bool(e.get("checked_base")) and e["checked_base"] != main and not verdict_kept(repo, e, main)
-    if e.get("status") != "queued" or not e.get("verify") or not e.get("full_base"):
+    if not e.get("verify") or not e.get("full_base"):
         return False
     if rem.get("run") is not None and not rem.get("collected_at"):  # its own run: a checker adopts it
         return False
     return not checker_alive(st, e["id"])
+
+
+def push_batchable(st, repo, d, e, t, main, facts=None):
+    """Whether entry e would need a verify round on main (THE PUSH BATCH above) and may share one: its KIND lets it (no
+    red fix, no --no-batch, batch_alone, push_alone or known red: changekind.py) and it is checked on an older main, or
+    queued for its verify round with no checker on it."""
+    if (e.get("backlog_batch") or float(e.get("retry_after") or 0) > t
+            or kind_of(st, repo, e, facts, t)["push_batch"] is not None):
+        return False
+    if e.get("status") == "checked":  # one keeping its verdict on main (MINIMAL RECHECKS) owes no verify round
+        return bool(e.get("checked_base")) and e["checked_base"] != main and not verdict_kept(repo, e, main)
+    return e.get("status") == "queued" and _queued_owes_verify_round(st, e)
+
+
+def _red_fix_in_flight(entries: Any, facts: Any, t: Any) -> Any:
+    """Whether an entry that is a red fix is open now (no backlog batch, not waiting out a retry).
+    NO PUSH BATCH UNDER A RED FIX IN FLIGHT (2026-11-19 10:37:14Z: push batch #48 formed 13 s before 08010c, a red
+    fix just verified, pushed; its push moved main under the batch's verify round, which passed at 10:46 and was
+    thrown away -- "main moved during its check: assembled again"). A red fix goes first and pushes alone, so a push
+    batch formed meanwhile is verified for nothing: none forms until the open red fixes are decided."""
+    return any(not e.get("backlog_batch") and not float(e.get("retry_after") or 0) > t
+               and classify_change(e, facts, t)["red_fix"] for e in entries)
 
 
 def push_candidates(repo, d, reds, st, t=None, facts=None):
@@ -420,12 +400,7 @@ def push_candidates(repo, d, reds, st, t=None, facts=None):
     if reds:
         return []
     t, facts, entries = batch_round(d, reds, st, t, facts)
-    # NO PUSH BATCH UNDER A RED FIX IN FLIGHT (2026-11-19 10:37:14Z: push batch #48 formed 13 s before 08010c, a red
-    # fix just verified, pushed; its push moved main under the batch's verify round, which passed at 10:46 and was
-    # thrown away -- "main moved during its check: assembled again"). A red fix goes first and pushes alone, so a push
-    # batch formed meanwhile is verified for nothing: none forms until the open red fixes are decided.
-    if any(not e.get("backlog_batch") and not float(e.get("retry_after") or 0) > t
-           and classify_change(e, facts, t)["red_fix"] for e in entries):
+    if _red_fix_in_flight(entries, facts, t):
         return []
     main = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
     owing = [e for e in entries if push_batchable(st, repo, d, e, t, main, facts)]
@@ -494,3 +469,5 @@ def drift_serialize(repo, batch):
             ident = True
         out.append(e)
     return out
+
+

@@ -6,6 +6,7 @@ import fcntl
 import os
 import re
 import time
+from typing import Any
 from agentctl.core import HOME, _bounded, err, git, git_ok, pid_alive, reds_dir, remote
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, read_text_or, write_json
@@ -199,6 +200,25 @@ def local_cleared(repo, main):
     return [line] + release_local_leftovers(repo)
 
 
+def _tidy_local_fixer(r: Any) -> Any:
+    """Remove the ended local fixer r's worktree when its commits are patch-equivalent on main, else list it in the
+    inbox; mark the record tidied. The lines to report."""
+    acts = []
+    wt = r.get("worktree")
+    if wt and os.path.isdir(wt):
+        msg = close_worktree(wt)
+        if msg.startswith("closed"):
+            acts.append(f"removed the local fixer's worktree: {msg}")
+        else:
+            line = f"RED LEFTOVER: the local fixer's {wt.replace(HOME, '~')} was kept ({msg.split(': ', 1)[-1]}); not patch-equivalent on main, review it"
+            inbox_write("red", line, [line], [], 1)
+            acts.append(line)
+    rec = read_record(r["path"]) or {}
+    rec["tidied"] = ts()
+    write_json(r["path"], rec)
+    return acts
+
+
 def release_local_leftovers(repo):
     """With no local red: each ended local fixer's worktree is removed when its commits are patch-equivalent on main
     (git cherry); anything else is listed in the inbox, never deleted. Once per fixer record."""
@@ -206,21 +226,6 @@ def release_local_leftovers(repo):
         return []
     acts = []
     for r in fixer_records():
-        if r.get("workflow") != LOCAL_FLOW or r["alive"] or r.get("tidied"):
-            continue
-        wt = r.get("worktree")
-        if not wt or not os.path.isdir(wt):
-            msg = None
-        else:
-            msg = close_worktree(wt)
-            if not msg.startswith("closed"):
-                line = f"RED LEFTOVER: the local fixer's {wt.replace(HOME, '~')} was kept ({msg.split(': ', 1)[-1]}); not patch-equivalent on main, review it"
-                inbox_write("red", line, [line], [], 1)
-                acts.append(line)
-                msg = None
-        if msg:
-            acts.append(f"removed the local fixer's worktree: {msg}")
-        rec = read_record(r["path"]) or {}
-        rec["tidied"] = ts()
-        write_json(r["path"], rec)
+        if r.get("workflow") == LOCAL_FLOW and not r["alive"] and not r.get("tidied"):
+            acts += _tidy_local_fixer(r)
     return acts

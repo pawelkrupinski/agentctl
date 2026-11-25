@@ -19,6 +19,7 @@ item already files, files an "explorer-flip" item (a backlog item, never an owne
 (scripts/ci/drift_explorer.py file: the seeds + the backlog rows) through the normal `agentctl land`. An item closes
 itself once main's backlog names its listing. A missing or unreadable asset does nothing and is logged."""
 import csv, io
+from typing import Any
 
 EXPLORER_TAG = "identity-flip-explorer"
 EXPLORER_ASSET = "new-flips.tsv"
@@ -33,14 +34,38 @@ MACHINES["explorer-flip"] = {  # open until main's backlog names the flip; the d
 }
 
 
+def _has_cells(row: Any) -> Any:
+    """Whether a tsv row holds any non-blank cell."""
+    return bool(row and any(c.strip() for c in row))
+
+
+def _write_flips_asset(path: Any, rows: Any) -> Any:
+    """The new flips as the explorer's tsv (EXPLORER_COLS) at path, for the filing script."""
+    with open(path, "w") as f:
+        f.write("\t".join(EXPLORER_COLS) + "\n")
+        for r in rows:
+            f.write("\t".join(r.get(c, "") for c in EXPLORER_COLS) + "\n")
+
+
+def _stray_changes(wt: Any) -> Any:
+    """The worktree's changed paths other than the backlog and the seeds the filing script may touch."""
+    return [x for x in git(wt, "status", "--porcelain").splitlines() if x[3:] not in (EXPLORER_BACKLOG, EXPLORER_SEEDS)]
+
+
+def _explorer_header(rows: Any) -> Any:
+    """The explorer tsv's column names (its first row); ValueError when it does not start venue, rawTitle, country, seed."""
+    head = [c.strip() for c in rows[0]] if rows else []
+    if head[:4] != ["venue", "rawTitle", "country", "seed"]:
+        raise ValueError("no explorer header")
+    return head
+
+
 def explorer_parse(raw):
     """The asset's flips: [{venue, rawTitle, country, seed, ...}]. Raises ValueError when it is not the explorer's tsv."""
     text = raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else str(raw)
     rows = list(csv.reader(io.StringIO(text), delimiter="\t", quoting=csv.QUOTE_NONE))
-    rows = [r for r in rows if r and any(c.strip() for c in r)]
-    if not rows or [c.strip() for c in rows[0][:4]] != ["venue", "rawTitle", "country", "seed"]:
-        raise ValueError("no explorer header")
-    head = [c.strip() for c in rows[0]]
+    rows = [r for r in rows if _has_cells(r)]
+    head = _explorer_header(rows)
     return [dict(zip(head, [c.strip() for c in r])) for r in rows[1:] if len(r) >= 4 and r[0].strip()]
 
 
@@ -68,10 +93,7 @@ def explorer_file(o_r, repo, rows, now_):
         return None
     asset = wt + ".new-flips.tsv"
     seeds = sorted({r["seed"] for r in rows}, key=lambda s: (len(s), s))
-    with open(asset, "w") as f:
-        f.write("\t".join(EXPLORER_COLS) + "\n")
-        for r in rows:
-            f.write("\t".join(r.get(c, "") for c in EXPLORER_COLS) + "\n")
+    _write_flips_asset(asset, rows)
     try:
         p = process_runner().run([sys.executable, "scripts/ci/drift_explorer.py", "file", "--asset", asset], cwd=wt,
                            capture_output=True, text=True, timeout=300)
@@ -81,7 +103,7 @@ def explorer_file(o_r, repo, rows, now_):
             git(repo, "worktree", "remove", "--force", wt, check=False)
             return None
         git(wt, "add", EXPLORER_BACKLOG, EXPLORER_SEEDS, check=False)
-        extra = [x for x in git(wt, "status", "--porcelain").splitlines() if x[3:] not in (EXPLORER_BACKLOG, EXPLORER_SEEDS)]
+        extra = _stray_changes(wt)
         if extra:
             err(f"drift explorer: the script changed more than the backlog and the seeds ({extra[:3]})")
             git(repo, "worktree", "remove", "--force", wt, check=False)

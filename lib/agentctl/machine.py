@@ -40,6 +40,25 @@ def machine_cores() -> int:
     return int(m["cores"]) if m and m.get("cores") else (os.cpu_count() or 1)
 
 
+def _read_macos_memory(out: dict[str, Any]) -> None:
+    """Fill `out` from macOS's sysctl and vm_stat, each key left None when unreadable."""
+    r = run_cmd(["sysctl", "-n", "hw.memsize"], timeout=10)
+    if r.stdout.strip().isdigit():
+        out["ram_gb"] = int(r.stdout.strip()) / 2 ** 30
+    vm = run_cmd(["vm_stat"], timeout=10).stdout
+    page = re.search(r"page size of (\d+) bytes", vm)
+    if page:
+        pages = sum(int(m.group(2)) for m in re.finditer(r"Pages (free|inactive|speculative):\s+(\d+)", vm))
+        out["free_gb"] = pages * int(page.group(1)) / 2 ** 30
+    lvl = run_cmd(["sysctl", "-n", "kern.memorystatus_level"], timeout=10).stdout.strip()  # memory_pressure's free %
+    if lvl.isdigit():
+        out["pressure"] = 100 - int(lvl)
+    sw = run_cmd(["sysctl", "-n", "vm.swapusage"], timeout=10).stdout
+    tot, used = re.search(r"total = ([\d.]+)M", sw), re.search(r"used = ([\d.]+)M", sw)
+    if tot and used:
+        out["swap_total_mb"], out["swap_used_mb"] = float(tot.group(1)), float(used.group(1))
+
+
 def mem_stats() -> dict[str, Any]:
     """THE machine's memory, macOS or Linux alike: {ram_gb, free_gb, pressure (% of RAM not available), swap_used_mb,
     swap_total_mb}, each None when unreadable. macOS: sysctl, vm_stat, memory_pressure; Linux (ci-runner, where a check
@@ -59,21 +78,7 @@ def mem_stats() -> dict[str, Any]:
             out["swap_total_mb"] = mi["SwapTotal"] / 1024
             out["swap_used_mb"] = (mi["SwapTotal"] - mi["SwapFree"]) / 1024
         return out
-    r = run_cmd(["sysctl", "-n", "hw.memsize"], timeout=10)
-    if r.stdout.strip().isdigit():
-        out["ram_gb"] = int(r.stdout.strip()) / 2 ** 30
-    vm = run_cmd(["vm_stat"], timeout=10).stdout
-    page = re.search(r"page size of (\d+) bytes", vm)
-    if page:
-        pages = sum(int(m.group(2)) for m in re.finditer(r"Pages (free|inactive|speculative):\s+(\d+)", vm))
-        out["free_gb"] = pages * int(page.group(1)) / 2 ** 30
-    lvl = run_cmd(["sysctl", "-n", "kern.memorystatus_level"], timeout=10).stdout.strip()  # memory_pressure's free %
-    if lvl.isdigit():
-        out["pressure"] = 100 - int(lvl)
-    sw = run_cmd(["sysctl", "-n", "vm.swapusage"], timeout=10).stdout
-    tot, used = re.search(r"total = ([\d.]+)M", sw), re.search(r"used = ([\d.]+)M", sw)
-    if tot and used:
-        out["swap_total_mb"], out["swap_used_mb"] = float(tot.group(1)), float(used.group(1))
+    _read_macos_memory(out)
     return out
 
 

@@ -332,6 +332,15 @@ ANNOTATION = re.compile(r"::error\b[^:]*::")
 MAX_JOB_LOG_FETCHES = 5
 
 
+def _annotation_lines(clean: Any, tail: Any) -> Any:
+    """A job log's `::error` annotations (its step timeout first), at most `tail`; None when it has none."""
+    notes = [l[:300] for l in clean if ANNOTATION.search(l)]
+    timed = [l[:300] for l in clean if STEP_TIMED_OUT in l]  # past the failed step's slice, in the reap step's
+    if not (notes or timed):
+        return None
+    return (timed[-1:] + [n for n in notes if n not in timed])[:tail]
+
+
 def job_log_lines(o_r, run_id, job, tail, unread=None, annotated=None):
     """Relevant lines from a job's WHOLE log. The per-step slices (what --log-failed prints) are shifted by a
     few lines from the stored log, so a failed step's slice can hold only its neighbours' checkout/cache lines while
@@ -348,12 +357,11 @@ def job_log_lines(o_r, run_id, job, tail, unread=None, annotated=None):
             unread.append(str(e))
         return []
     clean = [l for _job, l in log_entries(log)]
-    notes = [l[:300] for l in clean if ANNOTATION.search(l)]
-    timed = [l[:300] for l in clean if STEP_TIMED_OUT in l]  # past the failed step's slice, in the reap step's
+    lines = _annotation_lines(clean, tail)
     if annotated is not None:
-        annotated.append(bool(notes or timed))
-    if notes or timed:
-        return (timed[-1:] + [n for n in notes if n not in timed])[:tail]
+        annotated.append(lines is not None)
+    if lines is not None:
+        return lines
     name = job.get("name", "?")
     return relevant_lines("\n".join(f"{name}\t-\t{l}" for l in clean), tail).get(name, [])
 

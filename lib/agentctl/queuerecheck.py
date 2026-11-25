@@ -27,6 +27,19 @@ from agentctl.generated import without_generated
 BUILD_SHARED_DIRS = ("test", "data", "conf")
 
 
+def _in_build(p: Any, dirs: Any) -> Any:
+    """Whether path p is the build's, or compiled by it: a root file but Markdown, a project directory's, a source."""
+    return bool(("/" not in p and not p.endswith(".md")) or p.split("/", 1)[0] in dirs or p.split("/")[1:2] == ["src"]
+                or p.endswith((".scala", ".java")))
+
+
+def _build_files(tree: Any, tip: Any) -> Any:
+    """The files at tip the sbt build reads: project/ (but target directories) and the root .sbt files."""
+    return [f for f in git(tree, "ls-tree", "-r", "--name-only", tip, "--", "project", check=False).stdout.split()
+            if "/target/" not in f"/{f}"] + [f for f in git(tree, "ls-tree", "--name-only", tip, check=False).stdout.split()
+                                             if f.endswith(".sbt")]
+
+
 def out_of_build_reach(tree, tip, paths):
     """Whether no path of the change is one the sbt build compiles or reads at tip (OUT OF THE BUILD'S REACH); False when
     the build cannot be read."""
@@ -34,13 +47,9 @@ def out_of_build_reach(tree, tip, paths):
     if b is None or not paths:
         return False
     dirs = (set(b["projects"]) - {"."}) | set(BUILD_SHARED_DIRS) | {"project"}
-    if any(("/" not in p and not p.endswith(".md")) or p.split("/", 1)[0] in dirs or p.split("/")[1:2] == ["src"]
-           or p.endswith((".scala", ".java"))
-           for p in paths):
+    if any(_in_build(p, dirs) for p in paths):
         return False  # a root file but Markdown (build.sbt, the Dockerfile ...) is the build's or read by it; source too
-    files = [f for f in git(tree, "ls-tree", "-r", "--name-only", tip, "--", "project", check=False).stdout.split()
-             if "/target/" not in f"/{f}"] + [f for f in git(tree, "ls-tree", "--name-only", tip, check=False).stdout.split()
-                                             if f.endswith(".sbt")]
+    files = _build_files(tree, tip)
     if not files:
         return False
     names = [a for p in sorted({os.path.basename(p) for p in paths}) for a in ("-e", p)]

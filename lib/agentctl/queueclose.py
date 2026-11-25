@@ -29,6 +29,8 @@ from agentctl.statemachines import StaleVersion, TerminalState, machine_state
 from agentctl.queuecheck import (
     adopted_run, check_mode, commits_here, fetched_main, judge_check_failure, requeued_for_infra, round_ended,
     round_head, tip_refused)
+from agentctl.changekind import change_hold_visible, file_unheld_change
+from agentctl.queuebatch import change_hold_stuck, restart_hold, stuck_recovery
 
 
 # ONE QUEUE, CLOSED BY CONTENT (2026-10-30 split brain: six pre-cutover entries in the laptop's local waiting dir and
@@ -181,16 +183,21 @@ def migrate_local_queue(repo, store):
     return did
 
 
+def _change_row(i: dict[str, Any]) -> dict[str, Any]:
+    """One open change item as its row of `change_rows`."""
+    data = i.get("data") or {}
+    return {"id": i["id"], "state": i["state"], "worktree": data.get("worktree"), "head": data.get("head"),
+            "deadline": i["deadline"], "level": i["level"],
+            "hold": (data.get("hold") or {}).get("why") if i["state"] in HOLD_SHOWN else None,
+            "kind": kind_text(data.get("change_kind")) or None,
+            "resolved": data.get("autoresolved") if i["state"] == "checking" else None,
+            "since": float(data.get("submitted_at") or i.get("entered_at") or 0)}
+
+
 def change_rows(store: Any) -> list[dict[str, Any]]:
     """THE QUEUE as everyone reads it (`land status`, the status line, the page): the store's open change items,
     by id, as {id, state, worktree, head, deadline, level, hold, kind (a red fix's, changekind.py), since (submitted)}."""
-    rows = [{"id": i["id"], "state": i["state"], "worktree": (i.get("data") or {}).get("worktree"),
-             "head": (i.get("data") or {}).get("head"), "deadline": i["deadline"], "level": i["level"],
-             "hold": ((i.get("data") or {}).get("hold") or {}).get("why") if i["state"] in HOLD_SHOWN else None,
-             "kind": kind_text((i.get("data") or {}).get("change_kind")) or None,
-             "resolved": (i.get("data") or {}).get("autoresolved") if i["state"] == "checking" else None,
-             "since": float((i.get("data") or {}).get("submitted_at") or i.get("entered_at") or 0)}
-            for i in store.items("change") if not machine_state("change", i["state"]).terminal]
+    rows = [_change_row(i) for i in store.items("change") if not machine_state("change", i["state"]).terminal]
     return sorted(rows, key=lambda r: r["id"])
 
 
@@ -335,8 +342,6 @@ def mark_checked(st: Any, d: str, e: dict[str, Any], i: int, base: str, head: st
     wlog(d, f"{e['id']}: {verified} ({where})")
 
 
-
-
 def mark_checking(st: Any, d: str, e: dict[str, Any]) -> None:
     if e.get("status") != "checking":
         set_change(st, d, e, "checking", event={"text": f"{e['id']}: checking"}, since=ts())
@@ -346,3 +351,44 @@ def round_base(st: Any, repo: str, d: str, e: dict[str, Any], clock: Clock) -> s
     """The main the round checks on, with the change's commits here; None when either failed (the change requeued)."""
     base = fetched_main(st, repo, d, e, clock)
     return base if base is not None and commits_here(st, repo, d, e, clock) else None
+
+
+def lap_change_deadline(st: Any, e: Any, state: Any, t: Any, note: Any = None) -> Any:
+    """A queued or checked change past its deadline: said and re-deadlined -- quietly while its hold is live, an
+    escalation when it is stuck (change_hold_stuck: nothing holds it, its blocker is gone, held too long). note: what
+    else the line says (a checked change's last push)."""
+    it = st.item("change", e["id"])
+    if not it or it["state"] != state or t <= it["deadline"]:
+        return
+    hold = change_hold_visible(st, it, e, t)
+    stuck = change_hold_stuck(st, hold, it, t)
+    if stuck and stuck_recovery(hold, stuck) == "rederive":
+        # SELF-HEALING (2026-11-20, THE HOLD TABLE): a hold that describes a world that moved -- its blocker ended, or
+        # its kind's bound passed -- is dropped, and the tick decides afresh (it records the hold again if one still
+        # applies, its clock restarted); said quietly on the change's events, never a page
+        # NEVER UNHELD BETWEEN TWO READINGS (2026-11-23, W1's "nothing holds it"): kept, its clock restarted
+        restart_hold(st, e, t)
+        with suppress(StaleVersion):
+            it = st.item("change", e["id"]) or it
+            st.transition("change", e["id"], state, it["version"],
+                          event={"kind": "change.rederived", "severity": "info",
+                                 "text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}; its hold "
+                                         f"({hold.get('why')}) was stuck -- {stuck} -- so it is decided afresh"})
+        return
+    issue = None if hold else file_unheld_change(st, it, t, "agentctl (the change tick)")  # agentctl's bug: an issue,
+    # A HELD LAP IS NO INBOX ENTRY (2026-11-19 08:39Z, 08:55Z: movies-fix-replay's "queued for 15 min / 30 min, held:
+    # ..." reached the inbox every 15 min -- 93 of the day's 442 entries -- because the lap's event named the worktree
+    # as its audience, and the projector writes every event with one). A live hold's lap is an event with no audience:
+    # `land status` and the change's events say it; only a stuck or unheld lap goes to its author.
+    quiet = bool(hold) and not stuck
+    # never an owner page (changekind.py, A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD); a stale version: the next
+    # tick says it
+    with suppress(StaleVersion):
+        it = st.item("change", e["id"]) or it
+        st.transition("change", e["id"], state, it["version"],
+                      event={"text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}, "
+                                     + (f"held: {hold['why']}" if hold else "nothing holds it")
+                                     + (f" -- STUCK: {stuck}" if stuck else "") + (f" ({note})" if note else "")
+                                     + (f" -- filed as agentctl issue {issue}" if issue else ""),
+                             **({} if quiet else {"audience": {"worktree": e.get("worktree")}}),
+                             **({} if stuck and not issue else {"severity": "info"})})

@@ -4,6 +4,7 @@
 import argparse
 import os
 import re
+from typing import Any
 from agentctl.core import attempt, cherry_landed, env_num, git, remote
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.worktrees import worktrees
@@ -47,6 +48,14 @@ def parse_duration(text):
 UNTIL_DONE_AGAIN = "~/bin/agentctl land --until-done"
 
 
+def _unitemed_entries(repo: Any, known: Any, ours: Any) -> Any:
+    """This host's queue entries that `ours` claims and no change item (`known`: their ids) holds yet, as items."""
+    d = attempt(lambda: waiting_state(repo)[0], None, catch=(RuntimeError,))
+    return [{"id": e["id"], "state": ENTRY_STATE[e["status"]], "data": e, "entered_at": e.get("seq") or 0}
+            for e in (waiting_entries(d, open_only=False) if d else [])
+            if e["id"] not in known and ours(e) and e.get("status") in ENTRY_STATE]
+
+
 def own_change_item(repo, head, store):
     """The change land submitted from worktree `repo` at `head`, as {id, state, data, entered_at}: the open one, else
     the newest decided one. Read from the store's change items and from this host's queue entries (an entry the tick
@@ -57,10 +66,7 @@ def own_change_item(repo, head, store):
         return x.get("head") == head and os.path.realpath(x.get("worktree") or "") == rp
     mine = [it for it in store.items("change") if ours(it.get("data") or {})]
     known = {it["id"] for it in mine}
-    d = attempt(lambda: waiting_state(repo)[0], None, catch=(RuntimeError,))
-    for e in waiting_entries(d, open_only=False) if d else []:
-        if e["id"] not in known and ours(e) and e.get("status") in ENTRY_STATE:
-            mine.append({"id": e["id"], "state": ENTRY_STATE[e["status"]], "data": e, "entered_at": e.get("seq") or 0})
+    mine += _unitemed_entries(repo, known, ours)
     open_ = [it for it in mine if not machine_state("change", it["state"]).terminal]
     pool = open_ or mine
     return max(pool, key=lambda it: (it.get("entered_at") or 0, it["id"])) if pool else None
@@ -79,21 +85,38 @@ def next_command(repo, why):
     return f"next: read the reason above, act on it in {repo}, then {UNTIL_DONE_AGAIN}"
 
 
-def until_done_finish(repo, eid, sha, a, item=None):
+def _report_held_worktree(repo: Any, eid: Any, sha: Any, held: Any) -> Any:
+    """The LAND --UNTIL-DONE lines for a worktree still held by processes not this session's: exit code 4."""
+    print(f"LANDED {sha} (queued {eid}); NOT DONE: the worktree {repo} is kept: still held after "
+          f"{int(env_num('AGENTCTL_FREE_WAIT', FREE_WAIT))} s by processes not this session's to stop:", flush=True)
+    for pid, cmd in sorted(held.items()):
+        print(f"  pid {pid}: {cmd[:200]}", flush=True)
+    print(f"next: ask their owner to stop them (or `kill {' '.join(map(str, sorted(held)))}` if they are yours), "
+          f"then {UNTIL_DONE_AGAIN} from {repo}: it only cleans up", flush=True)
+    return 4
+
+
+def _left_alone_reason(repo: Any, item: Any) -> Any:
+    """Why `land --until-done` must not clean up worktree repo (another session's, the root checkout), or None."""
+    data = (item or {}).get("data") or {}
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    if data.get("session") and sid and data["session"] != sid:
+        return f"not this session's (the change was landed by session {data['session']}); its own agent cleans up"
+    try:
+        root = os.path.realpath(worktrees(repo)[0]["worktree"])
+    except RuntimeError as e:
+        return str(e)[:200]
+    return "the root checkout is never removed" if os.path.realpath(repo) == root else None
+
+
+def until_done_finish(repo: Any, eid: Any, sha: Any, a: Any, item: Any = None) -> Any:
     """LANDED: the proof, then the cleanup (LAND --UNTIL-DONE above). Returns the exit code."""
     def kept(why):
         print(f"LANDED {sha} (queued {eid}); NOT DONE: the worktree {repo} is kept: {why}", flush=True)
         return 3
-    data = (item or {}).get("data") or {}
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    if data.get("session") and sid and data["session"] != sid:
-        return kept(f"not this session's (the change was landed by session {data['session']}); its own agent cleans up")
-    try:
-        root = os.path.realpath(worktrees(repo)[0]["worktree"])
-    except RuntimeError as e:
-        return kept(str(e)[:200])
-    if os.path.realpath(repo) == root:
-        return kept("the root checkout is never removed")
+    why = _left_alone_reason(repo, item)
+    if why:
+        return kept(why)
     git(repo, "fetch", "--quiet", remote(), "main", check=False)
     commits, left = cherry_landed(repo, f"refs/remotes/{remote()}/main", "HEAD")
     if commits is None:
@@ -107,13 +130,7 @@ def until_done_finish(repo, eid, sha, a, item=None):
         return 0
     held = free_worktree(repo)
     if held:
-        print(f"LANDED {sha} (queued {eid}); NOT DONE: the worktree {repo} is kept: still held after "
-              f"{int(env_num('AGENTCTL_FREE_WAIT', FREE_WAIT))} s by processes not this session's to stop:", flush=True)
-        for pid, cmd in sorted(held.items()):
-            print(f"  pid {pid}: {cmd[:200]}", flush=True)
-        print(f"next: ask their owner to stop them (or `kill {' '.join(map(str, sorted(held)))}` if they are yours), "
-              f"then {UNTIL_DONE_AGAIN} from {repo}: it only cleans up", flush=True)
-        return 4
+        return _report_held_worktree(repo, eid, sha, held)
     msg = close_worktree(repo)
     if not msg.startswith("closed worktree"):
         return kept(msg.split(": ", 1)[-1])

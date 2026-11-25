@@ -31,13 +31,23 @@ RED_MAIN_REFETCH = 300
 _main_fetched = process_cache({})
 
 
+def _snapshot_heads(snap: Any) -> Any:
+    """The head shas of the snapshot's gate runs (the newest three each) and of its latest runs."""
+    heads = {r.get("headSha") for g in snap.get("gate") or [] for r in (g.get("runs") or [])[:3]}
+    return heads | {v.get("headSha") for v in (snap.get("latest") or {}).values() if isinstance(v, dict)}
+
+
+def _missing_heads(repo: Any, snap: Any) -> Any:
+    """The head commits of the snapshot's main runs that the clone lacks."""
+    heads = _snapshot_heads(snap)
+    return frozenset(h for h in heads if h and not git_ok(repo, "cat-file", "-e", f"{h}^{{commit}}"))
+
+
 def red_main_current(repo, snap):
     """Fetch main into repo when the snapshot's main runs name a head commit it lacks. Returns True when it fetched."""
     if not repo or not snap or not git_ok(repo, "rev-parse", "--verify", "-q", f"refs/remotes/{remote()}/main"):
         return False  # no clone, or one that never fetched main (nothing of main's to keep up to date)
-    heads = {r.get("headSha") for g in snap.get("gate") or [] for r in (g.get("runs") or [])[:3]}
-    heads |= {v.get("headSha") for v in (snap.get("latest") or {}).values() if isinstance(v, dict)}
-    missing = frozenset(h for h in heads if h and not git_ok(repo, "cat-file", "-e", f"{h}^{{commit}}"))
+    missing = _missing_heads(repo, snap)
     if not missing:
         return False
     at = _main_fetched.get((repo, missing))

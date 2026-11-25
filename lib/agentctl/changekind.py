@@ -171,7 +171,7 @@ def classify_queue(repo, d, entries, facts, t, st, record=True):
 UNHELD_TAG = "[change-unheld"
 
 
-def change_hold_visible(st, it, e, t):
+def change_hold_visible(st: Any, it: Any, e: Any, t: Any) -> Any:
     """What a queued or checked change waits on now, as `land status` would say it, or None: its recorded hold, its
     retry, the governor, or its executor running (a checker alive: a queued change being started)."""
     hold = change_hold_now(it, e or {}, t)
@@ -202,7 +202,7 @@ def _unheld_issue_text(tag: Any, it: Any, d: Any, t: Any) -> Any:
             f"`agentctl land status`; the change's events: `agentctl store events change {it['id']}`")
 
 
-def file_unheld_change(st, it, t, by):
+def file_unheld_change(st: Any, it: Any, t: Any, by: Any) -> Any:
     """File the agentctl issue for change item it, past its deadline with no recorded hold, once (an open one, or the
     item's `unheld_issue`, is reused). Returns the issue id."""
     d = it.get("data") or {}

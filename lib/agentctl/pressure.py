@@ -5,6 +5,7 @@ import os
 import re
 import sys
 import time
+from typing import Any
 from agentctl.core import attempt, env_num, run_cmd
 from agentctl.statefile import read_record, write_json
 from agentctl.cpu import cpu_pressure, machine_busy_cores, run_queue
@@ -128,24 +129,35 @@ def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_
     return r
 
 
-def laptop_pressure(r=None, load=True):
-    """Why this machine is under pressure now, with its numbers ("; "-joined), or None. load=False leaves the load out
-    (the governor holds each class on its own load factor). $AGENTCTL_LAPTOP_PRESSURE set (the tests'): its value is
-    the answer, `-` or empty for none."""
-    if r is None and "AGENTCTL_LAPTOP_PRESSURE" in os.environ:
-        return os.environ["AGENTCTL_LAPTOP_PRESSURE"].strip("-") or None  # `-` or empty: none
-    r = r or pressure_reading()
+def _memory_pressure(r: Any) -> Any:
+    """The reasons of a reading's free memory and kernel pressure level, as lines."""
     why = []
     free_pct = env_num("AGENTCTL_LAPTOP_FREE_PCT", LAPTOP_FREE_PCT)
     if r.get("free_pct") is not None and r["free_pct"] < free_pct:
         why.append(f"memory {r['free_pct']}% free (holds under {free_pct:g}%)")
     if r.get("level") is not None and r["level"] >= env_num("AGENTCTL_LAPTOP_PRESSURE_LEVEL", LAPTOP_PRESSURE_LEVEL):
         why.append(f"kernel memory pressure {PRESSURE_LEVELS.get(r['level'], '?')} (level {r['level']})")
-    why += cpu_pressure(r) if load else []
+    return why
+
+
+def _swap_pressure(r: Any) -> Any:
+    """The reason of a reading's swap growth, as lines."""
+    why = []
     bar = env_num("AGENTCTL_LAPTOP_SWAP_GROWTH_MB", LAPTOP_SWAP_GROWTH_MB)
     if r.get("swap_growth_mb") is not None and r["swap_growth_mb"] >= bar:
         why.append(f"swap growing +{r['swap_growth_mb'] / 1024:.1f} GB in {r['swap_span'] / 60:.0f} min (holds at "
                    f"+{bar / 1024:.1f} GB in {env_num('AGENTCTL_LAPTOP_SWAP_WINDOW', LAPTOP_SWAP_WINDOW) / 60:.0f} min)")
+    return why
+
+
+def laptop_pressure(r: Any = None, load: Any = True) -> Any:
+    """Why this machine is under pressure now, with its numbers ("; "-joined), or None. load=False leaves the load out
+    (the governor holds each class on its own load factor). $AGENTCTL_LAPTOP_PRESSURE set (the tests'): its value is
+    the answer, `-` or empty for none."""
+    if r is None and "AGENTCTL_LAPTOP_PRESSURE" in os.environ:
+        return os.environ["AGENTCTL_LAPTOP_PRESSURE"].strip("-") or None  # `-` or empty: none
+    r = r or pressure_reading()
+    why = _memory_pressure(r) + (cpu_pressure(r) if load else []) + _swap_pressure(r)
     return "; ".join(why) or None
 
 

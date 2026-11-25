@@ -257,6 +257,18 @@ def inv_wm(clock, st):
 WB_MAX = 10 * 60
 
 
+def _pids_working_in(br: Any) -> Any:
+    """`pid N <command>` of every process whose cwd is in checkout br; [] when the processes cannot be read."""
+    try:
+        cwds = process_cwds()
+        names = {pid: cmd for pid, _pp, _e, cmd in ps()}
+        return [f"pid {p} {names.get(p, '')[:60]}" for p, c in cwds.items()
+                if os.path.realpath(c) == os.path.realpath(br)
+                or os.path.realpath(c).startswith(os.path.realpath(br) + "/")]
+    except (Exception, SystemExit):
+        return []
+
+
 def inv_wb(clock, st):
     """WB: ~/bin's own checkout carries no uncommitted edit older than WB_MAX (work goes in worktrees: an edit there
     blocks every other agent's merge). Names the processes working in it."""
@@ -270,13 +282,7 @@ def inv_wb(clock, st):
     newest = max((os.path.getmtime(os.path.join(br, f)) for f in files if os.path.exists(os.path.join(br, f))), default=0)
     if clock.time() - newest < env_num("AGENTCTL_WB_MAX", WB_MAX):
         return True, f"{br}: {len(files)} file(s) edited just now"
-    try:
-        cwds = process_cwds()
-        names = {pid: cmd for pid, _pp, _e, cmd in ps()}
-        who = [f"pid {p} {names.get(p, '')[:60]}" for p, c in cwds.items()
-               if os.path.realpath(c) == os.path.realpath(br) or os.path.realpath(c).startswith(os.path.realpath(br) + "/")]
-    except (Exception, SystemExit):
-        who = []
+    who = _pids_working_in(br)
     return False, (f"{br} has uncommitted edits ({', '.join(files[:4])}) unchanged for {fmt_age(clock.time() - newest)}"
                    + (f"; working there: {'; '.join(who[:3])}" if who else "; nobody works there now") +
                    ": commit them in a worktree of ~/bin")

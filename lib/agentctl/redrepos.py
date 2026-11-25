@@ -1,6 +1,7 @@
 # agentctl, part `redrepos`: a watched repo's red config read for a red: another repo's or the primary's, its gate workflows, owner-only pushes, its run directories and keys
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_conf, red_repo_short
 from agentctl.gating import gate_flows
 
@@ -20,7 +21,7 @@ def red_gate_flows(o_r):
     return list(c["gate"]) if c else []
 
 
-def red_owner_only(o_r):
+def red_owner_only(o_r: Any) -> Any:
     """True for a repo whose fixer never pushes (red-repos.json `"push": "owner-only"`)."""
     c = red_repo_conf(o_r)
     return bool(c and c["push"] == "owner-only")

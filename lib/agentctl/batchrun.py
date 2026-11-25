@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+from typing import Any
 from agentctl.statefile import read_text_or
 from agentctl.procrunner import process_runner
 from agentctl.core import err, git, host_role, remote
@@ -127,20 +128,10 @@ def batch_check(repo, d, tree, base, tip, clock, st, cls="check", depth="fast", 
     return False, out, True
 
 
-def bisect(repo, d, batch, base, bwt, clock, st, depth="fast", runs=None, failed_out=None, range_base=None, cls="check"):
-    """The batch failed: the first entry whose prefix fails (binary search over the prefixes' tips, in the batch's tree
-    bwt). (index, output) of the culprit; (None, output) when the whole batch passes on its own again (flaky or infra).
-    A backlog or push batch (failed_out: its check's output) is not checked whole again first: each check is a landing
-    check's 30-40 min or a verify round's ~10, and the culprit's confirmation below still clears a flaky failure."""
-    lo, hi, out_hi = 0, len(batch) - 1, ""
-    check = lambda tip: batch_check(repo, d, bwt, base, tip, clock, st, cls=cls, depth=depth, runs=runs, range_base=range_base)
-    if depth in ("full", "verify") and failed_out is not None:
-        out_hi = failed_out
-    else:
-        ok, out, stalled = check(batch[hi]["tip"])
-        if ok or stalled:
-            return None, out
-        out_hi = out
+def _first_failing_prefix(check: Any, batch: Any, out_hi: Any) -> Any:
+    """(index of the first entry whose prefix fails, that prefix's output) by binary search, the whole batch (output
+    out_hi) known to fail; (None, output) when a check stalled."""
+    lo, hi = 0, len(batch) - 1
     while lo < hi:
         mid = (lo + hi) // 2
         ok, out, stalled = check(batch[mid]["tip"])
@@ -150,6 +141,26 @@ def bisect(repo, d, batch, base, bwt, clock, st, depth="fast", runs=None, failed
             lo = mid + 1
         else:
             hi, out_hi = mid, out
+    return lo, out_hi
+
+
+def bisect(repo, d, batch, base, bwt, clock, st, depth="fast", runs=None, failed_out=None, range_base=None, cls="check"):
+    """The batch failed: the first entry whose prefix fails (binary search over the prefixes' tips, in the batch's tree
+    bwt). (index, output) of the culprit; (None, output) when the whole batch passes on its own again (flaky or infra).
+    A backlog or push batch (failed_out: its check's output) is not checked whole again first: each check is a landing
+    check's 30-40 min or a verify round's ~10, and the culprit's confirmation below still clears a flaky failure."""
+    hi, out_hi = len(batch) - 1, ""
+    check = lambda tip: batch_check(repo, d, bwt, base, tip, clock, st, cls=cls, depth=depth, runs=runs, range_base=range_base)
+    if depth in ("full", "verify") and failed_out is not None:
+        out_hi = failed_out
+    else:
+        ok, out, stalled = check(batch[hi]["tip"])
+        if ok or stalled:
+            return None, out
+        out_hi = out
+    lo, out_hi = _first_failing_prefix(check, batch, out_hi)
+    if lo is None:
+        return None, out_hi  # a check stalled: its output
     # one flaky failure rejects nobody (audit #10): the culprit's prefix is checked once more before it is rejected
     ok, out, stalled = check(batch[lo]["tip"])
     if ok or stalled:

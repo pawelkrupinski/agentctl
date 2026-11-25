@@ -170,6 +170,18 @@ def joined_changes(d, w, st):
     return out
 
 
+def _finish_joined(st: Any, w: Any, q: Any, it: Any, to: Any, refs: Any, data: Any) -> Any:
+    """Joined change q (item it) of waiting entry w moved to `to`, under q's id, its line the projection's."""
+    line = joined_verdict(q, w if w.get("why") else {**w, "why": f"{w['id']}: {to}"}, to)
+    sha = w.get("landed_sha") if to == "landed" else None
+    extra = {k: refs[k] for k in refs if k not in ("verdict", "tail", "exit", "final", "command", "entry", "no_inbox")}
+    ev = change_event(q, line, refs.get("tail") or (), refs.get("exit", 0 if to == "landed" else 1), **extra)
+    with suppress(StaleVersion, TerminalState):
+        st.transition("change", q["id"], to, it["version"],
+                      data={**(data or {}), "why": line[:600], **({"tip": sha, "landed_sha": sha} if sha else {})},
+                      event=ev)
+
+
 def joined_verdicts(st, w, joined, to, event, data):
     """Waiting entry w's final state on each queued change that joined it, under the QUEUED id -- the one its `land`
     printed -- its line the projection's (joined_verdict), its author told there alone (review round 7:
@@ -177,14 +189,7 @@ def joined_verdicts(st, w, joined, to, event, data):
     through the projection, as a second LANDED)."""
     refs = (event or {}).get("refs") or {}
     for q, it in joined:
-        line = joined_verdict(q, w if w.get("why") else {**w, "why": f"{w['id']}: {to}"}, to)
-        sha = w.get("landed_sha") if to == "landed" else None
-        extra = {k: refs[k] for k in refs if k not in ("verdict", "tail", "exit", "final", "command", "entry", "no_inbox")}
-        ev = change_event(q, line, refs.get("tail") or (), refs.get("exit", 0 if to == "landed" else 1), **extra)
-        with suppress(StaleVersion, TerminalState):
-            st.transition("change", q["id"], to, it["version"],
-                          data={**(data or {}), "why": line[:600], **({"tip": sha, "landed_sha": sha} if sha else {})},
-                          event=ev)
+        _finish_joined(st, w, q, it, to, refs, data)
 
 
 def queue_verdict(st, d, e, status, verdict, tail=(), code=1, **fields):

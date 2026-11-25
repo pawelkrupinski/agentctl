@@ -4,6 +4,7 @@
 import os
 import re
 import time
+from typing import Any
 from agentctl.core import attempt, env_num, git, git_ok
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.allowedpaths import allowed_path
@@ -17,17 +18,27 @@ from agentctl.jvmreap import AGENT_WORK
 AUTHOR_ACTIVE_MIN = 15   # live = a pid alive and activity within this ($AGENTCTL_AUTHOR_ACTIVE_MIN)
 
 
+def _green_older_than(runs: Any, rid: Any) -> Any:
+    """The first completed green run of runs, with a head commit, whose id is below rid, or None."""
+    return next((r for r in runs if r.get("status") == "completed" and r.get("conclusion") == "success"
+                 and (r.get("databaseId") or 0) < rid and r.get("headSha")), None)
+
+
+def _green_before(repo: Any, u: Any) -> Any:
+    """The head sha of the first completed green run of u's workflow older than u's run, when the clone has its commit."""
+    green = _green_older_than(u.get("runs") or [], u["run"].get("databaseId") or 0)
+    return green["headSha"] if green and git_ok(repo, "cat-file", "-e", f"{green['headSha']}^{{commit}}") else None
+
+
 def red_commits(repo, u, limit=30):
     """The commits of the red run since the workflow's last green run on main (newest first); just its head when the
     range cannot be read here."""
     red = u["run"].get("headSha")
     if not repo or not red or not git_ok(repo, "cat-file", "-e", f"{red}^{{commit}}"):
         return [red] if red else []
-    rid = u["run"].get("databaseId") or 0
-    green = next((r for r in u.get("runs") or [] if r.get("status") == "completed" and r.get("conclusion") == "success"
-                  and (r.get("databaseId") or 0) < rid and r.get("headSha")), None)
-    if green and git_ok(repo, "cat-file", "-e", f"{green['headSha']}^{{commit}}"):
-        r = git(repo, "rev-list", f"--max-count={limit}", red, f"^{green['headSha']}", check=False)
+    green = _green_before(repo, u)
+    if green:
+        r = git(repo, "rev-list", f"--max-count={limit}", red, f"^{green}", check=False)
     else:
         r = git(repo, "rev-list", "--max-count=1", red, check=False)
     return [s for s in r.stdout.split() if s] if r.returncode == 0 else [red]
@@ -47,13 +58,18 @@ def landed_heads(repo):
     return out
 
 
+def _agent_pids() -> Any:
+    """The pids of agent processes (claude, agentctl land/watch/wait, the hook) other than this one."""
+    return [pid for pid, _pp, _e, cmd in ps() if pid != os.getpid()
+            and (AGENT_WORK.search(cmd or "") or re.search(r"agentctl (watch|wait)\b", cmd or ""))]
+
+
 def agent_pids_in(wts):
     """{worktree: [pid]} of the agent processes (claude, agentctl land/watch, the hook) whose cwd is in one of wts."""
     want = [os.path.realpath(w) for w in wts if w]
     if not want:
         return {}
-    pids = [pid for pid, _pp, _e, cmd in ps() if pid != os.getpid()
-            and (AGENT_WORK.search(cmd or "") or re.search(r"agentctl (watch|wait)\b", cmd or ""))]
+    pids = _agent_pids()
     out = {}
     for pid, cwd in lsof_cwds(pids).items() if pids else ():
         c = os.path.realpath(cwd)

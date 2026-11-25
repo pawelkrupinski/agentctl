@@ -3,6 +3,7 @@
 
 import os
 import re
+from typing import Any
 from agentctl.core import git, git_ok, remote
 from agentctl.repos import RED_PRIMARY
 from agentctl.workflows import job_inner
@@ -49,18 +50,29 @@ TEST_TOKEN = re.compile(r"\b([A-Z][A-Za-z0-9]+(?:Spec|Test|Tests|Suite|IT))\b")
 
 
 # -- 2. the culprit
-def blame_hint(repo, groups, d):
-    """The one change whose files the failing test or step names (its Spec/Test class, a path in its first line), or
-    None: the boundary the search probes first."""
+def _failure_tokens(d: Any) -> Any:
+    """The test and file names the red's line and jobs mention (longer than 3 characters)."""
     line = " ".join([str(d.get("line") or "")] + [str(j) for j in d.get("jobs") or []])
     toks = set(TEST_TOKEN.findall(line)) | {os.path.basename(p) for p in PATHISH.findall(line)}
     toks = {t for t in toks if len(t) > 3}
+    return toks
+
+
+def _group_files(repo: Any, g: Any) -> Any:
+    """The files the group's commits touch; [] when git cannot say."""
+    r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", *g["commits"], check=False)
+    return r.stdout.split() if r.returncode == 0 else []
+
+
+def blame_hint(repo: Any, groups: Any, d: Any) -> Any:
+    """The one change whose files the failing test or step names (its Spec/Test class, a path in its first line), or
+    None: the boundary the search probes first."""
+    toks = _failure_tokens(d)
     if not toks:
         return None
     hit = []
     for i, g in enumerate(groups):
-        r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", *g["commits"], check=False)
-        files = r.stdout.split() if r.returncode == 0 else []
+        files = _group_files(repo, g)
         if any(t in f for t in toks for f in files):
             hit.append(i)
     return hit[0] if len(hit) == 1 else None

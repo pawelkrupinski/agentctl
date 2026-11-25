@@ -73,25 +73,63 @@ def wrapper_last_words(m, n=3):
     return " | ".join([x for x in lines if x][-n:])[:600]
 
 
+def _wrapper_gone(m: Any) -> Any:
+    """Why a dispatched fixer's wrapper is gone (its pid dead; its last words), or None."""
+    pid = m.get("pid")
+    if not pid or pid_alive(int(pid)):
+        return None
+    words = wrapper_last_words(m)
+    return f"its wrapper (pid {pid}) is gone" + (f"; its last words: {words}" if words else "")
+
+
+def _session_ended(row: Any, t: Any, m: Any, bid: Any, ent: Any) -> Any:
+    """Why a dispatched fixer's bg session `bid` (entry ent) is over -- gone or its turn ended, no progress for
+    RED_ORPHAN_GRACE -- or None."""
+    idle = t - max(float(row.get("renewed_at") or row.get("acquired_at") or 0), mtime(m.get("log")))
+    if (ent is None or bg_turn_over(ent, m.get("log"), t)) and idle > env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE):
+        return f"its session {bid} is {(ent or {}).get('state') or 'gone'}, {fmt_age(idle)} without progress"
+    return None
+
+
 def fixer_work(row, t):
     """(True|False|None, why): is a dispatched fixer's lease held by work? Its wrapper alive, its session not ended
     (beyond RED_ORPHAN_GRACE since the lease's last progress). A dead wrapper's why carries its last words (stderr)."""
     m = lease_meta(row)
-    pid = m.get("pid")
-    if pid and not pid_alive(int(pid)):
-        words = wrapper_last_words(m)
-        return False, f"its wrapper (pid {pid}) is gone" + (f"; its last words: {words}" if words else "")
+    gone = _wrapper_gone(m)
+    if gone:
+        return False, gone
     bid = m.get("bg_id")
     if not bid:
         return None, "its session is starting"
     ent = bg_session(claude_cli(), bid)
     if ent == {}:
         return None, "`claude agents` unread"
-    idle = t - max(float(row.get("renewed_at") or row.get("acquired_at") or 0), mtime(m.get("log")))
-    if (ent is None or bg_turn_over(ent, m.get("log"), t)) and idle > env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE):
-        return False, (f"its session {bid} is {(ent or {}).get('state') or 'gone'}, "
-                       f"{fmt_age(idle)} without progress")
+    ended = _session_ended(row, t, m, bid, ent)
+    if ended:
+        return False, ended
     return True, "at work"
+
+
+def _judged_elsewhere(m: Any) -> Any:
+    """Why a laptop lease's holder is not this machine's to judge (its host, its worktree), or None."""
+    # A PID IS JUDGED ONLY WHERE IT RUNS (2026-11-18 23:42:21Z, core Main Pipeline #1053): a fixer another machine
+    # signed in as the laptop dispatched lost its lease 53 s after it was taken -- this tick found no pid 83138 among
+    # its own processes. Every "laptop:" holder names its host in its meta; an older wrapper's (no host) is ours only
+    # when its worktree is here.
+    if m.get("host") and m["host"] != socket_host():
+        return f"held on {m['host']}, judged there"
+    if not m.get("host") and m.get("worktree") and m.get("kind") == "fixer" and not os.path.isdir(m["worktree"]):
+        return "its worktree is not on this machine"
+    return None
+
+
+def _cached_owner_work(row: Any, m: Any, t: Any, cache: Any) -> Any:
+    """owner_work of the lease's family, judged once per family and pid in `cache`."""
+    fam = m.get("family") or row["name"].split("/", 1)[1]
+    k = ("owner", fam, m.get("pid"))
+    if k not in cache:
+        cache[k] = owner_work(fam, t, m.get("pid"))
+    return cache[k]
 
 
 def holder_work(row, t, cache=None):
@@ -102,20 +140,11 @@ def holder_work(row, t, cache=None):
         return None, "not this machine's"
     cache = {} if cache is None else cache
     m = lease_meta(row)
-    # A PID IS JUDGED ONLY WHERE IT RUNS (2026-11-18 23:42:21Z, core Main Pipeline #1053): a fixer another machine
-    # signed in as the laptop dispatched lost its lease 53 s after it was taken -- this tick found no pid 83138 among
-    # its own processes. Every "laptop:" holder names its host in its meta; an older wrapper's (no host) is ours only
-    # when its worktree is here.
-    if m.get("host") and m["host"] != socket_host():
-        return None, f"held on {m['host']}, judged there"
-    if not m.get("host") and m.get("worktree") and m.get("kind") == "fixer" and not os.path.isdir(m["worktree"]):
-        return None, "its worktree is not on this machine"
+    elsewhere = _judged_elsewhere(m)
+    if elsewhere:
+        return None, elsewhere
     if row["name"].startswith("owner/") or m.get("kind") in ("owner", "owned"):
-        fam = m.get("family") or row["name"].split("/", 1)[1]
-        k = ("owner", fam, m.get("pid"))
-        if k not in cache:
-            cache[k] = owner_work(fam, t, m.get("pid"))
-        return cache[k]
+        return _cached_owner_work(row, m, t, cache)
     if m.get("kind") == "fixer":
         return fixer_work(row, t)
     return None, "not judged here"

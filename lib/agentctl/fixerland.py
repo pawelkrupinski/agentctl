@@ -120,7 +120,7 @@ def spawn_fixer(repo: str, d: str, rec_path: str, rec: dict[str, Any], wt: str, 
     return p
 
 
-def unlanded_commits(wt):
+def unlanded_commits(wt: Any) -> Any:
     """[(sha, author time)] of the worktree's commits not on origin/main (cherry_landed: a rebased copy on main counts as
     landed), oldest first; [] when it is not a worktree."""
     if not wt or not os.path.isdir(wt):

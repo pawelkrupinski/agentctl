@@ -49,23 +49,34 @@ LAND_WAIT_REPORT_MIN = 10
 LAND_PRECHECK_ROUNDS = 2  # main moved under the lock this often: the next check runs under it, so a lander finishes
 
 
-def group_cpu_seconds(pgid):
-    """The CPU seconds the step's work has used: every live process of process group `pgid` AND every descendant of its
-    leader, whatever group it runs in (ps's cumulative TIME), or 0. ISSUE 20261108T232313-7384d0: the movies hook's
-    run-script-tests runs each self-test in a process group of its own, so a push whose hook ran scripttests for 19
-    silent minutes read "no output and no CPU" and was ended twice."""
+def _ps_rows() -> Any:
+    """Every process as [pid, ppid, pgid, time, stat] (stat "" where ps printed none)."""
     r = run_cmd(["ps", "-A", "-o", "pid=,ppid=,pgid=,time=,stat="])
     rows = [line.split() for line in r.stdout.splitlines()]
-    rows = [x if len(x) == 5 else x + [""] for x in rows if len(x) in (4, 5)]
+    return [x if len(x) == 5 else x + [""] for x in rows if len(x) in (4, 5)]
+
+
+def _descendants(rows: Any, leader: Any) -> Any:
+    """The pids of process `leader` and every descendant of it, whatever group each runs in."""
     kids = {}
     for pid, ppid, _g, _t, _s in rows:
         kids.setdefault(ppid, []).append(pid)
-    tree, todo = set(), [str(pgid)]
+    tree, todo = set(), [leader]
     while todo:
         cur = todo.pop()
         if cur not in tree:
             tree.add(cur)
             todo += kids.get(cur, [])
+    return tree
+
+
+def group_cpu_seconds(pgid: Any) -> Any:
+    """The CPU seconds the step's work has used: every live process of process group `pgid` AND every descendant of its
+    leader, whatever group it runs in (ps's cumulative TIME), or 0. ISSUE 20261108T232313-7384d0: the movies hook's
+    run-script-tests runs each self-test in a process group of its own, so a push whose hook ran scripttests for 19
+    silent minutes read "no output and no CPU" and was ended twice."""
+    rows = _ps_rows()
+    tree = _descendants(rows, str(pgid))
     mine = [x for x in rows if x[2] == str(pgid) or x[0] in tree]
     # A RUNNABLE PROCESS IS PROGRESS (as movies' stall-watch.sh counts it): under a load of 75 on 18 cores a busy child
     # is granted ~0.25 CPU-s a second, under the judge's 1 s a window, yet it is working, not stalled. Each sample with

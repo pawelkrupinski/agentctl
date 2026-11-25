@@ -7,8 +7,6 @@ import json
 import os
 import re
 import subprocess
-import sys
-import threading
 import time
 import urllib.parse
 import urllib.request
@@ -21,6 +19,7 @@ from agentctl.statefile import read_record, write_json
 from agentctl.ghapp import ghapp_enabled, ghapp_token
 from agentctl.classify import net_run
 from agentctl.core import HOME
+from agentctl.ghtally import gh_tally, gh_tally_as, gh_tally_shape
 
 
 # ---------------------------------------------------------------- forge: the read side
@@ -46,79 +45,6 @@ def forge_env(o_r, env=None):
     if ghapp_enabled():  # ci-runner: the repo's App installation token (ghapp.py), never a person's
         env["GH_TOKEN"] = ghapp_token(o_r)
     return env
-
-
-# THE QUOTA TALLY (2026-11-10): the kinowo-lander installation's 5,000 requests an hour ran out on 11-09 23:00-23:50Z, and
-# at a quiet 03:27-03:31Z on 11-10 it spent ~2,500 an hour, ~960 of them the gate refresh's `gh run list` reads
-# (dcde282). Nothing said where the rest went: ci-runner hides other users' processes, and no call was logged. Every
-# gh process (forge_env) and every REST GET answered 304 (free) is now counted by the agentctl function that asked
-# and what it ran, and each process prints its tally every GH_TALLY_SECONDS:
-#   agentctl: github calls (pid P, 300 s): 41 gh processes (movies 30, core 11), 12 of them 304 (free): 20 movies
-#   red_tick>run_jobs: gh run view ...  -- every site, by repository (the lander's quota is movies' alone)
-GH_TALLY_SECONDS = 300
-GH_TALLY_PLUMBING = {"forge_env", "gh_tally", "gh_json", "api", "_gh_api_once", "forge_run_list", "forge_actions_runs",
-                     "forge_actions_run", "forge_branches", "forge_branch_sha", "forge_delete_branch",
-                     "forge_release_asset", "tool_env", "drift_env",
-                     "<lambda>", "<listcomp>", "<dictcomp>", "<genexpr>", "wrapper", "inner"}
-_gh_tally_lock = threading.Lock()
-_gh_tally_state = {"since": time.time(), "calls": {}, "free": 0}
-_gh_tally_kind = threading.local()
-
-
-def gh_tally_site():
-    """`outer>inner`: the two nearest agentctl functions above the forge plumbing that made the call."""
-    names, f = [], sys._getframe(1)
-    while f is not None and len(names) < 2:
-        if f.f_code.co_name not in GH_TALLY_PLUMBING and f.f_code.co_name != "<module>":
-            names.append(f.f_code.co_name)
-        f = f.f_back
-    return ">".join(reversed(names)) or "?"
-
-
-def _print_tally(calls: Any, freed: Any, span: Any) -> None:
-    """The one-line tally of gh processes by repo and by call site, busiest first."""
-    top = sorted(calls.items(), key=lambda kv: -kv[1])
-    per_repo = {}
-    for k, n in top:
-        per_repo[k.split(" ", 1)[0]] = per_repo.get(k.split(" ", 1)[0], 0) + n
-    err(f"github calls (pid {os.getpid()}, {span:.0f} s): {sum(calls.values())} gh processes "
-        f"({', '.join(f'{r} {n}' for r, n in sorted(per_repo.items(), key=lambda kv: -kv[1]))}), {freed} of them 304 "
-        f"(free): " + "; ".join(f"{n} {k}" for k, n in top))
-
-
-def gh_tally(kind=None, free=False, now_=None, o_r=None):
-    """Count one gh process (or, `free`, mark the last one a 304) against its caller, and print the tally once
-    GH_TALLY_SECONDS have passed since the last. `kind` names what ran; None: what gh_json/_gh_api_once said."""
-    kind = kind or getattr(_gh_tally_kind, "what", None) or "gh"
-    t = time.time() if now_ is None else now_
-    with _gh_tally_lock:
-        st = _gh_tally_state
-        if free:
-            st["free"] += 1
-        else:
-            key = f"{(o_r or '?').split('/')[-1]} {gh_tally_site()}: {kind}"
-            st["calls"][key] = st["calls"].get(key, 0) + 1
-        if t - st["since"] < GH_TALLY_SECONDS:
-            return
-        calls, freed, span = st["calls"], st["free"], t - st["since"]
-        st.update(since=t, calls={}, free=0)
-    if calls:
-        _print_tally(calls, freed, span)
-
-
-@contextlib.contextmanager
-def gh_tally_as(what):
-    """What the gh process forge_env is about to count runs (gh_json's subcommand, a REST path's shape)."""
-    before, _gh_tally_kind.what = getattr(_gh_tally_kind, "what", None), what
-    try:
-        yield
-    finally:
-        _gh_tally_kind.what = before
-
-
-def gh_tally_shape(path: str) -> str:
-    """A REST path or gh argument with its ids and shas folded: runs/123/jobs -> runs/N/jobs."""
-    return re.sub(r"\b[0-9a-f]{40}\b", "SHA", re.sub(r"\b\d+\b", "N", path.split("?")[0]))[:80]
 
 
 def forge_argv(o_r, *args):
@@ -216,9 +142,10 @@ RUN_LIST_STATUSES = {"queued", "completed", "in_progress", "requested", "waiting
                      "cancelled", "failure", "neutral", "skipped", "stale", "startup_failure", "success", "timed_out"}
 
 
-def _run_list_options(args):
-    """{option: value} of a `run list` argv gh_json may answer from REST, or None."""
-    opts, i, rest = {}, 0, list(args[2:])
+def _run_list_opts_parsed(rest: Any) -> Any:
+    """{option: value} of a `run list` argv's flags (its --workflow, --branch, --limit, --json, --status, and their
+    short forms), or None on an unknown flag, a missing value or a repeated option."""
+    opts, i = {}, 0
     names = {"--workflow": "workflow", "-w": "workflow", "--branch": "branch", "-b": "branch", "--limit": "limit",
              "-L": "limit", "--json": "json", "--status": "status", "-s": "status"}
     while i < len(rest):
@@ -227,11 +154,21 @@ def _run_list_options(args):
             return None
         opts[name] = rest[i + 1]
         i += 2
-    if "json" not in opts or any(f not in RUN_LIST_FIELDS and f != "conclusion" for f in opts["json"].split(",")):
-        return None
-    if "workflow" in opts and not opts["workflow"].endswith((".yml", ".yaml")):
-        return None
-    if "status" in opts and opts["status"] not in RUN_LIST_STATUSES:
+    return opts
+
+
+def _run_list_values_ok(opts: Any) -> Any:
+    """Whether the parsed `run list` options name only what REST can answer: known --json fields, a workflow file,
+    a known --status."""
+    return ("json" in opts and all(f in RUN_LIST_FIELDS or f == "conclusion" for f in opts["json"].split(","))
+            and ("workflow" not in opts or opts["workflow"].endswith((".yml", ".yaml")))
+            and ("status" not in opts or opts["status"] in RUN_LIST_STATUSES))
+
+
+def _run_list_options(args: Any) -> Any:
+    """{option: value} of a `run list` argv gh_json may answer from REST, or None."""
+    opts = _run_list_opts_parsed(list(args[2:]))
+    if opts is None or not _run_list_values_ok(opts):
         return None
     try:
         opts["limit"] = int(opts.get("limit", 20))

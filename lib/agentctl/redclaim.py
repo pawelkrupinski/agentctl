@@ -22,7 +22,7 @@ from agentctl.redopen import red_attach_obs, red_open
 
 
 # -- interactive: claim, beat, release
-def red_targets(store, o_r, target, create=True):
+def red_targets(store: Any, o_r: Any, target: Any, create: Any = True) -> Any:
     """The non-terminal red items a target names: a red key, or a run (number, id, or `local`); a run not yet seen by
     the tick is opened here (its observation), so a claim always has its item."""
     t = str(target).lstrip("#")
@@ -42,7 +42,7 @@ def red_targets(store, o_r, target, create=True):
     return out
 
 
-def root_checkout(wt, o_r):
+def root_checkout(wt: Any, o_r: Any) -> Any:
     """True for a repo's own clone (the root checkout): a claim names a worktree of its own (audit #3)."""
     roots = set()
     for f in (lambda: scan_repo_for(o_r), lambda: repo_path_for(o_r), movies_repo_path):

@@ -27,7 +27,7 @@ def red_event(it, text, **kw):
 # is a fix-pending self-move, and the store raises a self-move's level unless its event says `info` -- so the landing
 # of its fix showed the red "escalated" on the owner's board. A fix-pending self-move is quiet unless it says
 # severity="escalate" (an unverified fix past its deadline, an owner push still waiting).
-def red_move(store, it, to, text, data=None, deadline_s=None, level=None, **ev):
+def red_move(store: Any, it: Any, to: Any, text: Any, data: Any = None, deadline_s: Any = None, level: Any = None, **ev: Any) -> Any:
     if to == "fix-pending" and it.get("state") == "fix-pending":
         ev.setdefault("severity", "info")
     kw = {"level": level} if level is not None else {}  # only when said: an older store server takes no `level`

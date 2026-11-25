@@ -42,6 +42,13 @@ def pure_move_claimed(repo, commit):
 _identity_known = process_cache({})  # (entry id, head) -> identity_change's verdict
 
 
+def hook_identity_flag(hook: Any) -> Any:
+    """The hook's flag that answers 'does this change touch identity': --identity-change, else --plan, else None. A flag
+    is never asked unless the hook has it: an unknown flag runs the real checks."""
+    text = read_text_or(hook or "", "")
+    return "--identity-change" if "--identity-change)" in text else "--plan" if "--plan)" in text else None
+
+
 def identity_change(repo, e):
     """Whether the change is an identity change (G5's drift check of a batch holding more than one): G5's identity-model commits, or the hook's
     --identity-change naming a path that can move takes (a hook without it: its --plan selecting the `identity` area). None when it cannot tell (no plan, unreadable commits): checked alone. Kept per
@@ -62,8 +69,7 @@ def identity_change(repo, e):
     # WHAT CAN MOVE TAKES, NOT WHAT RUNS IDENTITY SPECS (2026-11-19): the hook's `--identity-change` names only the
     # take paths (movies: the resolver, its adapters, the title rules, the judgements), while its identity AREA also
     # runs for a common/ change some identity specs read -- which still batches. A hook without it: its --plan's area.
-    text = read_text_or(hook or "", "")  # a flag is never asked unless the hook has it: an unknown flag runs the real checks
-    flag = "--identity-change" if "--identity-change)" in text else "--plan" if "--plan)" in text else None
+    flag = hook_identity_flag(hook)
     if paths is None or flag is None:
         return None
     plan = hook_query(hook, repo, flag, paths)

@@ -71,10 +71,16 @@ def item_events(st, typ, iid):
     return [e for e in st.events(after=0, limit=10 ** 7) if e.get("item_type") == typ and e.get("item_id") == iid]
 
 
-def change_paths(repo, entry, d):
-    """The change's files, from the clone (its base..tip); None when its commits are not here."""
+def _change_range(entry: Any, d: Any) -> Any:
+    """(base, tip) of a change: the entry's and the decision's, the first each names."""
     base = entry.get("checked_base") or entry.get("base") or d.get("base")
     tip = d.get("landed_sha") or entry.get("tip") or d.get("tip") or entry.get("head") or d.get("head")
+    return base, tip
+
+
+def change_paths(repo: Any, entry: Any, d: Any) -> Any:
+    """The change's files, from the clone (its base..tip); None when its commits are not here."""
+    base, tip = _change_range(entry, d)
     if not (repo and base and tip and os.path.isdir(repo)):
         return None
     r = git(repo, "diff", "--name-only", base, tip, check=False)

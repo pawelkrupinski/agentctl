@@ -3,6 +3,7 @@
 
 import json
 import time
+from typing import Any
 from agentctl.core import attempt, env_num, err, process_cache
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.redrecord import RED_TERMINAL
@@ -32,6 +33,7 @@ UNTRACKED_META = "red_untracked"      # store meta: {repo: [{key, workflow, jobs
 EVER_GREEN_RECHECK = 10 * 60          # s before a never-green answer is asked of GitHub again
 EVER_GREEN_JOB_RUNS = 10              # runs of the snapshot's list read for a job's success, at most
 UNTRACKED_KINDS = ("gate", "outside", "stuck-run", "predicts")
+_UNREAD = object()  # newest_green_main raised: the answer is unknown, not 'never green'
 _never_green_at = process_cache({})   # (repo, workflow[, job]) -> when GitHub last said never green
 _run_jobs_mem = process_cache({})     # run id -> its jobs (a decided run's never change)
 
@@ -84,19 +86,24 @@ def newest_green_main(o_r, workflow):
     return next((r for r in runs or [] if r.get("conclusion") == "success"), None)
 
 
+def _completed_green(runs: Any) -> Any:
+    """The first completed run of runs that concluded success, or None."""
+    return next((r for r in runs or [] if r.get("status") == "completed" and r.get("conclusion") == "success"), None)
+
+
 def workflow_ever_green(store, o_r, workflow, runs=(), now_=None):
     """True when workflow has had a green run on main, False when GitHub says it never had, None when unread."""
     t = now_ if now_ is not None else time.time()
     if workflow in (ever_green_record(store).get(o_r) or {}).get("flows", {}):
         return True
-    green = next((r for r in runs or [] if r.get("status") == "completed" and r.get("conclusion") == "success"), None)
+    green = _completed_green(runs)
     if not green:
         at = _never_green_at.get((o_r, workflow))
         if at is not None and t - at < env_num("AGENTCTL_EVER_GREEN_RECHECK", EVER_GREEN_RECHECK):
             return False
-        try:
-            green = newest_green_main(o_r, workflow)
-        except (Exception, SystemExit):  # SystemExit: NoToken
+        # SystemExit: NoToken
+        green = attempt(lambda: newest_green_main(o_r, workflow), _UNREAD, catch=(Exception, SystemExit))
+        if green is _UNREAD:
             return None
     if not green:
         _never_green_at[(o_r, workflow)] = t
@@ -139,6 +146,14 @@ def job_ever_green(store, o_r, workflow, job, runs=(), now_=None):
     return False
 
 
+def _never_green_jobs(store: Any, o_r: Any, ob: Any, wf: Any, runs: Any, now_: Any) -> Any:
+    """Why a gate or outside red is untracked when every one of its jobs never passed on main, or None."""
+    jobs = [j for j in ob.get("jobs") or [ob.get("job")] if j and j not in ("?", "infra", "stuck")]
+    if jobs and all(job_ever_green(store, o_r, wf, j, runs, now_) is False for j in jobs):
+        return f"never green: {', '.join(jobs)} of {wf} never passed on main"
+    return None
+
+
 def red_never_green(store, o_r, ob, now_=None):
     """Why observation ob is untracked ("never green: ..."), or None (tracked). Its workflow never green on main; or, a
     gate or outside red, every one of its jobs never green there."""
@@ -150,12 +165,7 @@ def red_never_green(store, o_r, ob, now_=None):
         return f"never green: {wf} has had no green run on main"
     if g is None or ob.get("red_kind") not in ("gate", "outside"):
         return None
-    jobs = [j for j in ob.get("jobs") or [ob.get("job")] if j and j not in ("?", "infra", "stuck")]
-    if not jobs:
-        return None
-    if all(job_ever_green(store, o_r, wf, j, runs, now_) is False for j in jobs):
-        return f"never green: {', '.join(jobs)} of {wf} never passed on main"
-    return None
+    return _never_green_jobs(store, o_r, ob, wf, runs, now_)
 
 
 def red_split_untracked(store, o_r, obs, now_=None):

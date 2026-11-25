@@ -1,6 +1,7 @@
 # agentctl, part `statemachines`: the machines (design §5): every item type's states, each with its deadline, its automatic exit and the states it may go to; a change's exits and their events
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 
 
 # ---------------------------------------------------------------- the machines (design §5; phase 1 step 5)
@@ -151,18 +152,27 @@ CHANGE_EXIT_VERDICT = {"landed": "LANDED", "rejected": "NOT LANDED", "superseded
                        "cancelled": "CANCELLED"}
 
 
-def change_exit_event(iid, to, data, ev):
-    """The event of a change's terminal transition to `to`, completed so that it reaches its author's inbox."""
-    ev = dict(ev)
+def _exit_audience(ev: Any, data: Any) -> Any:
+    """The audience of a change's terminal event: its own, completed with the change's worktree, session and pid."""
     aud = {k: v for k, v in (ev.get("audience") or {}).items() if v}
     for k in ("worktree", "session", "claude_pid"):
         if not aud.get(k) and data.get(k):
             aud[k] = data[k]
+    return aud
+
+
+def _exit_text(iid: Any, to: Any, data: Any) -> Any:
+    """The line of a terminal change event that carries none: the verdict word, the id, why."""
+    return f"{CHANGE_EXIT_VERDICT.get(to, to.upper())} {iid}" + (f": {data['why']}" if data.get("why") else "")
+
+
+def change_exit_event(iid: Any, to: Any, data: Any, ev: Any) -> Any:
+    """The event of a change's terminal transition to `to`, completed so that it reaches its author's inbox."""
+    ev = dict(ev)
+    aud = _exit_audience(ev, data)
     refs = dict(ev.get("refs") or {})
     refs.setdefault("entry", iid)
-    text = ev.get("text") or refs.get("verdict") or ""
-    if not text:
-        text = f"{CHANGE_EXIT_VERDICT.get(to, to.upper())} {iid}" + (f": {data['why']}" if data.get("why") else "")
+    text = ev.get("text") or refs.get("verdict") or _exit_text(iid, to, data)
     refs.setdefault("verdict", text.splitlines()[0])
     refs.setdefault("final", True)
     refs.setdefault("command", "land")
@@ -173,6 +183,20 @@ def change_exit_event(iid, to, data, ev):
     return ev
 
 
+def _exit_events(store: Any) -> Any:
+    """{change id: its terminal-transition events}, every one the store holds."""
+    evs = {}
+    for ev in store.events(after=0, limit=10 ** 9):
+        if ev.get("item_type") == "change" and ev.get("to_state") in CHANGE_EXIT_VERDICT:
+            evs.setdefault(ev["item_id"], []).append(ev)
+    return evs
+
+
+def _reaches_inbox(ev: Any, state: Any) -> Any:
+    """Whether event ev is a transition to `state` that reaches an inbox (an audience worktree or a non-info severity)."""
+    return ev.get("to_state") == state and bool((ev.get("audience") or {}).get("worktree") or ev["severity"] != "info")
+
+
 def change_exits_unannounced(store, since=0):
     """THE INVARIANT's check: the terminal change items (entered their state at or after `since`) whose terminal
     transition has no event that reaches an inbox (an audience or a non-info severity). Empty is healthy.
@@ -181,17 +205,9 @@ def change_exits_unannounced(store, since=0):
     committed with its transition, came after that read): a terminal item's event is in the same transaction, so a
     later events read always holds it."""
     exits = [it for it in store.items("change") if it["state"] in CHANGE_EXIT_VERDICT and it["entered_at"] >= since]
-    evs = {}
-    for ev in store.events(after=0, limit=10 ** 9) if exits else ():
-        if ev.get("item_type") == "change" and ev.get("to_state") in CHANGE_EXIT_VERDICT:
-            evs.setdefault(ev["item_id"], []).append(ev)
-    out = []
-    for it in exits:
-        if not any(e.get("to_state") == it["state"] and ((e.get("audience") or {}).get("worktree")
-                                                          or e["severity"] != "info")
-                   for e in evs.get(it["id"], [])):
-            out.append(it["id"])
-    return out
+    evs = _exit_events(store) if exits else {}
+    return [it["id"] for it in exits
+            if not any(_reaches_inbox(e, it["state"]) for e in evs.get(it["id"], []))]
 
 
 def change_event(e, verdict, tail=(), code=1, final=True, severity="info", **refs):

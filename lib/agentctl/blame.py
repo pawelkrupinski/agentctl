@@ -155,6 +155,27 @@ def blame_finish(store, it, b, why, t):
     return [line]
 
 
+def _passing_probes(b: Any) -> Any:
+    """The search's probes that passed at its boundary lo."""
+    return [p for p in b.get("probes") or [] if p.get("boundary") == b.get("lo") and p.get("verdict") == "pass"]
+
+
+def _seeded_ci_proof(probes: Any) -> Any:
+    """Whether a CI drift probe among probes replayed the red's own seeds."""
+    return any(p.get("ci") and p.get("kind") == "drift" and p.get("seeds") is True for p in probes)
+
+
+def _parent_unproven(b: Any) -> Any:
+    """Why the search's passing parent is no proof for a drift red -- no CI probe re-ran it with the red's own seeds --
+    or None."""
+    lo = b.get("lo")
+    proof = _passing_probes(b)
+    if not _seeded_ci_proof(proof):
+        return (f"the parent {str(blame_boundary(b, lo or 0))[:10]} was never re-run with the red's own seeds "
+                f"({'; '.join(str(p.get('evidence') or '') for p in proof)[:160] or 'no pass'}): no evidence for a culprit")
+    return None
+
+
 def blame_unproven(d, b):
     """Why the search's passing parent (boundary lo) is no proof for this red, or None. A convergence red's parent
     passes ONLY on a drift probe that replayed the red's own seeds, each row's verdict line naming the seed it pinned
@@ -164,12 +185,7 @@ def blame_unproven(d, b):
         return None
     if b.get("kind") != "drift":
         return "no CI check repeats this red with its own seeds (not a takes-drift row): the culprit is undetermined"
-    lo = b.get("lo")
-    proof = [p for p in b.get("probes") or [] if p.get("boundary") == lo and p.get("verdict") == "pass"]
-    if not any(p.get("ci") and p.get("kind") == "drift" and p.get("seeds") is True for p in proof):
-        return (f"the parent {str(blame_boundary(b, lo or 0))[:10]} was never re-run with the red's own seeds "
-                f"({'; '.join(str(p.get('evidence') or '') for p in proof)[:160] or 'no pass'}): no evidence for a culprit")
-    return None
+    return _parent_unproven(b)
 
 
 def blame_step(store, it, repo, o_r, t):

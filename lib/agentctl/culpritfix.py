@@ -99,27 +99,41 @@ def blame_reland(o_r, repo, u, b):
     return {"ok": True, "at": ts(), "worktree": wt, "msg": f"relanding {blame_change_name(g)} (reverting {rv[:10]}) from {wt} (pid {pid})"}
 
 
+def _refuted_note(g: Any, shas: Any, b: Any) -> Any:
+    """The fixer's note when the revert of the blamed change did not clear the red."""
+    return (f" THE BLAME WAS WRONG: {blame_change_name(g)} ({shas}) was reverted and that did not clear this red, so "
+            f"it is being relanded ({(b.get('reland') or {}).get('msg') or 'due'}). Look elsewhere for the cause.")
+
+
+def _offending_note(g: Any, shas: Any, b: Any, rv: Any) -> Any:
+    """The fixer's note naming the offending change: reverted (rv ok) or not."""
+    offending = (f" THE OFFENDING CHANGE is {blame_change_name(g)} ({shas}: `git show {shas}`), landed from "
+                 f"{str(g.get('worktree') or '?').replace(HOME, '~')}; its parent passes the same check, its end fails")
+    if rv.get("ok"):
+        return (f"{offending} ({str(b.get('evidence') or '')[:200]}). It was REVERTED ({rv.get('msg')}): your job is to "
+                f"make it land again, fixed -- in your worktree, after `git fetch {remote()} && git rebase "
+                f"{remote()}/main`, `git revert <the revert's sha>` re-applies it; add the fix and land it "
+                f"(`Fixes-Red:` not needed: the revert fixed the red). Its lander could not be revived: "
+                f"{b.get('revive_failed') or 'none recorded'}.")
+    return (f"{offending}. Its revert could not be landed ({rv.get('msg') or 'not tried'}): fix it forward "
+            f"(`Fixes-Red:`).")
+
+
 def blame_note(b):
     """What a fresh fixer is told of a red's blame (its change's diff and worktree), or ''."""
     b = b or {}
     g = blame_culprit(b)
     if not g:
         return ""
-    rv = b.get("revert") or {}
     shas = " ".join(c[:10] for c in g["commits"])
     if b.get("state") == "refuted":
-        return (f" THE BLAME WAS WRONG: {blame_change_name(g)} ({shas}) was reverted and that did not clear this red, so "
-                f"it is being relanded ({(b.get('reland') or {}).get('msg') or 'due'}). Look elsewhere for the cause.")
-    if rv.get("ok"):
-        return (f" THE OFFENDING CHANGE is {blame_change_name(g)} ({shas}: `git show {shas}`), landed from "
-                f"{str(g.get('worktree') or '?').replace(HOME, '~')}; its parent passes the same check, its end fails "
-                f"({str(b.get('evidence') or '')[:200]}). It was REVERTED ({rv.get('msg')}): your job is to make it land "
-                f"again, fixed -- in your worktree, after `git fetch {remote()} && git rebase {remote()}/main`, "
-                f"`git revert <the revert's sha>` re-applies it; add the fix and land it (`Fixes-Red:` not needed: the "
-                f"revert fixed the red). Its lander could not be revived: {b.get('revive_failed') or 'none recorded'}.")
-    return (f" THE OFFENDING CHANGE is {blame_change_name(g)} ({shas}: `git show {shas}`), landed from "
-            f"{str(g.get('worktree') or '?').replace(HOME, '~')}; its parent passes the same check, its end fails. Its "
-            f"revert could not be landed ({rv.get('msg') or 'not tried'}): fix it forward (`Fixes-Red:`).")
+        return _refuted_note(g, shas, b)
+    return _offending_note(g, shas, b, b.get("revert") or {})
+
+
+def _lander_text(g: Any) -> Any:
+    """Who landed the blamed change: its lander's name, or the owner by hand when no session did."""
+    return lander_name(g.get("lander")) if (g.get("lander") or {}).get("session") else "the owner (by hand)"
 
 
 def blame_status(d):
@@ -129,17 +143,16 @@ def blame_status(d):
     if not g:
         return None
     rv = b.get("revert") or {}
-    who = lander_name(g.get("lander")) if (g.get("lander") or {}).get("session") else "the owner (by hand)"
+    who = _lander_text(g)
+    name, short = blame_change_name(g), g.get("change") or g["commits"][0][:9]
     if b.get("state") == "refuted":
-        return (f"blame refuted: the revert of {blame_change_name(g)} did not clear it; relanded",
-                f"revert of {g.get('change') or g['commits'][0][:9]} refuted")
+        return f"blame refuted: the revert of {name} did not clear it; relanded", f"revert of {short} refuted"
     if rv.get("ok"):
         rev = "; lander revived" if b.get("revived") else ""
-        return (f"REVERTED {blame_change_name(g)} ({rv.get('msg')}), landed by {who}{rev}",
-                f"reverted {g.get('change') or g['commits'][0][:9]}{rev}")
+        return f"REVERTED {name} ({rv.get('msg')}), landed by {who}{rev}", f"reverted {short}{rev}"
     if rv:
-        return f"revert of {blame_change_name(g)} failed: {rv.get('msg')}", "revert failed"
-    return f"culprit: {blame_change_name(g)}, landed by {who}", f"culprit {g.get('change') or g['commits'][0][:9]}"
+        return f"revert of {name} failed: {rv.get('msg')}", "revert failed"
+    return f"culprit: {name}, landed by {who}", f"culprit {short}"
 
 
 def _note_lander_tried(store: Any, it_id: Any, b: Any) -> Any:

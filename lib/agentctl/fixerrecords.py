@@ -50,6 +50,22 @@ def fixer_records(max_age: float | None = None, now_: float | None = None) -> li
     return out
 
 
+def _newest_live_record_of(sid: str) -> str | None:
+    """The path of the newest unended fixer record naming session `sid`, or None."""
+    mine = [r for r in fixer_records() if r.get("session") == sid and not r.get("ended")]
+    return str(max(mine, key=lambda r: r.get("started") or "")["path"]) if mine else None
+
+
+def _session_fixer_record(sid: str) -> str | None:
+    """The record path of the fixer session `sid`: its binding, else a live record naming it; None when none does (a
+    session no record or binding names is no fixer, whatever its environment says)."""
+    bound = (read_record(fixer_session_path(sid)) or {}).get("record")
+    rec = read_record(bound) if bound else None
+    if rec and not rec.get("ended") and record_session_is(rec, sid, unset=True):
+        return bound
+    return _newest_live_record_of(sid)
+
+
 def own_fixer_record_path() -> str | None:
     """This session's own fixer record, or None. The session id decides -- its binding (bind_fixer_session), else a
     record naming it; with a session, the environment never does: a `claude --bg` session can start in a spare
@@ -57,17 +73,7 @@ def own_fixer_record_path() -> str | None:
     and wrote its notes onto #2432's lease), so the environment's record counts only when its session is this one, or
     when no record names this session (a record not yet told its session id)."""
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    env = os.environ.get("AGENTCTL_FIXER_RECORD")
-    if sid:
-        bound = (read_record(fixer_session_path(sid)) or {}).get("record")
-        rec = read_record(bound) if bound else None
-        if rec and not rec.get("ended") and record_session_is(rec, sid, unset=True):
-            return bound
-        mine = [r for r in fixer_records() if r.get("session") == sid and not r.get("ended")]
-        if mine:
-            return str(max(mine, key=lambda r: r.get("started") or "")["path"])
-        return None  # a session no record or binding names is no fixer, whatever its environment says
-    return env or None
+    return _session_fixer_record(sid) if sid else os.environ.get("AGENTCTL_FIXER_RECORD") or None
 
 
 def fixer_session_path(sid: str) -> str:

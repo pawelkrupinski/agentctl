@@ -1,32 +1,28 @@
 # agentctl, part `redvault`: vault asks, blocks nobody can see clear.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-import os
 import re
 import time
 from dataclasses import dataclass
 from typing import Any
-from agentctl.core import HOME, fmt_age, git, remote, slug
+from agentctl.core import fmt_age, git
 from agentctl.timefmt import iso_at, iso_epoch
 from agentctl.statefile import read_record
 from agentctl.classify import QUOTA_LOG
 from agentctl.repos import RED_PRIMARY, repo_signs
 from agentctl.procs import safe_cwd
 from agentctl.fixerrecords import own_fixer_record_path
-from agentctl.inboxentry import inbox_write
-from agentctl.worktrees import claimant, worktree_of
-from agentctl.redrepos import red_owner_only
+from agentctl.worktrees import claimant
 from agentctl.ciwhy import resolve_run
 from agentctl.statemachines import StaleVersion
 from agentctl.redrecord import lease_is_live, red_lease, red_of_key, red_what
 from agentctl.leases import block_lease, lease_meta, red_block_of
 from agentctl.conditions import probe_words, run_probe
 from agentctl.redask import OWNER_CAUSES, OWNER_CAUSE_CATEGORY, red_decision, vault_decide_cmd
-from agentctl.fixerland import unlanded_commits
 from agentctl.redmove import red_move
 from agentctl.redblock import BLOCK_MAX, BLOCK_TTL, owner_cmd_unsafe, owner_details, red_run_units
 from agentctl.redopen import red_offer
-from agentctl.redclaim import red_targets, root_checkout
+from agentctl.redclaim import red_targets
 from agentctl.ownerleases import owner_holder
 
 
@@ -164,49 +160,6 @@ def red_vault_block(store, it, upd, ns, why, t):
     red_move(store, it, "blocked-external", f"{red_what(d)}: waits on the {ns} vault (the owner's `decide vault-{ns}`)",
              data={**upd, "cause": f"vault-{ns}", "block": lname})
     return [f"{red_what(d)}: waits on the {ns} vault"]
-
-
-def red_owner_push(store, o_r, target, note="", wt=None):
-    """(rc, lines) of `red owner-push`: an owner-only repo's fix (red-repos.json; infra, whose push is a deploy), prepared
-    on the worktree's local branch, filed with the owner. The red goes to fix-pending with a fix of status `owner` (its
-    branch, head and the owner's one-liner) and one escalation reaches the inbox with the command; a green gate run
-    verifies it, and unproven after RED_FIX_GIVEUP it is offered again (red_fix_pending). Never pushes."""
-    if not red_owner_only(o_r):
-        return 2, [f"NOT FILED: {o_r} is not owner-only (red-repos.json): land the fix with `~/bin/agentctl land`"]
-    here = safe_cwd()
-    wt = os.path.realpath(wt or worktree_of(here) or here)
-    if not os.path.isdir(wt) or root_checkout(wt, o_r):
-        return 2, [f"NOT FILED: {wt.replace(HOME, '~')} is not a worktree of your own: `--worktree <yours>`"]
-    try:
-        if slug(wt) != o_r:
-            return 2, [f"NOT FILED: {wt.replace(HOME, '~')} is a clone of {slug(wt)}, not {o_r}"]
-    except (Exception, SystemExit) as e:
-        return 2, [f"NOT FILED: {wt.replace(HOME, '~')} is no clone of {o_r} ({str(e)[:120]})"]
-    if git(wt, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
-        return 1, ["NOT FILED: the worktree has uncommitted changes: commit each step first"]
-    git(wt, "fetch", "--quiet", remote(), "main", check=False)
-    ahead = unlanded_commits(wt)
-    if not ahead:
-        return 1, [f"NOT FILED: nothing in {wt.replace(HOME, '~')} that is not on {remote()}/main"]
-    items = red_targets(store, o_r, target, create=False)
-    if not items:
-        return 1, [f"NOT FILED: #{target} names no open red of {o_r}"]
-    head = git(wt, "rev-parse", "HEAD").strip()
-    branch = git(wt, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip() or head[:10]
-    tw = wt.replace(HOME, "~")
-    cmd = f"git -C {tw} pull --rebase {remote()} main && git -C {tw} push {remote()} HEAD:main"
-    t = store.clock()
-    what = ", ".join(red_what(it["data"]) for it in items)
-    line = (f"RED OWNER PUSH: {what}: a fix is ready on {branch} ({len(ahead)} commit(s), "
-            f"{', '.join(s[:10] for s, _ in ahead[:6])}) in {wt.replace(HOME, '~')}"
-            + (f" -- {note}" if note else "") + f". {o_r} is owner-only (a push is a deploy): `! {cmd}`")
-    for it in items:
-        cur = store.item("red", it["id"])
-        red_move(store, cur, "fix-pending", line, data={"fix": {"status": "owner", "entry": f"owner-push:{branch}",
-                                                                "sha": head, "at": t, "worktree": wt, "cmd": cmd,
-                                                                "note": note, "verify_since": t}})
-    inbox_write("red", line, [line], [], 1, cwd=wt)
-    return 0, [line, f"BLOCKED ON OWNER: {cmd}"]
 
 
 # A BLOCK NOBODY CAN SEE CLEAR (2026-11-07: Verify scrape recording #14's reds read "BLOCKED ON OWNER: ... re-pin movies

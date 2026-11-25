@@ -268,28 +268,38 @@ def lander_of_commit(idx, key):
 _lander_landed_at = process_cache({})  # repo -> when its landed changes were last noted
 
 
+def _landed_unnoted(it: Any, t: Any) -> Any:
+    """Whether a change item landed in the last day with commit keys and no `landed_commits` noted yet."""
+    return bool(it["state"] == "landed" and (it["data"] or {}).get("commit_keys")
+                and not it["data"].get("landed_commits") and t - float(it["entered_at"]) < 86400)
+
+
+def _note_landed_commits(store: Any, it: Any, keys: Any) -> Any:
+    """Note on landed change item `it` its commits on main (sha -> patch-id), found by the keys it recorded at
+    submission; the line to report, or None when none is found (or the item moved meanwhile)."""
+    idx = lander_index([{"change": it["id"], "commit_keys": it["data"]["commit_keys"], "state": "landed"}])
+    hits = {k["sha"]: k.get("patch_id") for k in keys if lander_of_commit(idx, k)}
+    if not hits:
+        return None
+    with suppress(StaleVersion):
+        store.update_item("change", it["id"], it["version"], {"landed_commits": hits})
+        return f"lander: {it['id']} landed as {', '.join(s[:9] for s in hits)}"
+    return None
+
+
 def lander_note_landed(store, repo, o_r, t, force=False):
     """Every LANDER_LANDED_EVERY s: each change landed in the last day whose commits on main are not noted yet gets them
     (`landed_commits`: main sha -> patch-id), found by the keys it recorded at submission. Returns what it noted."""
     if not force and t - _lander_landed_at.get(repo, 0) < env_num("AGENTCTL_LANDER_LANDED_EVERY", LANDER_LANDED_EVERY):
         return []
     _lander_landed_at[repo] = t
-    todo = [it for it in store.items("change") if it["state"] == "landed" and (it["data"] or {}).get("commit_keys")
-            and not it["data"].get("landed_commits") and t - float(it["entered_at"]) < 86400]
+    todo = [it for it in store.items("change") if _landed_unnoted(it, t)]
     if not todo or not repo:
         return []
     main = f"{remote()}/main"
     base = f"{main}~200" if git_ok(repo, "rev-parse", "-q", "--verify", f"{main}~200") else None
     keys = commit_keys(repo, base, main)
-    acts = []
-    for it in todo:
-        idx = lander_index([{"change": it["id"], "commit_keys": it["data"]["commit_keys"], "state": "landed"}])
-        hits = {k["sha"]: k.get("patch_id") for k in keys if lander_of_commit(idx, k)}
-        if hits:
-            with suppress(StaleVersion):
-                store.update_item("change", it["id"], it["version"], {"landed_commits": hits})
-                acts.append(f"lander: {it['id']} landed as {', '.join(s[:9] for s in hits)}")
-    return acts
+    return [line for it in todo if (line := _note_landed_commits(store, it, keys))]
 
 
 def lander_note_direct(store, repo, head, keys):

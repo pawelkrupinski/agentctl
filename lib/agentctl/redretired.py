@@ -204,15 +204,26 @@ def _job_has(j, key, name):
     return False
 
 
+def _input_gated_steps(steps: Any) -> Any:
+    """{name: its `if:`} of the steps (name, if) that ran under a condition on the inputs or the matrix."""
+    return {n: c for n, c in steps if n and c and re.search(r"\b(inputs|matrix|github\.event\.inputs)\.", c)}
+
+
+def _ran_gated_step_gone(step: Any, gated: Any, now: Any) -> Any:
+    """Whether the run's step ran under an input-gated `if:` and no step of the job now (`now`: names) matches it."""
+    n = step.get("name")
+    return step.get("conclusion") in ("success", "failure") and n in gated and not any(_name_match(t, n) for t in now)
+
+
 def _step_branch_gone(key, cur, old, steps):
     """A step the run's job ran under an `if:` on its inputs or matrix (the row's branch), gone from the job now."""
     if not old or key not in old or key not in cur:
         return None
-    gated = {n: c for n, c in old[key]["steps"] if n and c and re.search(r"\b(inputs|matrix|github\.event\.inputs)\.", c)}
+    gated = _input_gated_steps(old[key]["steps"])
     now = [n for n, _c in cur[key]["steps"] if n]
     for s in steps or []:
         n = s.get("name")
-        if s.get("conclusion") in ("success", "failure") and n in gated and not any(_name_match(t, n) for t in now):
+        if _ran_gated_step_gone(s, gated, now):
             return f"job {key} ran step `{n}` (if: {gated[n]}), a branch gone from main"
     return None
 

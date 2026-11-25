@@ -4,6 +4,7 @@
 import os
 import re
 import subprocess
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, git, remote, state_root
 from agentctl.repos import red_repo_conf, red_repo_of
@@ -143,25 +144,26 @@ def fix_replay_once(repo, sha, cmd, side):
         git(repo, "worktree", "prune", check=False)
 
 
-def gate_fix_replay_refusal(d, claimed, bare, nones, proofs):
-    """Why a Fixes-Red: for gate red d is refused under policy `fix-replay` (above), or None."""
-    what = red_what(d)
-    if nones:
-        bad = [(r, fix_replay_none_lint(r)) for r in nones]
-        bad = [(r, why) for r, why in bad if why]
-        if not bad:
-            return None
-        return (f"{what} is a gate red: `Fix-Replay: none — {bad[0][0]}` is no reason ({bad[0][1]}); name, in "
-                f"{FIX_REPLAY_NONE_MIN}+ characters, why this red cannot replay (infra, a CI-only race), or give the "
-                "command that fails at origin/main and passes at your fix")
-    cmds = bare + [c for c, _b, _h in claimed if c not in bare]
-    if not cmds:
-        return (f"{what} is a gate red: its Fixes-Red needs `Fix-Replay: <command>` -- the narrowest command that "
-                "fails at origin/main and passes at your fix; agentctl runs it at both before the change counts as the "
-                "fix -- or `Fix-Replay: none — <why>` when it genuinely cannot replay (a specific reason, "
-                f"{FIX_REPLAY_NONE_MIN}+ characters; the owner reads them weekly)")
+def _none_replay_refusal(what: Any, nones: Any) -> Any:
+    """Why the `Fix-Replay: none — <why>` reasons of gate red `what` are refused, or None when each is a reason."""
+    bad = [(r, fix_replay_none_lint(r)) for r in nones]
+    bad = [(r, why) for r, why in bad if why]
+    if not bad:
+        return None
+    return (f"{what} is a gate red: `Fix-Replay: none — {bad[0][0]}` is no reason ({bad[0][1]}); name, in "
+            f"{FIX_REPLAY_NONE_MIN}+ characters, why this red cannot replay (infra, a CI-only race), or give the "
+            "command that fails at origin/main and passes at your fix")
+
+
+def _replay_proved(seen: Any, cmds: Any) -> Any:
+    """Whether a recorded run of one of cmds failed at origin/main and passed at the fix."""
+    return any((seen.get(c) or {}).get("base") == "FAIL" and (seen.get(c) or {}).get("head") == "PASS" for c in cmds)
+
+
+def _proof_replay_refusal(what: Any, cmds: Any, proofs: Any) -> Any:
+    """Why the replay commands cmds of gate red `what` do not prove the fix (agentctl's recorded runs), or None."""
     seen = {p.get("cmd"): p for p in proofs or [] if p.get("cmd")}
-    if any((seen.get(c) or {}).get("base") == "FAIL" and (seen.get(c) or {}).get("head") == "PASS" for c in cmds):
+    if _replay_proved(seen, cmds):
         return None
     ran = [c for c in cmds if c in seen]
     if ran:
@@ -171,6 +173,20 @@ def gate_fix_replay_refusal(d, claimed, bare, nones, proofs):
                 "the command does not reach the red)")
     return (f"{what} is a gate red: agentctl has not run `{cmds[0]}` (a bare `Fix-Replay: <command>`, no "
             "base=/head= of your own: `agentctl land` from the laptop runs it at origin/main and at your fix)")
+
+
+def gate_fix_replay_refusal(d: Any, claimed: Any, bare: Any, nones: Any, proofs: Any) -> Any:
+    """Why a Fixes-Red: for gate red d is refused under policy `fix-replay` (above), or None."""
+    what = red_what(d)
+    if nones:
+        return _none_replay_refusal(what, nones)
+    cmds = bare + [c for c, _b, _h in claimed if c not in bare]
+    if not cmds:
+        return (f"{what} is a gate red: its Fixes-Red needs `Fix-Replay: <command>` -- the narrowest command that "
+                "fails at origin/main and passes at your fix; agentctl runs it at both before the change counts as the "
+                "fix -- or `Fix-Replay: none — <why>` when it genuinely cannot replay (a specific reason, "
+                f"{FIX_REPLAY_NONE_MIN}+ characters; the owner reads them weekly)")
+    return _proof_replay_refusal(what, cmds, proofs)
 
 
 def fix_replay_refusal(repo, commits, store, proofs=None):

@@ -84,6 +84,35 @@ def submit_to_server(repo, d, fields, store, note="", after_queued=None, waits=F
     return 0
 
 
+def _refusal_told(a: Any, verdict: Any, lines: Any) -> Any:
+    """Tell the change's author the precheck's verdict (inbox and stdout); exit code 1."""
+    inbox_write("land", verdict, [verdict], [l for l in lines if l.strip()][-40:], 1, cwd=a.repo)
+    print(verdict, flush=True)
+    return 1
+
+
+def _cancel_refused(a: Any, store: Any, lines: Any, last: Any) -> Any:
+    """The precheck refused change a.entry (`last`: its closing line): cancel it and tell its author. Exit code 1 when
+    the verdict is NOT LANDED or the cancel failed, 0 when the change was decided already."""
+    cancel = argparse.Namespace(wcmd="cancel", repo=a.repo, entry=a.entry, renamed=True, hold_for=None, hold_why=None)
+    # NOT LANDED only when the cancel took: the landing check runs alongside and may have decided first (review
+    # 2026-11-07: a change that LANDED was told NOT LANDED, "its queue entry is cancelled").
+    try:
+        rc = queue_command(cancel, store)
+    except (Exception, SystemExit) as e:  # the store unreachable: the change is still queued, its check judges it
+        err(f"could not cancel {a.entry}: {e}")
+        verdict = (f"PRECHECK REFUSED {a.entry} ({a.head[:10]}): {last}; it could not be cancelled ({str(e)[:120]}), so "
+                   f"the landing check still judges it -- `agentctl land cancel {a.entry}` to drop it, fix it in {a.repo}")
+        return _refusal_told(a, verdict, lines)
+    if rc != 0:
+        print(f"the fast precheck refused {a.entry}, but it is already decided (no open change to cancel): its own "
+              "verdict stands", flush=True)
+        return 0
+    verdict = (f"NOT LANDED: the fast precheck refused {a.entry} ({a.head[:10]}): {last}; its queue entry is cancelled. "
+               f"Fix it in {a.repo}, then land again")
+    return _refusal_told(a, verdict, lines)
+
+
 def cmd_land_precheck(a, store):
     """The detached half of start_fast_precheck: run the repo's precheck, and on a refusal cancel the queued change."""
     # Its own process group, ended WHOLE at the bound (review 2026-11-07: subprocess.run killed only the script, so what
@@ -104,27 +133,7 @@ def cmd_land_precheck(a, store):
     last = next((l for l in reversed(lines) if l.startswith("PRECHECK ")), lines[-1] if lines else "exit 1")
     why = precheck_reason(lines)
     last = f"{last} -- {why}" if why else last
-    cancel = argparse.Namespace(wcmd="cancel", repo=a.repo, entry=a.entry, renamed=True, hold_for=None, hold_why=None)
-    # NOT LANDED only when the cancel took: the landing check runs alongside and may have decided first (review
-    # 2026-11-07: a change that LANDED was told NOT LANDED, "its queue entry is cancelled").
-    try:
-        rc = queue_command(cancel, store)
-    except (Exception, SystemExit) as e:  # the store unreachable: the change is still queued, its check judges it
-        err(f"could not cancel {a.entry}: {e}")
-        verdict = (f"PRECHECK REFUSED {a.entry} ({a.head[:10]}): {last}; it could not be cancelled ({str(e)[:120]}), so "
-                   f"the landing check still judges it -- `agentctl land cancel {a.entry}` to drop it, fix it in {a.repo}")
-        inbox_write("land", verdict, [verdict], [l for l in lines if l.strip()][-40:], 1, cwd=a.repo)
-        print(verdict, flush=True)
-        return 1
-    if rc != 0:
-        print(f"the fast precheck refused {a.entry}, but it is already decided (no open change to cancel): its own "
-              "verdict stands", flush=True)
-        return 0
-    verdict = (f"NOT LANDED: the fast precheck refused {a.entry} ({a.head[:10]}): {last}; its queue entry is cancelled. "
-               f"Fix it in {a.repo}, then land again")
-    inbox_write("land", verdict, [verdict], [l for l in lines if l.strip()][-40:], 1, cwd=a.repo)
-    print(verdict, flush=True)
-    return 1
+    return _cancel_refused(a, store, lines, last)
 
 
 def queue_here(repo: Any, main_ref: Any, head: Any, d: Any, a: Any, store: Any, waits: Any, after_queued: Any) -> Any:

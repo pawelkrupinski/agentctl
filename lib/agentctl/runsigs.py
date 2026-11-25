@@ -114,6 +114,21 @@ RUNSIG_UNREAD_FIRST = 300
 RUNSIG_UNREAD_MAX = 7200
 
 
+def _save_unread_sigs(unread_path: Any, unread: Any, rid: Any, workflow: Any, per_job: Any, t: Any) -> Any:
+    """The signatures of a run whose log went unread, kept with their backoff (never cached as a verdict)."""
+    sigs = [{"job": j, "kind": k, "line": (l or "")[:300], "sig": signature(workflow, j, l)} for j, k, l in per_job]
+    tries = int((unread or {}).get("tries") or 0) + 1
+    with suppress(OSError):
+        write_json(unread_path, {"run": rid, "classifier": classifier_version(), "sigs": sigs, "tries": tries,
+                                 "due": t + min(RUNSIG_UNREAD_MAX, RUNSIG_UNREAD_FIRST * 2 ** (tries - 1))})
+    return sigs
+
+
+def _unread_not_due(unread: Any, t: Any) -> Any:
+    """Whether the unread record of a run is of this classifier and its backoff is not due yet."""
+    return bool(unread and unread.get("classifier") == classifier_version() and t < float(unread.get("due") or 0))
+
+
 def run_sigs(o_r, run, workflow, now_=None):
     """The signatures of a completed red run: [{job, kind, line, sig}] (cached; explain_run fills the cache). A run whose
     log went unread answers what it last read until its backoff is due (RUNSIG_UNREAD_FIRST)."""
@@ -124,16 +139,11 @@ def run_sigs(o_r, run, workflow, now_=None):
         return rec["sigs"]
     unread_path = reds_dir("runsig-unread", f"{rid}.json")
     unread = read_record(unread_path)
-    if unread and unread.get("classifier") == classifier_version() and t < float(unread.get("due") or 0):
+    if _unread_not_due(unread, t):
         return unread["sigs"]
     lines, _num, per_job = explain_run_jobs(o_r, run, 6)
     if any("LOG UNREADABLE" in l for l in lines):  # a log not read is no verdict: read again when due, never cached
-        sigs = [{"job": j, "kind": k, "line": (l or "")[:300], "sig": signature(workflow, j, l)} for j, k, l in per_job]
-        tries = int((unread or {}).get("tries") or 0) + 1
-        with suppress(OSError):
-            write_json(unread_path, {"run": rid, "classifier": classifier_version(), "sigs": sigs, "tries": tries,
-                                     "due": t + min(RUNSIG_UNREAD_MAX, RUNSIG_UNREAD_FIRST * 2 ** (tries - 1))})
-        return sigs
+        return _save_unread_sigs(unread_path, unread, rid, workflow, per_job, t)
     if unread:
         with suppress(OSError):
             os.remove(unread_path)
