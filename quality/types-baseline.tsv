@@ -3,7 +3,7 @@
 # commit carrying `Types: <why>`. CLAUDE.md, "The ratchets".
 mypy-errors	alertprobe	26
 mypy-errors	alertroute	30
-mypy-errors	alerts	60
+mypy-errors	alerts	59
 mypy-errors	ask	29
 mypy-errors	batch	35
 mypy-errors	batchcheck	38
@@ -14,7 +14,7 @@ mypy-errors	batchtick	45
 mypy-errors	beats	4
 mypy-errors	blame	43
 mypy-errors	blameopen	11
-mypy-errors	blamerecords	25
+mypy-errors	blamerecords	24
 mypy-errors	branches	69
 mypy-errors	buildview	14
 mypy-errors	changekind	24
@@ -22,8 +22,8 @@ mypy-errors	checkslot	26
 mypy-errors	cireport	41
 mypy-errors	ciwhy	48
 mypy-errors	classify	1
-mypy-errors	cleanup	43
-mypy-errors	cleanuppass	7
+mypy-errors	cleanup	13
+mypy-errors	cleanuppass	3
 mypy-errors	cli	16
 mypy-errors	clones	1
 mypy-errors	conditions	40
@@ -67,7 +67,7 @@ mypy-errors	launchd	2
 mypy-errors	leases	1
 mypy-errors	live	36
 mypy-errors	livestream	42
-mypy-errors	localrecheck	33
+mypy-errors	localrecheck	32
 mypy-errors	maint	34
 mypy-errors	maintain	9
 mypy-errors	netwatch	20
@@ -102,7 +102,7 @@ mypy-errors	queuepush	69
 mypy-errors	queuerecheck	45
 mypy-errors	queueslots	25
 mypy-errors	queuesubmit	36
-mypy-errors	queueuntil	14
+mypy-errors	queueuntil	12
 mypy-errors	recordingpins	23
 mypy-errors	recovery	52
 mypy-errors	red	48
@@ -167,15 +167,15 @@ mypy-errors	storestate	8
 mypy-errors	storetoken	46
 mypy-errors	stuckruns	4
 mypy-errors	superseded	26
-mypy-errors	syncsteps	48
+mypy-errors	syncsteps	47
 mypy-errors	tickrun	6
 mypy-errors	tickservice	8
 mypy-errors	tools	56
 mypy-errors	trailers	2
 mypy-errors	tunnel	4
-mypy-errors	upkeep	14
+mypy-errors	upkeep	13
 mypy-errors	wait	64
 mypy-errors	waiting	30
 mypy-errors	watchdog	19
-mypy-errors	watchtick	54
+mypy-errors	watchtick	52
 mypy-errors	worktrees	8

@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
+from collections.abc import Sequence
 import argparse
 import contextlib
 import datetime as dt
@@ -34,56 +35,93 @@ CLEANUP_ITEM_TIMEOUT = 120  # $AGENTCTL_CLEANUP_ITEM_TIMEOUT
 CLEANUP_REMOVE_RESERVE = 300  # $AGENTCTL_CLEANUP_REMOVE_RESERVE
 
 
-def cleanup_left(until):
+def cleanup_left(until: float | None) -> float:
     """Seconds left before the cleanup's deadline (monotonic `until`); inf without one."""
     return float("inf") if until is None else until - time.monotonic()
 
 
-def plan_worktrees(repo, main, min_age_h, cwds, include_caches=False, until=None):
-    """[(action, wt, branch, sha, reason)] where action is 'delete' or 'skip' -- 'stop' for every tree not looked at
-    once the deadline (`until`, monotonic) passed."""
-    plan = []
-    wts = worktrees(repo)
-    item = env_num("AGENTCTL_CLEANUP_ITEM_TIMEOUT", CLEANUP_ITEM_TIMEOUT)
-    for w in wts[1:]:  # the first entry is the main checkout
+DEADLINE_NOTE = "not looked at: the cleanup's deadline passed"
+
+
+class TreeReview:
+    """One cleanup pass's decision about each linked worktree, a method per stage: the tree's flags, whether it is in
+    use, its own git reads (status, merged). The first stage with an answer decides."""
+
+    def __init__(self, repo: str, main: str, min_age_h: float, cwds: dict[int, str], include_caches: bool,
+                 until: float | None) -> None:
+        self.repo, self.main, self.min_age_h, self.cwds = repo, main, min_age_h, cwds
+        self.include_caches, self.until = include_caches, until
+        self.item = env_num("AGENTCTL_CLEANUP_ITEM_TIMEOUT", CLEANUP_ITEM_TIMEOUT)
+
+    def verdict(self, w: dict[str, Any]) -> tuple[str, str, str | None, str, str]:
+        """(action, wt, branch, sha, reason) of linked worktree entry w."""
         path, sha = w["worktree"], w.get("HEAD", "")
         branch = w.get("branch", "").removeprefix("refs/heads/") or None
-        def skip(why):
-            plan.append(("skip", path, branch, sha, why))
-        if cleanup_left(until) <= 0:
-            plan.append(("stop", path, branch, sha, "not looked at: the cleanup's deadline passed")); continue
+        if cleanup_left(self.until) <= 0:
+            return ("stop", path, branch, sha, DEADLINE_NOTE)
+        why = self.flagged(w, path, branch) or self.in_use(path)
+        if why:
+            return ("skip", path, branch, sha, why)
+        action, why = self.by_git(path, sha)
+        return (action, path, branch, sha, why)
+
+    def flagged(self, w: dict[str, Any], path: str, branch: str | None) -> str | None:
+        """Why the tree is not touched by what it is (locked, protected, a tool cache, missing), or None."""
         if "locked" in w:
-            skip("locked"); continue
+            return "locked"
         if branch in PROTECTED_BRANCHES:
-            skip(f"on {branch}"); continue
-        if path.startswith(CACHE_TREES) and not include_caches:
-            skip("tool cache tree (--include-caches to consider)"); continue
+            return f"on {branch}"
+        if path.startswith(CACHE_TREES) and not self.include_caches:
+            return "tool cache tree (--include-caches to consider)"
         if "prunable" in w or not os.path.isdir(path):
-            skip("directory missing (prunable; not touched)"); continue
-        busy = [p for p, c in cwds.items() if c == path or c.startswith(path + "/")]
+            return "directory missing (prunable; not touched)"
+        return None
+
+    def in_use(self, path: str) -> str | None:
+        """Why the tree is not touched by what uses it (a process in it, recent git activity), or None."""
+        busy = [p for p, c in self.cwds.items() if c == path or c.startswith(path + "/")]
         if busy:
-            skip(f"in use by pid {busy[:3]}"); continue
-        act = gitdir_activity(repo, path)
-        if act and time.time() - act < min_age_h * 3600:
-            skip(f"active {int((time.time() - act) / 60)} min ago"); continue
-        t0 = time.monotonic()
-        dirty = git(repo, "-C", path, "status", "--porcelain", "--untracked-files=all", check=False, timeout=item)
+            return f"in use by pid {busy[:3]}"
+        act = gitdir_activity(self.repo, path)
+        if act and time.time() - act < self.min_age_h * 3600:
+            return f"active {int((time.time() - act) / 60)} min ago"
+        return None
+
+    def unclean(self, path: str) -> str | None:
+        """Why `git status` says the tree is not clean (or could not say), or None."""
+        dirty = git(self.repo, "-C", path, "status", "--porcelain", "--untracked-files=all", check=False, timeout=self.item)
         if dirty.returncode == 124:
-            skip(f"undecided: git status took over {item:g} s (looked at again next pass)"); continue
+            return f"undecided: git status took over {self.item:g} s (looked at again next pass)"
         if dirty.returncode != 0:
-            skip("git status failed"); continue
+            return "git status failed"
         if dirty.stdout.strip():
-            skip(f"dirty ({len(dirty.stdout.splitlines())} changed/untracked)"); continue
-        if cleanup_left(until) <= 0:
-            plan.append(("stop", path, branch, sha, "not looked at: the cleanup's deadline passed")); continue
-        why = merged_reason(repo, sha, main)
+            return f"dirty ({len(dirty.stdout.splitlines())} changed/untracked)"
+        return None
+
+    def by_git(self, path: str, sha: str) -> tuple[str, str]:
+        """(action, reason) from the tree's own git reads: dirty, then merged into main."""
+        t0 = time.monotonic()
+        why = self.unclean(path)
+        if why:
+            return "skip", why
+        if cleanup_left(self.until) <= 0:
+            return "stop", DEADLINE_NOTE
+        why = merged_reason(self.repo, sha, self.main)
         if not why:
-            n = git(repo, "rev-list", "--count", f"{main}..{sha}", check=False, timeout=item).stdout.strip() or "?"
-            skip(f"unmerged ({n} commit(s) not on {remote()}/main)"); continue
+            n = git(self.repo, "rev-list", "--count", f"{self.main}..{sha}", check=False, timeout=self.item).stdout.strip() or "?"
+            return "skip", f"unmerged ({n} commit(s) not on {remote()}/main)"
         if time.monotonic() - t0 > 30:
             err(f"cleanup: {path} took {time.monotonic() - t0:.0f} s to decide")
-        plan.append(("delete", path, branch, sha, why))
-    return plan
+        return "delete", why
+
+
+def plan_worktrees(repo: str, main: str, min_age_h: float, cwds: dict[int, str], include_caches: bool = False,
+                   until: float | None = None) -> list[tuple[str, str, str | None, str, str]]:
+    """[(action, wt, branch, sha, reason)] where action is 'delete' or 'skip' -- 'stop' for every tree not looked at
+    once the deadline (`until`, monotonic) passed."""
+    wts = worktrees(repo)
+    review = TreeReview(repo, main, min_age_h, cwds, include_caches, until)
+    return [review.verdict(w) for w in wts[1:]]  # the first entry is the main checkout
 
 
 def still_in_use(repo, path):
@@ -132,7 +170,7 @@ def sweep_dir():
 SWEEP_REPOS = [os.path.join(HOME, "projects", "movies")]
 
 
-def own_ancestry():
+def own_ancestry() -> set[int]:
     """This process and its parents (the agent's shell is in the worktree it lands from)."""
     parents = {p: pp for p, pp, _e, _c in ps()}
     chain, pid = set(), os.getpid()
@@ -142,50 +180,74 @@ def own_ancestry():
     return chain
 
 
-def close_worktree(wt):
+class WorktreeClosing:
+    """Closing the worktree land ran from, a method per stage; each returns why the worktree is KEPT, or None to go on."""
+
+    def __init__(self, wt: str) -> None:
+        self.wt = os.path.realpath(wt)
+        self.root = self.head = self.main = self.message = ""
+        self.branch: str | None = None
+
+    def placed(self) -> str | None:
+        """It is a linked worktree of a repository, unlocked, on no protected branch."""
+        try:
+            trees = worktrees(self.wt)
+        except RuntimeError as e:
+            return str(e)
+        self.root = os.path.realpath(trees[0]["worktree"])
+        if self.wt == self.root:
+            return "the root checkout is never closed"
+        me = next((t for t in trees if os.path.realpath(t["worktree"]) == self.wt), None)
+        if me is None:
+            return f"not a worktree of {self.root}"
+        if "locked" in me:
+            return "locked"
+        self.branch = (me.get("branch") or "").removeprefix("refs/heads/") or None
+        return f"on {self.branch}" if self.branch in PROTECTED_BRANCHES else None
+
+    def unused(self) -> str | None:
+        """No other process is in it and its tree is clean."""
+        mine, wt = own_ancestry(), self.wt
+        busy = [p for p, c in process_cwds().items() if p not in mine and (c == wt or c.startswith(wt + "/"))]
+        if busy:
+            return f"in use by pid {busy[:3]}"
+        dirty = git(wt, "status", "--porcelain", "--untracked-files=all", check=False)
+        if dirty.returncode or dirty.stdout.strip():
+            return f"the tree is not clean ({len(dirty.stdout.splitlines())} changed/untracked)"
+        return None
+
+    def landed(self) -> str | None:
+        """Every commit of its own is on origin's main (git cherry)."""
+        git(self.wt, "fetch", "--quiet", remote(), "main", check=False)
+        self.main = f"refs/remotes/{remote()}/main"
+        self.head = git(self.wt, "rev-parse", "HEAD").strip()
+        _commits, ahead = cherry_landed(self.wt, self.main, self.head)
+        if ahead is None:
+            return f"git cherry could not compare it with {remote()}/main"
+        return f"{len(ahead)} commit(s) not on {remote()}/main" if ahead else None
+
+    def removed(self) -> str | None:
+        """Remove the worktree and its branch (the message says what), unless git refuses."""
+        why = merged_reason(self.root, self.head, self.main) or "nothing of its own left"
+        r = git(self.root, "worktree", "remove", self.wt, check=False)
+        if r.returncode:
+            return f"git worktree remove refused: {r.stderr.strip()[:200]}"
+        log_deletion("worktree", os.path.basename(self.root), self.wt, self.head, f"closed after WATCH OK: {why}")
+        msg = f"closed worktree {self.wt}"
+        branch = self.branch
+        if branch and f"refs/heads/{branch}" not in {t.get("branch") for t in worktrees(self.root)}:
+            if git(self.root, "update-ref", "-d", f"refs/heads/{branch}", self.head, check=False).returncode == 0:
+                log_deletion("branch", os.path.basename(self.root), branch, self.head, f"closed after WATCH OK: {why}")
+                msg += f" and branch {branch}"
+        self.message = msg + f" ({why})"
+        return None
+
+
+def close_worktree(wt: str) -> str:
     """Remove the worktree land ran from and its local branch, when proven merged. Returns one line saying what."""
-    wt = os.path.realpath(wt)
-    try:
-        trees = worktrees(wt)
-    except RuntimeError as e:
-        return f"worktree {wt} kept: {e}"
-    root = os.path.realpath(trees[0]["worktree"])
-    if wt == root:
-        return f"worktree {wt} kept: the root checkout is never closed"
-    me = next((t for t in trees if os.path.realpath(t["worktree"]) == wt), None)
-    if me is None:
-        return f"worktree {wt} kept: not a worktree of {root}"
-    if "locked" in me:
-        return f"worktree {wt} kept: locked"
-    branch = (me.get("branch") or "").removeprefix("refs/heads/") or None
-    if branch in PROTECTED_BRANCHES:
-        return f"worktree {wt} kept: on {branch}"
-    mine = own_ancestry()
-    busy = [p for p, c in process_cwds().items() if p not in mine and (c == wt or c.startswith(wt + "/"))]
-    if busy:
-        return f"worktree {wt} kept: in use by pid {busy[:3]}"
-    dirty = git(wt, "status", "--porcelain", "--untracked-files=all", check=False)
-    if dirty.returncode or dirty.stdout.strip():
-        return f"worktree {wt} kept: the tree is not clean ({len(dirty.stdout.splitlines())} changed/untracked)"
-    git(wt, "fetch", "--quiet", remote(), "main", check=False)
-    main = f"refs/remotes/{remote()}/main"
-    head = git(wt, "rev-parse", "HEAD").strip()
-    _commits, ahead = cherry_landed(wt, main, head)
-    if ahead is None:
-        return f"worktree {wt} kept: git cherry could not compare it with {remote()}/main"
-    if ahead:
-        return f"worktree {wt} kept: {len(ahead)} commit(s) not on {remote()}/main"
-    why = merged_reason(root, head, main) or "nothing of its own left"
-    r = git(root, "worktree", "remove", wt, check=False)
-    if r.returncode:
-        return f"worktree {wt} kept: git worktree remove refused: {r.stderr.strip()[:200]}"
-    log_deletion("worktree", os.path.basename(root), wt, head, f"closed after WATCH OK: {why}")
-    msg = f"closed worktree {wt}"
-    if branch and f"refs/heads/{branch}" not in {t.get("branch") for t in worktrees(root)}:
-        if git(root, "update-ref", "-d", f"refs/heads/{branch}", head, check=False).returncode == 0:
-            log_deletion("branch", os.path.basename(root), branch, head, f"closed after WATCH OK: {why}")
-            msg += f" and branch {branch}"
-    return msg + f" ({why})"
+    closing = WorktreeClosing(wt)
+    kept = closing.placed() or closing.unused() or closing.landed() or closing.removed()
+    return f"worktree {closing.wt} kept: {kept}" if kept else closing.message
 
 
 # FREEING A LANDED WORKTREE (2026-11-18: `land --until-done` LANDED 94a33a968 but printed no DONE -- the agent's own
@@ -199,7 +261,7 @@ FREE_WAIT = 30  # s --until-done waits for a landed worktree to be free of proce
 NEVER_SIGNAL = re.compile(r"(^|/)(claude|login|tmux|ssh)(\s|$)")  # an agent session or a terminal: reported, never stopped
 
 
-def worktree_holders(wt):
+def worktree_holders(wt: str) -> dict[int, str]:
     """{pid: command} of the processes working inside wt, this process and its parents excepted."""
     wt = os.path.realpath(wt)
     mine = own_ancestry()
@@ -208,7 +270,7 @@ def worktree_holders(wt):
             if p not in mine and (c == wt or c.startswith(wt + "/"))}
 
 
-def process_session(pid):
+def process_session(pid: int) -> str | None:
     """The CLAUDE_CODE_SESSION_ID in pid's environment, or None (none, or not readable)."""
     if os.path.isdir(os.path.join(PROC_ROOT, "self")):
         try:
@@ -232,7 +294,7 @@ def stop_session_holders(held: dict[int, str], out: Any) -> None:
                 out(f"stopped pid {pid} of this session: {cmd[:120]}", flush=True)
 
 
-def free_worktree(wt, out=print):
+def free_worktree(wt: str, out: Any = print) -> dict[int, str]:
     """Stop the caller's processes in worktree wt (FREEING A LANDED WORKTREE above), then wait for it to be free.
     Returns {pid: command} of what still holds it (empty: free)."""
     held = worktree_holders(wt)
@@ -255,7 +317,7 @@ def free_worktree(wt, out=print):
 FETCH_TIMEOUT = 180  # an unattended fetch's bound ($AGENTCTL_FETCH_TIMEOUT)
 
 
-def bounded_fetch(repo, *extra, refs=()):
+def bounded_fetch(repo: str, *extra: str, refs: Sequence[str] = ()) -> bool | str:
     """`git fetch <remote>` for an unattended run (maintain's sweep): bounded, ssh keepalives on, never prompting. True,
     or why not (2026-10-27: the remote's ssh accepted the connection and never answered, and the first maintain pass hung
     in the sweep's fetch). Every remote here is https, where the ssh keepalives do nothing: a transfer under 1 KB/s for
@@ -269,67 +331,96 @@ def bounded_fetch(repo, *extra, refs=()):
     return True if r.returncode == 0 else (r.stderr.strip().splitlines() or ["exit %d" % r.returncode])[-1][:160]
 
 
-def sweep_repo(repo, idle_days, dry, out, store):
-    name = os.path.basename(repo)
-    now_ = time.time()
-    fetched = bounded_fetch(repo, "--prune")
-    main = f"refs/remotes/{remote()}/main"
-    if fetched is not True:
-        out.append(f"== {name}: fetch failed ({fetched}): from the last fetched state")
-    out.append(f"== {name} ({remote()}/main {git(repo, 'rev-parse', main).strip()[:10]})")
-    idle_wt, checked_out = [], set()
-    for w in worktrees(repo)[1:]:
+class RepoSweep:
+    """The sweep of one repository, a method per section of its report (lines appended to `out`)."""
+
+    def __init__(self, repo: str, idle_days: float, dry: bool, out: list[str], store: Any) -> None:
+        self.repo, self.idle_days, self.dry, self.out, self.store = repo, idle_days, dry, out, store
+        self.name, self.now_ = os.path.basename(repo), time.time()
+        self.main, self.o_r = "", ""
+        self.checked_out: set[str] = set()
+
+    def header(self) -> None:
+        fetched = bounded_fetch(self.repo, "--prune")
+        self.main = f"refs/remotes/{remote()}/main"
+        if fetched is not True:
+            self.out.append(f"== {self.name}: fetch failed ({fetched}): from the last fetched state")
+        self.out.append(f"== {self.name} ({remote()}/main {git(self.repo, 'rev-parse', self.main).strip()[:10]})")
+
+    def idle_worktrees(self) -> None:
+        idle = [line for line in map(self.idle_worktree, worktrees(self.repo)[1:]) if line]
+        self.out += idle or [f"  no unmerged worktree idle more than {self.idle_days} d"]
+
+    def idle_worktree(self, w: dict[str, Any]) -> str | None:
+        """The report line of a linked worktree unmerged and idle too long, or None."""
         path, sha = w["worktree"], w.get("HEAD", "")
         branch = (w.get("branch") or "").removeprefix("refs/heads/")
-        checked_out.add(branch)
-        if not os.path.isdir(path) or path.startswith(CACHE_TREES) or merged_reason(repo, sha, main):
-            continue
-        tip = int(git(repo, "log", "-1", "--format=%ct", sha, check=False).stdout.strip() or 0)
-        last = max(gitdir_activity(repo, path) or 0, tip)
-        days = (now_ - last) / 86400
-        if days > idle_days:
-            n = len(git(repo, "rev-list", f"{main}..{sha}").split())
-            idle_wt.append(f"  UNMERGED worktree {path} [{branch or 'detached'}]: {n} commit(s), idle {int(days)} d")
-    out += idle_wt or [f"  no unmerged worktree idle more than {idle_days} d"]
-    lonely = []
-    for line in git(repo, "for-each-ref", "--format=%(refname:short) %(objectname) %(committerdate:unix)",
-                    "refs/heads").splitlines():
-        b, sha, t = line.split()
-        if b in PROTECTED_BRANCHES or b in checked_out or merged_reason(repo, sha, main):
-            continue
-        days = (now_ - int(t)) / 86400
-        if days > idle_days:
-            lonely.append(f"  UNMERGED branch {b} (no worktree): tip {sha[:10]}, idle {int(days)} d")
-    out += lonely
-    o_r = None
-    for line in git(repo, "ls-remote", "--heads", remote()).splitlines():
-        sha, ref = line.split()
-        b = ref.removeprefix("refs/heads/")
-        if b in SWEEP_KEEP_REMOTE or b.startswith("measure/"):
-            continue  # measure/* is `agentctl cleanup`'s, by its runs
+        self.checked_out.add(branch)
+        if not os.path.isdir(path) or path.startswith(CACHE_TREES) or merged_reason(self.repo, sha, self.main):
+            return None
+        tip = int(git(self.repo, "log", "-1", "--format=%ct", sha, check=False).stdout.strip() or 0)
+        days = (self.now_ - max(gitdir_activity(self.repo, path) or 0, tip)) / 86400
+        if days <= self.idle_days:
+            return None
+        n = len(git(self.repo, "rev-list", f"{self.main}..{sha}").split())
+        return f"  UNMERGED worktree {path} [{branch or 'detached'}]: {n} commit(s), idle {int(days)} d"
+
+    def lonely_branches(self) -> None:
+        for line in git(self.repo, "for-each-ref", "--format=%(refname:short) %(objectname) %(committerdate:unix)",
+                        "refs/heads").splitlines():
+            b, sha, t = line.split()
+            if b in PROTECTED_BRANCHES or b in self.checked_out or merged_reason(self.repo, sha, self.main):
+                continue
+            days = (self.now_ - int(t)) / 86400
+            if days > self.idle_days:
+                self.out.append(f"  UNMERGED branch {b} (no worktree): tip {sha[:10]}, idle {int(days)} d")
+
+    def remote_branches(self) -> None:
+        for line in git(self.repo, "ls-remote", "--heads", remote()).splitlines():
+            sha, ref = line.split()
+            b = ref.removeprefix("refs/heads/")
+            if b in SWEEP_KEEP_REMOTE or b.startswith("measure/"):
+                continue  # measure/* is `agentctl cleanup`'s, by its runs
+            self.remote_branch(b, sha)
+
+    def remote_branch(self, b: str, sha: str) -> None:
+        repo, out = self.repo, self.out
         if not git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
             git(repo, "fetch", "--quiet", remote(), b, check=False)
-        why = git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}") and merged_reason(repo, sha, main)
+        why = git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}") and merged_reason(repo, sha, self.main)
         if not why:
-            t = int(git(repo, "log", "-1", "--format=%ct", sha, check=False).stdout.strip() or now_)
-            out.append(f"  unmerged remote branch {b}: tip {sha[:10]}, {int((now_ - t) / 86400)} d old (listed, kept)")
-            continue
-        if dry:
+            t = int(git(repo, "log", "-1", "--format=%ct", sha, check=False).stdout.strip() or self.now_)
+            out.append(f"  unmerged remote branch {b}: tip {sha[:10]}, {int((self.now_ - t) / 86400)} d old (listed, kept)")
+        elif self.dry:
             out.append(f"  would delete remote branch {b} {sha[:10]}: {why}")
-            continue
+        else:
+            self.delete_remote(b, sha, why)
+
+    def delete_remote(self, b: str, sha: str, why: str) -> None:
         try:
-            o_r = o_r or slug(repo)
-            delete_remote_branch(repo, o_r, b, sha)
-            log_deletion("remote-branch", o_r, b, sha, f"sweep: {why}")
-            out.append(f"  deleted remote branch {b} {sha[:10]}: {why}")
+            self.o_r = self.o_r or slug(self.repo)
+            delete_remote_branch(self.repo, self.o_r, b, sha)
+            log_deletion("remote-branch", self.o_r, b, sha, f"sweep: {why}")
+            self.out.append(f"  deleted remote branch {b} {sha[:10]}: {why}")
         except Exception as e:
-            out.append(f"  remote branch {b} not deleted: {e}")
-    out.append("== branches whose owner is gone (worktree removed or pid dead) and whose runs all finished")
-    try:
-        if not orphan_branches(repo, o_r or slug(repo), dry, out, store):
-            out.append("  none")
-    except (Exception, SystemExit) as e:
-        out.append(f"  could not list them ({str(e)[:160]})")
+            self.out.append(f"  remote branch {b} not deleted: {e}")
+
+    def orphans(self) -> None:
+        self.out.append("== branches whose owner is gone (worktree removed or pid dead) and whose runs all finished")
+        try:
+            if not orphan_branches(self.repo, self.o_r or slug(self.repo), self.dry, self.out, self.store):
+                self.out.append("  none")
+        except (Exception, SystemExit) as e:
+            self.out.append(f"  could not list them ({str(e)[:160]})")
+
+
+def sweep_repo(repo: str, idle_days: float, dry: bool, out: list[str], store: Any) -> None:
+    sweep = RepoSweep(repo, idle_days, dry, out, store)
+    sweep.header()
+    sweep.idle_worktrees()
+    sweep.lonely_branches()
+    sweep.remote_branches()
+    sweep.orphans()
 
 
 def cmd_sweep(a, store):

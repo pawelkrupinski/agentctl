@@ -87,16 +87,16 @@ def digest(A, name, build, fn_of, n=1500):
     return h.hexdigest()
 
 
-def recorded_digests():
-    return json.loads(open(DIGESTS).read()) if os.path.exists(DIGESTS) else {}
+def recorded_digests(path=DIGESTS):
+    return json.loads(open(path).read()) if os.path.exists(path) else {}
 
 
-def check(test, A, name, build, fn_of, n=1500):
+def check(test, A, name, build, fn_of, n=1500, digests=DIGESTS):
     got = digest(A, name, build, fn_of, n)
     if os.environ.get("R4_RECORD"):
-        d = recorded_digests()
+        d = recorded_digests(digests)
         d[name] = got
-        with open(DIGESTS, "w") as f:
+        with open(digests, "w") as f:
             json.dump(d, f, indent=1, sort_keys=True)
         return
-    test.assertEqual(recorded_digests().get(name), got, f"{name}: behaviour moved")
+    test.assertEqual(recorded_digests(digests).get(name), got, f"{name}: behaviour moved")
