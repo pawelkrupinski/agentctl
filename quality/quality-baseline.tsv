@@ -32,13 +32,11 @@ cognitive	close_worktree	20
 cognitive	cmd_config	21
 cognitive	cmd_issue	19
 cognitive	cmd_lease	17
-cognitive	cmd_maintain	36
 cognitive	cmd_recover	15
 cognitive	cmd_supersede	22
 cognitive	config_knobs	25
 cognitive	conflict_resolve	17
 cognitive	dry_run	34
-cognitive	expire_cache	51
 cognitive	explorer_tick	19
 cognitive	failed_jobs_log	23
 cognitive	fix_between	21
@@ -174,13 +172,11 @@ cyclomatic	close_worktree	25
 cyclomatic	cmd_config	15
 cyclomatic	cmd_issue	13
 cyclomatic	cmd_lease	20
-cyclomatic	cmd_maintain	29
 cyclomatic	cmd_recover	16
 cyclomatic	cmd_supersede	18
 cyclomatic	config_knobs	14
 cyclomatic	conflict_resolve	21
 cyclomatic	dry_run	20
-cyclomatic	expire_cache	29
 cyclomatic	explorer_tick	19
 cyclomatic	failed_jobs_log	22
 cyclomatic	fix_between	22
@@ -281,9 +277,7 @@ cyclomatic	workflow_triggers	12
 cyclomatic	write_snapshot	23
 inner-defs	sync_steps	7
 method-lines	alert_probe	55
-method-lines	cmd_maintain	56
 method-lines	dry_run	53
-method-lines	expire_cache	58
 method-lines	jvm_reap	57
 method-lines	live_registry_read	53
 method-lines	live_stream	51

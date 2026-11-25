@@ -1,12 +1,13 @@
 # agentctl, part `maintain`: `agentctl maintain`: the periodic pass -- the iOS simulators' sweep, the caches' expiry, the orphans' duty
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from typing import Any
+from typing import Any, Callable
 import argparse
 import datetime as dt
 import glob
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -71,37 +72,50 @@ def ios_simulator_sweep(root=None, dry_run=False):
                                 "(scripts/ios-simulators sweep)", [], [], 0)
 
 
-def cmd_maintain(a, store):
-    """THE reaper (the owner, 2026-10-27: one service, not three): launchd net.bitcashier.agentctl-maintain runs it every
-    15 min. Each pass: the reap (`orphans --kill --safe`: dead owners, stray wait loops, stuck sbt servers, stale JVMs);
-    once a day, at the first pass from 09:00 local, the sweep. --dry-run lists and kills nothing."""
-    if hasattr(sys.stdout, "reconfigure"):  # its log shows each step as it happens
-        sys.stdout.reconfigure(line_buffering=True)
-    print(f"== agentctl maintain {ts()}{' (DRY RUN)' if a.dry_run else ''}")
-    if not a.dry_run:
-        write_beat("maintain")
-        wd = beat_age("watchdog")  # the watchdog's watcher (design §15): it must have run within 5 min
-        if os.path.exists(os.path.join(launch_agents_dir(), "net.bitcashier.agentctl-watchdog.plist")) and \
-                (wd is None or wd > 300):
-            notify("agentctl: the watchdog is not running", f"last ran {fmt_age(wd) + ' ago' if wd else 'never'}")
-            print(f"== the watchdog last ran {fmt_age(wd) + ' ago' if wd else 'never'}: notified")
+def _guarded(verb: str, step: Callable[[], None]) -> None:
+    """Run one section of the pass; a failure is a line of the log, never the end of the pass."""
+    try:
+        step()
+    except (Exception, SystemExit) as e:
+        print(f"  could not {verb} ({str(e)[:160]})")
+
+
+def _watchdog_watch(a: Any) -> None:
+    """The watchdog's watcher (design §15): it must have run within 5 min wherever its launchd job is installed."""
+    write_beat("maintain")
+    wd = beat_age("watchdog")
+    if os.path.exists(os.path.join(launch_agents_dir(), "net.bitcashier.agentctl-watchdog.plist")) and (wd is None or wd > 300):
+        notify("agentctl: the watchdog is not running", f"last ran {fmt_age(wd) + ' ago' if wd else 'never'}")
+        print(f"== the watchdog last ran {fmt_age(wd) + ' ago' if wd else 'never'}: notified")
+
+
+def _reap_section(a: Any, store: Any) -> None:
     print("== reap")
     cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True))
+
+
+def _logs_section(a: Any, store: Any) -> None:
     print("== logs")
     rotated = [] if a.dry_run else rotate_logs()
     for line in rotated or ["(dry run)" if a.dry_run else "none over the size"]:
         print(f"  {line}")
-    print("== spotlight")
-    try:
+
+
+def _spotlight_section(a: Any, store: Any) -> None:
+    def mark() -> None:
         marked = [] if a.dry_run else spotlight_exclude()
         print(f"  marked {len(marked)} tree(s) never to index" if marked else "  every worktree marked")
-    except (Exception, SystemExit) as e:
-        print(f"  could not mark ({str(e)[:160]})")
+    print("== spotlight")
+    _guarded("mark", mark)
+
+
+def _ios_section(a: Any, store: Any) -> None:
     print("== ios simulators")
-    try:
-        ios_simulator_sweep(dry_run=a.dry_run)
-    except (Exception, SystemExit) as e:
-        print(f"  could not sweep ({str(e)[:160]})")
+    _guarded("sweep", lambda: ios_simulator_sweep(dry_run=a.dry_run))
+
+
+def _sweep_section(a: Any, store: Any) -> None:
+    """The daily sweep: forced, or at the first pass from the sweep hour when today's has not run."""
     path = state_root("maintain.json")
     st = read_record(path) or {}
     today, hour = dt.date.today().isoformat(), dt.datetime.now().hour
@@ -113,19 +127,40 @@ def cmd_maintain(a, store):
     else:
         print(f"== sweep: done today ({st.get('sweep_at')})" if st.get("sweep") == today else
               f"== sweep: from {MAINTAIN_SWEEP_HOUR:02d}:00")
-    print("== orphaned work")
-    try:
+
+
+def _orphans_section(a: Any, store: Any) -> None:
+    def duty() -> None:
         for line in orphan_duty(store, dry_run=a.dry_run) or ["  none"]:
             print(f"  {line}")
-    except (Exception, SystemExit) as e:
-        print(f"  could not look ({str(e)[:160]})")
-    print("== cache expiry")
-    try:
+    print("== orphaned work")
+    _guarded("look", duty)
+
+
+def _cache_section(a: Any, store: Any) -> None:
+    def expire() -> None:
         gone = expire_cache(dry_run=a.dry_run)
         print(f"  {'would remove' if a.dry_run else 'removed'} {len(gone)} cache entr{'y' if len(gone) == 1 else 'ies'} older "
               f"than {env_num('AGENTCTL_CACHE_EXPIRE_DAYS', CACHE_EXPIRE_DAYS):g} days")
-    except (Exception, SystemExit) as e:
-        print(f"  could not expire ({str(e)[:160]})")
+    print("== cache expiry")
+    _guarded("expire", expire)
+
+
+MAINTAIN_SECTIONS = (_reap_section, _logs_section, _spotlight_section, _ios_section, _sweep_section, _orphans_section,
+                     _cache_section)  # in the order of the pass
+
+
+def cmd_maintain(a: Any, store: Any) -> int:
+    """THE reaper (the owner, 2026-10-27: one service, not three): launchd net.bitcashier.agentctl-maintain runs it every
+    15 min. Each pass: the reap (`orphans --kill --safe`: dead owners, stray wait loops, stuck sbt servers, stale JVMs);
+    once a day, at the first pass from 09:00 local, the sweep. --dry-run lists and kills nothing."""
+    if hasattr(sys.stdout, "reconfigure"):  # its log shows each step as it happens
+        sys.stdout.reconfigure(line_buffering=True)
+    print(f"== agentctl maintain {ts()}{' (DRY RUN)' if a.dry_run else ''}")
+    if not a.dry_run:
+        _watchdog_watch(a)
+    for section in MAINTAIN_SECTIONS:
+        section(a, store)
     return 0
 
 
@@ -142,72 +177,89 @@ CACHE_EXPIRE_FILES = (("", ("agentctl-land-*", "phase2-apply-*.log")), ("sbt-dum
                       (os.path.join("reds", "baseline"), ("*.json",)), (os.path.join("reds", "baseline-out"), ("*",)))
 
 
-def _newest_mtime(path):
-    newest = os.lstat(path).st_mtime
+def _newest_mtime(path: str) -> float | None:
+    """The newest mtime in the tree at path (itself included), None when path cannot be read."""
+    try:
+        newest = os.lstat(path).st_mtime
+    except OSError:
+        return None
     for dp, dns, fns in os.walk(path):
         for n in dns + fns:
-            try:
+            with suppress(OSError):
                 newest = max(newest, os.lstat(os.path.join(dp, n)).st_mtime)
-            except OSError:
-                pass
     return newest
 
 
-def expire_cache(root=None, days=None, now=None, dry_run=False):
-    """[(path, why)] of what this pass removed (or, dry_run, would remove) under the state root."""
-    root = os.path.realpath(root or state_root())
-    days = env_num("AGENTCTL_CACHE_EXPIRE_DAYS", CACHE_EXPIRE_DAYS) if days is None else days
-    cutoff = (time.time() if now is None else now) - days * 86400
-    if not allowed_path(root):
-        return []
-    out = []
+def _lstat_mtime(path: str) -> float | None:
+    try:
+        return os.lstat(path).st_mtime
+    except OSError:
+        return None
 
-    def inside(p):
-        return os.path.realpath(os.path.dirname(p)).startswith(root + os.sep) or \
-            os.path.realpath(os.path.dirname(p)) == root
 
-    def drop(p, why):
-        if not inside(p) or not allowed_path(p):
+def _fixer_running(red_dir: str) -> bool:
+    """Whether a fixer record of the red run's directory has not ended."""
+    records = (read_record(f) for f in glob.glob(os.path.join(glob.escape(red_dir), "fixer*.json")))
+    return any(r and not r.get("ended") for r in records)
+
+
+class CacheExpiry:
+    """One pass over the state root: a method per kind of entry (the files by pattern, the red runs' dirs, the internal-tree
+    tags), each dropping what is older than the cutoff -- or, dry, only naming it."""
+
+    def __init__(self, root: str, days: float, cutoff: float, dry_run: bool) -> None:
+        self.root, self.days, self.cutoff, self.dry_run = root, days, cutoff, dry_run
+        self.gone: list[tuple[str, str]] = []
+
+    def _inside(self, p: str) -> bool:
+        parent = os.path.realpath(os.path.dirname(p))
+        return parent.startswith(self.root + os.sep) or parent == self.root
+
+    def drop(self, p: str, why: str) -> None:
+        if not self._inside(p) or not allowed_path(p):
             return
         with suppress(OSError):
-            if not dry_run:
+            if not self.dry_run:
                 if os.path.isdir(p) and not os.path.islink(p):
-                    import shutil
                     shutil.rmtree(p)
                 else:
                     os.unlink(p)
-            out.append((p, why))
+            self.gone.append((p, why))
 
-    for sub, pats in CACHE_EXPIRE_FILES:
-        d = os.path.join(root, sub)
-        for pat in pats:
-            for p in glob.glob(os.path.join(glob.escape(d), pat)):
-                try:
-                    st = os.lstat(p)
-                except OSError:
-                    continue
-                if not os.path.isdir(p) and st.st_mtime < cutoff:
-                    drop(p, f"older than {days:g} days")
-    reds = os.path.join(root, "reds")
-    for p in glob.glob(os.path.join(glob.escape(reds), "[0-9]*")):
-        if os.path.islink(p) or not os.path.isdir(p) or not os.path.basename(p).isdigit():
-            continue
-        try:
-            if _newest_mtime(p) >= cutoff:
+    def files(self) -> None:
+        patterns = [(os.path.join(self.root, sub), pat) for sub, pats in CACHE_EXPIRE_FILES for pat in pats]
+        for p in (p for d, pat in patterns for p in glob.glob(os.path.join(glob.escape(d), pat))):
+            m = _lstat_mtime(p)
+            if m is not None and not os.path.isdir(p) and m < self.cutoff:
+                self.drop(p, f"older than {self.days:g} days")
+
+    def red_dirs(self) -> None:
+        for p in glob.glob(os.path.join(glob.escape(os.path.join(self.root, "reds")), "[0-9]*")):
+            if os.path.islink(p) or not os.path.isdir(p) or not os.path.basename(p).isdigit():
                 continue
-        except OSError:
-            continue
-        running = [r for r in (read_record(f) for f in glob.glob(os.path.join(glob.escape(p), "fixer*.json")))
-                   if r and not r.get("ended")]
-        if not running:
-            drop(p, f"red run dir, untouched for {days:g} days, no fixer running")
-    for p in glob.glob(os.path.join(glob.escape(os.path.join(root, "internal-trees")), "*.json")):
-        try:
-            if os.lstat(p).st_mtime >= cutoff:
+            newest = _newest_mtime(p)
+            if newest is not None and newest < self.cutoff and not _fixer_running(p):
+                self.drop(p, f"red run dir, untouched for {self.days:g} days, no fixer running")
+
+    def tree_tags(self) -> None:
+        for p in glob.glob(os.path.join(glob.escape(os.path.join(self.root, "internal-trees")), "*.json")):
+            m = _lstat_mtime(p)
+            if m is None or m >= self.cutoff:
                 continue
-        except OSError:
-            continue
-        tree = (read_record(p) or {}).get("path")
-        if not tree or (allowed_path(tree) and not os.path.exists(tree)):  # a protected path is never stat'ed
-            drop(p, "internal-tree tag of a gone worktree")
-    return out
+            tree = (read_record(p) or {}).get("path")
+            if not tree or (allowed_path(tree) and not os.path.exists(tree)):  # a protected path is never stat'ed
+                self.drop(p, "internal-tree tag of a gone worktree")
+
+
+def expire_cache(root: str | None = None, days: float | None = None, now: float | None = None,
+                 dry_run: bool = False) -> list[tuple[str, str]]:
+    """[(path, why)] of what this pass removed (or, dry_run, would remove) under the state root."""
+    root = os.path.realpath(root or state_root())
+    days = env_num("AGENTCTL_CACHE_EXPIRE_DAYS", CACHE_EXPIRE_DAYS) if days is None else days
+    if not allowed_path(root):
+        return []
+    expiry = CacheExpiry(root, days, (time.time() if now is None else now) - days * 86400, dry_run)
+    expiry.files()
+    expiry.red_dirs()
+    expiry.tree_tags()
+    return expiry.gone
