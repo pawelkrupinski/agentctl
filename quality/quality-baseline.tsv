@@ -91,7 +91,6 @@ cognitive	recovery_tick	26
 cognitive	red_attach_obs	17
 cognitive	red_authors	22
 cognitive	red_callable_evidence	15
-cognitive	red_claim	35
 cognitive	red_diagnosis_step	27
 cognitive	red_dispatch	27
 cognitive	red_failed_steps	14
@@ -101,7 +100,6 @@ cognitive	red_flake_check	15
 cognitive	red_joined_idle	18
 cognitive	red_main_verify	14
 cognitive	red_offer	31
-cognitive	red_release	19
 cognitive	red_renew_blocks	26
 cognitive	red_repos_parse	26
 cognitive	red_spawn	28
@@ -229,7 +227,7 @@ cyclomatic	recovery_tick	17
 cyclomatic	red_attach_obs	18
 cyclomatic	red_authors	23
 cyclomatic	red_callable_evidence	20
-cyclomatic	red_claim	32
+cyclomatic	red_claim	13
 cyclomatic	red_diagnosis_step	32
 cyclomatic	red_dispatch	30
 cyclomatic	red_failed_steps	22
@@ -239,7 +237,6 @@ cyclomatic	red_flake_check	17
 cyclomatic	red_joined_idle	18
 cyclomatic	red_main_verify	20
 cyclomatic	red_offer	38
-cyclomatic	red_release	15
 cyclomatic	red_renew_blocks	25
 cyclomatic	red_repos_parse	26
 cyclomatic	red_spawn	25
@@ -274,7 +271,6 @@ method-lines	dry_run	53
 method-lines	jvm_reap	57
 method-lines	live_registry_read	53
 method-lines	live_stream	51
-method-lines	red_claim	62
 method-lines	red_dispatch	59
 method-lines	sweep_repo	61
 method-lines	sync_onto_main	61

@@ -3,7 +3,7 @@
 
 import os
 import time
-from typing import Any
+from typing import Any, Callable
 from agentctl.core import HOME, git
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime, read_record, write_json
@@ -72,68 +72,90 @@ def red_noted(store: Any, items: list[Any], note: str) -> None:
             red_joined_progress(store, row, f"note: {note}")
 
 
-def red_claim(store, o_r, target, note="", wt=None):
+def _noted_on_lease(own: str, rec: dict[str, Any], note: str) -> tuple[int, list[str]]:
+    """The note a fixer writes on its own lease record."""
+    rec["note"] = note or rec.get("note") or "working"
+    write_json(own, rec)
+    return 0, [f"noted on your lease {rec.get('lease')}: {rec['note']}"]
+
+
+def _held_by_fixer(store: Any, rec: dict[str, Any]) -> Callable[[dict[str, Any]], bool]:
+    """Whether a red's lease is the fixer's own (its lease's holder, or the lease it is named by)."""
+    primary = store.get(rec["lease"]) if rec.get("lease") else None
+    mine = primary["holder"] if lease_is_live(primary, store.clock()) else None
+
+    def held_by_me(it: dict[str, Any]) -> bool:
+        row = store.get(red_lease(it["data"]["key"]))
+        return bool(lease_is_live(row, store.clock()) and (row["holder"] == mine or row["name"] == rec.get("lease")))
+    return held_by_me
+
+
+def _fixer_claim(store: Any, o_r: Any, target: Any, note: str, own: str) -> tuple[tuple[int, list[str]] | None, list[Any], Any]:
+    """A claim made inside a dispatched fixer: (the note it wrote when the reds are its own, else None; the reds that are
+    not held by it, to claim; the worktree its record names). `red claim N` there used to write the note on its own
+    lease and ignore N (2026-10-29)."""
+    rec = read_record(own) or {}
+    t = str(target).lstrip("#")
+    if t in (str(rec.get("run")), str(rec.get("lease") or "").split("/", 1)[-1]):  # its own red, by run or key
+        return _noted_on_lease(own, rec, note), [], None
+    items = red_targets(store, o_r, target)
+    held_by_me = _held_by_fixer(store, rec)
+    if not items or all(held_by_me(it) for it in items):
+        done = _noted_on_lease(own, rec, note)
+        red_noted(store, items or [], rec["note"])
+        return done, [], None
+    return None, [it for it in items if not held_by_me(it)], rec.get("worktree")
+
+
+def _claim_meta(it: dict[str, Any], wt: str, who: str, note: str, own: str | None) -> dict[str, Any]:
+    return {"kind": "claim", "worktree": wt, "who": who, "note": note, "session": os.environ.get("CLAUDE_CODE_SESSION_ID"),
+            "gate": bool(it["data"].get("gate")),
+            # made inside a dispatched fixer: its family's holder (red_family_holder); an
+            # interactive session's claim takes only its red (the owner, 2026-11-08)
+            **({"fixer": own} if own else {})}
+
+
+def _claim_one(store: Any, it: dict[str, Any], holder: str, wt: str, who: str, note: str, own: str | None) -> tuple[int, str]:
+    """(rc, line) of claiming (or renewing) one red's lease."""
+    name = red_lease(it["data"]["key"])
+    row = store.get(name)
+    if lease_is_live(row, store.clock()) and row["holder"] == holder:
+        store.renew(name, row["epoch"], row["secret"], f"beat {time.time()}", RED_CLAIM_TTL, note=note or None)
+        return 0, f"renewed {red_what(it['data'])} ({name})"
+    r = store.acquire(name, holder, RED_CLAIM_TTL, RED_CLAIM_MAX, progress=red_wt_mark(wt), item=f"red:{it['id']}",
+                      meta=_claim_meta(it, wt, who, note, own))
+    if "held" in r:
+        return 1, (f"NOT CLAIMED: {red_what(it['data'])} is held by {r['held']['holder']} until "
+                   f"{time.strftime('%H:%M', time.localtime(r['held']['expires_at']))}")
+    store.close_offer(f"red:{it['id']}", "taken")
+    return 0, (f"claimed {red_what(it['data'])} for {who} ({wt.replace(HOME, '~')}) as {name}"
+               + (f": {note}" if note else "") + f"; it lapses after {RED_CLAIM_TTL // 60} min without activity in "
+               f"your worktree; release: ~/bin/agentctl red release {it['data']['key']}")
+
+
+def red_claim(store: Any, o_r: Any, target: Any, note: str = "", wt: Any = None) -> tuple[int, list[str]]:
     """(rc, lines): the red's lease to the caller (a claim, renewed by its worktree's activity). Inside a dispatched
     fixer, a red its wrapper already holds (its own, or a family / run sibling under the same holder) gets the fixer's
     note; ANY OTHER red N is claimed for the fixer, in its worktree -- how a fixer (the convergence family's) takes a
-    second red. 2026-10-29: `red claim <N>` in a fixer wrote the note on its own lease and ignored N."""
+    second red."""
     own = own_fixer_record_path()
-    rec = (read_record(own) or {}) if own else {}
     here = safe_cwd()
     items = None
     if own:
-        t = str(target).lstrip("#")
-        if t in (str(rec.get("run")), str(rec.get("lease") or "").split("/", 1)[-1]):  # its own red, by run or key
-            rec["note"] = note or rec.get("note") or "working"
-            write_json(own, rec)
-            return 0, [f"noted on your lease {rec.get('lease')}: {rec['note']}"]
-        items = red_targets(store, o_r, target)
-        primary = store.get(rec["lease"]) if rec.get("lease") else None
-        mine = primary["holder"] if lease_is_live(primary, store.clock()) else None
-
-        def held_by_me(it):
-            row = store.get(red_lease(it["data"]["key"]))
-            return lease_is_live(row, store.clock()) and (row["holder"] == mine or row["name"] == rec.get("lease"))
-        if not items or all(held_by_me(it) for it in items):
-            rec["note"] = note or rec.get("note") or "working"
-            write_json(own, rec)
-            red_noted(store, items or [], rec["note"])
-            return 0, [f"noted on your lease {rec.get('lease')}: {rec['note']}"]
-        items = [it for it in items if not held_by_me(it)]
-        wt = wt or rec.get("worktree")
+        noted, items, rec_wt = _fixer_claim(store, o_r, target, note, own)
+        if noted:
+            return noted
+        wt = wt or rec_wt
     wt = os.path.realpath(wt or worktree_of(here) or here)
     if root_checkout(wt, o_r) or not os.path.isdir(wt):
-        return 2, [f"NOT CLAIMED: {wt.replace(HOME, '~')} is not a worktree of your own (a claim is renewed by its "
-                   "worktree's activity; the root checkout counts for nobody): `--worktree <your worktree>`"]
-    items = items if items is not None else red_targets(store, o_r, target)
+        return 2, [f"NOT CLAIMED: {wt.replace(HOME, '~')} is not a worktree of your own (a claim is renewed by its worktree's "
+                   "activity; the root checkout counts for nobody): `--worktree <your worktree>`"]
+    items = items if own else red_targets(store, o_r, target)
     if not items:
         return 1, [f"NOT CLAIMED: #{target} names no red on main"]
     who = claimant(here)
-    holder = f"laptop:claim:{who}@{wt}"
-    rc, lines = 0, []
-    for it in items:
-        name = red_lease(it["data"]["key"])
-        row = store.get(name)
-        if lease_is_live(row, store.clock()) and row["holder"] == holder:
-            store.renew(name, row["epoch"], row["secret"], f"beat {time.time()}", RED_CLAIM_TTL, note=note or None)
-            lines.append(f"renewed {red_what(it['data'])} ({name})")
-            continue
-        r = store.acquire(name, holder, RED_CLAIM_TTL, RED_CLAIM_MAX, progress=red_wt_mark(wt), item=f"red:{it['id']}",
-                          meta={"kind": "claim", "worktree": wt, "who": who, "note": note,
-                                "session": os.environ.get("CLAUDE_CODE_SESSION_ID"), "gate": bool(it["data"].get("gate")),
-                                # made inside a dispatched fixer: its family's holder (red_family_holder); an
-                                # interactive session's claim takes only its red (the owner, 2026-11-08)
-                                **({"fixer": own} if own else {})})
-        if "held" in r:
-            rc = 1
-            lines.append(f"NOT CLAIMED: {red_what(it['data'])} is held by {r['held']['holder']} until "
-                         f"{time.strftime('%H:%M', time.localtime(r['held']['expires_at']))}")
-            continue
-        store.close_offer(f"red:{it['id']}", "taken")
-        lines.append(f"claimed {red_what(it['data'])} for {who} ({wt.replace(HOME, '~')}) as {name}"
-                     + (f": {note}" if note else "") + f"; it lapses after {RED_CLAIM_TTL // 60} min without activity in "
-                     f"your worktree; release: ~/bin/agentctl red release {it['data']['key']}")
-    return rc, lines
+    claims = [_claim_one(store, it, f"laptop:claim:{who}@{wt}", wt, who, note, own) for it in items]
+    return max(rc for rc, _line in claims), [line for _rc, line in claims]
 
 
 def red_beat(store, o_r, target, note):
@@ -152,33 +174,41 @@ def red_beat(store, o_r, target, note):
     return rc, out or [f"#{target} names no red"]
 
 
-def red_release(store, o_r, target, any_=False):
+def _lift_owner_block(store: Any, it: dict[str, Any], blk: dict[str, Any], me: str) -> str:
+    """THE OWNER LIFTS A BLOCK OF THE HARNESS'S OR A DECISION: the red is offered again at the next tick."""
+    keys = [k for k in blk["meta"].get("keys") or [] if k != it["data"]["key"]]
+    brow = store.get(blk["name"])
+    if keys:  # the block holds other reds too: only this one leaves it
+        store.set_meta(blk["name"], brow["epoch"], brow["secret"], {"keys": keys})
+    else:
+        store.revoke(blk["name"], f"RELEASED by {me}: offered again")
+    return f"lifted the owner block of {red_what(it['data'])} ({blk['cause']}): offered again at the next tick"
+
+
+def _release_one(store: Any, it: dict[str, Any], me: str, any_: bool) -> tuple[str | None, bool]:
+    """(its line, whether the red is now free of a lease or block of the caller's reach)."""
+    name = red_lease(it["data"]["key"])
+    row = store.get(name)
+    blk = red_block_of(it, store) if any_ and not lease_is_live(row, store.clock()) else None
+    if blk and (blk["meta"].get("crash_loop") or blk["meta"].get("decision")):
+        return _lift_owner_block(store, it, blk, me), True
+    if not lease_is_live(row, store.clock()):
+        return None, False
+    if not any_ and lease_meta(row).get("who") != me:
+        return f"{red_what(it['data'])} is held by {row['holder']}, not {me} (--any releases anyone's)", False
+    store.revoke(name, f"RELEASED by {me}")
+    return f"released {red_what(it['data'])} ({row['holder']})", True
+
+
+def red_release(store: Any, o_r: Any, target: Any, any_: bool = False) -> tuple[int, list[str]]:
     me = claimant()
-    out, rc = [], 1
+    out: list[str] = []
+    freed = False
     for it in red_targets(store, o_r, target, create=False):
-        name = red_lease(it["data"]["key"])
-        row = store.get(name)
-        blk = red_block_of(it, store) if any_ and not lease_is_live(row, store.clock()) else None
-        if blk and (blk["meta"].get("crash_loop") or blk["meta"].get("decision")):
-            # THE OWNER LIFTS A BLOCK OF THE HARNESS'S OR A DECISION: the red is offered again at the next tick
-            keys = [k for k in blk["meta"].get("keys") or [] if k != it["data"]["key"]]
-            brow = store.get(blk["name"])
-            if keys:  # the block holds other reds too: only this one leaves it
-                store.set_meta(blk["name"], brow["epoch"], brow["secret"], {"keys": keys})
-            else:
-                store.revoke(blk["name"], f"RELEASED by {me}: offered again")
-            rc = 0
-            out.append(f"lifted the owner block of {red_what(it['data'])} ({blk['cause']}): offered again at the next tick")
-            continue
-        if not lease_is_live(row, store.clock()):
-            continue
-        if not any_ and lease_meta(row).get("who") != me:
-            out.append(f"{red_what(it['data'])} is held by {row['holder']}, not {me} (--any releases anyone's)")
-            continue
-        store.revoke(name, f"RELEASED by {me}")
-        rc = 0
-        out.append(f"released {red_what(it['data'])} ({row['holder']})")
-    return rc, out or [f"red: no live lease on #{target}"]
+        line, ok = _release_one(store, it, me, any_)
+        out.extend([line] if line else [])
+        freed = freed or ok
+    return (0 if freed else 1), out or [f"red: no live lease on #{target}"]
 
 
 # -- interactive holders: the tick renews a claim from its worktree's activity; imported claim files lapse unless busy
