@@ -286,5 +286,116 @@ class OwnerTest(OwnerBase):
         self.assertFalse(rows["convergence"]["alive"])
 
 
+def transcript(path, *entries):
+    """A fake transcript: each entry a (type, text, usage tokens or None, sidechain) row."""
+    with open(path, "w") as f:
+        for kind, text, tokens, side in entries:
+            m = {"role": kind, "content": [{"type": "text", "text": text}]}
+            if tokens is not None:
+                m["usage"] = {"input_tokens": 2, "cache_read_input_tokens": tokens - 5, "cache_creation_input_tokens": 3}
+            f.write(json.dumps({"type": kind, "message": m, **({"isSidechain": True} if side else {})}) + "\n")
+    return path
+
+
+class SessionRolloverTest(OwnerBase):
+    """A SESSION PAST ITS CONTEXT LIMIT STARTS FRESH (2026-11-25): the outside-gate owner, resumed as the same session
+    for 134 turns, reached ~985k tokens of context; each resume reloaded it all. Past AGENTCTL_CONTEXT_FRESH (300k) the
+    owner's next turn is a fresh session with a handover from agentctl's own records."""
+
+    def owner_rec(self, tokens, wt=None):
+        wt = wt or self.r.path
+        path = transcript(os.path.join(self.tmp.name, "old.jsonl"), ("user", "go", None, False),
+                          ("assistant", "decided: bisect FooSpec first", tokens, False),
+                          ("assistant", "a subagent's own context", 5, True))
+        return {"session": "0ld5e55i0n-1", "transcript": path, "worktree": wt, "notebook": f"{wt}/RED-NOTEBOOK.md",
+                "verdicts": ["turn 3: DIAGNOSED FooSpec races its clock"], "last_end": "IDLE"}
+
+    def test_the_context_is_the_last_turns_input_cache_read_and_cache_creation(self):
+        rec = self.owner_rec(412345)
+        self.assertEqual(A.context_tokens(rec["transcript"]), 412345, "a sidechain's figures are not the session's")
+        big = os.path.join(self.tmp.name, "big.jsonl")  # the figures far from the end: read back in larger chunks
+        transcript(big, ("assistant", "x", 777, False), *[("user", "y" * 2000, None, False)] * 400)
+        self.assertEqual(A.context_tokens(big), 777)
+
+    def test_above_the_limit_the_owner_starts_fresh_with_a_handover_of_its_reds_and_worktree(self):
+        self.tick(dispatch=False)
+        key = self.only()["data"]["key"]
+        with open(os.path.join(self.r.path, "wip.txt"), "w") as f:
+            f.write("half done")
+        rec = self.owner_rec(412345)
+        text = A.owner_rollover(self.st, FAM, rec, [A.red_lease(key)])
+        self.assertIsNotNone(text, "past 300k: a fresh session")
+        self.assertIn("A FRESH SESSION, HANDED OVER", text)
+        self.assertIn(f"red {key}", text, "the reds in hand")
+        self.assertIn(self.r.path.replace(A.HOME, "~"), text, "the worktree")
+        self.assertIn("wip.txt", text, "its dirty files")
+        self.assertIn("DIAGNOSED FooSpec races its clock", text, "the last verdicts")
+        self.assertIn("decided: bisect FooSpec first", text, "the old session's last messages")
+        self.assertLess(len(text), A.HANDOVER_MAX + 1)
+        self.assertIsNone(rec["session"], "never resumed")
+        self.assertEqual([(r["old"], r["tokens"]) for r in rec["rollovers"]], [("0ld5e55i0n-1", 412345)])
+        A.session_seen(rec, "n3w-5e55i0n")
+        self.assertEqual(rec["rollovers"][-1]["new"], "n3w-5e55i0n")
+
+    def test_below_the_limit_or_with_no_readable_transcript_the_session_resumes(self):
+        rec = self.owner_rec(120000)
+        self.assertIsNone(A.owner_rollover(self.st, FAM, rec, []))
+        self.assertEqual((rec["session"], rec["context_tokens"]), ("0ld5e55i0n-1", 120000), "resumed, its context read")
+        for path in (os.path.join(self.tmp.name, "missing.jsonl"),
+                     transcript(os.path.join(self.tmp.name, "nousage.jsonl"), ("assistant", "hi", None, False))):
+            rec = dict(self.owner_rec(1), transcript=path)
+            self.assertIsNone(A.owner_rollover(self.st, FAM, rec, []), path)
+            self.assertEqual((rec["session"], rec["context_tokens"]), ("0ld5e55i0n-1", None))
+
+    def test_a_fixer_resuming_a_session_past_the_limit_starts_fresh_with_the_handover(self):
+        rec = {"resume": True, "resumed_from": "0ld5e55i0n-1", "resume_note": "revive the lander", "worktree": self.r.path,
+               "workflow": "Main", "run": 40, "line": FAIL_LINE}
+        found = os.path.join(A.claude_projects_root(), "fake")  # where bg_transcript finds a session's transcript
+        os.makedirs(found, exist_ok=True)
+        os.replace(self.owner_rec(500000)["transcript"], os.path.join(found, "0ld5e55i0n-1.jsonl"))
+        self.assertEqual(A.fixer_rollover(self.st, rec), rec["resume_note"])
+        self.assertFalse(rec["resume"])
+        self.assertIn("revive the lander", rec["resume_note"])
+        self.assertIn("A FRESH SESSION, HANDED OVER", rec["resume_note"])
+        self.assertEqual(rec["rollover"]["tokens"], 500000)
+        os.replace(self.owner_rec(1000)["transcript"], os.path.join(found, "sm4ll.jsonl"))
+        small = {"resume": True, "resumed_from": "sm4ll", "worktree": self.r.path, "resume_note": "go on"}
+        self.assertEqual(A.fixer_rollover(self.st, small), "go on")
+        self.assertTrue(small["resume"])
+
+    def test_the_owners_next_turn_past_the_limit_is_a_fresh_session_shown_in_red_status(self):
+        os.environ.update(FAKE_CLAUDE_SLEEP="1", FAKE_CLAUDE_CONTEXT="400000")
+        self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_CONTEXT", None)
+        self.tick(dispatch=True)
+        self.assertTrue(self.wait(lambda: self.rec().get("session")))
+        old = self.rec()["session"]
+        self.main_red(41, 21, line="[info] - BarSpec should baz *** FAILED ***")
+        self.tick(dispatch=True, advance=1)
+        self.assertTrue(self.wait(lambda: self.rec().get("turn") == 2, limit=40), self.owner_log())
+        self.assertTrue(self.wait(lambda: self.rec().get("session") not in (None, old)), self.owner_log())
+        new = self.rec()["session"]
+        argv = self.argv_of(new)
+        self.assertNotIn("--resume", argv)
+        self.assertIn("A FRESH SESSION, HANDED OVER", argv[argv.index("--bg") + 1])
+        self.assertEqual([(r["old"], r["new"], r["tokens"]) for r in self.rec()["rollovers"]], [(old, new, 400000)])
+        text = A.red_status_text(self.st, verbose=True)
+        self.assertIn(f"rollover {self.rec()['rollovers'][0]['at']}: {old[:8]} -> {new[:8]} (400000 tokens)", text)
+
+    def test_the_owners_next_turn_below_the_limit_resumes_with_its_context_read(self):
+        os.environ.update(FAKE_CLAUDE_SLEEP="1", FAKE_CLAUDE_CONTEXT="1000")
+        self.addCleanup(os.environ.__setitem__, "FAKE_CLAUDE_SLEEP", "0")
+        self.addCleanup(os.environ.pop, "FAKE_CLAUDE_CONTEXT", None)
+        self.tick(dispatch=True)
+        self.assertTrue(self.wait(lambda: self.rec().get("session")))
+        sid = self.rec()["session"]
+        self.main_red(41, 21, line="[info] - BarSpec should baz *** FAILED ***")
+        self.tick(dispatch=True, advance=1)
+        self.assertTrue(self.wait(lambda: self.rec().get("turn") == 2, limit=40), self.owner_log())
+        self.assertEqual((self.rec()["session"], self.rec().get("context_tokens")), (sid, 1000))
+        argv = self.argv_of(sid)
+        self.assertEqual(argv[argv.index("--resume") + 1], sid)
+
+
 if __name__ == "__main__":
     unittest.main()

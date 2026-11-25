@@ -29,6 +29,7 @@ from agentctl.red import RED_FIXER_MAX, RED_FIXER_TTL, RED_FIXER_WALL, RED_RELEA
 from agentctl.redclaim import bind_fixer_session
 from agentctl.redcrash import keep_awake, verdict_cut
 from agentctl.dispatchblock import claude_cli, interactive_mode
+from agentctl.sessionroll import fixer_rollover
 
 
 # ONE FIXER LIFECYCLE (2026-11-04): a dispatched fixer's wrapper (red_fixer) and a family owner's (owner.red_owner) keep
@@ -197,7 +198,7 @@ def red_fixer(a):
          "run": {"number": num, "databaseId": rec.get("run_id")}, "repo": rec.get("repo"),
          "blame_note": rec.get("blame_note"), "lander": rec.get("lander"), "decision": rec.get("decision")}
     u["record"] = a.record
-    prompt = fixer_prompt(u, wt, sync_brief(), rec.get("resume_note"))
+    prompt = fixer_prompt(u, wt, sync_brief(), fixer_rollover(st, rec))  # its resumed session past its context: fresh
     cli = claude_cli()
     label = fixer_label(rec)
     argv = [cli, "--bg", prompt, "--permission-mode", interactive_mode(), "--permission-prompts", "none", "-n", label,

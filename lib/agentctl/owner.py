@@ -8,6 +8,7 @@ import signal
 import subprocess
 import sys
 import time
+from typing import Any
 from agentctl.core import HOME, env_num, fmt_age, git, git_ok, remote, spawn_detached
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -36,6 +37,7 @@ from agentctl.redclaim import bind_fixer_session
 from agentctl.redcrash import keep_awake, verdict_cut
 from agentctl.fixerlife import HeldLease, TurnProgress
 from agentctl.ownerleases import owner_drop, owner_hand, owner_holder, owner_leases, owner_tell_leases
+from agentctl.sessionroll import owner_rollover, owner_turn_line, session_seen
 
 
 OWNER_MAX = 7 * 86400        # ...and is held at most this long in one spell (a restart takes it again)
@@ -151,9 +153,10 @@ def owner_resume_target(rec):
     return None
 
 
-def owner_turn_prompt(fam, rec, st, names, first, resumed=False):
+def owner_turn_prompt(fam, rec, st, names, first, resumed=False, handover=None):
     """The turn's prompt: the first red's task (fixer_prompt) in the owner's voice, every red of the turn listed. A
-    resumed session (its wrapper restarted) is told to continue, never to start over."""
+    resumed session (its wrapper restarted) is told to continue, never to start over; a fresh one past its predecessor's
+    context limit (sessionroll) gets the handover instead."""
     active = red_active(st)
     its = [active[n.split("/", 1)[1]] for n in names if n.split("/", 1)[1] in active]
     reds = [f"{red_what(i['data'])} (red {i['data'].get('key')}): {str(i['data'].get('line') or '')[:160]}" for i in its]
@@ -165,18 +168,21 @@ def owner_turn_prompt(fam, rec, st, names, first, resumed=False):
          "refuted": d.get("refuted"), "predicts": d.get("predicts"), "flake": d.get("red_kind") == "flake",
          "diagnosis": d.get("diagnosis"), "prior_work": d.get("prior_work"), "old_note": d.get("old_note"),
          "decision": red_decision(d)}
+    return fixer_prompt(u, rec["worktree"], sync_brief(), handover or owner_turn_note(rec, first, resumed),
+                        owner={"family": fam, "notebook": rec["notebook"], "reds": reds})
+
+
+def owner_turn_note(rec: dict[str, Any], first: bool, resumed: bool) -> str | None:
+    """The prompt's note: a resumed session continues, a first turn has none, a next turn reads its inbox."""
     if resumed:
-        note = ("RESUMED AFTER A RESTART, NEVER START OVER: your wrapper restarted (" + str(rec.get("last_end") or
+        return ("RESUMED AFTER A RESTART, NEVER START OVER: your wrapper restarted (" + str(rec.get("last_end") or
                 "it had died")[:200] + "); you are the SAME session, in the same worktree, with your notebook and "
                 "your context: continue from where you left off (your notebook's `what is left`, your commits, the CI "
                 "runs you started). The reds above are yours again; read RED-INBOX.md, then go on.")
-    elif first:
-        note = None
-    else:
-        note = ("NEXT TURN: the reds above are new or offered to you again (a previous verdict did not "
-                "clear them): read RED-INBOX.md and your notebook, then go on.")
-    return fixer_prompt(u, rec["worktree"], sync_brief(), note,
-                        owner={"family": fam, "notebook": rec["notebook"], "reds": reds})
+    if first:
+        return None
+    return ("NEXT TURN: the reds above are new or offered to you again (a previous verdict did not "
+            "clear them): read RED-INBOX.md and your notebook, then go on.")
 
 
 OWNER_HEARTBEAT_LOST = "STOPPED: the owner's heartbeat lease was lost"
@@ -270,7 +276,7 @@ def red_owner(a):
         tail = [l[:300] for l in text.splitlines()[-INBOX_TAIL:]]
         s["empty"] = 0 if verdict else s["empty"] + 1
         outcome = verdict or outcome_if_none
-        line = f"RED OWNER {fam} turn {s['turn']}: {outcome[:300]}"
+        line = owner_turn_line(rec, fam, s["turn"], outcome)  # kept: a fresh session's handover names it
         inbox_write("red fixer", line, [line], tail, 0 if outcome.startswith("LANDED") else 1, cwd=wt)
         release(s["names"], outcome, "\n".join(tail[-8:]))
         if s["bid"]:  # THE TURN'S SESSION STOPPED (bg_spent): claude keeps its process on as a spare, and the next
@@ -287,7 +293,7 @@ def red_owner(a):
         if s["bid"] is not None:
             ent = bg_session(cli, s["bid"])
             if ent and ent.get("sessionId") and rec.get("session") != ent["sessionId"]:
-                rec.update(session=ent["sessionId"], transcript=bg_transcript(ent["sessionId"]))
+                session_seen(rec, ent["sessionId"])  # its id, and a rollover's new session named
                 write_json(path, rec)
                 bind_fixer_session(rec["session"], path)  # the session is a fixer's: ~/bin refuses its commits
             s["missing"] = s["missing"] + 1 if ent is None else 0
@@ -363,7 +369,7 @@ def red_owner(a):
                       + (f"resuming {resume[:8]}, the last one that does" if resume else "a fresh session"), flush=True)
                 rec.update(session=resume, transcript=bg_transcript(resume) if resume else None)
                 s["first"], s["resumed"] = s["first"] or not resume, s["resumed"] and bool(resume)
-            prompt = owner_turn_prompt(fam, rec, st, held, s["first"], resumed=s["resumed"])
+            prompt = owner_turn_prompt(fam, rec, st, held, s["first"], s["resumed"], owner_rollover(st, fam, rec, held))
             if prompt is None:  # its reds closed meanwhile
                 owner_drop(fam, held)
                 return None

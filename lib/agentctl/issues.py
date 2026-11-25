@@ -77,7 +77,7 @@ def tick_issues(st, now_=None):
     return []
 
 
-def status_issues(st, t):
+def status_issues(st: Any, t: float) -> list[dict[str, Any]]:
     return [{"id": i["id"], "text": i["data"].get("text", "")[:1000], "by": i["data"].get("by"),
              "at": i["data"].get("at"), "opened": i.get("entered_at"), "level": i.get("level"),
              "cwd": i["data"].get("cwd")}

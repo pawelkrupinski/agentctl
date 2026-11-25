@@ -315,7 +315,7 @@ cognitive	remote_check_lines	24
 cognitive	remote_poll	42
 cognitive	remote_progress	12
 cognitive	remote_run_listed	13
-cognitive	render_red_status	61
+cognitive	render_red_status	52
 cognitive	render_status_line	21
 cognitive	replay_cores	13
 cognitive	resolve_run	23
@@ -635,7 +635,7 @@ cyclomatic	owner_of	21
 cyclomatic	owner_orphans	15
 cyclomatic	owner_spawn	13
 cyclomatic	owner_text	12
-cyclomatic	owner_turn_prompt	13
+cyclomatic	owner_turn_prompt	11
 cyclomatic	owner_work	19
 cyclomatic	park_duty	20
 cyclomatic	park_release_why	15
@@ -743,7 +743,7 @@ cyclomatic	remote_check_lines	16
 cyclomatic	remote_ghost	13
 cyclomatic	remote_poll	28
 cyclomatic	remote_progress	11
-cyclomatic	render_red_status	48
+cyclomatic	render_red_status	43
 cyclomatic	render_status_line	20
 cyclomatic	resolve_blocker	13
 cyclomatic	resolve_run	16
@@ -873,7 +873,6 @@ method-lines	red_view_state	85
 method-lines	regenerate	63
 method-lines	remote_check	79
 method-lines	remote_poll	68
-method-lines	render_red_status	51
 method-lines	retire_jobs_of	55
 method-lines	stats_pass	71
 method-lines	status_page_server	103

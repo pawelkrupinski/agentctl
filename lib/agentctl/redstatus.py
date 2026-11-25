@@ -47,10 +47,7 @@ def render_red_status(m, verbose=False):
             who = "none at work"
         out.append(f"family {f['family']}: {f['open']} open red(s), ONE fixer: {who}")
     for o in [] if "owners" in unread else m.get("owners") or []:
-        if o.get("worktree"):
-            out.append(f"owner {o['family']}: {'ALIVE' if o['alive'] else 'not running'}, turn {o.get('turn') or 0}, "
-                       f"{o.get('reds') or 0} red(s) in hand, {o.get('restarts') or 0} restart(s); "
-                       f"{str(o['worktree']).replace(HOME, '~')}" + (f" (ended: {o['verdict']})" if o.get("ended") else ""))
+        out += owner_status_lines(o, verbose) if o.get("worktree") else []
     dp = m.get("dispatcher") or {}
     if "error" in dp:
         out.append(f"dispatcher: unread ({dp['error']})")
@@ -62,6 +59,21 @@ def render_red_status(m, verbose=False):
         if dp.get("pressure"):
             out.append(f"laptop: {dp['pressure']} (holds other work only, never a red fix)")
     return "\n".join(out)
+
+
+def owner_status_lines(o: dict[str, Any], verbose: bool) -> list[str]:
+    """An owner's line; verbose, its session's context and its last rollovers to a fresh session (sessionroll)."""
+    line = (f"owner {o['family']}: {'ALIVE' if o['alive'] else 'not running'}, turn {o.get('turn') or 0}, "
+            f"{o.get('reds') or 0} red(s) in hand, {o.get('restarts') or 0} restart(s); "
+            f"{str(o['worktree']).replace(HOME, '~')}" + (f" (ended: {o['verdict']})" if o.get("ended") else ""))
+    return [line] + (owner_context_lines(o) if verbose else [])
+
+
+def owner_context_lines(o: dict[str, Any]) -> list[str]:
+    """The owner's session context at its last resume check, and its last three rollovers."""
+    return ([f"      context at its last resume check: {o.get('context') or 'unread'} tokens"]
+            + [f"      rollover {r.get('at')}: {str(r.get('old'))[:8]} -> {str(r.get('new') or 'starting')[:8]} "
+               f"({r.get('tokens')} tokens)" for r in (o.get("rollovers") or [])[-3:]])
 
 
 def red_status_text(store: Any, verbose: bool = False) -> str:

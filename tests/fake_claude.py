@@ -19,6 +19,7 @@
                               $FAKE_CLAUDE_BG_WAIT=<s>: it first backgrounds a task (`agentctl wait`), ends its turn
                               waiting on it (row `blocked`, live pid, no answer) for <s> s, then the task's notification
                               comes and it answers.
+                              $FAKE_CLAUDE_CONTEXT=<n>: its answers carry usage figures, n tokens of context.
                               $FAKE_CLAUDE_SILENT_ONCE=<file>: while <file> exists, the next session consumes it and
                               fails before one message (a transcript of metadata only), its job's detail <file>'s text.
   --bg ... --resume <sid>     of a session whose transcript holds no conversation: claude's refusal -- a row under a
@@ -72,8 +73,13 @@ def has_conversation(sid):
 
 
 def say(path, role, text):
+    m = {"role": role, "content": [{"type": "text", "text": text}]}
+    if role == "assistant" and os.environ.get("FAKE_CLAUDE_CONTEXT"):  # the turn's usage: its context in tokens
+        n = int(os.environ["FAKE_CLAUDE_CONTEXT"])
+        m["usage"] = {"input_tokens": 1, "cache_creation_input_tokens": 9, "cache_read_input_tokens": n - 10,
+                      "output_tokens": 50}
     with open(path, "a") as f:
-        f.write(json.dumps({"type": role, "message": {"role": role, "content": [{"type": "text", "text": text}]}}) + "\n")
+        f.write(json.dumps({"type": role, "message": m}) + "\n")
 
 
 try:  # claude refuses to start in a deleted directory

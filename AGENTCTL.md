@@ -918,6 +918,13 @@ agent must be assigned to it".
   owner (kind `owned`), a line in `RED-INBOX.md` -- and become the NEXT TURN of the same session (`--resume`) -- only a session whose transcript holds a conversation: one
   that failed before its first message is never resumed (claude refuses it, `source session ... not found`; 2026-11-21,
   Order independence #99), the turn resumes the last one that spoke, else starts a fresh one. A crashed turn's verdict
+  A SESSION PAST ITS CONTEXT LIMIT STARTS FRESH (2026-11-25; outside-gate had ~985k tokens by turn 134, each resume
+  reloading it all): before a resume the session's context is read from its transcript (the last assistant turn's
+  input + cache-read + cache-creation tokens); past `AGENTCTL_CONTEXT_FRESH` (300k) the turn is a fresh session whose
+  prompt carries a handover of under 2k tokens built from agentctl's records -- the reds in hand, the worktree's branch
+  and dirty files, the last verdicts, the open issues, the old session's last answers -- and the rollover (old id, new
+  id, tokens) is kept in the owner's record and shown by `red status -v`. A fixer resuming a session (a revived lander,
+  a resumable fixer) follows the same rule; an unreadable transcript, or one with no usage figures, resumes as before.
   carries claude's own error (its job's `detail`, `~/.claude/jobs/<id>/state.json`), and so does the HARNESS FAULT. A turn
   ends with one verdict line; that turn's red leases are released with it, exactly as a fixer's, so verification,
   re-offers (back to the same owner), the attempt ladder and the crash-loop breaker work as before. It is restarted
@@ -3062,6 +3069,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `condition_pending_lapse` | `AGENTCTL_CONDITION_PENDING_LAPSE` | `1800` | s between two sightings after which a pending condition's sighting run starts again |
 | `contact_gap` | `AGENTCTL_CONTACT_GAP` | `120` | s of a machine's silence before its leases' clocks pause |
 | `contact_pause_max` | `AGENTCTL_CONTACT_PAUSE_MAX` | `43200` | s a silent machine's leases are paused at most |
+| `context_fresh` | `AGENTCTL_CONTEXT_FRESH` | `300000` | tokens: a session whose last turn's context is past this is not resumed but started fresh |
 | `disk_min_gb` | `AGENTCTL_DISK_MIN_GB` | `50` | the Data volume's free space below which the upkeep runs at once, then WD opens |
 | `disk_path` | `AGENTCTL_DISK_PATH` | - | - |
 | `dispatch_dir` | `AGENTCTL_DISPATCH_DIR` | - | - |

@@ -40,7 +40,8 @@ def owner_record_path(fam):
 #     wrapper renews those leases with its heartbeat while the session works on them; a turn ends with a verdict, and
 #     the leases of that turn are released with it (LANDED, GAVE UP, DIAGNOSED, BLOCKED ON OWNER), exactly as a
 #     fixer's: the red machine then verifies, re-offers -- back to the same owner -- or blocks, and the attempt ladder
-#     and the crash-loop breaker count as before. New reds start the next turn of the SAME session (`--resume`);
+#     and the crash-loop breaker count as before. New reds start the next turn of the SAME session (`--resume`;
+#     past its context limit a fresh one, handed over: sessionroll);
 #   - is restarted only when it died: its leases lapse, its reds are offered again, and the dispatcher starts the
 #     wrapper again with the same worktree, notebook and session. It ends on its own after OWNER_IDLE with no red,
 #     on RED-STOP.md, when its heartbeat lease is lost, or after OWNER_EMPTY_TURNS turns in a row with no verdict.

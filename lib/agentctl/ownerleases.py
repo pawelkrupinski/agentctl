@@ -77,5 +77,6 @@ def owners_status(store, t):
         out.append({"family": f["name"], "alive": lease_is_live(row, t), "worktree": rec.get("worktree"),
                     "notebook": rec.get("notebook"), "session": rec.get("session"), "turn": rec.get("turn"),
                     "restarts": rec.get("restarts"), "started": rec.get("started"), "ended": rec.get("ended"),
-                    "verdict": rec.get("verdict"), "reds": len(owner_leases(f["name"]))})
+                    "verdict": rec.get("verdict"), "reds": len(owner_leases(f["name"])),
+                    "context": rec.get("context_tokens"), "rollovers": rec.get("rollovers") or []})
     return out

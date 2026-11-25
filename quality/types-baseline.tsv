@@ -50,7 +50,7 @@ mypy-errors	govusage	6
 mypy-errors	identitychange	13
 mypy-errors	inbox	17
 mypy-errors	invariants	36
-mypy-errors	issues	7
+mypy-errors	issues	6
 mypy-errors	jvmreap	42
 mypy-errors	land	23
 mypy-errors	landdryrun	48
@@ -141,7 +141,7 @@ mypy-errors	snapshot	9
 mypy-errors	statemachines	32
 mypy-errors	stats	50
 mypy-errors	statsrecords	89
-mypy-errors	status	109
+mypy-errors	status	108
 mypy-errors	statusagents	39
 mypy-errors	statuspage	55
 mypy-errors	store	78
