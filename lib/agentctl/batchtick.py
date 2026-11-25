@@ -2,10 +2,10 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, NamedTuple
-from agentctl.core import err, git, remote
 from agentctl.timefmt import ts
-from agentctl.waitingdir import save_entry, waiting_entries
 from agentctl.statemachines import machine_state
+from agentctl.core import err, git, remote
+from agentctl.waitingdir import save_entry, waiting_entries
 from agentctl.leases import lease_live
 from agentctl.queueslots import check_tree, check_tree_slot, set_change
 from agentctl.queue import land_hold
@@ -15,7 +15,8 @@ from agentctl.redseen import gate_reds
 from agentctl.batchrun import assemble, unread_note
 from agentctl.recovery import batch_move, current_batch
 from agentctl.batchitem import batch_fail, new_batch
-from agentctl.queuepush import DEEP_BATCHES, backlog_candidates, backlog_min, check_tree_slot_free, push_candidates
+from agentctl.queuebatchsel import backlog_candidates, backlog_min, push_candidates
+from agentctl.queuepush import DEEP_BATCHES, check_tree_slot_free
 from agentctl.batchpush import push_batch_item
 from agentctl.batch import (
     backlog_reconcile, batch_kind, batch_ready, batch_round_depth, green_batch_depth, note_batch_progress,

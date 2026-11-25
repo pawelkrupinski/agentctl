@@ -29,8 +29,8 @@ MODULES = ("procrunner", "govpool", "usage", "timefmt", "statefile", "moviestool
            "reddispatch", "ownerwrapper", "cleanuppass", "redworkflow", "statusline", "redquota", "statsepisodes",
            "stats", "remotejobs", "remote", "redprobe", "blame", "batchrun", "queuebatch", "offerdispatch",
            "queuefailure", "queuediff", "queuecheck", "queueclose", "superseded", "park", "snapshot", "selfci",
-           "redwaits", "redview", "cireport", "watchtick", "recovery", "netwatch", "tools", "batchitem", "redlease",
-           "queuepush", "orphans", "orphanpass", "batchpush", "batch", "batchcheck", "batchtick", "status",
-           "maintain", "redfollow", "redpending", "redstep", "redhold", "server", "invariants", "watchdog",
-           "landqueue", "statuspage", "redstatus", "syncsteps", "redcommands", "queueenter", "landdryrun", "slots",
-           "cliparser", "redtick", "serversteps", "processor", "cli")
+           "redwaits", "redview", "cireport", "watchtick", "recovery", "queuebatchsel", "netwatch", "tools",
+           "batchitem", "redlease", "queuepush", "orphans", "orphanpass", "batchpush", "batch", "batchcheck",
+           "batchtick", "status", "maintain", "redfollow", "redpending", "redstep", "redhold", "server",
+           "invariants", "watchdog", "landqueue", "statuspage", "redstatus", "syncsteps", "redcommands",
+           "queueenter", "landdryrun", "slots", "cliparser", "redtick", "serversteps", "processor", "cli")
