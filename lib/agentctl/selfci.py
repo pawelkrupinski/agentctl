@@ -26,6 +26,7 @@ PIN_LINK = "/var/lib/agentctl-src/current"  # the export the auto-pin runs: a li
 
 def read_runs() -> list[dict[str, Any]]:
     """agentctl's tests.yml runs on main, newest first."""
+    # listing: the newest 30 on main; red_since reads from the newest decided run down, never an absence
     return list(gh_json(SELF_REPO, "run", "list", "--workflow", "tests.yml", "--branch", "main", "--limit", "30",
                         "--json", "databaseId,number,status,conclusion,headSha,createdAt,updatedAt"))
 

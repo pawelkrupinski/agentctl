@@ -3255,6 +3255,9 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `watch_poll` | `AGENTCTL_WATCH_POLL` | `60` | - |
 | `watch_stall_min` | `AGENTCTL_WATCH_STALL_MIN` | `120` | a watch with no change in its runs for this long ends WATCH STALLED |
 | `watch_timeout` | `AGENTCTL_WATCH_TIMEOUT` | `10800` | either run undecided by then: exit 2, could not tell |
+| `wa_behind_max` | `AGENTCTL_WA_BEHIND_MAX` | `10` | commits ci-runner's pin may trail origin/main |
+| `wa_read_every` | `AGENTCTL_WA_READ_EVERY` | `300` | s a reading (a gh list and an ssh) is kept |
+| `wa_red_max` | `AGENTCTL_WA_RED_MAX` | `1800` | s agentctl's tests.yml may stay red on main |
 | `wb_max` | `AGENTCTL_WB_MAX` | `600` | - |
 | `wf_pct` | `AGENTCTL_WF_PCT` | `70` | % of kern.maxfiles open system-wide past which WF is violated |
 | `wm_max` | `AGENTCTL_WM_MAX` | `2700` | maintain's last pass (launchd every 15 min) |
