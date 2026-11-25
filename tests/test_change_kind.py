@@ -139,6 +139,29 @@ class WatchdogKindTest(unittest.TestCase):
         self.assertIn("c-fix (red fix of 6 (outside)) is checked", why)
         self.assertNotIn("c-wait", why, "only a GATE red's fix may not wait for green")
 
+    def test_a_red_gate_with_a_stalled_red_fix_shows_one_line_naming_the_rule_and_the_change(self):
+        """2026-11-25: the gate sat red for hours, its fix `waiting` for green, and `status` said nothing of it. Over
+        RED_LIVENESS_MAX (60 min, $AGENTCTL_RED_LIVENESS_MAX) red with a red fix that does not move: ONE line with the
+        change and the rule blocking it, in `status` and `red status`; none while the gate is young or the fix moves."""
+        t = time.time()
+        snap = lambda ago: {"repo": "pawelkrupinski/movies", "at": t, "gate": [{
+            "name": "Main", "decided": {"number": 8, "conclusion": "failure"}, "newer": [], "count": 1, "runs": [],
+            "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t - ago))}]}
+        self.st.put_item("red", "k8", "leased", {"key": "k8", "workflow": "Main", "gate": True, "runs": ["8"]})
+        self.st.put_item("change", "c-fix", "waiting", {"fixes": ["8"], "submitted_at": t - 100,
+                                                        "wait_rule": "abc1234567 names 9, no run of the open gate red"})
+        self.assertIsNone(A.red_fix_liveness(self.st, t, snap(50 * 60)), "red for 50 min: not yet")
+        line = A.red_fix_liveness(self.st, t, snap(80 * 60))
+        self.assertEqual(line.count("\n"), 0)
+        self.assertIn("the gate has been red 1 h", line)
+        self.assertIn("c-fix (red fix of 8 (gate)) is waiting for main to turn green: abc1234567 names 9, no run of the "
+                      "open gate red", line)
+        self.assertEqual(A.with_liveness("the status line\nchanges: 1", self.st, t), "the status line\nchanges: 1",
+                         "no snapshot read: no line")
+        it = self.st.item("change", "c-fix")
+        self.st.transition("change", "c-fix", "queued", it["version"])
+        self.assertIsNone(A.red_fix_liveness(self.st, t, snap(80 * 60)), "its fix is queued, not stalled")
+
     def test_a_stale_hold_is_re_derived_by_the_tick_never_paged(self):
         """THE HOLD TABLE's recovery (policy.py HOLDS, 2026-11-20): a hold whose blocker ended, or past its kind's own
         bound, describes a world that moved -- the lap drops it (the tick derives it afresh), quietly, no issue."""

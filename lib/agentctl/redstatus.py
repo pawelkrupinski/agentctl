@@ -9,6 +9,7 @@ from agentctl.repos import RED_PRIMARY, red_repo_short
 from agentctl.reverts import revert_line
 from agentctl.redview import RED_STATUS_FRESH, red_status_snapshot_path
 from agentctl.status import status_data, status_store
+from agentctl.redhold import red_fix_liveness
 
 
 def render_red_status(m, verbose=False):
@@ -79,7 +80,11 @@ def owner_context_lines(o: dict[str, Any]) -> list[str]:
 def red_status_text(store: Any, verbose: bool = False) -> str:
     """`agentctl red status`'s text, from the status model (its reds, families and dispatcher sections)."""
     t = store.clock() if hasattr(store, "clock") else time.time()
-    return render_red_status(status_data(store=store, now_=t, only=("reds", "families", "owners", "dispatcher",
+    try:
+        stalled = red_fix_liveness(store, t)
+    except (Exception, SystemExit):
+        stalled = None
+    return (f"{stalled}\n" if stalled else "") + render_red_status(status_data(store=store, now_=t, only=("reds", "families", "owners", "dispatcher",
                                                                     "untracked", "reverts")), verbose)
 
 

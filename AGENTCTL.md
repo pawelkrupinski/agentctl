@@ -600,6 +600,22 @@ may land on red, found nothing: WR, a fix waiting for the green only it could br
 through that names any name of an open gate red in the store (`open_gate_red_names`); the batch then takes the fix
 alone and the non-fix change stays behind.
 
+**WR self-heals, and an episode counts by signature (2026-11-25, the owner: "fix the class").** Three more pieces, so a
+fix of the open red never waits on bookkeeping again:
+- *Episode names* (`redepisode.py`, read by `queue_facts`): besides the red item's own names, a gate red's names include
+  every run of its workflow's red streak since the last green whose CACHED run signature has the red's failing job and
+  line -- a run the item dropped (or never attached) still counts for a fix naming it; a run failing another way, or one
+  before the green, does not (it waits as before). No forge read: an uncached signature counts nothing.
+- *The heal* (`batch.py release_red_fixes`, run by the batch tick while red as well as at green): a waiting change the
+  store's open red names, whose commits `must_wait` no longer holds, goes back to the queue -- first, alone, in the
+  red-fix tree -- and the batch is left to the changes that may wait. A red fix `must_wait` still holds is told what holds
+  it: `wait_rule` on its item (`must_wait_why`), which WR's text and the liveness line print -- the escalation left.
+- *The liveness line* (`redhold.py red_fix_liveness`): over 60 min of red gate (`$AGENTCTL_RED_LIVENESS_MAX`) with a red
+  fix that does not move (WR's own reading, `red_fix_stalls`), `agentctl status` (under its first line) and `red status`
+  show ONE line: `RED FIX STALLED: the gate has been red <age>; <change> (red fix of ...) is <state>: <the rule>`.
+The simulator holds it as invariant IW (a red fix of an open gate red the store names never waits past N ticks; scenarios
+`REDFIX_OLDER_RUN`, `REDFIX_HEALS`, `REDFIX_OTHER_FAILURE`).
+
 Under each red row (the gate's and the reds outside it) ci-why prints ONE line, `fixing: <state>`, the state
 `red_state` decides for that red run -- the same function the red tick acts on, so ci-why, `--summary`, the status line
 and `red status` can never disagree (2026-10-27: Identity capture #2133 was `UNASSIGNED (assigning ...)` in ci-why
@@ -2094,7 +2110,7 @@ read the simulated clock (`sim_datetime`; ids carrying the wall clock reordered 
 **THE SIMULATOR GATE (2026-11-20, the owner's "fix agentctl issues structurally").** `tests/sim_gate.py` runs 308
 fixed scenarios (the suite's 200 random seeds, the calm / load / chaos profiles with a 30-seed x 2-tree chaos sweep,
 every replayed day, the collisions, the baselines, the 08010c timeline) in COUNT MODE (`Sim.run(stop=False)`), and
-counts, per INVARIANT KIND (`queue_sim.INVARIANT_KINDS`: I1-I11, Ib, Ic, Id, IX; every `violate()` names one), the
+counts, per INVARIANT KIND (`queue_sim.INVARIANT_KINDS`: I1-I11, Ib, Ic, Id, IX, IW; every `violate()` names one), the
 scenarios that break it. `tests/sim-invariants.tsv` holds each kind's VERSION, the FINGERPRINT of its definition (the
 source of every Sim method raising it, the run loop and the scenario list) and its BASELINE count. It refuses: a count
 past its baseline; a definition changed without a new version; a baseline risen at the same version against the push's
@@ -3180,6 +3196,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_fix_requeue_grace` | `AGENTCTL_RED_FIX_REQUEUE_GRACE` | `900` | $AGENTCTL_RED_FIX_REQUEUE_GRACE |
 | `red_held_idle` | `AGENTCTL_RED_HELD_IDLE` | `2700` | s a red in its owner's hand may go with no progress of its own before it is released |
 | `red_join_idle` | `AGENTCTL_RED_JOIN_IDLE` | `1800` | s a red joined to its family holder's lease may go with no progress on it before it is released |
+| `red_liveness_max` | `AGENTCTL_RED_LIVENESS_MAX` | `3600` | the gate red this long with a red fix stalled: the status line says so |
 | `red_main_verify_every` | `AGENTCTL_RED_MAIN_VERIFY_EVERY` | `10800` | - |
 | `red_old_run` | `AGENTCTL_RED_OLD_RUN` | `172800` | an outside red whose newest run is older than this is checked by a fresh run before it is fixed |
 | `red_orphan_grace` | `AGENTCTL_RED_ORPHAN_GRACE` | `300` | an ended session's turn still held this long is orphaned |

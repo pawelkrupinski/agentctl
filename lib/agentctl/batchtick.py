@@ -141,9 +141,10 @@ def gate_fix_waits(st: Any, reds: Any, waiting: Any, t: float) -> bool:
 
 
 def waiting_after_release(repo: str, d: str, st: Any, t: float, it: Any, reds: Any) -> list[dict[str, Any]]:
-    """The waiting entries, read again when green released red fixes waiting behind the red that has ended."""
+    """The waiting entries, read again when a red fix was released: at green, or while red when the open red names it
+    (release_red_fixes: WR self-heals)."""
     waiting = waiting_entries(d)
-    if not reds and (not it or it["state"] in ("blocked-red", "assembling")) and release_red_fixes(d, st, reds, waiting, t):
+    if (not it or it["state"] in ("blocked-red", "assembling")) and release_red_fixes(repo, d, st, reds, waiting, t):
         return waiting_entries(d)
     return waiting
 

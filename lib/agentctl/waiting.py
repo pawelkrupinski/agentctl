@@ -37,7 +37,7 @@ only the confirmed culprit rejected. No `waiting` branch. Every verdict goes to 
 The old names (`waiting status|pause|resume|cancel|run|service`) answer until 2026-11-05, each naming its new one."""
 
 
-def is_production_path(p):
+def is_production_path(p: str) -> bool:
     """movies' pre-push is_production_path: what reaches a pod or a fleet host (the rest lands while red)."""
     return any(fnmatch.fnmatch(p, g) for g in PRODUCTION_GLOBS)
 
@@ -69,8 +69,27 @@ def touches_production(repo: str, c: str) -> bool:
 def must_wait(repo: str, commits: list[str], reds: set[str], store: Any) -> bool:
     """A production commit with no Fixes-Red: naming a red run waits; tools-only and declared fixes go (the hook's rule).
     A red run is one of the gate's (`reds`) or any name of an open gate red in the store."""
+    return must_wait_why(repo, commits, reds, store) is not None
+
+
+def must_wait_why(repo: str, commits: list[str], reds: set[str], store: Any) -> str | None:
+    """None when no commit must wait, else the rule that makes the first one wait, in words (WR names it when a fix
+    that cannot move says why: `Fixes-Red:` missing, not counting, or naming no run of the open gate red)."""
     named = reds | open_gate_red_names(store)
-    return any(touches_production(repo, c) and not commit_fixes(repo, c, store) & named for c in commits)
+    for c in commits:
+        if touches_production(repo, c):
+            fixes = commit_fixes(repo, c, store)  # a trailer that does not count (fix_check) is no fix: it waits
+            if not fixes & named:
+                return wait_words(c, fixes, reds, named - reds)
+    return None
+
+
+def wait_words(c: str, fixes: set[str], reds: set[str], open_names: set[str]) -> str:
+    """Why commit c waits, as must_wait_why words it."""
+    if not fixes:
+        return f"{c[:10]} is a production commit whose `Fixes-Red:` is missing or does not count (fix_check: it touches nothing the red's job reads)"
+    return (f"{c[:10]} is a production commit whose `Fixes-Red:` names {', '.join(sorted(fixes))}, no run of the open gate red "
+            f"(the gate's runs {', '.join(sorted(reds)[:4])}; the red items' {', '.join(sorted(open_names)[:6]) or 'none'})")
 
 
 def apply_entry(d, wt, e, base, regen=True, autoresolve=False):

@@ -17,6 +17,7 @@ from agentctl.laptoprole import laptop_role_standby
 from agentctl.storestate import port_open
 from agentctl.statusagents import STATUS_LOG_MAX, STATUS_LOG_SUFFIXES, status_log_body
 from agentctl.status import render_status, status_cached, status_header
+from agentctl.redhold import red_fix_liveness
 from agentctl.livepage import AGENT_PAGE_HTML, STATUS_PAGE_HTML
 from agentctl.livestream import (
     LIVE_SEND_TIMEOUT, LIVE_STREAMS, _live_streams, live_mask_text, live_peer_closed, live_stream)
@@ -54,8 +55,19 @@ def cmd_status(a, store):
         print(h["line"])
         return 0
     standby = None if on_ci_runner() else laptop_role_standby(store)  # ONE MACHINE HOLDS THE LAPTOP ROLE
-    print((f"STANDBY: {standby}\n" if standby else "") + render_status(h, t))
+    print((f"STANDBY: {standby}\n" if standby else "") + with_liveness(render_status(h, t), store, t))
     return 0
+
+
+def with_liveness(text: str, store: Any, t: float) -> str:
+    """`status`' text with the red-fix liveness line (redhold.py red_fix_liveness) under its first line, when there is one;
+    a store that cannot be read says nothing here (the status line already says so)."""
+    try:
+        line = red_fix_liveness(store, t)
+    except (Exception, SystemExit):
+        line = None
+    head, _, rest = text.partition("\n")
+    return text if not line else f"{head}\n{line}\n{rest}"
 
 
 def status_host_ok(host):

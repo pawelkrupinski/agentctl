@@ -4,6 +4,7 @@
 import os
 import subprocess
 import sys
+from contextlib import suppress
 from typing import Any
 from agentctl.core import env_num, err, fmt_age, git, remote, spawn_detached
 from agentctl.timefmt import ts
@@ -19,7 +20,8 @@ from agentctl.queue import VERIFY_MODE, forces_full_recheck, range_paths, verify
 from agentctl.generated import without_generated
 from agentctl.queuerecheck import read_overlap, recheck_reason
 from agentctl.changekind import classify_change, kind_text, queue_facts
-from agentctl.waiting import batch_order, must_wait
+from agentctl.waiting import batch_order, must_wait, must_wait_why
+from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.recovery import batch_key, batch_move
 from agentctl.queuepush import BACKLOG_BATCH_MAX, drift_serialize
 from agentctl.batchrun import assemble
@@ -317,18 +319,38 @@ def green_batch_depth(tree, it, kept, base, tip):
 # commits name no gate red -- and at green the waiting batch took it with the rest, so it waited for their combined
 # check). At green, before a new waiting batch forms, each waiting change that fixes an open red goes back to the queue,
 # where it goes first, alone, in the red-fix tree (A FIX OF ANY OPEN RED GOES FIRST, changekind.py).
-def release_red_fixes(d, st, reds, waiting, t):
+#
+# WR SELF-HEALS (the owner, 2026-11-25, batch #124: a fix naming #2896 waited for the green of the open red #2898 for
+# hours, WR said so, nobody acted): the same release runs while the gate is RED, for each waiting change the store's open
+# red names (its episode: changekind.py queue_facts) whose commits must_wait no longer holds -- it goes back to the queue,
+# first and alone, and a batch is left to the changes that may wait. One the rule still holds is told what holds it
+# (`wait_rule` on its item: WR and the liveness line print it), the one escalation left.
+def release_red_fixes(repo: Any, d: Any, st: Any, reds: Any, waiting: Any, t: float) -> list[str]:
     facts = queue_facts(reds, st)
     out = []
     for e in waiting:
         k = classify_change(e, facts, t)
         if not k["red_fix"]:
             continue
-        set_change(st, d, e, "queued", event={"text": f"{e['id']}: main is green -- a fix of an open red ({kind_text(k)}) "
-                                                  "is checked alone and first, never a batch member", "severity": "info"},
+        why = must_wait_why(repo, e["commits"], reds, st) if reds else None
+        if why:
+            note_wait_rule(st, e, why)
+            continue
+        text = "main is green" if not reds else "the open red names it, so it never waits for green"
+        set_change(st, d, e, "queued", data={"wait_rule": None},
+                   event={"text": f"{e['id']}: {text} -- a fix of an open red ({kind_text(k)}) "
+                                  "is checked alone and first, never a batch member", "severity": "info"},
                    waiting_released=ts())
         out.append(e["id"])
     return out
+
+
+def note_wait_rule(st: Any, e: dict[str, Any], why: str) -> None:
+    """The rule holding waiting change e, on its item (once per wording); a moved item is read again by the next tick."""
+    it = st.item("change", e["id"])
+    if it and (it.get("data") or {}).get("wait_rule") != why and not machine_state("change", it["state"]).terminal:
+        with suppress(StaleVersion):
+            st.update_item("change", e["id"], it["version"], {"wait_rule": why})
 
 
 def batch_row_ids(bt: dict[str, Any] | None, rows: list[dict[str, Any]]) -> set[str]:

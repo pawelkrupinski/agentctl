@@ -17,4 +17,4 @@ Ib	5	e3d659fda290	0	every queued or checked change past its deadline has a recor
 Ic	5	e3d659fda290	0	no change past its deadline is silent in `land status`
 Id	5	e3d659fda290	0	executors start in the documented priority order within a tick
 IX	6	31f0b4d53abe	0	no executor for a decided change
-IW	1	12f66e7a3111	4	a red fix of an open gate red the store names never waits for green past N ticks
+IW	1	12f66e7a3111	0	a red fix of an open gate red the store names never waits for green past N ticks

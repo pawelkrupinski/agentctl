@@ -39,7 +39,7 @@ cognitive	change_exits_unannounced	12
 cognitive	change_hold_stuck	13
 cognitive	change_rows	11
 cognitive	check_batch	75
-cognitive	classify_change	41
+cognitive	classify_change	33
 cognitive	classify_job	27
 cognitive	close_condition	19
 cognitive	close_landed_changes	19
@@ -77,7 +77,6 @@ cognitive	holder_work	14
 cognitive	hunks_resolve	26
 cognitive	identity_change	11
 cognitive	inv_w1	44
-cognitive	inv_wr	26
 cognitive	job_ever_green	21
 cognitive	joined_verdicts	13
 cognitive	jvm_candidates	36
@@ -248,7 +247,7 @@ cyclomatic	change_hold_stuck	12
 cyclomatic	change_paths	14
 cyclomatic	change_rows	15
 cyclomatic	check_batch	56
-cyclomatic	classify_change	27
+cyclomatic	classify_change	22
 cyclomatic	classify_job	34
 cyclomatic	close_condition	15
 cyclomatic	close_landed_changes	15
@@ -292,7 +291,6 @@ cyclomatic	hunks_resolve	18
 cyclomatic	identity_change	13
 cyclomatic	inv_w1	34
 cyclomatic	inv_wb	15
-cyclomatic	inv_wr	22
 cyclomatic	job_ever_green	20
 cyclomatic	job_log_lines	17
 cyclomatic	jobs_verdict	23

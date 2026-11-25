@@ -980,7 +980,7 @@ class QueueTest(WaitingTest):
         wb, _ = self.agent("b", "web/src/main/B.scala", "b\n", msg="b: a production change naming no red")
         eb, _ = self.queued(wb)
         self.check(eb)
-        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: the fix\n\nFixes-Red: 7")
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: the fix\n\nFixes-Red: 7\nFix-Replay: none \u2014 a fixture with no command that replays it")
         ea, _ = self.queued(wa)
         self.check(ea)
         self.assertEqual(entry(ea)["status"], "waiting", "before the red is open in the store, nothing says it fixes one")
@@ -989,9 +989,36 @@ class QueueTest(WaitingTest):
         self.assertFalse(A.must_wait(self.r.path, entry(ea)["commits"], self.reds, A.process_store()))
         self.assertTrue(A.must_wait(self.r.path, entry(eb)["commits"], self.reds, A.process_store()))
         did = self.drive()
-        self.assertEqual(entry(ea)["status"], "landed", f"the fix goes ahead alone: {did} {self.batch()}")
+        self.check(ea)  # the heal sent it back to the queue (release_red_fixes): its own check and push, first and alone
+        self.assertEqual(entry(ea)["status"], "landed", f"the fix goes ahead alone: {did} {self.batch()} {entry(ea).get('why')}")
         self.assertEqual(entry(eb)["status"], "waiting", "the non-fix change waits for green")
         self.assertEqual(self.remote_log()[0], "a: the fix\n\nFixes-Red: 7"[:len("a: the fix")])
+
+    def test_wr_heals_a_waiting_fix_the_open_red_names_and_says_what_holds_one_it_cannot_release(self):
+        """2026-11-25, batch #124: a fix sat `waiting` for the green of the red it fixed; WR said so and nobody acted.
+        Both fixes below joined `waiting` before any red item named them. Now the open gate red names #7 (its
+        episode): the tick sends that fix back to the queue while the gate is still red, first and alone. The other
+        names a red OUTSIDE the gate -- the rule still holds it, and says which rule on its item."""
+        def entry(eid):
+            return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        d, _c, _w = A.waiting_state(self.r.path)
+        self.reds = {"8", "98000"}
+        fixes = {}
+        for name, run in (("gate", "7"), ("out", "6")):
+            wt, _ = self.agent(name, f"web/src/main/{name}.scala", "x\n", msg=f"{name}: a fix\n\nFixes-Red: {run}")
+            fixes[name], _ = self.queued(wt)
+            self.check(fixes[name])
+            self.assertEqual(entry(fixes[name])["status"], "waiting", "no red item names it yet")
+        st = A.process_store()
+        st.put_item("red", "k7", "leased", {"key": "k7", "workflow": "Main", "gate": True, "runs": ["7", "8"],
+                                            "last_run": {"number": 8}})
+        st.put_item("red", "k6", "leased", {"key": "k6", "workflow": "Alert", "gate": False, "red_kind": "outside",
+                                            "runs": ["6"]})
+        A.waiting_after_release(self.r.path, d, st, self.clock.time(), None, self.reds)
+        self.assertEqual(entry(fixes["gate"])["status"], "queued", "the open red names it: back to the queue, red or not")
+        self.assertEqual(entry(fixes["out"])["status"], "waiting", "no gate red names it: the rule holds it")
+        why = (st.item("change", fixes["out"])["data"] or {}).get("wait_rule") or ""
+        self.assertIn("names 6, no run of the open gate red", why)
 
     def test_the_batchs_check_on_ci_runner_is_the_fast_only_set_on_a_check_fast_branch(self):
         head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()

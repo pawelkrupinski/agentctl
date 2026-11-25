@@ -272,6 +272,32 @@ class MinimalRecheckSimTest(unittest.TestCase):
             self.assertEqual((checks, kept), (2, 0), "its check, then the verify round: web compiles common")
 
 
+class RedEpisodeTest(unittest.TestCase):
+    """SEVERAL RUNS OF ONE RED (queue_sim.REDFIX_*; 2026-11-25, batch #124): a fix naming an older run of the open gate red
+    lands on the red like any fix of it; one naming a run its red item only learns of later is let go when it does (IW:
+    never waits for green past N ticks once the store names it); a fix of ANOTHER failure waits for the green."""
+
+    def sims(self, script):
+        return [queue_sim.Sim(seed, calm=True, trees=2, script=list(script)).run() for seed in range(4)]
+
+    def test_a_fix_naming_an_older_run_of_the_open_red_lands_on_the_red(self):
+        for sim in self.sims(queue_sim.REDFIX_OLDER_RUN):
+            self.assertEqual(failures([sim]), [])
+            self.assertLessEqual(queue_sim.landing_waits(sim)["fix"], queue_sim.FIX_08010C_BOUND)
+
+    def test_a_fix_is_let_go_once_the_red_names_its_run(self):
+        for sim in self.sims(queue_sim.REDFIX_HEALS):
+            self.assertEqual(failures([sim]), [])
+            fix = next(c for c in sim.changes if c.label == "fix")
+            self.assertLessEqual(sim.done_at[fix.cid], 8 + 10, "the red learned the run at tick 8: the fix goes at once")
+
+    def test_the_fix_of_another_failure_waits_for_green(self):
+        for sim in self.sims(queue_sim.REDFIX_OTHER_FAILURE):
+            self.assertEqual(failures([sim]), [])
+            fix = next(c for c in sim.changes if c.label == "fix")
+            self.assertGreater(sim.done_at[fix.cid], 20, "it names a run no item holds: it waits while the gate is red")
+
+
 class Timeline08010cTest(unittest.TestCase):
     """THE 08010c TIMELINE (queue_sim.TIMELINE_08010C; 2026-11-19): a fix of a red OUTSIDE the gate, checked while two
     ordinary changes owed combined-tree verifications and made a push batch, sat ~2 h. Replayed over 8 seeds: it is
