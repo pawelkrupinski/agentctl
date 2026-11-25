@@ -9,7 +9,7 @@ calls.
 
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
-- Tests: `~/bin/agentctl suite` from the worktree (= `python3 tests/run.py` under a governor ticket of class `suite`,
+- Tests: `~/bin/agentctl suite` from the worktree (= `python3 tests/run.py`, which takes a governor ticket of class `suite`,
   ONE run at once, `$AGENTCTL_SUITE_CAP`: parallel agents queue instead of piling up on the laptop). tests/run.py runs
   the suite in parallel workers (`-j N`, default min(cpus, 8)), each test under a timeout (`--timeout S`, default 60:
   the test FAILS with its traceback instead of hanging the suite), the whole suite bounded (`--suite-timeout`); about
@@ -2344,6 +2344,7 @@ agentctl gov admit --class C ...    # scripts/jvm-gate.sh's call (--fd 7 --ticke
 agentctl gov route --job J          # ci (exit 0) when the governor would hold J now and ci-runner's measure lane is free
 agentctl gov usage --job J --wall S --cpu S   # one run's cores, for J's measured history (sbt-warm's call)
 agentctl gov cores --job J          # the cores J is charged (measured p75, else its default)
+agentctl gov probe                  # one line: the governor's features (admit cores route width), for other repos' callers
 agentctl gov replay --at 2026-11-18T05:45Z [--hold 30] [--cores 18]   # the admissions again under the cores rule
 agentctl suite [run.py args]       # agentctl's own tests (tests/run.py) under a `suite` ticket: one run at once (SUITE_CAP)
 ```
@@ -2354,9 +2355,24 @@ agentctl suite [run.py args]       # agentctl's own tests (tests/run.py) under a
   131-150 on 18 cores, while ps summed to 6.1 cores and pressure read none). The capacity is starved at 95% of the
   cores measured (GOV_SATURATED); `laptop_pressure` says `CPU saturated: B of N cores busy (user + sys), run queue R`
   when that coincides with a run queue over LAPTOP_LOAD x the cores. A long run queue alone, cores idle, is no pressure.
-- **Every suite run holds a ticket**: `tests/run.py` takes a class-`suite` ticket charged its workers (`agentctl suite`
-  holds it for it), its wait bounded at 900 s before its own `--suite-timeout` starts; the pre-push hook's KILL bound
-  leaves that room. It owns each worker's temp root (`agentctl-t-*` with an `owner.pid`), removed however the worker
+- **THE GOVERNED FAN-OUT** (2026-11-25, the owner: "fix structurally" -- load 103 on 18 cores while `gov status` said
+  0 admitted: agentctl's pre-push suite and simulator gate, movies' mutation tests, 43 test processes, none holding a
+  ticket; movies' jvm-gate.sh had grepped gov.py for `def cmd_gov`, which the module split moved, so movies took no
+  ticket for three days). Every parallel runner takes its width from ONE place (`lib/agentctl/govpool.py` governed();
+  movies' `scripts/jvm-gate.sh` gov_width, with `scripts/gov-parallel` for `xargs -P` and `scripts/lib/tool_pool.py`
+  for a Python pool): not under a ticket, it takes one charged its workers (`gov admit`); under one already
+  (`$AGENTCTL_GOV_WIDTH`, exported by a check's ticket -- its charged cores -- and by every governed pool to its
+  workers, `1`) it takes NONE, so a nested runner never waits on its parent, and runs at most that wide. Past the
+  governor's bounded wait (900 s) or with it failing, a pool runs ONE wide, never its full width ticketless. Guards:
+  `tests/test_govpool.py` (agentctl) and movies' `scripts/ci/fanout_lint.py` refuse a fan-out (`xargs -P`, a
+  thread/process pool, `-n auto`) outside it, an allowed one naming why (network-bound).
+- **`gov probe`**: `agentctl governor: admit cores route width`, the stable line a caller in another repository reads
+  (jvm-gate.sh governor_bin; bitcashier's bin/gov-sbt calls `gov admit`, whose arguments stay as they are), never
+  agentctl's source. `gov status` lists every live ticket with its class, memory, cores, JOB, label, pid, since and
+  checkout, and `outside any ticket: B of M busy cores` when the machine's busy cores exceed the charged ones by a core.
+- **Every suite run holds a ticket**: `tests/run.py` (and `tests/sim_gate.py`) take a class-`suite` ticket charged
+  their workers through the governed fan-out (`agentctl suite` just runs run.py), its wait bounded at 900 s before its
+  own `--suite-timeout` starts; the pre-push hook's KILL bounds leave that room. It owns each worker's temp root (`agentctl-t-*` with an `owner.pid`), removed however the worker
   ended, and fails the run naming any that survives; upkeep removes /tmp's `agentctl-t-*` past the bound unless its
   runner is alive or an entry of it changed lately.
 

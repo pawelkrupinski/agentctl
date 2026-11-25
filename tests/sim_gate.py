@@ -99,9 +99,15 @@ def worker(chunk):
 def measure(jobs=None, only=None):
     """{scenario: run_one result}, the scenarios spread over subprocesses (PYTHONHASHSEED=0: a seed replays exactly)."""
     todo = [s for s in scenarios() if only is None or s[0] in only]
-    jobs = jobs or min(8, os.cpu_count() or 2)
+    sys.path.insert(0, os.path.join(os.path.dirname(HERE), "lib"))
+    from agentctl.govpool import governed  # THE GOVERNED FAN-OUT: its chunks under one ticket, or the one above it
+    with governed("sim-gate", jobs or min(8, os.cpu_count() or 2), f"tests/sim_gate.py {os.path.dirname(HERE)}") as pool:
+        return measure_chunks(todo, pool.width, pool.env(os.environ))
+
+
+def measure_chunks(todo, jobs, env):
     chunks = [todo[i::jobs] for i in range(jobs)]
-    env = {**os.environ, "PYTHONHASHSEED": "0"}
+    env = {**env, "PYTHONHASHSEED": "0"}
     for k in ("AGENTCTL_RED_FIXER", "FIXER_RECORD", "AGENT_NAME"):
         env.pop(k, None)
 

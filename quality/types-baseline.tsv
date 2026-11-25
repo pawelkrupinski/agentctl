@@ -42,9 +42,9 @@ mypy-errors	gatesummary	4
 mypy-errors	gating	33
 mypy-errors	generated	38
 mypy-errors	ghapp	34
-mypy-errors	gov	44
+mypy-errors	gov	42
 mypy-errors	govbudget	12
-mypy-errors	govcmd	33
+mypy-errors	govcmd	34
 mypy-errors	govroute	18
 mypy-errors	govusage	6
 mypy-errors	identitychange	13

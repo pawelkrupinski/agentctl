@@ -1,7 +1,7 @@
 """tests/run.py's own behaviour. --shard K/N (2026-11-19: on GitHub's 4-cpu runner the whole suite took 290-420 s
 against its 420 s bound, and two of eight runs on main ended SUITE TIMEOUT with no test failed -- a red that blocks the
 auto-pin): N jobs each run a disjoint 1/N of the tests, together every one."""
-import os, subprocess, sys, unittest
+import os, subprocess, sys, tempfile, unittest
 
 RUN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "run.py")
 
@@ -86,34 +86,35 @@ class TempRootTest(unittest.TestCase):
 class SuiteTicketTest(unittest.TestCase):
     """2026-11-22 (load 131-150 on 18 cores): agentctl's own suites -- a lane's `python3 tests/run.py`, the pre-push
     hook's -- took no governor ticket, eight workers each beside everything the governor did hold. Every run of the
-    suite takes one (class suite, charged its workers' cores) unless its caller holds one (agentctl suite)."""
+    suite takes its width from THE GOVERNED FAN-OUT (tests/test_govpool.py): a ticket of class suite charged its
+    workers, or, under a ticket already, none and at most that ticket's width."""
 
-    def setUp(self):
-        sys.path.insert(0, os.path.dirname(RUN))
-        import run, tempfile
-        self.run, self.d = run, tempfile.mkdtemp()
-        self.calls = os.path.join(self.d, "calls")
-        self.gov = os.path.join(self.d, "agentctl")
-        with open(self.gov, "w") as f:
-            f.write(f"#!/bin/sh\necho \"$*\" >> {self.calls}\n")
-        os.chmod(self.gov, 0o755)
+    def run_suite(self, *args, **env):
+        d = tempfile.mkdtemp()
+        calls, gov = os.path.join(d, "calls"), os.path.join(d, "agentctl")
+        with open(gov, "w") as f:
+            f.write(f"#!/bin/sh\necho \"$*\" >> {calls}\n")
+        os.chmod(gov, 0o755)
+        e = {**os.environ, "AGENTCTL_SUITE_GOVERNOR": gov, "AGENTCTL_GOV_DIR": d, **env}
+        e.pop("AGENTCTL_GOV_WIDTH", None) if "AGENTCTL_GOV_WIDTH" not in env else None
+        r = subprocess.run([sys.executable, RUN, *args, "test_suite_runner.ShardTest.test_a_shard_outside"],
+                           capture_output=True, text=True, env=e, timeout=120)
+        return r, (open(calls).read().splitlines() if os.path.exists(calls) else [])
 
     def test_a_run_takes_a_suite_ticket_charged_its_workers(self):
-        env = {"AGENTCTL_SUITE_GOVERNOR": self.gov, "AGENTCTL_GOV_DIR": self.d}
-        held = self.run.hold_ticket(6, env=env)
-        try:
-            self.assertIsNotNone(held)
-            [call] = open(self.calls).read().splitlines()
-            self.assertIn("gov admit --fd", call)
-            self.assertIn("--class suite", call)
-            self.assertIn("--cores 6", call)
-        finally:
-            self.run.release_ticket(held)
+        r, calls = self.run_suite("-j", "3")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        [call] = calls
+        self.assertIn("gov admit --fd", call)
+        self.assertIn("--class suite", call)
+        self.assertIn("--cores 3", call)
+        self.assertIn("(3 workers)", r.stdout)
 
-    def test_a_caller_holding_a_ticket_is_not_charged_twice(self):
-        env = {"AGENTCTL_SUITE_GOVERNOR": self.gov, "AGENTCTL_GOV_DIR": self.d, "AGENTCTL_SUITE_TICKET": "/held"}
-        self.assertIsNone(self.run.hold_ticket(6, env=env))
-        self.assertFalse(os.path.exists(self.calls))
+    def test_a_run_under_a_ticket_takes_none_and_runs_its_width(self):
+        r, calls = self.run_suite("-j", "8", AGENTCTL_GOV_WIDTH="2")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(calls, [])
+        self.assertIn("(2 workers)", r.stdout)
 
 
 if __name__ == "__main__":

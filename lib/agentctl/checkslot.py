@@ -13,6 +13,8 @@ from agentctl.machine import machine_sample
 from agentctl.govbudget import (
     CHECKS_DEFAULT_CAP, GOV_MEM_GB, cap_state, check_runs, checks_cap, checks_dir, gov_max_checks, slot_holders)
 from agentctl.gov import GOV_ADMIT_MAX, gov_admit
+from agentctl.govpool import WIDTH_ENV
+from agentctl.govusage import GOV_JOB_CORES
 
 
 class Slot:
@@ -33,8 +35,11 @@ class Slot:
 
     def env(self, env):
         """The hook's environment: its sbt JVM is admitted at this check's priority, and its sbt-warm calls take no cores
-        ticket of their own (KINOWO_GOV_CPU_HELD): this check's ticket is charged the hook's cores already."""
-        return dict(env, KINOWO_GOV_CLASS=self.cls, KINOWO_GOV_CPU_HELD="1")
+        ticket of their own (KINOWO_GOV_CPU_HELD): this check's ticket is charged the hook's cores already. So is every
+        parallel runner in it: THE GOVERNED FAN-OUT (govpool.py, movies' scripts/gov-parallel) takes no ticket under
+        $AGENTCTL_GOV_WIDTH and runs at most the cores this ticket is charged."""
+        cores = int(float((self.ticket.rec if self.ticket else {}).get("cores") or GOV_JOB_CORES["check"]))
+        return dict(env, KINOWO_GOV_CLASS=self.cls, KINOWO_GOV_CPU_HELD="1", **{WIDTH_ENV: str(max(1, cores))})
 
 
 @contextlib.contextmanager

@@ -7,7 +7,7 @@ must not import (`wire_store(process_store)`, the probes, ...) and holds main. c
 MODULES is every module in import order, each after every module it imports (devtools/placemodules.py writes it): the
 manifest the quality tools (quality/typecheck.py) and the tests' view of the package (tests/agentctl_view.py) read.
 """
-MODULES = ("procrunner", "usage", "core", "timefmt", "statefile", "moviestools", "classify", "selfcode", "ghapp",
+MODULES = ("procrunner", "govpool", "usage", "core", "timefmt", "statefile", "moviestools", "classify", "selfcode", "ghapp",
            "forge", "repos", "buildview", "notifyurl", "config", "workflows", "trailers", "waitingdir", "redretired",
            "storetoken", "claudefiles", "gating", "allowedpaths", "procs", "fixerrecords", "inboxentry", "wait",
            "cpu", "fixersession", "live", "owned", "clones", "worktrees", "fixerenv", "deletions", "machine",

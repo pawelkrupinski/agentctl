@@ -1,7 +1,6 @@
 # agentctl, part `gov`: the governor: ONE admission control for the laptop's memory and cores: its capacity, its waiters, a ticket admitted or refused, idle sbt servers evicted
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-import contextlib
 import fcntl
 import glob
 import json
@@ -390,23 +389,12 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
         gov_bump()  # the next waiter is the head now: it looks at once
 
 
-@contextlib.contextmanager
-def gov_ticket(cls, mem=None, label="", kind="job", report=None, cores=None, job=None):
-    t = gov_admit(cls, mem, label, kind=kind, report=report, cores=cores, job=job)
-    try:
-        yield t
-    finally:
-        t.release()
-
-
 def cmd_suite(a):
     """`agentctl suite [tests/run.py args]`: agentctl's own test suite (tests/run.py: parallel, a timeout per test; in
-    this directory) under a governor ticket of class `suite` (SUITE_CAP at once): parallel agents queue here instead of
-    piling up. Arguments are run.py's (-j N, --timeout S, PATTERN...)."""
-    args = list(a.args or [])
-    with gov_ticket("suite", label=f"agentctl suite {os.path.basename(os.getcwd())}"):  # run.py then takes none
-        return process_runner().run([sys.executable, os.path.join("tests", "run.py")] + args,
-                              env={**os.environ, "AGENTCTL_SUITE_TICKET": "agentctl suite"}).returncode
+    this directory). run.py takes its governor ticket itself (THE GOVERNED FAN-OUT, govpool.py: class `suite`, SUITE_CAP
+    at once, charged its workers): parallel agents queue there instead of piling up. Arguments are run.py's (-j N,
+    --timeout S, PATTERN...)."""
+    return process_runner().run([sys.executable, os.path.join("tests", "run.py")] + list(a.args or [])).returncode
 
 
 def gov_class_of(repo, commits, reds, st=None):

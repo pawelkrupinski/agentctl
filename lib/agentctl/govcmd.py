@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import os
 import time
+from typing import Any
 from agentctl.core import env_num, pct
 from agentctl.machine import machine_cores, machine_load1
 from agentctl.govtickets import gov_dir, gov_tickets
@@ -18,7 +19,16 @@ from agentctl.govusage import GOV_USAGE_MIN_WALL, gov_job_cores, gov_measured_co
 from agentctl.govroute import gov_replay, gov_route
 
 
+# THE GOVERNOR'S FEATURES, for a caller in another repository (movies' scripts/jvm-gate.sh governor_bin, bitcashier's
+# bin/gov-sbt): a stable line, never a grep of agentctl's source (2026-11-22 to -25: jvm-gate.sh grepped gov.py for
+# `def cmd_gov` and `def gov_route`; a module split moved both, and movies took no ticket for three days).
+GOV_FEATURES = ("admit", "cores", "route", "width")
+
+
 def cmd_gov(a):
+    if a.gcmd == "probe":
+        print("agentctl governor: " + " ".join(GOV_FEATURES))
+        return 0
     if a.gcmd == "admit":
         t = gov_admit(a.cls, a.mem, a.label or "", kind=a.kind, fd=a.fd, ticket=a.ticket, wait=not a.try_,
                       force=a.force, pid=a.pid, cwd=a.cwd, cores=a.cores, job=a.job)
@@ -72,24 +82,7 @@ def cmd_gov(a):
               f"{len(gov_waiters())} waiting")
         return 0
     if a.gcmd == "status":
-        tickets, m = gov_tickets(), gov_machine()
-        cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * m["cores"]
-        print(f"governor: {len(tickets)} admitted, {gov_committed(tickets):.1f}/{gov_budget():.0f} GB committed, "
-              f"{gov_charged(tickets):g}/{cap:g} cores charged, {gov_ramp(tickets):.0f} GB still growing; free {m['free'] if m['free'] is None else round(m['free'], 1)} "
-              f"GB, pressure {m['pressure']}%, load {m['load1']:.1f}/{m['cores']} cores; check cap {checks_cap()}")
-        for t in tickets:
-            print(f"  {t.get('class'):<7} {t.get('mem'):>4} GB {float(t.get('cores') or 0):>4g} cores  {t.get('kind'):<5} "
-                  f"{t.get('label')}  pid {t.get('pid')}  "
-                  f"since {t.get('since')}  {t.get('cwd')}")
-        for w in gov_waiters():
-            print(f"  WAITING {w.get('class'):<7} {w.get('mem'):>4} GB {float(w.get('cores') or 0):>4g} cores  "
-                  f"{w.get('label')}  pid {w.get('pid')}")
-        idle = idle_servers()
-        if idle:
-            print("evictable: " + ", ".join(f"{os.path.basename(r)} ({int(i // 60)} min)" for i, r, _p in idle))
-        why, summary = pressure_report()
-        print(f"pressure: {why} -- holds all but red fixes [{summary}]" if why else f"pressure: none [{summary}]")
-        return 0
+        return gov_status()
     if a.gcmd == "stats":
         rc = cmd_checks(argparse.Namespace(ccmd="stats", days=a.days))
         cutoff = time.time() - a.days * 86400
@@ -123,6 +116,38 @@ def cmd_gov(a):
         print(f"evictions (all time): {ev}")
         return rc
     return 2
+
+
+def ticket_line(t: dict[str, Any]) -> str:
+    """One live ticket: its class, memory, cores, job, label, pid, since and checkout."""
+    return (f"  {t.get('class'):<7} {t.get('mem'):>4} GB {float(t.get('cores') or 0):>4g} cores  "
+            f"{t.get('job') or t.get('kind'):<9} {t.get('label')}  pid {t.get('pid')}  since {t.get('since')}  "
+            f"{t.get('cwd')}")
+
+
+def gov_status() -> int:
+    """`agentctl gov status`: the totals, every live ticket and waiter, the cores outside any ticket, the evictable
+    servers and the pressure."""
+    tickets, m = gov_tickets(), gov_machine()
+    cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * m["cores"]
+    print(f"governor: {len(tickets)} admitted, {gov_committed(tickets):.1f}/{gov_budget():.0f} GB committed, "
+          f"{gov_charged(tickets):g}/{cap:g} cores charged, {gov_ramp(tickets):.0f} GB still growing; free {m['free'] if m['free'] is None else round(m['free'], 1)} "
+          f"GB, pressure {m['pressure']}%, load {m['load1']:.1f}/{m['cores']} cores; check cap {checks_cap()}")
+    for t in tickets:
+        print(ticket_line(t))
+    capacity = gov_capacity(tickets, m)
+    outside = capacity["measured"] - capacity["charged"]
+    if outside >= 1:  # what no ticket accounts for: a runner outside the governed fan-out, or a ticket undercharged
+        print(f"  outside any ticket: {outside:.1f} of {capacity['measured']:.1f} busy cores")
+    for w in gov_waiters():
+        print(f"  WAITING {w.get('class'):<7} {w.get('mem'):>4} GB {float(w.get('cores') or 0):>4g} cores  "
+              f"{w.get('label')}  pid {w.get('pid')}")
+    idle = idle_servers()
+    if idle:
+        print("evictable: " + ", ".join(f"{os.path.basename(r)} ({int(i // 60)} min)" for i, r, _p in idle))
+    why, summary = pressure_report()
+    print(f"pressure: {why} -- holds all but red fixes [{summary}]" if why else f"pressure: none [{summary}]")
+    return 0
 
 
 def cmd_checks(a):

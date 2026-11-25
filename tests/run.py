@@ -137,42 +137,11 @@ def surviving(procs):
 
 
 # EVERY SUITE RUN TAKES A GOVERNOR TICKET (2026-11-22: load 131-150 on 18 cores while lanes' `python3 tests/run.py`
-# and the pre-push hook's suite ran ticketless, eight workers each): class `suite`, charged its workers' cores, held on
-# a descriptor this process keeps open (released when it ends, as movies' jvm-gate.sh gov_hold holds one). None when
-# the caller holds one already ($AGENTCTL_SUITE_TICKET: `agentctl suite`), or with no governor here. The wait is
-# bounded (SUITE_TICKET_WAIT): past it the suite runs without one, said on stderr.
-SUITE_TICKET_WAIT = 900
-
-
-def hold_ticket(jobs, env=None):
-    """(fd, ticket path) of the suite ticket now held, or None."""
-    env = os.environ if env is None else env
-    gov = env.get("AGENTCTL_SUITE_GOVERNOR") or os.path.join(os.path.dirname(HERE), "agentctl")
-    if env.get("AGENTCTL_SUITE_TICKET") or env.get("AGENTCTL_SUITE_GOVERNOR") == "-" or not os.access(gov, os.X_OK):
-        return None
-    d = env.get("AGENTCTL_GOV_DIR") or os.path.expanduser("~/.cache/agentctl/gov")
-    os.makedirs(d, exist_ok=True)
-    ticket = os.path.join(d, f"t-suite-{os.getpid()}.lock")
-    fd = os.open(ticket, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
-    try:
-        r = subprocess.run([gov, "gov", "admit", "--fd", str(fd), "--ticket", ticket, "--class", "suite", "--mem", "1",
-                            "--cores", str(jobs), "--label", f"tests/run.py {os.path.dirname(HERE)}",
-                            "--pid", str(os.getpid())], pass_fds=(fd,), timeout=SUITE_TICKET_WAIT)
-        if r.returncode == 0:
-            return fd, ticket
-    except (OSError, subprocess.TimeoutExpired) as e:
-        sys.stderr.write(f"run.py: no governor ticket ({e}); running without one\n")
-    release_ticket((fd, ticket))
-    return None
-
-
-def release_ticket(held):
-    if held:
-        os.close(held[0])
-        try:
-            os.unlink(held[1])
-        except OSError:
-            pass
+# and the pre-push hook's suite ran ticketless, eight workers each): THE GOVERNED FAN-OUT (lib/agentctl/govpool.py),
+# class `suite`, charged its workers' cores; under a ticket already ($AGENTCTL_GOV_WIDTH: a check's hook) it takes none
+# and runs at most that wide; past the governor's bounded wait it runs one wide, never ticketless at full width.
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "lib"))
+from agentctl.govpool import governed  # noqa: E402
 
 
 def load_durations():
@@ -195,6 +164,21 @@ def save_json(path, d):
 
 def save_durations(d):
     save_json(DURATIONS, d)
+
+
+def run_workers(drive, jobs, suite_timeout, procs):
+    """Run `jobs` drivers to the end or the suite's bound (started once the pool is admitted); True when cut short."""
+    threads = [threading.Thread(target=drive, args=(i,), daemon=True) for i in range(jobs)]
+    deadline = time.monotonic() + suite_timeout
+    try:
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(max(0, deadline - time.monotonic()))
+        return any(t.is_alive() for t in threads)
+    finally:
+        for p in list(procs):
+            end_worker(p)
 
 
 def main():
@@ -220,8 +204,7 @@ def main():
     if a.worker:
         return worker(a.timeout)
     # The parent never imports the tests (their import sets the per-process roots), it asks a child for the list.
-    env = {k: v for k, v in os.environ.items()
-           if k not in ("AGENTCTL_TEST_RUN_TMP", "AGENTCTL_STATE_ROOT", "TMPDIR", "AGENTCTL_SUITE_TICKET")}
+    env = {k: v for k, v in os.environ.items() if k not in ("AGENTCTL_TEST_RUN_TMP", "AGENTCTL_STATE_ROOT", "TMPDIR")}
     listing = subprocess.run([sys.executable, "-c", f"import sys; sys.argv=['run.py']; sys.path.insert(0, {HERE!r}); "
                               f"import run; print('\\n'.join(run.list_tests({a.patterns!r})))"],
                              capture_output=True, text=True, env=env, cwd=HERE, timeout=120)
@@ -272,20 +255,10 @@ def main():
     # a SIGTERM / SIGHUP (a hook's bound, a closed terminal) ends the run through the finally below, its roots removed
     for sig in (signal.SIGTERM, signal.SIGHUP):
         signal.signal(sig, lambda n, _f: sys.exit(128 + n))
-    threads = [threading.Thread(target=drive, args=(i,), daemon=True) for i in range(max(1, a.jobs))]
-    held = hold_ticket(max(1, a.jobs))
-    t0 = time.monotonic()  # the suite's bound starts once it is admitted
-    try:
-        for t in threads:
-            t.start()
-        deadline = t0 + a.suite_timeout
-        for t in threads:
-            t.join(max(0, deadline - time.monotonic()))
-        timed_out = any(t.is_alive() for t in threads)
-    finally:
-        for p in list(procs):
-            end_worker(p)
-        release_ticket(held)
+    with governed("suite", a.jobs, f"tests/run.py {os.path.dirname(HERE)}") as pool:
+        a.jobs, env = pool.width, pool.env(env)  # each worker one core of the ticket: a pool inside a test runs one wide
+        t0 = time.monotonic()  # the suite's wall time starts once it is admitted
+        timed_out = run_workers(drive, a.jobs, a.suite_timeout, procs)
     leaked = surviving(procs)
     print()
     nrun = sum(r["run"] for r in results)

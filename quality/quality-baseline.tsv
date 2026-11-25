@@ -79,7 +79,7 @@ cognitive	cmd_cleanup	96
 cognitive	cmd_config	21
 cognitive	cmd_dispatch	41
 cognitive	cmd_env	35
-cognitive	cmd_gov	67
+cognitive	cmd_gov	56
 cognitive	cmd_inbox	41
 cognitive	cmd_issue	19
 cognitive	cmd_land	15
@@ -489,7 +489,7 @@ cyclomatic	cmd_cleanup	45
 cyclomatic	cmd_config	15
 cyclomatic	cmd_dispatch	29
 cyclomatic	cmd_env	27
-cyclomatic	cmd_gov	56
+cyclomatic	cmd_gov	49
 cyclomatic	cmd_inbox	40
 cyclomatic	cmd_issue	13
 cyclomatic	cmd_land	15
@@ -833,7 +833,7 @@ method-lines	build_view	65
 method-lines	check_batch	119
 method-lines	ci_why	182
 method-lines	cmd_cleanup	94
-method-lines	cmd_gov	105
+method-lines	cmd_gov	91
 method-lines	cmd_maintain	56
 method-lines	cmd_orphans	123
 method-lines	cmd_red	90

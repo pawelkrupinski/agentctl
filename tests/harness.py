@@ -56,9 +56,11 @@ def _hermetic_environment():
                 # lock as it vanished: "No such file or directory: .../objects/maintenance.lock"
                 "[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n")
     for k in list(os.environ):
-        if k in _DROP or k.startswith(_DROP_PREFIXES) or (k.startswith("AGENTCTL_") and not k.startswith("AGENTCTL_TEST")):
+        if k in _DROP or k.startswith(_DROP_PREFIXES) or (k.startswith("AGENTCTL_") and not k.startswith("AGENTCTL_TEST")
+                                                                  and k != "AGENTCTL_GOV_WIDTH"):
             del os.environ[k]  # every agentctl knob of the shell running the tests too: AGENTCTL_STORE_URL, AGENTCTL_HOST,
-            # AGENTCTL_MOVIES_REPO... would point the suite at a real store or clone (the tests set their own)
+            # AGENTCTL_MOVIES_REPO... would point the suite at a real store or clone (the tests set their own); never
+            # AGENTCTL_GOV_WIDTH: a worker's one core of the suite's ticket (govpool.py), which a pool in a test rides
     # AGENTCTL_LAPTOP_PRESSURE "-": the machine running the tests is never the one under test (2026-10-30: ci-runner
     # at load 95 on 32 cores held every fixer and owner dispatch back -- the owner-restart test failed 3 runs in a row)
     # AGENTCTL_MACHINE: an idle 12-core 36 GB machine with 500 GB of disk in place of the runner's own (lib/agentctl/gov.py machine_fixed):

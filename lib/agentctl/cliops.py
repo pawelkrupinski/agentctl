@@ -14,9 +14,11 @@ Subparsers: TypeAlias = "argparse._SubParsersAction[argparse.ArgumentParser]"
 
 
 def add_gov(sub: Subparsers) -> None:
-    gv = sub.add_parser("gov", help="the governor: ONE admission control for laptop memory and CPU (status, stats, admit, evict, route, replay, usage, cores)")
+    gv = sub.add_parser("gov", help="the governor: ONE admission control for laptop memory and CPU (status, stats, admit, evict, route, replay, usage, cores, probe)")
     gvs = gv.add_subparsers(dest="gcmd", required=True)
     gvs.add_parser("status", help="admitted work, waiters, memory, evictable idle sbt servers, pressure")
+    gvs.add_parser("probe", help="one line: the governor's features (admit cores route width); scripts/jvm-gate.sh reads "
+                                 "it, never agentctl's source")
     gvs.add_parser("capacity", help="one line: starved | ok | spare, the cores busy (charged, measured), admitted, waiting")
     gst = gvs.add_parser("stats", help="checks stats, plus each class's admission waits and the evictions")
     gst.add_argument("--days", type=float, default=7)

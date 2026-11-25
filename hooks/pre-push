@@ -24,7 +24,7 @@ try: print(float(json.load(open(os.path.expanduser("~/.cache/agentctl-tests/suit
 except Exception: print(0)' 2>/dev/null)
   bound=$(awk -v l="${load:-0}" -v c="$cores" -v w="${wall:-0}" 'BEGIN { f = (c > 0) ? l / c : 1; if (f < 1) f = 1; if (f > 4) f = 4;
                                                      b = 1.5 * w; if (b < 280) b = 280; printf "%d", b * f }')
-  # run.py takes the suite's governor ticket itself, waiting at most 900 s (its SUITE_TICKET_WAIT) before its own
+  # run.py takes the suite's governor ticket itself, waiting at most 900 s (govpool.py POOL_TICKET_WAIT) before its own
   # --suite-timeout starts: the KILL bound below leaves that wait room (2026-11-22, ticketless suites at load 150)
   # the per-test timeout grows the same way (2026-11-22: queue_sim's mutation 1, ~40 s idle, timed out at load 290)
   per_test=$(awk -v b="$bound" 'BEGIN { printf "%d", 60 * b / 280 }')
@@ -35,11 +35,12 @@ except Exception: print(0)' 2>/dev/null)
   else
     tail -2 "$tmp/out" >&2
     # THE SIMULATOR GATE (tests/sim_gate.py): no invariant kind's violations rise against the remote's main, and no
-    # invariant changes beside the code it measures. Against the remote's sha when this clone has it, else alone.
+    # invariant changes beside the code it measures. Against the remote's sha when this clone has it, else alone. Its
+    # chunks run under a suite ticket of their own (THE GOVERNED FAN-OUT): the KILL bound leaves its 900 s wait room.
     base=""
     [ "$_rsha" != "$z" ] && git cat-file -e "$_rsha^{commit}" 2>/dev/null && base="--base $_rsha"
     # shellcheck disable=SC2086
-    if [ -f "$tmp/tree/tests/sim_gate.py" ] && ! (cd "$tmp/tree" && timeout --foreground -s KILL 300 python3 tests/sim_gate.py $base >"$tmp/gate" 2>&1); then
+    if [ -f "$tmp/tree/tests/sim_gate.py" ] && ! (cd "$tmp/tree" && timeout --foreground -s KILL 1220 python3 tests/sim_gate.py $base >"$tmp/gate" 2>&1); then
       tail -20 "$tmp/gate" >&2
       echo "pre-push: REFUSED -- the simulator gate fails on $lsha (tests/sim_gate.py; fix forward)" >&2
       rc=1

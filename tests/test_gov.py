@@ -419,6 +419,30 @@ class GovernorTest(unittest.TestCase):
         self.assertEqual(len(res["waiting"]), 2, "the first ended after 300 s (its end record), so a fourth went in")
         self.assertLessEqual(res["new_peak"], 12.0)
 
+    def test_probe_names_the_features_a_caller_in_another_repository_reads(self):
+        """movies' jvm-gate.sh grepped gov.py for `def cmd_gov`; a module split moved it and movies took no ticket for
+        three days (2026-11-22..25). The probe is the contract: a stable line, never agentctl's source."""
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(A.main(["gov", "probe"]), 0)
+        self.assertEqual(out.getvalue(), "agentctl governor: admit cores route width\n")
+
+    def test_status_names_each_tickets_job_and_the_cores_outside_any_ticket(self):
+        self.admit("agent", 1, job="testUnit")
+        os.environ["AGENTCTL_GOV_BUSY_PROBE"] = "echo 9"
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            A.main(["gov", "status"])
+        self.assertRegex(out.getvalue(), r"agent +1\.0 GB +4 cores +testUnit +test agent +pid \d+")
+        self.assertIn("outside any ticket: 5.0 of 9.0 busy cores", out.getvalue())
+
+    def test_a_checks_hook_runs_its_fanouts_at_the_checks_width(self):
+        slot = A.Slot("lane x")
+        slot.ticket = self.admit("check", 1, kind="check")
+        env = slot.env({"PATH": "/bin"})
+        self.assertEqual(env["AGENTCTL_GOV_WIDTH"], "4", "the check's charged cores: a fan-out in its hook rides them")
+        self.assertEqual(env["KINOWO_GOV_CPU_HELD"], "1")
+
     def test_status_shows_the_charged_cores(self):
         self.admit("agent", 1, job="testUnit")
         out = io.StringIO()
