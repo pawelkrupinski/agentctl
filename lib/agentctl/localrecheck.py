@@ -8,7 +8,7 @@ import re
 import time
 from agentctl.core import HOME, _bounded, err, git, git_ok, pid_alive, reds_dir, remote
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, read_text_or, write_json
 from agentctl.moviestools import hook_checks
 from agentctl.classify import ANSI, STRONG, norm_line
 from agentctl.repos import precheck_hook
@@ -49,11 +49,7 @@ def write_baseline_out(main, out):
     d = reds_dir("baseline-out")
     os.makedirs(d, exist_ok=True)
     path = os.path.join(d, main)
-    try:
-        with open(path) as f:
-            old = f.read()
-    except OSError:
-        old = ""
+    old = read_text_or(path, "")
     if not old.startswith(f"pre-push baseline {main}\n"):
         old = f"pre-push baseline {main}\n"
     tmp = f"{path}.{os.getpid()}"

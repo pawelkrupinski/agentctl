@@ -5,16 +5,13 @@ import json
 import os
 import re
 from typing import Any, Optional
+from agentctl.statefile import read_text_or
 from agentctl.core import HOME, run_cmd
 
 
 def read_meminfo(path: str = "/proc/meminfo") -> dict[str, int]:
     """{field: kB} of Linux's /proc/meminfo ({} elsewhere)."""
-    try:
-        with open(path) as f:
-            return {m.group(1): int(m.group(2)) for m in re.finditer(r"^(\w+):\s+(\d+)", f.read(), re.M)}
-    except OSError:
-        return {}
+    return {m.group(1): int(m.group(2)) for m in re.finditer(r"^(\w+):\s+(\d+)", read_text_or(path, ""), re.M)}
 
 
 # A FIXED MACHINE ($AGENTCTL_MACHINE, JSON): ram_gb, free_gb, pressure, swap_used_mb, swap_total_mb, load1, cores,

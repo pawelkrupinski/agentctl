@@ -9,7 +9,7 @@ from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, fmt_age, git, git_ok, host_role
 from agentctl.timefmt import iso_at
-from agentctl.statefile import read_record
+from agentctl.statefile import read_record, read_text_or
 from agentctl.classify import credential_failure, redact_credentials
 from agentctl.repos import precheck_hook, repo_of_waiting
 from agentctl.waitingdir import waiting_entries, wlog
@@ -341,11 +341,7 @@ def module_overlap(landed_paths, change_paths):
 
 def verify_areas_supported(tree):
     """Whether the tree's precommit-share.sh runs the area tests of a check/verifyareas- branch."""
-    try:
-        with open(os.path.join(tree, SHARE_SCRIPT)) as f:
-            return f"{VERIFY_AREAS_MODE}-" in f.read()
-    except OSError:
-        return False
+    return f"{VERIFY_AREAS_MODE}-" in read_text_or(os.path.join(tree, SHARE_SCRIPT), "")
 
 
 def selection_at(tree, rev, tip, paths):

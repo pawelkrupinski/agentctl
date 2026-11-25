@@ -29,7 +29,7 @@ import re
 import time
 from typing import Any, Callable, Optional
 from agentctl.core import HOME, run_cmd, state_root
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, read_text_or, write_json
 from agentctl.machine import machine_fixed, ram_gb
 from agentctl.govtickets import gov_tickets
 from agentctl.testtmp import TEST_TMP_MAX_AGE
@@ -93,11 +93,7 @@ def mongod_cache_kb(args: str, ram: float) -> int:
     found = MONGOD_CACHE_ARG.search(args or "")
     conf = MONGOD_CONFIG_ARG.search(args or "")
     if not found and conf:
-        try:
-            with open(os.path.expanduser(conf.group(1))) as f:
-                found = MONGOD_CACHE_CONF.search(f.read())
-        except OSError:
-            pass
+        found = MONGOD_CACHE_CONF.search(read_text_or(os.path.expanduser(conf.group(1)), ""))
     gb = float(found.group(1)) if found else max(0.25, 0.5 * (ram - 1))
     return int(gb * 1024 * 1024)
 
@@ -118,11 +114,7 @@ VM_MEMORY_CONFIGS = (
 
 def _configured_kb(path: str, line: re.Pattern[str], bare: int) -> Optional[int]:
     """The KB of the memory `line` reads in config `path` (a bare number counted in `bare` bytes), or None."""
-    try:
-        with open(path) as f:
-            m = line.search(f.read())
-    except OSError:
-        return None
+    m = line.search(read_text_or(path, ""))  # an unreadable config: nothing found
     return int(float(m.group(1)) * (SIZE_UNITS[m.group(2).upper()] if m.group(2) else bare)) // 1024 if m else None
 
 

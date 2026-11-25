@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import fnmatch
+from agentctl.statefile import read_text_or
 from agentctl.core import git, git_ok, process_cache, remote
 from agentctl.repos import precheck_hook
 from agentctl.queue import hook_query
@@ -55,11 +56,7 @@ def identity_change(repo, e):
     # WHAT CAN MOVE TAKES, NOT WHAT RUNS IDENTITY SPECS (2026-11-19): the hook's `--identity-change` names only the
     # take paths (movies: the resolver, its adapters, the title rules, the judgements), while its identity AREA also
     # runs for a common/ change some identity specs read -- which still batches. A hook without it: its --plan's area.
-    try:
-        with open(hook or "") as f:
-            text = f.read()  # a flag is never asked unless the hook has it: an unknown flag runs the real checks
-    except OSError:
-        text = ""
+    text = read_text_or(hook or "", "")  # a flag is never asked unless the hook has it: an unknown flag runs the real checks
     flag = "--identity-change" if "--identity-change)" in text else "--plan" if "--plan)" in text else None
     if paths is None or flag is None:
         return None

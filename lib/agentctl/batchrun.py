@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+from agentctl.statefile import read_text_or
 from agentctl.procrunner import process_runner
 from agentctl.core import err, git, host_role, remote
 from agentctl.timefmt import ts
@@ -77,11 +78,7 @@ def batch_mode(hook):
     """The combined check's hook mode: `--fast-only` (compile of every test config, the fast tests, the touched files'
     lints and the checks a touched merge=union file selects: each change was checked in full alone, on an older main,
     and the rebase writes a union-merged file no member's check saw) when the hook has it, else the full `--range` dry run."""
-    try:
-        with open(hook) as f:
-            return "--fast-only" if "--fast-only" in f.read() else "--range"
-    except OSError:
-        return "--range"
+    return "--fast-only" if "--fast-only" in read_text_or(hook, "") else "--range"
 
 
 RED_PRECHECK_MODE = "--checks-only"  # a waiting batch's pre-check while main is red: every check, no push

@@ -378,11 +378,7 @@ def bg_failure(bid):
     e.g. `source session ... not found`, `Prompt is too long · automatic compaction failed: You've hit your weekly
     limit ...`), '' when it did not or says nothing more than its state: a crash's verdict carries the actual error,
     and a limit named there makes the launch LIMITED (redstep.red_end_outcome)."""
-    try:
-        with open(os.path.join(claude_jobs_root(), str(bid or "")[:8], "state.json")) as f:
-            job = json.load(f)
-    except (OSError, ValueError):
-        return ""
+    job = read_record(os.path.join(claude_jobs_root(), str(bid or "")[:8], "state.json"))
     if not isinstance(job, dict) or job.get("state") not in ("failed", "error", "blocked"):
         return ""
     detail = " ".join(str(job.get("detail") or "").split())[:300]

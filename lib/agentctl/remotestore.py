@@ -8,7 +8,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from agentctl.core import SHORT, env_num, host_role
+from agentctl.statefile import read_text_or
+from agentctl.core import SHORT, attempt, env_num, host_role
 from agentctl.store import StoreAuthFailed, StoreUnavailable, store_errors
 from agentctl.storetoken import token
 from agentctl.laptoprole import laptop_role_holder
@@ -91,10 +92,7 @@ class RemoteStore:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
                 return json.loads(r.read() or b"null")
         except urllib.error.HTTPError as e:
-            try:
-                b = json.loads(e.read() or b"{}")
-            except ValueError:
-                b = {}
+            b = attempt(lambda: json.loads(e.read() or b"{}"), {}, catch=(ValueError,))
             if e.code in (401, 403):
                 raise StoreAuthFailed(f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}") from None
             cls = store_errors().get(b.get("error"))
@@ -139,11 +137,7 @@ def store_url() -> str | None:
         return None
     if os.environ.get("AGENTCTL_STORE_URL"):
         return os.environ["AGENTCTL_STORE_URL"]
-    try:
-        with open(state_root("store.url")) as f:
-            return f.read().strip() or default_store_url()
-    except OSError:
-        return default_store_url()
+    return read_text_or(state_root("store.url"), "").strip() or default_store_url()
 
 
 def default_store_url() -> str:
