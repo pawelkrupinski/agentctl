@@ -9,14 +9,13 @@ import os
 import re
 import signal
 import subprocess
-import sys
 import time
 from agentctl.procrunner import process_runner
 from agentctl.core import (
-    GIT_NET_SSH, HOME, PROTECTED_BRANCHES, REPOS, cherry_landed, env_num, err, git, git_ok, remote, run_cmd,
-    scratch, slug, state_root)
+    GIT_NET_SSH, HOME, PROTECTED_BRANCHES, cherry_landed, env_num, err, git, git_ok, remote, run_cmd, slug,
+    state_root)
 from agentctl.timefmt import now, ts
-from agentctl.forge import forge_branch_sha, forge_branches, forge_delete_branch, gh_json
+from agentctl.forge import forge_branches
 from agentctl.procs import PROC_ROOT, process_cwds, ps
 from agentctl.worktrees import CACHE_TREES, gitdir_activity, merged_reason, worktrees
 from agentctl.maint import cmd_orphans
@@ -117,102 +116,6 @@ def measure_decision(name, sha, commit_time, runs, now_):
     if age_h > 24:
         return ("delete", name, sha, f"no runs, {age_h:.0f}h old")
     return ("skip", name, sha, f"no runs yet, {age_h:.1f}h old")
-
-
-def cmd_cleanup(a):
-    dry = a.dry_run or (sys.stdin.isatty() and not a.execute)
-    mode = "DRY RUN" if dry else "EXECUTE"
-    print(f"agentctl cleanup ({mode}); log: {os.path.join(scratch(), 'agentctl-deleted.log')}")
-    t_start = time.monotonic()
-    until = t_start + a.deadline if getattr(a, "deadline", None) is not None else None
-    reserve = env_num("AGENTCTL_CLEANUP_REMOVE_RESERVE", CLEANUP_REMOVE_RESERVE)
-    cwds = process_cwds()
-    rc, took, stopped, net_down = 0, [], [], None
-    for repo in a.repo or REPOS:
-        repo = os.path.abspath(os.path.expanduser(repo))
-        name = os.path.basename(repo)
-        if not os.path.isdir(repo):
-            continue
-        if cleanup_left(until) <= 0:
-            stopped.append(f"repo {name}"); continue
-        if net_down:
-            err(f"{name}: not fetched -- {net_down}; skipping repo"); rc = 1; continue
-        t_repo = time.monotonic()
-        try:
-            if not a.no_fetch:
-                f = bounded_fetch(repo, refs=("main",))
-                if f is not True:
-                    if str(f).startswith("timed out"):  # A STALLED REMOTE STALLS THEM ALL: one wait, not one per repo
-                        net_down = f"{name}'s fetch {f}"
-                    raise RuntimeError(f"fetch: {f}")
-            main = git(repo, "rev-parse", f"refs/remotes/{remote()}/main").strip()
-        except RuntimeError as e:
-            err(f"{name}: {e}; skipping repo"); rc = 1; continue
-        print(f"\n== {name} ({remote()}/main {main[:10]})")
-        for action, path, branch, sha, why in plan_worktrees(repo, main, a.min_age_hours, cwds, a.include_caches, until):
-            label = f"worktree {path} [{branch or 'detached'}] {sha[:10]}"
-            if action == "stop" or (action == "delete" and not dry and cleanup_left(until) < reserve):
-                stopped.append(path); continue  # never a removal begun that the deadline could cut in half
-            if action == "skip":
-                if a.verbose:
-                    print(f"  keep   {label}: {why}")
-                continue
-            print(f"  {'would delete' if dry else 'delete'} {label}: {why}")
-            if dry:
-                continue
-            # Re-verify right before acting; `git worktree remove` (no --force) refuses dirty trees itself. A run over
-            # many repos takes minutes (2026-11-22: 30, killed by upkeep's bound), so the plan's lock and cwd reads are
-            # taken again here: a tree a process entered or locked since planning is kept.
-            if git(repo, "-C", path, "rev-parse", "HEAD").strip() != sha or not merged_reason(repo, sha, main):
-                print("    changed since planning; kept"); continue
-            busy_now = still_in_use(repo, path)
-            if busy_now:
-                print(f"    {busy_now} since planning; kept"); continue
-            r = git(repo, "worktree", "remove", path, check=False)
-            if r.returncode != 0:
-                print(f"    worktree remove refused: {r.stderr.strip()}"); rc = 1; continue
-            log_deletion("worktree", name, path, sha, why)
-            if branch and branch not in PROTECTED_BRANCHES:
-                others = {w.get("branch") for w in worktrees(repo)}
-                if f"refs/heads/{branch}" in others:
-                    print(f"    branch {branch} checked out elsewhere; kept"); continue
-                r = git(repo, "update-ref", "-d", f"refs/heads/{branch}", sha, check=False)
-                if r.returncode == 0:
-                    log_deletion("branch", name, branch, sha, why)
-                    print(f"    deleted branch {branch} ({sha[:10]})")
-                else:
-                    print(f"    branch {branch} not deleted: {r.stderr.strip()}"); rc = 1
-        took.append(f"{name} {time.monotonic() - t_repo:.0f} s")
-        if a.no_remote:
-            continue
-        o_r = slug(repo)
-        try:
-            # listing: one measure branch's runs; deleted only when every listed run finished
-            runs_for = lambda b: gh_json(o_r, "run", "list", "--branch", b, "--limit", "20", "--json", "databaseId,status")
-            mplan = plan_measure(o_r, runs_for)
-        except Exception as e:
-            err(f"{name}: measure branches not checked: {e}"); rc = 1; continue
-        for action, bname, sha, why in mplan:
-            label = f"remote {o_r}:{bname} {sha[:10]}"
-            if action == "skip":
-                if a.verbose:
-                    print(f"  keep   {label}: {why}")
-                continue
-            print(f"  {'would delete' if dry else 'delete'} {label}: {why}")
-            if dry:
-                continue
-            try:
-                if forge_branch_sha(o_r, bname) != sha:
-                    print("    moved since planning; kept"); continue
-                forge_delete_branch(o_r, bname)
-                log_deletion("remote-branch", o_r, bname, sha, why)
-            except Exception as e:
-                print(f"    delete failed: {e}"); rc = 1
-    if stopped:
-        print(f"cleanup: stopped at its {a.deadline:g} s deadline: {len(stopped)} left for the next pass "
-              f"({', '.join(stopped[:3])}{', ...' if len(stopped) > 3 else ''})")
-    print(f"cleanup: {time.monotonic() - t_start:.0f} s ({'; '.join(took) or 'no repo'})")
-    return rc
 
 
 # ---------------------------------------------------------------- the lifecycle closes itself

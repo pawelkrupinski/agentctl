@@ -8,56 +8,57 @@ import io
 import sys
 import time
 from typing import Any, Callable
-from agentctl.store import CurrentStore
+from agentctl.procrunner import ProcessRunner, wire_runner
 from agentctl.ghapp import cmd_github_app
 from agentctl.config import cmd_config
 from agentctl.storetoken import wire_token_missing_note
-from agentctl.leases import cmd_lease
 from agentctl.inboxentry import wire_inbox_writer
 from agentctl.owned import cmd_wait, restart_gate
-from agentctl.reverts import cmd_revert
 from agentctl.inbox import inbox_command, with_inbox
 from agentctl.maint import cmd_orphans
-from agentctl.cleanup import cmd_cleanup, cmd_sweep
+from agentctl.ciwhy import gate_from_snap, outside_from_snap, red_for
+from agentctl.clock import Clock
+from agentctl.store import CurrentStore
+from agentctl.leases import cmd_lease
+from agentctl.reverts import cmd_revert
+from agentctl.cleanup import cmd_sweep
 from agentctl.conditions import cmd_recover, wire_probes, wire_recover_actions
 from agentctl.upkeep import probe_disk_free
 from agentctl.queue import probe_infra_requeue, probe_push_credential
 from agentctl.issues import cmd_issue
-from agentctl.alerts import alert_write
 from agentctl.laptoprole import cmd_laptop
-from agentctl.gov import cmd_suite
-from agentctl.govcmd import cmd_checks, cmd_gov
-from agentctl.ciwhy import gate_from_snap, outside_from_snap, red_for
 from agentctl.serverclone import probe_clone_health
 from agentctl.branches import cmd_dispatch
-from agentctl.localrecheck import check_failures, recheck_local
 from agentctl.redcrash import probe_red_newer_verdict
+from agentctl.gov import cmd_suite
+from agentctl.localrecheck import check_failures, recheck_local
+from agentctl.govcmd import cmd_checks, cmd_gov
+from agentctl.alerts import alert_write
 from agentctl.redvault import probe_quota_reset
 from agentctl.ask import cmd_decide
 from agentctl.watchtick import cmd_watch
-from agentctl.queueclose import probe_change_source
 from agentctl.recovery import (
     cmd_inbox, probe_gate_read, probe_git_fetch, probe_http, probe_route, probe_tcp, probe_token, probe_tunnel,
     probe_waiting_ok, probe_workflow_green, recover_clear_flag, recover_clear_hold, recover_tunnel_reset,
     token_unavailable_note)
 from agentctl.tools import cmd_env, cmd_prepush, cmd_queue_retired, cmd_state
+from agentctl.server import cmd_store, process_store
+from agentctl.queueclose import probe_change_source
 from agentctl.superseded import cmd_supersede
 from agentctl.park import cmd_park, cmd_unpark
 from agentctl.orphans import probe_orphan_landed
 from agentctl.maintain import cmd_maintain
 from agentctl.invariants import probe_invariant
 from agentctl.watchdog import cmd_watchdog
-from agentctl.server import cmd_store, process_store
+from agentctl.batch import probe_batch_progress
 from agentctl.status import cmd_ci_why
 from agentctl.statuspage import cmd_status
-from agentctl.redtick import cmd_red, probe_red_read
-from agentctl.batch import probe_batch_progress
 from agentctl.queueenter import cmd_land_precheck
 from agentctl.slots import cmd_land
-from agentctl.clock import Clock
-from agentctl.procrunner import ProcessRunner, wire_runner
 from agentctl.cliparser import parser
+from agentctl.redtick import cmd_red, probe_red_read
 from agentctl.processor import cmd_tick, cmd_waiting
+from agentctl.cleanuppass import cmd_cleanup
 
 
 # THE COMPOSITION ROOT: what every process wires before any command runs.
