@@ -446,7 +446,7 @@ def red_block(st, o_r, a):
     if not items:
         print(f"NOT BLOCKED: #{n} names no red on main")
         return 1
-    details = owner_details(o_r, n, name, units, a.owner_cmd or om.get("cmd"), words, owner_cause)
+    details = owner_details(o_r, n, name, units, a.owner_cmd or om.get("cmd"), words, owner_cause, st)
     keys = [it["data"]["key"] for it in items]
     what = ", ".join(red_what(it["data"]) for it in items)
     text = (f"BLOCKED: {cause} down (auto-clears when {words})" if cause else

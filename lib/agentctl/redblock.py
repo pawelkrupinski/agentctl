@@ -4,7 +4,6 @@
 import re
 import time
 from agentctl.classify import QUOTA_LOG
-from agentctl.store import open_store
 from agentctl.forge import GH_CLI, RED_CONCLUSIONS
 from agentctl.repos import scan_repo_for
 from agentctl.workflows import LOCAL_FLOW
@@ -118,13 +117,13 @@ def owner_cmd_unsafe(cmd):
     return None
 
 
-def owner_details(o_r, n, name, units, cmd, words, owner_cause):
+def owner_details(o_r, n, name, units, cmd, words, owner_cause, store):
     """The owner's whole picture, one line each part: what fails, what was tried, why only the owner, the command, how
     it clears (the owner, 2026-10-28: "more details in the future pls")."""
     u = units[0] if units else {}
     failing = f"{u.get('job') or '?'}: {str(u.get('line') or 'no error line read')[:160]}"
     try:
-        its = red_item_of_run(open_store(), n, name)
+        its = red_item_of_run(store, n, name)
     except Exception:
         its = []
     hist = [h for it in its for h in it["data"].get("history") or []]
