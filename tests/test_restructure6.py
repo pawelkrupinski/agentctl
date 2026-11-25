@@ -277,6 +277,128 @@ class JvmReapTest(unittest.TestCase):
         check(self, "jvm_reap", build, call, 5000)
 
 
+FRAGMENTS = ["rm -rf /run/github-runner/b-1/core/docker", "rm /a/b/c/d", "rm -rf /tmp", "rm -rf /a/*", "rm -rf $X/y", "rm -rf ~", "rm -rf ~/a/b/c", "rm -f .",
+             "sudo rm -rf /var/lib/x/y/z", "nice -n 5 rm /q/r/s", "docker system prune -af", "docker rm c1", "podman rmi x", "kubectl delete pod x", "kubectl delete pods -A",
+             "kubectl delete ns y --all", "find /a/b/c -delete", "find /a -name x", "git clean -fdx", "git reset --hard", "git status", "if [ -d /a/b/c ]; then",
+             "test -d /a/b/c", "pgrep -f x >/dev/null", "echo hi", "mongo --eval db.dropDatabase()", "psql -c 'DROP TABLE x'", "TRUNCATE TABLE y", "Runner.Worker",
+             "rm -rf /actions-runner/x/_work/y/z", "ls", "fi", "docker ps", "while true", "kubectl get pods", "rm -rf '/a/b/c'", "exec rm /q/w/e", "rm -rf ${V}", "rm -rf `x`/a/b"]
+JOINERS = [" && ", " || ", "; ", " | ", "\n", " ; do ", " then ", " else "]
+
+
+class RedBlockTest(unittest.TestCase):
+    def test_owner_cmd_unsafe(self):
+        def build(case):
+            r = case.rng
+            if r.random() < 0.05:
+                return (r.choice([None, "", 0]),)
+            return ("".join(r.choice(FRAGMENTS) + (r.choice(JOINERS) if i else "") for i in range(r.randint(1, 4))),)
+        check(self, "owner_cmd_unsafe", build, lambda A: A.owner_cmd_unsafe, 8000)
+
+    def test_block_invalid(self):
+        def build(case):
+            r = case.rng
+            case.fake("lease_is_live", lambda rng, row, t: row is not None and rng.random() < 0.4)
+            case.fake("red_lease", lambda rng, key: f"red/{key}")
+            case.fake("ask_refusal", lambda rng, cat, q: maybe(rng, "refused", 0.4))
+            case.fake("ask_category", lambda rng, m: "cat")
+            case.put("OWNER_CAUSES", {"disk": "full disk", "perm": "a permission"})
+            case.put("WAIT_CAUSES", {"quota": "a quota"})
+            iss = r.choice([None, {"state": "closed", "data": {"note": "n" * 150}}, {"state": "open"}, {"state": "closed", "data": None}])
+            st = Probe(case, "store", get=lambda rng, name: maybe(rng, {"holder": "h1"}, 0.6), item=lambda rng, kind, iid: iss)
+            m = {}
+            for k, gen in (("vault", lambda: True), ("crash_loop", lambda: True), ("decision", lambda: True), ("harness", lambda: True), ("issue", lambda: "i1"),
+                           ("wait_cause", lambda: r.choice(["quota", "other"])), ("owner_cause", lambda: r.choice(["disk", "perm", "zz"])),
+                           ("cmd", lambda: r.choice(["", " ", "rm /a/b/c/d", "rm -rf /a/b/c/d", "echo ok", "if [ -d /x/y/z ]; then rm /x/y/z; fi"])),
+                           ("details", lambda: r.choice(["Request limit reached", "fine"])), ("text", lambda: r.choice(["quota exceeded", ""])),
+                           ("decide", lambda: "d"), ("question", lambda: "q")):
+                if r.random() < (0.12 if k in ("vault", "crash_loop", "decision") else 0.5):
+                    m[k] = gen()
+            d = {"key": "k1", **{k: v for k, v in (("kind", r.choice(["test", "infra", "x"])), ("line", r.choice(["HTTP 401: Request limit reached", "boom", "", "quota spent"]))) if r.random() < 0.8}}
+            return (st, {"data": d}, m, 5.0)
+        check(self, "block_invalid", build, lambda A: A.block_invalid, 8000)
+
+    def test_red_renew_blocks(self):
+        def build(case):
+            r = case.rng
+            keys = [f"k{i}" for i in range(4)]
+            case.fake("red_active", lambda rng, st: {i: {"data": {"key": k}} for i, k in enumerate(keys) if rng.random() < 0.8})
+            case.fake("lease_is_live", lambda rng, row, t: rng.random() < 0.8)
+            case.fake("block_invalid", lambda rng, st, it, m, t: maybe(rng, rng.choice(["why1", "why2"]), 0.35))
+            case.fake("red_what", lambda rng, d: f"red-{d['key']}")
+            case.fake("run_probe", lambda rng, kind, args: maybe(rng, types.SimpleNamespace(ok=rng.random() < 0.4, detail=rng.choice(["d1", "d2"])), 0.7))
+            case.fake("inbox_write", lambda rng, *a: None)
+            case.put("PROBES", {"p1", "p2"})
+            case.fake("lease_meta", lambda rng, row: row["meta"])
+            rows = []
+            for i in range(r.randint(0, 3)):
+                meta = {"keys": r.sample(keys, r.randint(0, 3)), "probed_at": r.choice([0, 40, 95, 99.5]), "until": "u", "text": "t" * 250}
+                if r.random() < 0.7:
+                    meta["probe"] = {"kind": r.choice(["p1", "p3", None]), "args": {"a": 1}}
+                rows.append({"name": f"block/b{i}", "epoch": i, "secret": "s", "meta": meta})
+            st = Probe(case, "store", list=lambda rng, prefix: rows)
+            return (st, 100.0)
+        check(self, "red_renew_blocks", build, lambda A: A.red_renew_blocks, 8000)
+
+
+class RedOpenTest(unittest.TestCase):
+    def test_red_offer(self):
+        def build(case):
+            r = case.rng
+            tiers = ["author", "revert", "blame", "deep", "fixer", "x"]
+            case.fake("red_tier", lambda rng, d, culprit, t: rng.choice(tiers))
+            case.fake("decided_revert", lambda rng, d, t: maybe(rng, "c" * 12, 0.6))
+            case.fake("red_offer_class", lambda rng, d: rng.choice(["code", "infra"]))
+            case.fake("red_decision", lambda rng, d: rng.random() < 0.3)
+            case.fake("red_what", lambda rng, d: f"red-{d.get('key')}")
+            case.fake("env_num", lambda rng, name, default: rng.choice([default, 5, 100]))
+            case.fake("red_move", lambda rng, store, it, state, text, **kw: {**it, "moved": [state, text]})
+            case.fake("red_put_offer", lambda rng, store, it: None)
+            case.put("RED_OFFER", {"author": 600, "code": 1800, "infra": 3600})
+            case.put("BLAME_MAX", 900)
+            case.put("HOME", "/home/x")
+            st = Probe(case, "store", clock=lambda rng: r.choice([1000.0, 5000.0]))
+            d = {"key": "k1"}
+            for k, gen in (("culprit", lambda: r.choice(["", "abc"])), ("blame", lambda: {"since": r.choice([0, 500, 4000])}),
+                           ("author", lambda: {"worktree": r.choice(["/home/x/wt", "/w"]), "session": "s", "shas": r.choice([[], ["a" * 40, "b" * 40]]), "extra": 1}),
+                           ("last_run", lambda: {"number": 7}), ("workflow", lambda: "W"), ("line", lambda: r.choice(["", "boom"])),
+                           ("deep_told", lambda: r.choice([0, 1, 2, 3])), ("attempts", lambda: r.choice([None, 0, 2, 3]))):
+                if r.random() < 0.6:
+                    d[k] = gen()
+            data = maybe(r, {"x": 1, **({"culprit": "dc"} if r.random() < 0.3 else {})}, 0.5)
+            return (st, {"id": "i1", "data": d}, "text", data, "repo", r.random() < 0.3, maybe(r, "V", 0.3), maybe(r, ["t1"], 0.3), r.random() < 0.3)
+        check(self, "red_offer", build, lambda A: A.red_offer, 8000)
+
+    def test_red_diagnosis_step(self):
+        def build(case):
+            r = case.rng
+            case.fake("red_names", lambda rng, d: [1, "2", None])
+            case.fake("red_what", lambda rng, d: "R")
+            case.fake("red_verify_dispatch", lambda rng, *a: rng.choice(["dispatched x", "none: no", "dispatched y"]))
+            case.fake("red_keep_holder", lambda rng, row, text: None)
+            case.fake("parse_time", lambda rng, s: types.SimpleNamespace(timestamp=lambda: float(s)))
+            changes = [{"id": f"c{i}", "entered_at": r.choice([0, 500, 9000]), "data": maybe(r, {"diagnoses": r.choice([[1], ["2"], [3], None]),
+                        **({"landed_sha": "s"} if r.random() < 0.5 else {"tip": "t"} if r.random() < 0.5 else {})}, 0.9)} for i in range(r.randint(0, 3))]
+
+            def items(rng, kind, states):
+                if rng.random() < 0.1:
+                    raise RuntimeError("store down")
+                return changes
+            st = Probe(case, "store", items=items, update_item=lambda rng, *a: None)
+            done = {f"c{i}": {"at": r.choice([50, 5000]), "dispatch": r.choice(["dispatched z", "none", None]), **({"told": 1} if r.random() < 0.2 else {})}
+                    for i in range(3) if r.random() < 0.4}
+            d = {"workflow": "W", "opened_at": r.choice([0, 9000]), "last_run": {"databaseId": 5}, **({"diagnosis_runs": done} if done or r.random() < 0.5 else {})}
+            snap = maybe(r, {"latest": {"W": maybe(r, {k: v for k, v in (("updatedAt", str(r.choice([100, 6000]))), ("status", r.choice(["completed", "queued"])),
+                                                                           ("number", 3), ("conclusion", r.choice([None, "success"])), ("databaseId", 9)) if r.random() < 0.9}, 0.9)}}, 0.8)
+            return (st, {"id": "i1", "version": 2, "data": d}, {"row": 1}, snap, "repo", "o/r", r.choice([100, 7000]))
+
+        def call(A):
+            def run(*args):
+                out = A.red_diagnosis_step(*args)
+                return out, args[1]["data"].get("diagnosis_runs")
+            return run
+        check(self, "red_diagnosis_step", build, call, 8000)
+
+
 def raising(rng, p, value=None):
     if rng.random() < p:
         raise RuntimeError("boom")
