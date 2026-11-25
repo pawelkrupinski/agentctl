@@ -142,6 +142,7 @@ def carry_over_reds(latest: Any, prev: Any) -> Any:
 def newest_branch_runs(o_r: Any) -> Any:
     """({(branch, workflow): its newest completed run}, {workflow: main's newest completed run}) from the newest
     BRANCH_RUNS_LIMIT runs listed and the gate and outside workflows' lists."""
+    # listing: the newest BRANCH_RUNS_LIMIT; a red no longer listed carries over from prev until its branch is gone
     runs = gh_json(o_r, "run", "list", "--limit", str(BRANCH_RUNS_LIMIT), "--json", RUN_FIELDS + ",headBranch,event")
     recorded = {r.get("branch") for r in dispatch_records() if r.get("branch")}
     latest, newest_main = {}, {}
