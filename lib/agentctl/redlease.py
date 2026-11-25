@@ -70,93 +70,164 @@ def red_end_outcome(h: dict[str, Any], m: dict[str, Any], row: Any, t: float) ->
     return None  # instant re-dispatch
 
 
-def red_lease_ended(store, it, row, block, t, repo=None):
-    """Its holder's lease ended (released with a verdict, expired without progress, revoked): one attempt (not for a
-    release by hand, a fixer that never started, a lease lost to infra, a red found already fixed, or one that needs the
-    owner's decision: AN ATTEMPT IS A FIXER THAT TRIED AND FAILED TO FIX), the verdict in its history, offered again up
-    the ladder."""
-    d = it["data"]
-    h = red_history(row, t)
-    m = lease_meta(row)
-    reset = red_end_outcome(h, m, row, t)
-    out = str(h["outcome"])
-    infra = bool(h.get("dispatched") and LEASE_INFRA.match(out))  # a wrapper's lease renews by its beat: a lapse is
-    # the wrapper or its machine gone (an interactive claim lapses by its own inactivity: that one counts)
-    counted = not (out.startswith(("NOT STARTED", "RELEASED", "LIMITED")) or infra or GAVE_UP_FIXED.match(out)
-                   or GAVE_UP_DECIDE.match(out))
-    upd = {"history": (d.get("history") or []) + [h], "holder": None,
-           "attempts": int(d.get("attempts") or 0) + (1 if counted else 0),
-           "ended_lease": (row or {}).get("epoch")}
-    if reset is not None:
-        upd["dispatch_after"] = reset
-    elif str(h["outcome"]).startswith("NOT STARTED") and m.get("tier") == "lander" and d.get("blame"):
-        # THE LANDER COULD NOT BE REVIVED (LAUNCH FAILED): a fresh fixer at once, briefed with the change -- no backoff
-        upd["blame"] = dict(d["blame"], revive_failed=str(h["outcome"])[:300])
-    elif str(h["outcome"]).startswith("NOT STARTED"):
-        fails = int(d.get("start_failures") or 0) + 1
-        upd.update(start_failures=fails, dispatch_after=t + min(RED_START_BACKOFF * 2 ** (fails - 1), 3600))
-    elif counted:
-        upd.update(start_failures=0, dispatch_after=0)
-    if str(h["outcome"]).startswith("DIAGNOSED:"):
-        upd["diagnosis"] = h["outcome"][len("DIAGNOSED:"):].strip()[:600]
-    wt = h.get("worktree")
-    if wt and os.path.isdir(wt) and allowed_path(wt):  # its unlanded commits are never lost: the next fixer starts there
+class LeaseEnd:
+    """A red's holder's lease that ended (released with a verdict, expired without progress, revoked): one attempt (not
+    for a release by hand, a fixer that never started, a lease lost to infra, a red found already fixed, or one that
+    needs the owner's decision: AN ATTEMPT IS A FIXER THAT TRIED AND FAILED TO FIX), the verdict in its history, offered
+    again up the ladder. Each stage answers what the tick did, or None for the next."""
+
+    def __init__(self, store: Any, it: dict[str, Any], row: Any, block: Any, t: float, repo: Any) -> None:
+        self.store, self.it, self.block, self.t, self.repo = store, it, block, t, repo
+        self.d = it["data"]
+        self.h = red_history(row, t)
+        self.m = lease_meta(row)
+        reset = red_end_outcome(self.h, self.m, row, t)
+        self.out = str(self.h["outcome"])
+        # a wrapper's lease renews by its beat: a lapse is the wrapper or its machine gone (an interactive claim lapses
+        # by its own inactivity: that one counts)
+        infra = bool(self.h.get("dispatched") and LEASE_INFRA.match(self.out))
+        self.counted = not (self.out.startswith(("NOT STARTED", "RELEASED", "LIMITED")) or infra
+                            or GAVE_UP_FIXED.match(self.out) or GAVE_UP_DECIDE.match(self.out))
+        self.upd = self.attempt_update(row, reset)
+
+    def attempt_update(self, row: Any, reset: float | None) -> dict[str, Any]:
+        """What the ended lease changes on the red: its history, the attempt counted, the next dispatch, the diagnosis,
+        the work its worktree left."""
+        d, h, out = self.d, self.h, self.out
+        upd = {"history": (d.get("history") or []) + [h], "holder": None,
+               "attempts": int(d.get("attempts") or 0) + (1 if self.counted else 0),
+               "ended_lease": (row or {}).get("epoch")}
+        upd.update(self.dispatch_update(reset))
+        if out.startswith("DIAGNOSED:"):
+            upd["diagnosis"] = h["outcome"][len("DIAGNOSED:"):].strip()[:600]
+        prior = self.prior_work(h.get("worktree"))
+        if prior:
+            upd["prior_work"] = prior
+        return upd
+
+    def dispatch_update(self, reset: float | None) -> dict[str, Any]:
+        """When the red is dispatched next: after the usage limit resets, at once for a lander that could not be revived,
+        after a growing backoff for a fixer that never started, at once after an attempt."""
+        d, out = self.d, self.out
+        if reset is not None:
+            return {"dispatch_after": reset}
+        if out.startswith("NOT STARTED") and self.m.get("tier") == "lander" and d.get("blame"):
+            # THE LANDER COULD NOT BE REVIVED (LAUNCH FAILED): a fresh fixer at once, briefed with the change -- no backoff
+            return {"blame": dict(d["blame"], revive_failed=out[:300])}
+        if out.startswith("NOT STARTED"):
+            fails = int(d.get("start_failures") or 0) + 1
+            return {"start_failures": fails, "dispatch_after": self.t + min(RED_START_BACKOFF * 2 ** (fails - 1), 3600)}
+        return {"start_failures": 0, "dispatch_after": 0} if self.counted else {}
+
+    def prior_work(self, wt: Any) -> dict[str, Any] | None:
+        """Its unlanded commits are never lost: the next fixer starts in the worktree that has them."""
+        if not (wt and os.path.isdir(wt) and allowed_path(wt)):
+            return None
         left = [c[:10] for c in cherry_landed(wt, f"refs/remotes/{remote()}/main", "HEAD")[1] or []]
-        if left:
-            upd["prior_work"] = {"worktree": wt, "commits": left[:20]}
-    fix = red_fix_of({"data": {**d, **upd}}, {"repo": repo}) if RED_LANDED_VERDICT.match(out) else None
-    if fix:  # ITS FIXER LANDED ITS FIX (784badc4406e.4, 2026-11-13: `LANDED 8d06b1a5ab` was offered again, then put on
-        # the owner): the red waits for the run that proves it, its owner block (if any) answered by the fix
-        lifted = red_lift_block(store, it, block, f"its fixer landed {fix['sha'][:10]}")
-        store.close_offer(f"red:{it['id']}", "fix-pending")
-        red_move(store, it, "fix-pending", f"{red_what(d)}: {h['holder']} landed its fix {fix['sha'][:10]}: verifying"
-                 + (f" ({lifted})" if lifted else ""),
-                 data={**upd, "fix": {**fix, "verify_since": t}, "cause": None, "block": None, "ask": None})
-        return [f"fix-pending {red_what(d)} (its fixer landed {fix['sha'][:10]})"]
-    waits = red_waits_on_of(out, d.get("key"), store)
-    if waits:  # A HOLD ON ANOTHER RED'S FIX (red_waits_on_of): a state agentctl resolves itself, never a failed action
-        lifted = red_lift_block(store, it, block, f"it waits on red {waits['red']}'s fix {waits['sha'][:10]}")
-        store.close_offer(f"red:{it['id']}", "fix-pending")
-        dec = d.get("decision")
-        red_move(store, it, "fix-pending", f"{red_what(d)}: waits on red {waits['red']}'s fix {waits['sha'][:10]}"
-                 + (f" ({lifted})" if lifted else ""),
-                 data={**upd, "fix": {"entry": None, "status": RED_WAITS_ON, "at": t, **waits}, "cause": None,
-                       "block": None, "ask": None, **({"decision": {**dec, "status": "waiting"}} if dec else {})})
-        return [f"fix-pending {red_what(d)} (waits on red {waits['red']}'s {waits['sha'][:10]})"]
-    if block:
-        red_move(store, it, "blocked-external", f"{red_what(d)}: {block['text']}",
-                 data={**upd, "cause": block.get("cause"), "block": block["name"]})
-        return [f"blocked {red_what(d)}"]
-    if GAVE_UP_FIXED.match(out):  # ALREADY FIXED: the red's probe decides, never the fixer's word alone
-        return red_already_fixed(store, it, upd, out, t)
-    decide = red_decision_needed(d, h) if str(h["outcome"]).startswith("DIAGNOSED:") else None
-    if not decide and GAVE_UP_DECIDE.match(out):  # THE FIXER NEEDS THE OWNER'S DECISION: one WAITING ON YOU, with its
-        m = RED_DECIDE.search(out)  # own words (and the category it names), never offered to the next fixer meanwhile
-        decide = ((m.group(1) or "") + m.group(2).strip()) if m else re.sub(r"^\W*GAVE UP:\s*", "", out).strip()
-        upd["gave_up_ask"] = True  # routed back (red_ask_route), it counts as the attempt it was
-        if m:  # its words before the ask are the diagnosis the owner reads
-            upd["diagnosis"] = re.sub(r"^\W*GAVE UP:\s*", "", out[:m.start(1) if m.group(1) else m.start(2)])
-            upd["diagnosis"] = re.sub(r"[;\s]*decide\s*$", "", upd["diagnosis"]).strip()[:600]
-    vault = vault_ask_ns(decide or (out if out.startswith("BLOCKED ON OWNER") else ""))
-    if vault:  # ITS ONE ASK IS A VAULT UNLOCK: a wait agentctl checks itself (red_vault_ask), never a decision
-        return red_vault_ask(store, it, upd, vault, out, t, d.get("repo"))
-    if red_decision(d) and DECISION_FAILED.match(str(h["outcome"])):  # THE OWNER'S DECIDED ACTION FAILED: told
-        return red_decision_failed(store, it, upd, h["outcome"], t)
-    if decide:
-        return red_decision_block(store, it, upd, decide, t)
-    issue = red_blamed_issue(store, out)
-    if issue:
-        red_harness_block(store, it, upd, issue, AGENTCTL_DEFECT_CAUSE, f"~/bin/agentctl issue --list",
+        return {"worktree": wt, "commits": left[:20]} if left else None
+
+    def hold_fix_pending(self, why: str, line: str, data: dict[str, Any]) -> None:
+        """Park the red in fix-pending, its owner block (if any) answered by what it waits for."""
+        lifted = red_lift_block(self.store, self.it, self.block, why)
+        self.store.close_offer(f"red:{self.it['id']}", "fix-pending")
+        red_move(self.store, self.it, "fix-pending", line + (f" ({lifted})" if lifted else ""), data=data)
+
+    def fixer_landed(self) -> list[str] | None:
+        """ITS FIXER LANDED ITS FIX (784badc4406e.4, 2026-11-13: `LANDED 8d06b1a5ab` was offered again, then put on the
+        owner): the red waits for the run that proves it."""
+        fix = red_fix_of({"data": {**self.d, **self.upd}}, {"repo": self.repo}) if RED_LANDED_VERDICT.match(self.out) else None
+        if not fix:
+            return None
+        sha, what = fix["sha"][:10], red_what(self.d)
+        self.hold_fix_pending(f"its fixer landed {sha}", f"{what}: {self.h['holder']} landed its fix {sha}: verifying",
+                              {**self.upd, "fix": {**fix, "verify_since": self.t}, "cause": None, "block": None, "ask": None})
+        return [f"fix-pending {what} (its fixer landed {sha})"]
+
+    def waits_on_fix(self) -> list[str] | None:
+        """A HOLD ON ANOTHER RED'S FIX (red_waits_on_of): a state agentctl resolves itself, never a failed action."""
+        waits = red_waits_on_of(self.out, self.d.get("key"), self.store)
+        if not waits:
+            return None
+        sha, what, dec = waits["sha"][:10], red_what(self.d), self.d.get("decision")
+        self.hold_fix_pending(f"it waits on red {waits['red']}'s fix {sha}", f"{what}: waits on red {waits['red']}'s fix {sha}",
+                              {**self.upd, "fix": {"entry": None, "status": RED_WAITS_ON, "at": self.t, **waits},
+                               "cause": None, "block": None, "ask": None,
+                               **({"decision": {**dec, "status": "waiting"}} if dec else {})})
+        return [f"fix-pending {what} (waits on red {waits['red']}'s {sha})"]
+
+    def blocked_by_owner(self) -> list[str] | None:
+        block = self.block
+        if not block:
+            return None
+        red_move(self.store, self.it, "blocked-external", f"{red_what(self.d)}: {block['text']}",
+                 data={**self.upd, "cause": block.get("cause"), "block": block["name"]})
+        return [f"blocked {red_what(self.d)}"]
+
+    def already_fixed(self) -> list[str] | None:
+        """ALREADY FIXED: the red's probe decides, never the fixer's word alone."""
+        return red_already_fixed(self.store, self.it, self.upd, self.out, self.t) if GAVE_UP_FIXED.match(self.out) else None
+
+    def needs_owner(self) -> list[str] | None:
+        """THE FIXER NEEDS THE OWNER: its one ask is a vault unlock (a wait agentctl checks itself), the owner's decided
+        action failed (told), or a decision (one WAITING ON YOU, never offered to the next fixer meanwhile)."""
+        h, out, d = self.h, self.out, self.d
+        decide = red_decision_needed(d, h) if out.startswith("DIAGNOSED:") else None
+        if not decide and GAVE_UP_DECIDE.match(out):
+            decide = self.gave_up_ask()
+        vault = vault_ask_ns(decide or (out if out.startswith("BLOCKED ON OWNER") else ""))
+        if vault:  # ITS ONE ASK IS A VAULT UNLOCK
+            return red_vault_ask(self.store, self.it, self.upd, vault, out, self.t, d.get("repo"))
+        if red_decision(d) and DECISION_FAILED.match(str(h["outcome"])):  # THE OWNER'S DECIDED ACTION FAILED: told
+            return red_decision_failed(self.store, self.it, self.upd, h["outcome"], self.t)
+        return red_decision_block(self.store, self.it, self.upd, decide, self.t) if decide else None
+
+    def gave_up_ask(self) -> str:
+        """The owner's ask in a GAVE UP verdict, its own words (and the category it names); its words before the ask are
+        the diagnosis the owner reads. Routed back (red_ask_route), it counts as the attempt it was."""
+        out, upd = self.out, self.upd
+        m = RED_DECIDE.search(out)
+        upd["gave_up_ask"] = True
+        if not m:
+            return re.sub(r"^\W*GAVE UP:\s*", "", out).strip()
+        upd["diagnosis"] = re.sub(r"^\W*GAVE UP:\s*", "", out[:m.start(1) if m.group(1) else m.start(2)])
+        upd["diagnosis"] = re.sub(r"[;\s]*decide\s*$", "", upd["diagnosis"]).strip()[:600]
+        return (m.group(1) or "") + m.group(2).strip()
+
+    def blamed_issue(self) -> list[str] | None:
+        issue = red_blamed_issue(self.store, self.out)
+        if not issue:
+            return None
+        d, out = self.d, self.out
+        red_harness_block(self.store, self.it, self.upd, issue, AGENTCTL_DEFECT_CAUSE, f"~/bin/agentctl issue --list",
                           f"a newer {d.get('workflow')} run no longer fails this way",
                           f"its fixer blamed agentctl: open agentctl issue {issue} ({out[:200]}). Offered again when the "
-                          "issue is closed or a newer run decides it", t)
+                          "issue is closed or a newer run decides it", self.t)
         return [f"blocked {red_what(d)} on agentctl issue {issue}"]
-    streak = red_crash_streak({**d, **upd})
-    if len(streak) >= env_num("AGENTCTL_RED_CRASH_LOOP", RED_CRASH_LOOP):
-        return red_crash_loop(store, it, upd, streak, t)
-    red_offer(store, it, f"{red_what(d)}: {h['holder']} ended ({h['outcome'][:120]}): offered again", data=upd,
-              quiet=not counted)
-    return [f"re-offered {red_what(d)} after {h['outcome'][:60]}"]
+
+    def crash_loop(self) -> list[str] | None:
+        streak = red_crash_streak({**self.d, **self.upd})
+        if len(streak) >= env_num("AGENTCTL_RED_CRASH_LOOP", RED_CRASH_LOOP):
+            return red_crash_loop(self.store, self.it, self.upd, streak, self.t)
+        return None
+
+    def offer_again(self) -> list[str]:
+        h, what = self.h, red_what(self.d)
+        red_offer(self.store, self.it, f"{what}: {h['holder']} ended ({h['outcome'][:120]}): offered again", data=self.upd,
+                  quiet=not self.counted)
+        return [f"re-offered {what} after {h['outcome'][:60]}"]
+
+    def run(self) -> list[str]:
+        for stage in (self.fixer_landed, self.waits_on_fix, self.blocked_by_owner, self.already_fixed, self.needs_owner,
+                      self.blamed_issue, self.crash_loop):
+            done = stage()
+            if done is not None:
+                return done
+        return self.offer_again()
+
+
+def red_lease_ended(store: Any, it: dict[str, Any], row: Any, block: Any, t: float, repo: Any = None) -> list[str]:
+    """Its holder's lease ended: LeaseEnd's ladder."""
+    return LeaseEnd(store, it, row, block, t, repo).run()
 
 
 RED_WAITS_ON_VERDICT = re.compile(r"^\W*WAITS ON ([0-9a-f]{7,40})\s*\(red ([0-9a-f]{12}(?:\.\d+)?|[\w.-]+)\)")

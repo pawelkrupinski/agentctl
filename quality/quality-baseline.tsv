@@ -141,7 +141,6 @@ cognitive	red_flake_check	15
 cognitive	red_job_reads	69
 cognitive	red_job_retired	19
 cognitive	red_joined_idle	18
-cognitive	red_lease_ended	48
 cognitive	red_main_verify	14
 cognitive	red_offer	31
 cognitive	red_owner_push	12
@@ -352,7 +351,6 @@ cyclomatic	red_job_reads	22
 cyclomatic	red_job_reads.scan	32
 cyclomatic	red_job_retired	21
 cyclomatic	red_joined_idle	18
-cyclomatic	red_lease_ended	46
 cyclomatic	red_main_current	18
 cyclomatic	red_main_verify	20
 cyclomatic	red_never_green	14
@@ -421,7 +419,6 @@ method-lines	red_claim	62
 method-lines	red_dispatch	59
 method-lines	red_fix_pending	260
 method-lines	red_job_reads	66
-method-lines	red_lease_ended	87
 method-lines	red_run_retired	51
 method-lines	regenerate	63
 method-lines	retire_jobs_of	55

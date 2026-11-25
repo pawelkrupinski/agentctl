@@ -115,8 +115,8 @@ mypy-errors	redearly	8
 mypy-errors	redfamilies	10
 mypy-errors	redfixes	47
 mypy-errors	redfixread	34
-mypy-errors	redhold	32
-mypy-errors	redlease	35
+mypy-errors	redhold	31
+mypy-errors	redlease	30
 mypy-errors	redmove	14
 mypy-errors	redobserve	20
 mypy-errors	redopen	36
@@ -129,7 +129,7 @@ mypy-errors	redrepos	12
 mypy-errors	redretired	57
 mypy-errors	redseen	50
 mypy-errors	redstatus	6
-mypy-errors	redstep	50
+mypy-errors	redstep	48
 mypy-errors	redtick	82
 mypy-errors	reduntracked	43
 mypy-errors	redvault	34
