@@ -58,7 +58,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, Sequence, TypeVar
+from typing import Any, Callable, Sequence, TypeVar
 from agentctl.procrunner import process_runner
 from agentctl.configfile import config_load
 
@@ -102,6 +102,21 @@ ZERO = "0" * 40
 # ---------------------------------------------------------------- helpers
 def err(msg: object) -> None:
     print(f"agentctl: {msg}", file=sys.stderr, flush=True)
+
+
+D = TypeVar("D")
+
+
+def attempt(fn: Callable[[], T], default: D, *, catch: tuple[type[BaseException], ...],
+            what: str | None = None) -> T | D:
+    """fn(), or default when it raises one of `catch` -- exactly the types the call site names, nothing wider. With
+    `what`, the failure is told first: `what (<the error, 160 characters at most>)` on stderr."""
+    try:
+        return fn()
+    except catch as e:
+        if what is not None:
+            err(f"{what} ({str(e)[:160]})")
+        return default
 
 
 def state_root(*parts: str) -> str:

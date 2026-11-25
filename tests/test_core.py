@@ -35,6 +35,34 @@ class RunCmdTest(unittest.TestCase):
 
 
 
+class AttemptTest(unittest.TestCase):
+    """THE TRY-DEFAULT SHAPE (2026-11-25): a call's result, or a default on exactly the exceptions the call site names."""
+
+    def test_the_result_or_the_default_on_a_named_exception(self):
+        self.assertEqual(A.attempt(lambda: int("7"), 0, catch=(ValueError,)), 7)
+        self.assertEqual(A.attempt(lambda: int("x"), 0, catch=(ValueError,)), 0)
+        self.assertIsNone(A.attempt(lambda: {}["k"], None, catch=(KeyError, ValueError)))
+
+    def test_an_exception_the_site_did_not_name_propagates(self):
+        with self.assertRaises(KeyError):
+            A.attempt(lambda: {}["k"], None, catch=(ValueError,))
+        with self.assertRaises(SystemExit):  # Exception alone never swallows a NoToken
+            A.attempt(lambda: sys.exit(3), None, catch=(Exception,))
+        self.assertEqual(A.attempt(lambda: sys.exit(3), "no", catch=(Exception, SystemExit)), "no")
+
+    def test_what_tells_the_failure_and_only_the_failure(self):
+        import contextlib, io
+        out = io.StringIO()
+        with contextlib.redirect_stderr(out):
+            self.assertEqual(A.attempt(lambda: 1, 0, catch=(OSError,), what="the cache"), 1)
+            self.assertEqual(out.getvalue(), "")
+            A.attempt(lambda: open("/nonexistent/x"), None, catch=(OSError,), what="the cache was not read")
+            A.attempt(lambda: int("y" * 300), None, catch=(ValueError,), what="long")
+        lines = out.getvalue().splitlines()
+        self.assertRegex(lines[0], r"^agentctl: the cache was not read \(\[Errno 2\] No such file .*\)$")
+        self.assertEqual(len(lines[1]), len("agentctl: long ()") + 160)
+
+
 class GitDecodeTest(unittest.TestCase):
     def test_git_output_that_is_not_utf8_never_crashes_a_git_call(self):
         # 2026-11-03: charlie-msi carried a Latin-1 "\xa3"; core.git's strict UTF-8 decode raised

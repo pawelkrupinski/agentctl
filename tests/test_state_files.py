@@ -23,6 +23,15 @@ class StateFilesTest(unittest.TestCase):
         self.assertEqual(A.read_record(self.p, {}), [1, 2])
         self.assertEqual(A.read_json_file(self.p), {})  # an object reader: a list is no object
 
+    def test_a_text_file_that_cannot_be_read_reads_as_the_default(self):
+        self.assertEqual(A.read_text_or(self.p, "none"), "none")  # missing
+        self.assertEqual(A.read_text_or(self.d, ""), "")  # a directory
+        os.makedirs(os.path.dirname(self.p))
+        open(self.p, "w").write("a\nb")
+        self.assertEqual(A.read_text_or(self.p, ""), "a\nb")
+        with self.assertRaises(TypeError):  # only OSError is absorbed: no path is a caller's bug
+            A.read_text_or(None, "")
+
     def test_a_write_is_whole_leaves_no_temporary_and_keeps_a_secret_private(self):
         A.write_json(self.p, {"a": 1})
         self.assertEqual(json.load(open(self.p)), {"a": 1})

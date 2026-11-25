@@ -1,4 +1,4 @@
-# agentctl, part `statefile`: THE JSON STATE FILES: one reader (read_record) and one atomic writer (write_json).
+# agentctl, part `statefile`: THE STATE FILES: one JSON reader (read_record), one text reader (read_text_or) and one atomic writer (write_json).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's only.
 
 import json
@@ -13,6 +13,15 @@ def read_record(path: str, default: Any = None) -> Any:
         with open(path) as f:
             return json.load(f)
     except (OSError, ValueError):
+        return default
+
+
+def read_text_or(path: str, default: str) -> str:
+    """The text at path, or default when it cannot be read (OSError only: missing, unreadable, a directory)."""
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
         return default
 
 
