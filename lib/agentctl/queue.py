@@ -356,13 +356,25 @@ def selection_change(tree, full_tip, tip, paths, new=None):
     if old is None or new is None:
         return "its selection at the full check cannot be read" if old is None else "its selection cannot be read"
     for key in sorted(set(old) | set(new)):
-        if key in VERIFY_RUNS_ADDED:
-            continue
-        added = [w for w in (new.get(key) or []) if w not in set(old.get(key) or [])]
-        if key not in old and key in new or added:
-            return f"its {key.lstrip('-')} for the change adds {', '.join(added[:3]) or 'a mode'}" \
-                + (f" (+{len(added) - 3} more)" if len(added) > 3 else "")
+        added = selection_added(key, old, new)
+        if added is not None:
+            return selection_added_words(key, added)
     return None
+
+
+def selection_added_words(key: Any, added: Any) -> str:
+    """`its <key> for the change adds a, b, c (+n more)`: the first three of what the selection adds, or a mode."""
+    return f"its {key.lstrip('-')} for the change adds {', '.join(added[:3]) or 'a mode'}" \
+        + (f" (+{len(added) - 3} more)" if len(added) > 3 else "")
+
+
+def selection_added(key: Any, old: Any, new: Any) -> list[str] | None:
+    """What the selection `new` adds under key to `old`'s (a list: empty for a mode that was not selected at all), or None
+    when it adds nothing the verify round leaves unrun."""
+    if key in VERIFY_RUNS_ADDED:
+        return None
+    added = [w for w in (new.get(key) or []) if w not in set(old.get(key) or [])]
+    return added if added or (key not in old and key in new) else None
 
 
 def land_holds(st):

@@ -76,7 +76,19 @@ def red_owner_rules(o_r, num):
 def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
     """The fixer's prompt for red u; owner: a family owner's turn ({family, notebook, reds}), whose leases its wrapper
     holds (no claim) and whose session lives on across reds."""
-    num, rid = u["run"].get("number"), u["run"].get("databaseId")
+    num = u["run"].get("number")
+    o_r = red_repo_of(u)
+    common = fixer_preamble(u, wt, brief, owner, o_r)
+    task = fixer_task(u, wt)
+    if u.get("decision"):  # THE OWNER ANSWERED this red's question (`agentctl decide`): act on that answer
+        task = owner_decided_note(u["decision"]) + task
+    task += WAITS_ON_BRIEF + LAND_BRIEF + fixer_task_context(u, o_r, num) + fixer_task_verdicts(u)
+    return common + task + early_brief_of(u) + (f" {resume_note}" if resume_note else "")
+
+
+def fixer_preamble(u: Any, wt: Any, brief: Any, owner: Any, o_r: str) -> str:
+    """What every fixer prompt opens with: who it is, the brief, its worktree, and the replays its land will demand."""
+    num = u["run"].get("number")
     # WHO YOU ARE comes in the prompt, never the environment: a `claude --bg` session inherits the claude daemon's
     # environment -- whichever fixer's wrapper spawned it (2026-10-29: every background fixer was 'red-fixer-2473')
     fx = f" --fixer {u['record']}" if u.get("record") else ""
@@ -86,7 +98,6 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
            if u.get("lander") else
            "You are an unattended red-build fixer dispatched by agentctl (nobody else was fixing this red), a background "
            "session the owner sees in `claude agents`. ")
-    o_r = red_repo_of(u)
     bpath, btext = fixer_brief(o_r)
     if o_r != RED_PRIMARY:  # the movies preamble is movies'; the repo's own CLAUDE.md is the first read here
         brief = f"{o_r}'s CLAUDE.md in your worktree"
@@ -96,6 +107,17 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
               f"{FIXER_UNLANDED_NUDGE // 60} min get a RED-NUDGE.md in your worktree (read it, land, delete it), then an "
               f"escalation to the owner.\n\n=== THE FIXER BRIEF ({bpath.replace(HOME, '~')}) ===\n{btext}\n"
               "=== END OF THE FIXER BRIEF ===\n\n")
+    common += fixer_replay_notes(u, owner, o_r)
+    if u.get("orphan"):  # an unlanded change whose author ended (orphan_duty)
+        common = common.replace(first, "").replace(f"(branch off {remote()}/main, already created)", "(the ended author's own)")
+    elif u.get("lander"):  # THE LANDER REVIVED (blame.py): its change reverted, it fixes and re-lands it
+        common = common.replace(f"(branch off {remote()}/main, already created)", "(yours)")
+    return common
+
+
+def fixer_replay_notes(u: Any, owner: Any, o_r: str) -> str:
+    """The replays the fixer's land will demand (redreplay.py) and the warning when fixes of this red already failed."""
+    common = ""
     replay = red_replay_command(red_repo_clone(o_r), u) if not owner else None
     if replay:  # FIX REPLAY (redreplay.py): its land is refused without the replay's base=FAIL head=PASS
         common += (f"REPLAY BEFORE LANDING: this red's check replays cheaply: `{replay}`. Run it at {remote()}/main "
@@ -112,59 +134,94 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
         common += (f"RECURRING: this failure outlived {len(red_refuted(u))} landed fixes ({', '.join(x[:10] for x in red_refuted(u))}): "
                    "each treated a symptom. Read them (`git show`), find the ROOT CAUSE they all missed, and fix that; "
                    "another symptom fix is not a fix. ")
-    if u.get("orphan"):  # an unlanded change whose author ended (orphan_duty)
-        common = common.replace(first, "").replace(f"(branch off {remote()}/main, already created)", "(the ended author's own)")
-        task = (f"This worktree holds commits that are NOT on {remote()}/main, and the agent that wrote them has ended. Its last "
-                f"verdict: {str(u.get('line') or 'none')[:400]!r}. Make it land: `git fetch {remote()} && git rebase "
-                f"{remote()}/main` (never squash), fix what the checks reject (read the failing checks' output; never loosen a "
-                "test, never skip a check), then `~/bin/agentctl land`. If the change is wrong or "
-                "already on main in another form, say so. End at `LANDED <sha>`, or `GAVE UP: <why>`.")
-    elif u.get("lander"):  # THE LANDER REVIVED (blame.py): its change reverted, it fixes and re-lands it
-        common = common.replace(f"(branch off {remote()}/main, already created)", "(yours)")
-        task = lander_prompt(u, wt)
-    elif u.get("diagnosis"):  # a diagnose-only fixer found the cause: this one makes the durable fix
-        task = (f"Red run {u['workflow']} #{num} (run id {rid}), job `{u['job']}`, was DIAGNOSED by a diagnose-only fixer: "
-                f"{u['diagnosis'][:600]!r}. The diagnosis is not the end, and nor is a 'one-off' verdict: make the DURABLE "
-                "fix. Remove the cause (code, CI config, the test harness) if it is in the repo. If it really lies outside "
-                "the code (a crashed browser, a runner, a transient), land instead the means to diagnose it next time: keep "
-                "the failing process's stderr and exit status in the job log or its artifacts (e.g. Chrome's stderr, which "
-                "CdpDriver discards), a retry-free guard that names the cause. `~/bin/agentctl ci-why " + str(rid) + "` "
-                "explains the run. Never rerun to green, never loosen a test. Commit with a `Fixes-Red: " + str(num) + "` "
-                "trailer and land it with `~/bin/agentctl land`. End at `LANDED <sha>`; if you cannot, "
-                "`GAVE UP: <why>`; if the fix needs the owner's decision (a design change the red rules do not let you "
-                "make, in an owner-only category: the brief's ASK THE OWNER ONLY WHAT NO AGENT CAN DO), `DIAGNOSED: <cause>; decide[<category>]: <the decision>` (the red waits on the owner with it); if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
-                "and end `BLOCKED ON OWNER: <command>`.")
-    elif u["workflow"] == LOCAL_FLOW:
-        task = (f"The pre-push check `{u['job']}` FAILS ON PLAIN {remote()}/main {str(u['run'].get('headSha'))[:10]} (no "
-                f"change needed to see it; first failure line: {u.get('line', '')[:200]!r}). scripts/hooks/pre-push "
-                "documents each check; reproduce it in your worktree, root-cause and fix it (never loosen the check), "
-                "commit with a `Fixes-Red: local` trailer and land with `~/bin/agentctl land`. End "
-                "at `LANDED <sha>`, or `GAVE UP: <why>`.")
-    elif u["kind"] in ("infra", "unclear"):  # the group's primary: no test failure in the run at all
-        task = (f"Red run {u['workflow']} #{num} (run id {rid}) failed in job `{u['job']}`, and ci-why calls it "
-                f"{'INFRA-SHAPED' if u['kind'] == 'infra' else 'UNCLEAR (no FAILED/error line: runner lost? log truncated?)'}. "
-                f"DIAGNOSE ONLY: `~/bin/agentctl ci-why {rid}`, the CI runners' health (~/bin/ci-runners-page, the "
-                "ci-runner host's systemd units over ssh, read-only), disk, docker, the tunnel. Make NO code change and "
-                "do not rerun anything to get green. If it needs a deploy, a restart or any owner action, run "
-                f"`~/bin/agentctl red block {num} --owner-cause <kind> --cmd \"<the exact command the owner must run>\"` and end with a line "
-                "`BLOCKED ON OWNER: <command>`; otherwise end with `DIAGNOSED: <cause>; durable fix: <what to change, or "
-                "what to log so the next occurrence names its cause>` -- an implementer is dispatched with it at once.")
-    else:
-        task = (f"Fix red run {u['workflow']} #{num} (run id {rid}), failing in "
-                + (f"jobs {', '.join(u['jobs'])} (first: `{u['job']}`)" if len(u.get("jobs") or []) > 1 else f"job `{u['job']}`")
-                + (f" with: {u['line'][:200]!r}" if u.get("line") else "") +
-                f". `~/bin/agentctl ci-why {rid}` explains it. Root-cause it (never rerun to green, never loosen a test "
-                "or a budget to pass), commit the fix with a `Fixes-Red: " + str(num) + "` trailer, and land it with "
-                "`~/bin/agentctl land`. End at `LANDED <sha>`. If you cannot fix it, end with a line "
-                "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
-                "and end `BLOCKED ON OWNER: <command>`.")
-    if u.get("decision"):  # THE OWNER ANSWERED this red's question (`agentctl decide`): act on that answer
-        dec = u["decision"]
-        task = (f"THE OWNER DECIDED this red: asked {str(dec.get('question'))[:400]!r}, the owner answered "
-                f"{str(dec.get('answer'))[:1500]!r}. Act on exactly that answer (it settles what the fixers could not "
-                "decide) and land the result. If acting on it fails (the land is NOT LANDED, a check rejects it, it "
-                "cannot be done), end `NOT LANDED: <why>` or `GAVE UP: <why>`: the owner is told at once. ") + task
-    task += WAITS_ON_BRIEF + LAND_BRIEF
+    return common
+
+
+def fixer_task(u: Any, wt: Any) -> Any:
+    """What the fixer is asked to do, by the kind of red it was dispatched for."""
+    num, rid = u["run"].get("number"), u["run"].get("databaseId")
+    if u.get("orphan"):
+        return orphan_task(u)
+    if u.get("lander"):
+        return lander_prompt(u, wt)
+    if u.get("diagnosis"):  # a diagnose-only fixer found the cause: this one makes the durable fix
+        return diagnosed_task(u, num, rid)
+    if u["workflow"] == LOCAL_FLOW:
+        return local_check_task(u)
+    if u["kind"] in ("infra", "unclear"):  # the group's primary: no test failure in the run at all
+        return infra_task(u, num, rid)
+    return red_run_task(u, num, rid)
+
+
+def orphan_task(u: Any) -> str:
+    """An unlanded change whose author ended (orphan_duty): make it land."""
+    return (f"This worktree holds commits that are NOT on {remote()}/main, and the agent that wrote them has ended. Its last "
+            f"verdict: {str(u.get('line') or 'none')[:400]!r}. Make it land: `git fetch {remote()} && git rebase "
+            f"{remote()}/main` (never squash), fix what the checks reject (read the failing checks' output; never loosen a "
+            "test, never skip a check), then `~/bin/agentctl land`. If the change is wrong or "
+            "already on main in another form, say so. End at `LANDED <sha>`, or `GAVE UP: <why>`.")
+
+
+def diagnosed_task(u: Any, num: Any, rid: Any) -> str:
+    """A diagnose-only fixer found the cause: the durable fix is this fixer's."""
+    return (f"Red run {u['workflow']} #{num} (run id {rid}), job `{u['job']}`, was DIAGNOSED by a diagnose-only fixer: "
+            f"{u['diagnosis'][:600]!r}. The diagnosis is not the end, and nor is a 'one-off' verdict: make the DURABLE "
+            "fix. Remove the cause (code, CI config, the test harness) if it is in the repo. If it really lies outside "
+            "the code (a crashed browser, a runner, a transient), land instead the means to diagnose it next time: keep "
+            "the failing process's stderr and exit status in the job log or its artifacts (e.g. Chrome's stderr, which "
+            "CdpDriver discards), a retry-free guard that names the cause. `~/bin/agentctl ci-why " + str(rid) + "` "
+            "explains the run. Never rerun to green, never loosen a test. Commit with a `Fixes-Red: " + str(num) + "` "
+            "trailer and land it with `~/bin/agentctl land`. End at `LANDED <sha>`; if you cannot, "
+            "`GAVE UP: <why>`; if the fix needs the owner's decision (a design change the red rules do not let you "
+            "make, in an owner-only category: the brief's ASK THE OWNER ONLY WHAT NO AGENT CAN DO), `DIAGNOSED: <cause>; decide[<category>]: <the decision>` (the red waits on the owner with it); if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
+            "and end `BLOCKED ON OWNER: <command>`.")
+
+
+def local_check_task(u: Any) -> str:
+    """A pre-push check that fails on plain main."""
+    return (f"The pre-push check `{u['job']}` FAILS ON PLAIN {remote()}/main {str(u['run'].get('headSha'))[:10]} (no "
+            f"change needed to see it; first failure line: {u.get('line', '')[:200]!r}). scripts/hooks/pre-push "
+            "documents each check; reproduce it in your worktree, root-cause and fix it (never loosen the check), "
+            "commit with a `Fixes-Red: local` trailer and land with `~/bin/agentctl land`. End "
+            "at `LANDED <sha>`, or `GAVE UP: <why>`.")
+
+
+def infra_task(u: Any, num: Any, rid: Any) -> str:
+    """An infra-shaped or unclear red: diagnose only, no code change."""
+    return (f"Red run {u['workflow']} #{num} (run id {rid}) failed in job `{u['job']}`, and ci-why calls it "
+            f"{'INFRA-SHAPED' if u['kind'] == 'infra' else 'UNCLEAR (no FAILED/error line: runner lost? log truncated?)'}. "
+            f"DIAGNOSE ONLY: `~/bin/agentctl ci-why {rid}`, the CI runners' health (~/bin/ci-runners-page, the "
+            "ci-runner host's systemd units over ssh, read-only), disk, docker, the tunnel. Make NO code change and "
+            "do not rerun anything to get green. If it needs a deploy, a restart or any owner action, run "
+            f"`~/bin/agentctl red block {num} --owner-cause <kind> --cmd \"<the exact command the owner must run>\"` and end with a line "
+            "`BLOCKED ON OWNER: <command>`; otherwise end with `DIAGNOSED: <cause>; durable fix: <what to change, or "
+            "what to log so the next occurrence names its cause>` -- an implementer is dispatched with it at once.")
+
+
+def red_run_task(u: Any, num: Any, rid: Any) -> str:
+    """An ordinary red run: root-cause it and land the fix."""
+    return (f"Fix red run {u['workflow']} #{num} (run id {rid}), failing in "
+            + (f"jobs {', '.join(u['jobs'])} (first: `{u['job']}`)" if len(u.get("jobs") or []) > 1 else f"job `{u['job']}`")
+            + (f" with: {u['line'][:200]!r}" if u.get("line") else "") +
+            f". `~/bin/agentctl ci-why {rid}` explains it. Root-cause it (never rerun to green, never loosen a test "
+            "or a budget to pass), commit the fix with a `Fixes-Red: " + str(num) + "` trailer, and land it with "
+            "`~/bin/agentctl land`. End at `LANDED <sha>`. If you cannot fix it, end with a line "
+            "`GAVE UP: <why>`; if it needs the owner, `~/bin/agentctl red block " + str(num) + " --owner-cause <kind> --cmd \"<command>\"` (only for a cause outside the code that only the owner can act on: never a code red) "
+            "and end `BLOCKED ON OWNER: <command>`.")
+
+
+def owner_decided_note(dec: Any) -> str:
+    """The opening of a red's task once the owner answered its question (`agentctl decide`): act on that answer."""
+    return (f"THE OWNER DECIDED this red: asked {str(dec.get('question'))[:400]!r}, the owner answered "
+            f"{str(dec.get('answer'))[:1500]!r}. Act on exactly that answer (it settles what the fixers could not "
+            "decide) and land the result. If acting on it fails (the land is NOT LANDED, a check rejects it, it "
+            "cannot be done), end `NOT LANDED: <why>` or `GAVE UP: <why>`: the owner is told at once. ")
+
+
+def fixer_task_context(u: Any, o_r: str, num: Any) -> str:
+    """What a red's task gets appended about where it stands: the owner-only repo's rules, an old newest run, the work a
+    previous fixer left, the branch it is on."""
+    task = ""
     if red_owner_only(o_r):  # every task above says "land it": not in an owner-only repo
         task += red_owner_rules(o_r, num)
     if u.get("old_note"):
@@ -179,6 +236,12 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
     if u.get("predicts"):
         task += (f" This red is on branch {u['predicts']}, not main yet: a run of commits that have since landed on main, "
                  "with main's inputs, so main will fail the same way next. Fix it on main before it does.")
+    return task
+
+
+def fixer_task_verdicts(u: Any) -> str:
+    """What the red's own failure line and blame add to its task: a regression or an order dependence, a flake, the blame's note."""
+    task = ""
     if is_regression(u.get("line")):  # THE ORDER VERDICT (classify.py): the control pass failed in default order too
         task += (" REGRESSION, NOT AN ORDER DEPENDENCE: its control pass ran the failing tests again in DEFAULT order at "
                  "the same commit and they failed there too, so the order they ran in is not the cause and no ordering "
@@ -196,7 +259,7 @@ def fixer_prompt(u, wt, brief, resume_note=None, owner=None):
                  "the ordering); do not just retry it.")
     if u.get("blame_note"):  # the red's blame (blame.py): the offending change, its revert, what to do with it
         task += u["blame_note"]
-    return common + task + early_brief_of(u) + (f" {resume_note}" if resume_note else "")
+    return task
 
 
 def early_brief_of(u: dict[str, Any]) -> str:

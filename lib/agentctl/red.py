@@ -4,6 +4,7 @@
 import os
 import re
 import time
+from typing import Any
 from agentctl.core import env_num, err, pct, process_cache, remote
 from agentctl.timefmt import parse_time
 from agentctl.classify import norm_line
@@ -292,6 +293,12 @@ def decided_revert(d, t=None):
 
 
 def red_tier(d, culprit=None, t=None):
+    return red_decided_tier(d, t) or ("infra" if red_wants_infra_tier(d) else red_ladder_tier(d, culprit))
+
+
+def red_decided_tier(d: Any, t: float) -> str | None:
+    """The tier a decision already made fixes -- the crash-loop breaker's `deep`, a decided revert, the blame's verdict
+    (a decided culprit: `blame`; a determined one: its lander revived once) -- or None while the ladder below decides."""
     if (d.get("crash_loop") or {}).get("stage") == "deep":  # the crash-loop breaker moved it up (red_crash_loop)
         return "deep"
     if decided_revert(d, t):
@@ -304,18 +311,32 @@ def red_tier(d, culprit=None, t=None):
         return "blame"
     if who in ("lander", "owner") and not d.get("lander_tried"):
         return "lander"
-    if d.get("kind") in ("infra", "unclear") and d.get("red_kind") != "flake" and not d.get("diagnosis") \
-            and int(d.get("attempts") or 0) < 3:
-        return "infra"
-    last = (d.get("history") or [{}])[-1]
-    conds = {"author": bool((d.get("author") or {}).get("worktree")) and not d.get("author_tried"),
-             "resumable": bool(last.get("session") and last.get("worktree")),
-             "culprit": bool(culprit) and not d.get("reverted") and not d.get("early")}  # early: never
+    return None
+
+
+def red_wants_infra_tier(d: Any) -> bool:
+    """An infra or unclear failure that is no flake and has no diagnosis yet gets the cheap infra tier, three tries."""
+    return d.get("kind") in ("infra", "unclear") and d.get("red_kind") != "flake" and not d.get("diagnosis") \
+        and int(d.get("attempts") or 0) < 3
+
+
+def red_ladder_tier(d: Any, culprit: Any) -> str:
+    """The rung of RED_LADDER for the red's attempts, given who can take it up (its author, its last session, a culprit)."""
+    conds = red_ladder_takers(d, culprit)
     a = min(int(d.get("attempts") or 0), 3)
     for n, cond, tier in RED_LADDER:
         if n == a and (cond is None or conds[cond]):
             return tier
     return "deep"
+
+
+def red_ladder_takers(d: Any, culprit: Any) -> dict[str, bool]:
+    """Which of RED_LADDER's conditions hold: its author's worktree is there to resume, its last session can be, a culprit
+    is named and neither reverted nor an early one."""
+    last = (d.get("history") or [{}])[-1]
+    return {"author": bool((d.get("author") or {}).get("worktree")) and not d.get("author_tried"),
+            "resumable": bool(last.get("session") and last.get("worktree")),
+            "culprit": bool(culprit) and not d.get("reverted") and not d.get("early")}  # early: never
 
 
 def canon_job(job):

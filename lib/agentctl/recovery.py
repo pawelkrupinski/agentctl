@@ -230,48 +230,73 @@ def cmd_inbox(a: argparse.Namespace, store: Any) -> int:
             print(line)
         return 0
     if a.ids[:1] == ["wait"]:
-        if a.ids[1:]:
-            print("usage: agentctl inbox wait [--kinds K,...] [--audience A,...] [--since-ack] [--timeout S] [--forever]")
-            return 2
-        return inbox_wait(a.kinds, a.since_ack, a.timeout, a.verbose, getattr(a, "forever", False),
-                          audience=getattr(a, "audience", None) or "owner")
-    entries = inbox_entries()
-    aud = getattr(a, "audience", None)
-    if aud and aud != "all":
-        want = {x.strip() for x in aud.split(",") if x.strip()}
-        entries = [e for e in entries if alert_audience(e) in want]
-    if a.ids:
-        entries = [e for e in entries if any(e["id"].startswith(i) or any(x.endswith(i) for x in entry_ids(e))
-                                              for i in a.ids)]
-    if a.unread:
-        entries = [e for e in entries if not e["read"]]
+        return inbox_wait_command(a)
+    entries = inbox_matches(a)
     if getattr(a, "count", False):  # every match: a count capped by the listing's --limit read "30 unread" for 44
         print(len(entries))
         return 0
-    if a.limit:
-        entries = entries[-a.limit:]
+    entries = entries[-a.limit:] if a.limit else entries
+    inbox_print(a, entries)
+    if a.ack and entries:
+        inbox_acknowledge(a, entries)
+    return 0
+
+
+def inbox_wait_command(a: argparse.Namespace) -> int:
+    """`agentctl inbox wait [--kinds K,...] [--audience A,...] [--since-ack] [--timeout S] [--forever]`."""
+    if a.ids[1:]:
+        print("usage: agentctl inbox wait [--kinds K,...] [--audience A,...] [--since-ack] [--timeout S] [--forever]")
+        return 2
+    return inbox_wait(a.kinds, a.since_ack, a.timeout, a.verbose, getattr(a, "forever", False),
+                      audience=getattr(a, "audience", None) or "owner")
+
+
+def inbox_matches(a: argparse.Namespace) -> list[dict[str, Any]]:
+    """The inbox entries the audience, the ids and `--unread` of the command line select, oldest first."""
+    entries = entries_of_audience(inbox_entries(), getattr(a, "audience", None))
+    if a.ids:
+        entries = [e for e in entries if entry_named_by(e, a.ids)]
+    return [e for e in entries if not e["read"]] if a.unread else entries
+
+
+def entries_of_audience(entries: list[dict[str, Any]], audience: str | None) -> list[dict[str, Any]]:
+    """The entries addressed to one of the comma-separated audiences (`all` or none: every entry)."""
+    if not audience or audience == "all":
+        return entries
+    want = {x.strip() for x in audience.split(",") if x.strip()}
+    return [e for e in entries if alert_audience(e) in want]
+
+
+def entry_named_by(e: dict[str, Any], ids: list[str]) -> bool:
+    """Whether inbox entry e is the one any of `ids` names: by the start of its id, or the end of one of its ids."""
+    return any(e["id"].startswith(i) or any(x.endswith(i) for x in entry_ids(e)) for i in ids)
+
+
+def inbox_print(a: argparse.Namespace, entries: list[dict[str, Any]]) -> None:
+    """The entries as JSON, as lines (with their tails under --verbose), or the one line saying there are none."""
     if a.json:
         print(json.dumps(entries, indent=1))
     elif not entries:
         print("inbox: no " + ("unread " if a.unread else "") + f"entries ({inbox_dir()})")
     else:
         for e in entries:
-            print(entry_line(e))
-            if a.verbose:
-                for line in e.get("tail") or []:
-                    print(f"    {line}")
-    if a.ack and entries:
-        # ACK ONLY YOUR OWN (2026-10-29 19:00: an agent's `inbox --unread --ack` marked every agent's verdicts read):
-        # --all (the owner, the orchestrator) acks what was listed; an entry named by its WHOLE id is acked whoever's;
-        # otherwise only the caller's. A prefix is no name: `inbox 2026 --ack` matches every entry ever written.
-        mine = entries if getattr(a, "all", False) else [e for e in entries if e["id"] in (a.ids or ()) or own_inbox_entry(e)]
-        os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)
-        for e in mine:
-            open(os.path.join(inbox_dir(), "acked", e["id"]), "a").close()
-        left = len(entries) - len(mine)
-        print(f"inbox: acknowledged {len(mine)} entr{'y' if len(mine) == 1 else 'ies'}"
-              + (f"; {left} left unread for the agents they belong to (`--all` acks them: the owner's)" if left else ""))
-    return 0
+            inbox_print_entry(e, a.verbose)
+
+
+def inbox_print_entry(e: dict[str, Any], verbose: bool) -> None:
+    print(entry_line(e))
+    for line in (e.get("tail") or []) if verbose else []:
+        print(f"    {line}")
+
+
+def inbox_acknowledge(a: argparse.Namespace, entries: list[dict[str, Any]]) -> None:
+    mine = entries if getattr(a, "all", False) else [e for e in entries if e["id"] in (a.ids or ()) or own_inbox_entry(e)]
+    os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)
+    for e in mine:
+        open(os.path.join(inbox_dir(), "acked", e["id"]), "a").close()
+    left = len(entries) - len(mine)
+    print(f"inbox: acknowledged {len(mine)} entr{'y' if len(mine) == 1 else 'ies'}"
+          + (f"; {left} left unread for the agents they belong to (`--all` acks them: the owner's)" if left else ""))
 
 
 def caller_identity():

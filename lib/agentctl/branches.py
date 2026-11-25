@@ -8,6 +8,7 @@ import re
 import sys
 import time
 import urllib.parse
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import dispatches_dir, env_num, git_ok, remote, slug
 from agentctl.timefmt import ts
@@ -316,21 +317,37 @@ def parse_fields(fields):
 def cmd_dispatch(a):
     o_r = slug(a.repo) if getattr(a, "repo", None) else default_repo()
     if a.dcmd == "list":
-        recs = dispatch_records()
-        if not recs:
-            print(f"dispatch: no records ({dispatches_dir()})")
-        for r in recs:
-            gone = owner_gone(r)
-            state = "unmatched" if r.get("source") == "unmatched" else "owner gone" if gone else "owner alive" if gone is False else "no owner"
-            print(f"{r.get('at', '?')} {r.get('branch') or ''} run {r.get('run_id') or '?'} {r.get('workflow') or ''}: "
-                  f"{owner_text(r) if r.get('source') != 'unmatched' else '-'} [{state}] {r.get('purpose') or ''}")
-        return 0
+        return dispatch_list()
     inputs = parse_fields(a.field)
     if a.dcmd == "record":
         rec = record_dispatch(branch=a.branch, run_id=a.run, workflow=a.workflow, purpose=a.purpose, inputs=inputs or None)
         print(f"dispatch: recorded {rec.get('branch') or ''} run {rec.get('run_id') or '?'} → owner {owner_text(rec)}")
         return 0
-    # run
+    return dispatch_run(a, o_r, inputs)
+
+
+def dispatch_list() -> int:
+    """`agentctl dispatch list`: every recorded dispatch, newest last, with whether its owner is still there."""
+    recs = dispatch_records()
+    if not recs:
+        print(f"dispatch: no records ({dispatches_dir()})")
+    for r in recs:
+        unmatched = r.get("source") == "unmatched"
+        print(f"{r.get('at', '?')} {r.get('branch') or ''} run {r.get('run_id') or '?'} {r.get('workflow') or ''}: "
+              f"{'-' if unmatched else owner_text(r)} [{dispatch_owner_state(r, unmatched)}] {r.get('purpose') or ''}")
+    return 0
+
+
+def dispatch_owner_state(r: Any, unmatched: bool) -> str:
+    """Where a recorded dispatch's owner stands: unmatched (no owner to find), gone, alive, or none recorded."""
+    if unmatched:
+        return "unmatched"
+    gone = owner_gone(r)
+    return "owner gone" if gone else "owner alive" if gone is False else "no owner"
+
+
+def dispatch_run(a: Any, o_r: str, inputs: Any) -> int:
+    """`agentctl dispatch run`: start the workflow on a.ref, record the dispatch, and find the run it created."""
     t0 = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=60)
     args = ["workflow", "run", a.workflow, "--ref", a.ref]
     for k, v in inputs.items():
@@ -343,18 +360,7 @@ def cmd_dispatch(a):
     rec = record_dispatch(branch=a.ref, run_id=None, workflow=a.workflow,
                           purpose=a.purpose, inputs=inputs,
                           key=None if a.ref != "main" else f"main-{re.sub(r'[^A-Za-z0-9._-]', '_', a.workflow)}-{int(time.time())}")
-    rid = None
-    for _ in range(int(env_num("AGENTCTL_DISPATCH_FIND", 12))):
-        try:
-            # listing: the run just dispatched, created since t0; not listed yet is retried (DISPATCH_FIND), never 'none'
-            runs = gh_json(o_r, "run", "list", "--workflow", a.workflow, "--branch", a.ref, "--limit", "5", "--json", RUN_FIELDS)
-            fresh = [x for x in runs if str(x.get("createdAt", "")) >= t0.strftime("%Y-%m-%dT%H:%M:%SZ")]
-            if fresh:
-                rid = max(x["databaseId"] for x in fresh)
-                break
-        except (Exception, SystemExit):
-            pass
-        time.sleep(env_num("AGENTCTL_DISPATCH_FIND_POLL", 5))
+    rid = dispatched_run_id(o_r, a, t0)
     if rid:
         rec = save_dispatch(dict(rec, run_id=rid), None if a.ref != "main" else dispatch_key(None, rid))
         write_json(dispatches_dir("inputs", f"{rid}.json"), inputs)
@@ -362,3 +368,16 @@ def cmd_dispatch(a):
     return 0
 
 
+def dispatched_run_id(o_r: str, a: Any, t0: Any) -> Any:
+    """The newest run of a.workflow on a.ref created since t0, or None once DISPATCH_FIND polls found none yet."""
+    for _ in range(int(env_num("AGENTCTL_DISPATCH_FIND", 12))):
+        try:
+            # listing: the run just dispatched, created since t0; not listed yet is retried (DISPATCH_FIND), never 'none'
+            runs = gh_json(o_r, "run", "list", "--workflow", a.workflow, "--branch", a.ref, "--limit", "5", "--json", RUN_FIELDS)
+            fresh = [x for x in runs if str(x.get("createdAt", "")) >= t0.strftime("%Y-%m-%dT%H:%M:%SZ")]
+            if fresh:
+                return max(x["databaseId"] for x in fresh)
+        except (Exception, SystemExit):
+            pass
+        time.sleep(env_num("AGENTCTL_DISPATCH_FIND_POLL", 5))
+    return None

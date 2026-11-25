@@ -35,11 +35,9 @@ cognitive	answer_regen_holds	15
 cognitive	apply_entry	20
 cognitive	assemble	24
 cognitive	await_verdict	11
-cognitive	backlog_reconcile	23
 cognitive	base_failure_keys	28
 cognitive	baseline_failures	16
 cognitive	batch_check	19
-cognitive	batch_step	122
 cognitive	bg_final_text	13
 cognitive	bg_spent	16
 cognitive	bg_turn	14
@@ -77,10 +75,8 @@ cognitive	cmd_checks	12
 cognitive	cmd_ci_why	14
 cognitive	cmd_cleanup	96
 cognitive	cmd_config	21
-cognitive	cmd_dispatch	41
 cognitive	cmd_env	35
 cognitive	cmd_gov	56
-cognitive	cmd_inbox	41
 cognitive	cmd_issue	19
 cognitive	cmd_land	15
 cognitive	cmd_laptop	15
@@ -93,7 +89,6 @@ cognitive	cmd_recover	15
 cognitive	cmd_red	70
 cognitive	cmd_revert	11
 cognitive	cmd_state	12
-cognitive	cmd_store	28
 cognitive	cmd_supersede	22
 cognitive	cmd_wait	18
 cognitive	cmd_watchdog	26
@@ -124,7 +119,6 @@ cognitive	fix_path_unread	12
 cognitive	fix_replay_refusal	25
 cognitive	fix_replay_trailers	30
 cognitive	fix_workflow_jobs	14
-cognitive	fixer_prompt	39
 cognitive	fixer_verdict	14
 cognitive	fixer_work	12
 cognitive	fixers_land_watch	33
@@ -152,7 +146,6 @@ cognitive	hunk_take	11
 cognitive	hunks_resolve	26
 cognitive	identity_change	12
 cognitive	idle_servers	14
-cognitive	inbox_wait	65
 cognitive	inv_w1	44
 cognitive	inv_wr	26
 cognitive	job_ever_green	23
@@ -163,8 +156,6 @@ cognitive	jvm_scan	24
 cognitive	kick_processor	11
 cognitive	land_calls	19
 cognitive	land_hold	13
-cognitive	land_in_worktree	41
-cognitive	land_loop	39
 cognitive	land_status_entry	25
 cognitive	land_until_done	28
 cognitive	lander_index	17
@@ -190,7 +181,6 @@ cognitive	main_workflow_files	28
 cognitive	maybe_publish_gate	16
 cognitive	maybe_upkeep	12
 cognitive	mem_stats	12
-cognitive	metrics_text	26
 cognitive	migrate_local_queue	19
 cognitive	name_causes	32
 cognitive	note_batch_progress	15
@@ -252,7 +242,6 @@ cognitive	red_decide	44
 cognitive	red_decision_failed	16
 cognitive	red_diagnosis_step	27
 cognitive	red_dispatch	29
-cognitive	red_dispatcher	110
 cognitive	red_enforce	18
 cognitive	red_failed_steps	16
 cognitive	red_family	16
@@ -293,7 +282,6 @@ cognitive	red_spawn	28
 cognitive	red_step	106
 cognitive	red_tick	53
 cognitive	red_tick_others	13
-cognitive	red_tier	21
 cognitive	red_unblock	16
 cognitive	red_unheld	19
 cognitive	red_units	16
@@ -310,9 +298,7 @@ cognitive	regenerate	53
 cognitive	release_local_leftovers	15
 cognitive	relevant_lines	16
 cognitive	relink_worktrees	14
-cognitive	remote_check	43
 cognitive	remote_check_lines	24
-cognitive	remote_poll	42
 cognitive	remote_progress	12
 cognitive	remote_run_listed	13
 cognitive	render_red_status	52
@@ -337,7 +323,6 @@ cognitive	runs_of_number	17
 cognitive	sbt_serving	18
 cognitive	sbt_stuck_reasons	24
 cognitive	scala_code	24
-cognitive	selection_change	18
 cognitive	selection_modules	11
 cognitive	session_activity	15
 cognitive	session_transcripts	11
@@ -394,7 +379,6 @@ cognitive	workflow_timeout_bound	22
 cognitive	workflow_triggers	26
 cognitive	write_snapshot	12
 copies	ask	2
-copies	batch	4
 copies	blame	2
 copies	blame|blamerecords	2
 copies	buildview	2
@@ -441,11 +425,9 @@ cyclomatic	allowed_path	12
 cyclomatic	answer_regen_holds	14
 cyclomatic	apply_entry	31
 cyclomatic	assemble	15
-cyclomatic	backlog_reconcile	19
 cyclomatic	base_failure_keys	19
 cyclomatic	baseline_failures	14
 cyclomatic	batch_check	17
-cyclomatic	batch_step	82
 cyclomatic	bg_final_text	11
 cyclomatic	bg_spent	15
 cyclomatic	bg_turn	14
@@ -486,10 +468,8 @@ cyclomatic	cmd_checks	17
 cyclomatic	cmd_ci_why	11
 cyclomatic	cmd_cleanup	45
 cyclomatic	cmd_config	15
-cyclomatic	cmd_dispatch	29
 cyclomatic	cmd_env	27
 cyclomatic	cmd_gov	49
-cyclomatic	cmd_inbox	40
 cyclomatic	cmd_issue	13
 cyclomatic	cmd_land	15
 cyclomatic	cmd_land_precheck	15
@@ -502,7 +482,6 @@ cyclomatic	cmd_prepush	12
 cyclomatic	cmd_recover	16
 cyclomatic	cmd_red	47
 cyclomatic	cmd_state	11
-cyclomatic	cmd_store	17
 cyclomatic	cmd_supersede	18
 cyclomatic	cmd_wait	12
 cyclomatic	cmd_watchdog	22
@@ -533,7 +512,6 @@ cyclomatic	fix_replay_refusal	23
 cyclomatic	fix_replay_trailers	16
 cyclomatic	fix_workflow_jobs	13
 cyclomatic	fixer_env	12
-cyclomatic	fixer_prompt	36
 cyclomatic	fixer_work	13
 cyclomatic	fixers_land_watch	23
 cyclomatic	forge_run_list	15
@@ -565,7 +543,6 @@ cyclomatic	hunk_take	13
 cyclomatic	hunks_resolve	18
 cyclomatic	identity_change	14
 cyclomatic	idle_servers	11
-cyclomatic	inbox_wait	35
 cyclomatic	inbox_write	11
 cyclomatic	inv_w1	34
 cyclomatic	inv_wb	15
@@ -581,8 +558,6 @@ cyclomatic	jvm_candidates	35
 cyclomatic	jvm_reap	23
 cyclomatic	jvm_scan	25
 cyclomatic	land_calls	12
-cyclomatic	land_in_worktree	31
-cyclomatic	land_loop	25
 cyclomatic	land_status_entry	25
 cyclomatic	land_until_done	25
 cyclomatic	lander_note_landed	18
@@ -607,7 +582,6 @@ cyclomatic	lsof_cwds	12
 cyclomatic	main_workflow_files	11
 cyclomatic	maybe_upkeep	11
 cyclomatic	mem_stats	13
-cyclomatic	metrics_text	24
 cyclomatic	migrate_local_queue	13
 cyclomatic	name_causes	22
 cyclomatic	note_batch_progress	18
@@ -673,7 +647,6 @@ cyclomatic	red_decision_block	12
 cyclomatic	red_decision_failed	14
 cyclomatic	red_diagnosis_step	32
 cyclomatic	red_dispatch	31
-cyclomatic	red_dispatcher	66
 cyclomatic	red_failed_steps	23
 cyclomatic	red_families	11
 cyclomatic	red_family	23
@@ -720,7 +693,6 @@ cyclomatic	red_step	76
 cyclomatic	red_stop_holder	12
 cyclomatic	red_tick	40
 cyclomatic	red_tick_others	11
-cyclomatic	red_tier	24
 cyclomatic	red_unblock	14
 cyclomatic	red_unheld	15
 cyclomatic	red_units	13
@@ -737,10 +709,8 @@ cyclomatic	regen_hold_overdue	22
 cyclomatic	regenerate	31
 cyclomatic	release_local_leftovers	11
 cyclomatic	relevant_lines	13
-cyclomatic	remote_check	28
 cyclomatic	remote_check_lines	16
 cyclomatic	remote_ghost	13
-cyclomatic	remote_poll	28
 cyclomatic	remote_progress	11
 cyclomatic	render_red_status	43
 cyclomatic	render_status_line	20
@@ -765,7 +735,6 @@ cyclomatic	run_watched	11
 cyclomatic	sbt_stuck_reasons	17
 cyclomatic	scala_code	13
 cyclomatic	scala_statements	12
-cyclomatic	selection_change	16
 cyclomatic	server_steps	11
 cyclomatic	session_worktrees	19
 cyclomatic	set_change	18
@@ -826,7 +795,6 @@ method-lines	_tick_changes_pass	86
 method-lines	_watch	81
 method-lines	alert_probe	55
 method-lines	alert_write	59
-method-lines	batch_step	134
 method-lines	build_view	65
 method-lines	check_batch	119
 method-lines	ci_why	182
@@ -839,12 +807,8 @@ method-lines	dry_run	53
 method-lines	expire_cache	60
 method-lines	explain_run_jobs	119
 method-lines	fix_check	51
-method-lines	fixer_prompt	124
 method-lines	gov_admit	80
-method-lines	inbox_wait	55
 method-lines	jvm_reap	61
-method-lines	land_in_worktree	74
-method-lines	land_loop	61
 method-lines	landing_records	109
 method-lines	live_registry_read	53
 method-lines	live_stream	53
@@ -857,7 +821,6 @@ method-lines	red_block	130
 method-lines	red_claim	62
 method-lines	red_decide	60
 method-lines	red_dispatch	65
-method-lines	red_dispatcher	116
 method-lines	red_fix_facts	62
 method-lines	red_fix_pending	260
 method-lines	red_fixer	210
@@ -870,8 +833,6 @@ method-lines	red_step	157
 method-lines	red_tick	100
 method-lines	red_view_state	85
 method-lines	regenerate	63
-method-lines	remote_check	79
-method-lines	remote_poll	68
 method-lines	retire_jobs_of	55
 method-lines	stats_pass	71
 method-lines	status_page_server	103

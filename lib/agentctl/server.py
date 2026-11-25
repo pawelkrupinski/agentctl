@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import urllib.parse
+from typing import Any
 from agentctl.core import env_num, err, git, remote, state_root
 from agentctl.timefmt import iso_epoch, now, ts
 from agentctl.store import Store, store_errors
@@ -171,8 +172,24 @@ def supersede_stranded(d, e, st):
 def metrics_text(st, now_=None):
     """The Prometheus text the module's agentctl-metrics copies to node-exporter (agentctl.rules' gauges)."""
     t = now_ if now_ is not None else st.clock()
-    snap = state_read()
-    tick = float(snap.get("tick_at") or 0)
+    two = 2 * env_num("AGENTCTL_TICK", TICK)
+    rows = [("agentctl_reconciler_tick_timestamp", "unix time the last tick finished", float(state_read().get("tick_at") or 0)),
+            ("agentctl_oldest_change_age_seconds", "age of the oldest non-terminal change, not counting red main time",
+             oldest_change_age(st, t)),
+            ("agentctl_red_unleased_seconds", "longest a red on main has had no lease, fix, block or offer",
+             longest_unleased_red(st, t)),
+            ("agentctl_leases_expired_unreaped", "leases past their TTL by more than 2 ticks with their item unmoved",
+             unreaped_leases(st, t, two)),
+            ("agentctl_items_past_deadline", "items past their state's deadline by more than 2 ticks",
+             items_past_deadline(st, t, two))]
+    out = []
+    for name, help_, v in rows:
+        out += [f"# HELP {name} {help_}.", f"# TYPE {name} gauge", f"{name} {float(v):.0f}"]
+    return "\n".join(out) + "\n"
+
+
+def oldest_change_age(st: Any, t: float) -> float:
+    """The age of the oldest non-terminal change, not counting the time main was red (the red accumulator's growth)."""
     acc = float(st.meta_get("red_accum", 0) or 0)
     ages = []
     for it in st.items("change"):
@@ -182,13 +199,22 @@ def metrics_text(st, now_=None):
         since = float(dd.get("submitted_at") or it["entered_at"])
         acc0 = dd.get("red_accum0")
         ages.append(max(0.0, (t - since) - max(0.0, acc - float(acc if acc0 is None else acc0))))
+    return max(ages) if ages else 0
+
+
+def longest_unleased_red(st: Any, t: float) -> float:
+    """The longest a red on main has had no lease, fix, block or offer (0 when the store cannot say)."""
     unleased = 0.0
     try:
         for it in red_unheld(st):
             unleased = max(unleased, t - float(it.get("entered_at") or t))
     except Exception:
         pass
-    two = 2 * env_num("AGENTCTL_TICK", TICK)
+    return unleased
+
+
+def unreaped_leases(st: Any, t: float, two: float) -> int:
+    """How many leased reds and checking changes hold a lease that expired more than `two` s ago with the item unmoved."""
     unreaped = 0
     for typ, state, lease in (("red", "leased", lambda i: red_lease(i["data"]["key"])),
                               ("change", "checking", lambda i: f"check/{i['id']}")):
@@ -199,19 +225,13 @@ def metrics_text(st, now_=None):
                 continue
             if row and row["expires_at"] < t - two and row["expires_at"] > it["entered_at"]:
                 unreaped += 1
-    past = sum(1 for typ in MACHINES for it in st.items(typ)
+    return unreaped
+
+
+def items_past_deadline(st: Any, t: float, two: float) -> int:
+    """How many non-terminal items are past their state's deadline by more than `two` s."""
+    return sum(1 for typ in MACHINES for it in st.items(typ)
                if not machine_state(typ, it["state"]).terminal and it["deadline"] < t - two)
-    rows = [("agentctl_reconciler_tick_timestamp", "unix time the last tick finished", tick),
-            ("agentctl_oldest_change_age_seconds", "age of the oldest non-terminal change, not counting red main time",
-             max(ages) if ages else 0),
-            ("agentctl_red_unleased_seconds", "longest a red on main has had no lease, fix, block or offer", unleased),
-            ("agentctl_leases_expired_unreaped", "leases past their TTL by more than 2 ticks with their item unmoved",
-             unreaped),
-            ("agentctl_items_past_deadline", "items past their state's deadline by more than 2 ticks", past)]
-    out = []
-    for name, help_, v in rows:
-        out += [f"# HELP {name} {help_}.", f"# TYPE {name} gauge", f"{name} {float(v):.0f}"]
-    return "\n".join(out) + "\n"
 
 
 class StoreAPI:
@@ -351,25 +371,40 @@ def cmd_store(a):
     """`agentctl store serve --listen ADDR:PORT --allow-user U... --metrics-user U...` (ci-runner);
     `agentctl store use URL` (the laptop: which store its sync and agents use)."""
     if a.scmd == "token":
-        if a.tcmd == "issue":
-            tid, tok = store_token_issue(a.user, a.name)
-            err(f"store token {tid} for {a.user} issued (revoke: agentctl store token revoke {tid})")
-            print(tok)
-        elif a.tcmd == "revoke":
-            rec = store_token_revoke(a.id)
-            print(f"revoked {a.id} ({rec.get('user')} {rec.get('name') or ''})".rstrip())
-        else:
-            for tid, rec in sorted(store_tokens_load().items(), key=lambda x: x[1].get("issued", "")):
-                print(f"{tid}  {rec.get('user'):<14} {rec.get('name') or '-':<14} issued {rec.get('issued')}"
-                      + (f"  REVOKED {rec['revoked']}" if rec.get("revoked") else ""))
-        return 0
+        return store_token_command(a)
     if a.scmd == "use":
-        RemoteStore(a.url).state()  # it answers, with this token, before anything relies on it
-        os.makedirs(state_root(), exist_ok=True)
-        with open(state_root("store.url"), "w") as f:
-            f.write(a.url + "\n")
-        print(f"store: {a.url} (every agentctl process here; the sync re-reads it at its next start)")
-        return 0
+        return store_use_command(a)
+    return store_serve_command(a)
+
+
+def store_token_command(a: Any) -> int:
+    """`agentctl store token issue|revoke|list`: the store's tokens, the issued one printed on stdout."""
+    if a.tcmd == "issue":
+        tid, tok = store_token_issue(a.user, a.name)
+        err(f"store token {tid} for {a.user} issued (revoke: agentctl store token revoke {tid})")
+        print(tok)
+    elif a.tcmd == "revoke":
+        rec = store_token_revoke(a.id)
+        print(f"revoked {a.id} ({rec.get('user')} {rec.get('name') or ''})".rstrip())
+    else:
+        for tid, rec in sorted(store_tokens_load().items(), key=lambda x: x[1].get("issued", "")):
+            print(f"{tid}  {rec.get('user'):<14} {rec.get('name') or '-':<14} issued {rec.get('issued')}"
+                  + (f"  REVOKED {rec['revoked']}" if rec.get("revoked") else ""))
+    return 0
+
+
+def store_use_command(a: Any) -> int:
+    """`agentctl store use URL`: this machine's store from now on, once it answers with this token."""
+    RemoteStore(a.url).state()  # it answers, with this token, before anything relies on it
+    os.makedirs(state_root(), exist_ok=True)
+    with open(state_root("store.url"), "w") as f:
+        f.write(a.url + "\n")
+    print(f"store: {a.url} (every agentctl process here; the sync re-reads it at its next start)")
+    return 0
+
+
+def store_serve_command(a: Any) -> int:
+    """`agentctl store serve`: the file store behind its API, its leases extended by the downtime, until stopped."""
     host, _, port = a.listen.rpartition(":")
     st = Store(path=state_root("store.db"))
     gap = store_grace(st)
@@ -380,20 +415,22 @@ def cmd_store(a):
                          "(`agentctl store token issue --user <login>` makes it)")
     api = StoreAPI(st, a.allow_user or [], a.metrics_user or [])
     srv = store_server(api, host or "127.0.0.1", int(port or STORE_PORT))
-
-    def alive():
-        while True:
-            time.sleep(30)
-            try:
-                st.meta_set("last_alive", time.time())
-            except Exception as e:
-                err(f"store: last_alive not written ({e})")
-    threading.Thread(target=alive, daemon=True).start()
+    threading.Thread(target=store_alive_beat, args=(st,), daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=srv.shutdown, daemon=True).start())
     err(f"store: serving {state_root('store.db')} on {host}:{port}, auth {a.auth} (allow {','.join(api.allow) or '-'}; metrics "
         f"{','.join(api.metrics) or '-'})")
     srv.serve_forever()
     return 0
+
+
+def store_alive_beat(st: Any) -> None:
+    """Every 30 s the store's `last_alive` (store_grace reads it at the next start to extend the leases by the downtime)."""
+    while True:
+        time.sleep(30)
+        try:
+            st.meta_set("last_alive", time.time())
+        except Exception as e:
+            err(f"store: last_alive not written ({e})")
 
 
 # A REVOKE NEEDS NO SECRET, SO THE ROLE GUARDS IT TOO (2026-11-19: all night every family owner ended "STOPPED: the

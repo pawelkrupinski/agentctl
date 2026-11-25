@@ -11,6 +11,7 @@ import stat
 import sys
 import threading
 import time
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import branch_of, err, git, remote, scratch, slug
 from agentctl.timefmt import ts
@@ -189,65 +190,100 @@ def land_in_worktree(repo, a, clock, store):
         print(f"NOT LANDED: the working tree has uncommitted changes ({len(dirty.splitlines())} file(s)). Commit them, or "
               "pass --stash to set them aside in a named stash and restore them afterwards.")
         return 1
-    if a.branch:
-        r = sh("git", "rev-parse", "--abbrev-ref", "HEAD")
-        if r.stdout.strip() != a.branch:
-            if dirty:
-                print("NOT LANDED: --branch with a dirty tree; commit first")
-                return 1
-            r = sh("git", "switch", a.branch)
-            if r.returncode:
-                print(f"NOT LANDED: cannot switch to {a.branch}: {r.stderr.strip()}")
-                return 1
+    if a.branch and not land_on_branch(a.branch, dirty, sh):
+        return 1
     try:
         if dirty:
             stash = Stash(repo)
             stash.save()
             err(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
-        if getattr(a, "until_done", False):  # the whole tail: submit, wait, clean up (queueuntil.py LAND --UNTIL-DONE)
-            if not queue_mode(repo, a):
-                print("NOT LANDED: --until-done is the land queue's (movies); it takes no --follow / --no-watch")
-                return 1
-            return land_until_done(repo, main_ref, sh, a, clock, store)
-        if queue_mode(repo, a):  # THE LAND QUEUE: rebase, guard, QUEUED -- the checks and the push are the processor's
-            return enqueue(repo, main_ref, sh, a, clock, store)
-        a.landed_sha, a.pushed_at, a.waiting = None, None, None
-        rc = None
-        for round_ in range(LAND_PRECHECK_ROUNDS + 1):
-            # The long checks first, WITHOUT the lock (the last round: under it, so a lander always finishes).
-            a.prechecked = None
-            if round_ < LAND_PRECHECK_ROUNDS:
-                rc = precheck(repo, main_ref, sh, log_path, a, clock, store)
-                if rc is not None:
-                    break
-            with land_lock(repo, clock, store) as held:
-                if not held:
-                    print("NOT LANDED: timed out waiting for the landing lock (another land is running its checks); "
-                          "land again.")
-                    return 1
-                rc = land_loop(repo, main_ref, sh, log_path, a, clock, store)
-            if rc != MAIN_MOVED:
-                break
-            err(f"{remote()}/main moved since the check: checking again on it, outside the lock")
+        queued = land_queued(repo, main_ref, sh, a, clock, store)
+        if queued is not None:
+            return queued
+        rc = land_rounds(repo, main_ref, sh, log_path, a, clock, store)
     finally:
         if stash and not stash.restore():
             print(f"WARNING: local changes are in stash {stash.name}, not restored")
-    if rc == 0 and a.waiting and not getattr(a, "follow", False):
-        return 0  # the processor lands it; LANDED / NOT LANDED and the WATCH verdict go to `agentctl inbox`
-    if rc == 0 and a.waiting:  # --follow: wait here for the batch, then watch
-        rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"], clock, store, close=None if getattr(a, "keep_worktree", False) else repo)
+    return land_followed(repo, a, rc, clock, store)
+
+
+def land_queued(repo: str, main_ref: Any, sh: Any, a: Any, clock: Any, store: Any) -> Any:
+    """land's exit code when the land queue takes the change (--until-done: submit, wait, clean up; else rebase, guard,
+    QUEUED -- the checks and the push are the processor's); None when it lands directly."""
+    if getattr(a, "until_done", False):  # the whole tail: submit, wait, clean up (queueuntil.py LAND --UNTIL-DONE)
+        if not queue_mode(repo, a):
+            print("NOT LANDED: --until-done is the land queue's (movies); it takes no --follow / --no-watch")
+            return 1
+        return land_until_done(repo, main_ref, sh, a, clock, store)
+    if queue_mode(repo, a):  # THE LAND QUEUE: rebase, guard, QUEUED -- the checks and the push are the processor's
+        return enqueue(repo, main_ref, sh, a, clock, store)
+    return None
+
+
+def land_on_branch(branch: str, dirty: Any, sh: Any) -> bool:
+    """True when the worktree is on `branch` (switched there if need be); else NOT LANDED is printed and it is False."""
+    r = sh("git", "rev-parse", "--abbrev-ref", "HEAD")
+    if r.stdout.strip() == branch:
+        return True
+    if dirty:
+        print("NOT LANDED: --branch with a dirty tree; commit first")
+        return False
+    r = sh("git", "switch", branch)
+    if r.returncode:
+        print(f"NOT LANDED: cannot switch to {branch}: {r.stderr.strip()}")
+        return False
+    return True
+
+
+def land_rounds(repo: str, main_ref: Any, sh: Any, log_path: Any, a: Any, clock: Any, store: Any) -> Any:
+    """The direct land's rounds: the long checks outside the landing lock, then the push under it; checked again when
+    main moved in between. Returns land's exit code (1, with NOT LANDED printed, when the lock timed out)."""
+    a.landed_sha, a.pushed_at, a.waiting = None, None, None
+    rc = None
+    for round_ in range(LAND_PRECHECK_ROUNDS + 1):
+        # The long checks first, WITHOUT the lock (the last round: under it, so a lander always finishes).
+        a.prechecked = None
+        if round_ < LAND_PRECHECK_ROUNDS:
+            rc = precheck(repo, main_ref, sh, log_path, a, clock, store)
+            if rc is not None:
+                break
+        with land_lock(repo, clock, store) as held:
+            if not held:
+                print("NOT LANDED: timed out waiting for the landing lock (another land is running its checks); "
+                      "land again.")
+                return 1
+            rc = land_loop(repo, main_ref, sh, log_path, a, clock, store)
+        if rc != MAIN_MOVED:
+            break
+        err(f"{remote()}/main moved since the check: checking again on it, outside the lock")
+    return rc
+
+
+def land_followed(repo: str, a: Any, rc: Any, clock: Any, store: Any) -> Any:
+    """What follows a land that returned rc: nothing for a change the processor lands, else (--follow) the wait for its
+    batch and the watch of main's CI, or the watch item whose verdict goes to the inbox."""
+    follow = getattr(a, "follow", False)
+    if rc == 0 and a.waiting:
+        if not follow:
+            return 0  # the processor lands it; LANDED / NOT LANDED and the WATCH verdict go to `agentctl inbox`
+        keep = getattr(a, "keep_worktree", False)  # --follow: wait here for the batch, then watch
+        rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"], clock, store, close=None if keep else repo)
     if rc != 0 or not a.landed_sha or getattr(a, "no_watch", False):
         return rc
+    return land_watched(repo, a, clock, store)
+
+
+def land_watched(repo: str, a: Any, clock: Any, store: Any) -> int:
+    """The watch of the landed push: its item, whose verdict goes to the inbox, or (--follow) main's CI watched here."""
+    close = None if getattr(a, "keep_worktree", False) else repo
     if not getattr(a, "follow", False):  # land ends at LANDED; its watch item's verdict goes to the inbox
-        start_watch(store, repo, a.landed_sha, a.pushed_at, worktree=repo,
-                    close=None if getattr(a, "keep_worktree", False) else repo,
+        start_watch(store, repo, a.landed_sha, a.pushed_at, worktree=repo, close=close,
                     session=os.environ.get("CLAUDE_CODE_SESSION_ID"))
         print(f"watching {a.landed_sha[:10]}: its WATCH verdict goes to `agentctl inbox`", flush=True)
         return 0
     # the lock is free again: the next lander goes while this one watches main's CI; on WATCH OK the worktree it ran
     # from is closed when proven merged (close_worktree), unless --keep-worktree
-    return watch_landed(repo, a.landed_sha, a.pushed_at, clock, store, close=None if getattr(a, "keep_worktree", False) else repo,
-                        fixes=getattr(a, "fixes", None) or ())
+    return watch_landed(repo, a.landed_sha, a.pushed_at, clock, store, close=close, fixes=getattr(a, "fixes", None) or ())
 
 
 MAIN_MOVED = "main moved"  # land_loop: the check outside the lock no longer covers origin/main
@@ -273,67 +309,112 @@ def proven_push(repo, head, main_ref, log_path, a, store):
     return 1
 
 
+PUSH_AGAIN = "push again"  # push_verdict: the push lost a race or failed remote-side; land_loop syncs and pushes again
+
+
 def land_loop(repo, main_ref, sh, log_path, a, clock, store):
     for attempt in range(LAND_RETRIES + 1):
-        lock_note("fetch and rebase")
-        rc, head = sync(repo, main_ref, sh, clock, store, getattr(a, "release_hold", False))
+        rc, head, reds = land_synced(repo, main_ref, sh, a, clock, store, log_path)
         if rc is not None:
             return rc
-        reds = gate_reds(repo) if waiting_supported(repo) else set()
-        if reds and must_wait(repo, waiting_commits(repo, f"{remote()}/main", head), reds, store):
-            # checked already (before the lock, without the gate): only the cherry-pick onto `waiting` here
-            return join(store, repo, log_path, a, head)
-        hook = precheck_hook(repo)
-        prechecked = getattr(a, "prechecked", None)
-        if hook and prechecked and prechecked != (head, git(repo, "rev-parse", main_ref).strip()):
-            # main moved since the check outside the lock: give the lock back and check again outside it
-            a.prechecked = None
-            return MAIN_MOVED
-        if hook and not prechecked:
-            # CHECK FIRST: the hook's dry run over exactly what the push will carry (its pass is stored, so the push's own
-            # hook run reuses it in seconds). A long hook inside `git push` holds the push's ssh connection idle, and a
-            # tunnel drop kills it after "all clear" (2026-10-23); the area tests make long hooks the norm.
-            rc = dry_run(repo, hook, head, log_path, attempt + 1, clock, store,
-                         cls=gov_class_of(repo, waiting_commits(repo, f"{remote()}/main", head), reds), a=a)
-            if rc is not None:
-                return rc
+        rc = land_check_first(repo, main_ref, log_path, a, clock, store, attempt, head, reds)
+        if rc is not None:
+            return rc
         a.prechecked = None  # a retry after a push race checks its new base again
-        try:  # the runs the pushed commits claim to fix: the watch verifies them
-            a.fixes = sorted(fixes_of(repo, waiting_commits(repo, f"{remote()}/main", head), store))
-        except Exception:
-            a.fixes = []
-        try:  # THE LANDER (lander.py): what this push carries, keyed so the commits are found on main again
-            a.lander_keys = commit_keys(repo, f"{remote()}/main", head)
-        except Exception:
-            a.lander_keys = []
-        err(f"pushing {head[:10]} to {remote()}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
-        lock_note(f"push of {head[:10]}")
-        a.pushed_at = clock.time()
-        rc, out = run_watched(push_argv(remote(), head), repo, tool_env(), log_path, "push", **push_bounds())
-        if rc == 0:
-            mark_gate_dirty()
-        with open(log_path, "a") as f:
-            f.write(f"=== attempt {attempt + 1} {ts()} {head}\n{out}\n")
-        if rc is None:
-            return stalled("push (git push and its pre-push hook)", out, log_path)
-        if rc == 0:
-            return proven_push(repo, head, main_ref, log_path, a, store)
-        if RACE.search(out) and attempt < LAND_RETRIES:
-            err(f"push race ({RACE.search(out).group(0)}): refetch, rebase, retry")
-            clock.sleep(min(30, 2 + 3 * attempt))
-            continue
-        if RACE.search(out) and not REDGATE.search(out):
-            print(f"NOT LANDED: still racing after {LAND_RETRIES} retries ({RACE.search(out).group(0)}); try again shortly.")
-            return 1
-        remote_fault = TRANSIENT_PUSH.search(out or "")
-        if remote_fault and attempt < LAND_RETRIES:  # the remote's (or the network's) fault: retried, never the change's
-            err(f"push failed remote-side ({remote_fault.group(0)}): retry")
-            clock.sleep(min(60, 5 + 10 * attempt))
-            continue
-        return refused(store, repo, out, log_path, f"the push failed remote-side ({remote_fault.group(0)}), {LAND_RETRIES} "
-                       "times: the forge's fault, not the change's -- land again later" if remote_fault else
-                       "the push failed (pre-push hook or remote)")
+        land_claims(repo, a, head, store)
+        verdict = land_push(repo, main_ref, log_path, a, clock, store, attempt, head)
+        if verdict != PUSH_AGAIN:
+            return verdict
     return 1
+
+
+def land_synced(repo: str, main_ref: Any, sh: Any, a: Any, clock: Any, store: Any, log_path: Any) -> tuple[Any, str | None, set[str]]:
+    """(land's exit code or None, the head synced onto main, the gate's reds): the sync's NOT LANDED, or the change joined
+    to `waiting` while main is red, decide here; else the push goes on."""
+    lock_note("fetch and rebase")
+    rc, head = sync(repo, main_ref, sh, clock, store, getattr(a, "release_hold", False))
+    if rc is not None:
+        return rc, head, set()
+    reds = gate_reds(repo) if waiting_supported(repo) else set()
+    if reds and must_wait(repo, waiting_commits(repo, f"{remote()}/main", head), reds, store):
+        # checked already (before the lock, without the gate): only the cherry-pick onto `waiting` here
+        return join(store, repo, log_path, a, head), head, reds
+    return None, head, reds
+
+
+def land_push(repo: str, main_ref: Any, log_path: Any, a: Any, clock: Any, store: Any, attempt: Any, head: str) -> Any:
+    """One push of head to main, its output appended to the land log: land's exit code, or PUSH_AGAIN."""
+    err(f"pushing {head[:10]} to {remote()}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
+    lock_note(f"push of {head[:10]}")
+    a.pushed_at = clock.time()
+    rc, out = run_watched(push_argv(remote(), head), repo, tool_env(), log_path, "push", **push_bounds())
+    if rc == 0:
+        mark_gate_dirty()
+    with open(log_path, "a") as f:
+        f.write(f"=== attempt {attempt + 1} {ts()} {head}\n{out}\n")
+    return push_verdict(repo, head, main_ref, log_path, a, clock, store, attempt, rc, out)
+
+
+def land_check_first(repo: str, main_ref: Any, log_path: Any, a: Any, clock: Any, store: Any, attempt: Any, head: str, reds: Any) -> Any:
+    """None when the hook's check of what the push will carry passed (or none is needed); else land's exit code, MAIN_MOVED
+    when main moved since the check outside the lock."""
+    hook = precheck_hook(repo)
+    prechecked = getattr(a, "prechecked", None)
+    if hook and prechecked and prechecked != (head, git(repo, "rev-parse", main_ref).strip()):
+        # main moved since the check outside the lock: give the lock back and check again outside it
+        a.prechecked = None
+        return MAIN_MOVED
+    if hook and not prechecked:
+        # CHECK FIRST: the hook's dry run over exactly what the push will carry (its pass is stored, so the push's own
+        # hook run reuses it in seconds). A long hook inside `git push` holds the push's ssh connection idle, and a
+        # tunnel drop kills it after "all clear" (2026-10-23); the area tests make long hooks the norm.
+        return dry_run(repo, hook, head, log_path, attempt + 1, clock, store,
+                       cls=gov_class_of(repo, waiting_commits(repo, f"{remote()}/main", head), reds), a=a)
+    return None
+
+
+def land_claims(repo: str, a: Any, head: str, store: Any) -> None:
+    """What the push carries, noted on the args: the runs its commits claim to fix (the watch verifies them) and the
+    lander's keys (lander.py), so the commits are found on main again."""
+    try:
+        a.fixes = sorted(fixes_of(repo, waiting_commits(repo, f"{remote()}/main", head), store))
+    except Exception:
+        a.fixes = []
+    try:  # THE LANDER (lander.py): what this push carries, keyed so the commits are found on main again
+        a.lander_keys = commit_keys(repo, f"{remote()}/main", head)
+    except Exception:
+        a.lander_keys = []
+
+
+def push_verdict(repo: str, head: str, main_ref: Any, log_path: Any, a: Any, clock: Any, store: Any, attempt: Any, rc: Any, out: Any) -> Any:
+    """land's exit code for the push that ended rc with `out` -- or PUSH_AGAIN (after a pause) when a race or the
+    remote's own fault leaves attempts."""
+    if rc is None:
+        return stalled("push (git push and its pre-push hook)", out, log_path)
+    if rc == 0:
+        return proven_push(repo, head, main_ref, log_path, a, store)
+    return push_refused_verdict(repo, log_path, clock, store, attempt, out)
+
+
+def push_refused_verdict(repo: str, log_path: Any, clock: Any, store: Any, attempt: Any, out: Any) -> Any:
+    """land's exit code for a push that failed with `out` -- PUSH_AGAIN (after a pause) when a race or the remote's own
+    fault leaves attempts, else refused."""
+    race = RACE.search(out)
+    if race and attempt < LAND_RETRIES:
+        err(f"push race ({race.group(0)}): refetch, rebase, retry")
+        clock.sleep(min(30, 2 + 3 * attempt))
+        return PUSH_AGAIN
+    if race and not REDGATE.search(out):
+        print(f"NOT LANDED: still racing after {LAND_RETRIES} retries ({race.group(0)}); try again shortly.")
+        return 1
+    remote_fault = TRANSIENT_PUSH.search(out or "")
+    if remote_fault and attempt < LAND_RETRIES:  # the remote's (or the network's) fault: retried, never the change's
+        err(f"push failed remote-side ({remote_fault.group(0)}): retry")
+        clock.sleep(min(60, 5 + 10 * attempt))
+        return PUSH_AGAIN
+    return refused(store, repo, out, log_path, f"the push failed remote-side ({remote_fault.group(0)}), {LAND_RETRIES} "
+                   "times: the forge's fault, not the change's -- land again later" if remote_fault else
+                   "the push failed (pre-push hook or remote)")
 
 
 def join(st, repo, log_path, a, head):

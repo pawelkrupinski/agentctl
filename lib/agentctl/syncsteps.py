@@ -14,6 +14,7 @@ from agentctl.selfcode import TOOL_PATH
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import trust_asks
+from agentctl.clock import Clock
 from agentctl.store import StoreUnavailable
 from agentctl.land import tool_env
 from agentctl.explorer import explorer_tick
@@ -25,14 +26,14 @@ from agentctl.laptoprole import laptop_role_step
 from agentctl.fixerland import fixers_land_watch
 from agentctl.storestate import mirror_state
 from agentctl.recordingpins import refresh_pinned_recording
-from agentctl.reddispatch import red_dispatcher, red_renew_holders
-from agentctl.queueclose import close_landed_changes, migrate_local_queue
 from agentctl.alerts import reconcile_alerts
 from agentctl.projector import notify_escalations, project_events
+from agentctl.orphanreap import red_reap_orphans
+from agentctl.queueclose import close_landed_changes, migrate_local_queue
+from agentctl.reddispatch import red_renew_holders
 from agentctl.netwatch import network_watch, tunnel_watch
 from agentctl.redstatus import write_red_status_snapshot
-from agentctl.orphanreap import red_reap_orphans
-from agentctl.clock import Clock
+from agentctl.offerdispatch import red_dispatcher
 
 
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json

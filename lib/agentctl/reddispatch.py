@@ -6,37 +6,27 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.core import HOME, NO_SIGN, env_num, fmt_age, git, git_ok, reds_dir, remote
+from agentctl.core import NO_SIGN, env_num, fmt_age, git, git_ok, reds_dir, remote
 from agentctl.timefmt import parse_time, ts
-from agentctl.repos import red_repo_clone, red_repo_of
 from agentctl.trailers import trailer_values
 from agentctl.waitingdir import waiting_state
 from agentctl.allowedpaths import allowed_dir
 from agentctl.procs import socket_host
 from agentctl.inboxentry import inbox_write
-from agentctl.fixersession import claude_trust_gap
 from agentctl.worktrees import WorktreeGuard
 from agentctl.fixerenv import fixer_env
 from agentctl.redrepos import red_owner_only
 from agentctl.redfamilies import red_identity
-from agentctl.dispatchblock import cached_dispatch_blocker
 from agentctl.statemachines import StaleVersion
 from agentctl.redrecord import RED_JOIN_IDLE, RED_TERMINAL, lease_is_live, red_active, red_names, red_what
 from agentctl.leases import lease_meta
 from agentctl.land import spawn_land
 from agentctl.redreplay import agentctl_revert_fix_replay
-from agentctl.owners import OWNER_TTL, owner_alive, owner_lease
 from agentctl.fixerland import red_dispatch
-from agentctl.red import (
-    DECIDED_REVERT, RED_CLAIM_MAX, RED_CLAIM_TTL, RED_DECIDED_REVERT_MAX, RED_FIXER_MAX, RED_FIXER_TTL)
+from agentctl.red import DECIDED_REVERT, RED_CLAIM_TTL, RED_DECIDED_REVERT_MAX, RED_FIXER_TTL
 from agentctl.culpritfix import blame_note, blame_reland, lander_spawn
-from agentctl.redseen import KIND_ORDER
-from agentctl.redopen import red_family_tell
 from agentctl.redclaim import red_joined_progress, red_wt_mark
 from agentctl.redcrash import red_queue_family
-from agentctl.owner import OWNER_MAX, owner_spawn, owner_still_ending
-from agentctl.blame import blame_waiting
-from agentctl.ownerleases import family_owned, owner_hand, owner_holder
 
 
 def red_commits_naming(wt: str | None, names: Any, keys: tuple[str, ...] = ("Fixes-Red",)) -> list[tuple[str, float]]:
@@ -266,124 +256,6 @@ def red_backoff_why(d: dict[str, Any], after: float) -> str:
                                                   if str(h.get("outcome") or "").startswith("NOT STARTED")), ""))
     return f"its last {d.get('start_failures')} fixer(s) never got going; the next at {at}" + (
         f"; launch error: {last[:240]}" if last else "")
-
-
-def red_dispatcher(store, o_r, repo, t):
-    """THE QUEUE (see ONE RED MODEL above): the open fixer offers, highest priority first; per queue family exactly one
-    fixer -- a new red of a family at work joins its fixer, a family with none is dispatched once (its other open
-    offers taken with it) while a slot is free and dispatch can run. An offer that cannot be taken says why (its
-    escalation names it)."""
-    acts = []
-    offs = store.offers("fixer")
-    if not offs:
-        return acts
-    offs.sort(key=lambda o: (o["priority"], KIND_ORDER.get(o["picture"].get("kind"), 1), o["opened_at"]))
-    blocker = cached_dispatch_blocker()
-    gone = set()
-    for off in offs:
-        if off["id"] in gone:
-            continue
-        pic = off["picture"]
-        if repo_dispatch_off(store, red_repo_of(pic)):  # its repo's dispatch is off (the owner's): never dispatched
-            store.offer_reason(off["id"], f"dispatch off for {red_repo_of(pic)} (owner)")
-            continue
-        fam = red_queue_family(pic)
-        owned = family_owned(fam) and off["tier"] not in ("revert", "author", "lander", "blame")
-        live = owner_alive(store, fam, t) if owned else None
-        if owned and not live and (ending := owner_still_ending(store, fam, t)):
-            # its last wrapper lost its heartbeat (orphaned, revoked) and is still ending: the next starts after it
-            if ending != off.get("reason"):
-                store.offer_reason(off["id"], ending)
-            continue
-        if owned and live:
-            # THE FAMILY'S OWNER IS ALIVE: the red is its next turn -- its lease taken for the owner and handed over
-            took = store.take(off["id"], owner_holder(fam), OWNER_TTL, OWNER_MAX,
-                              meta={"kind": "owned", "family": fam, "owner": owner_lease(fam), "host": socket_host(),
-                                    "worktree": lease_meta(live).get("worktree"), "gate": bool(pic.get("gate"))})
-            if took and "epoch" in took:
-                owner_hand(fam, off["lease"], took)
-                red_family_tell(live, pic, fam)
-                acts.append(f"{pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: red {pic['key']} handed "
-                            f"to its family {fam}'s owner")
-            continue
-        holder = red_family_holder(store, fam, t) if off["tier"] not in ("revert", "lander", "blame") else None
-        item = store.item("red", off["item"].split(":", 1)[1]) or {"data": {}}
-        if holder and holder["holder"] in (item["data"].get("family_released") or []):
-            holder = None  # released from that holder for no progress (red_joined_idle): a fixer of its own, never back
-        if holder and holder["name"] != off["lease"]:
-            # ONE FIXER PER FAMILY: a new red of a family whose fixer is at work is that fixer's -- under its lease; an
-            # owned family's too while its owner is not running (never a second session beside a live holder). A
-            # claim's red is a claim of the same worktree (renewed by its activity, red_renew_holders), a fixer's a sibling;
-            # the holder's note is about its own red, never the joined one's
-            claim = lease_meta(holder).get("kind") == "claim"
-            took = store.take(off["id"], holder["holder"], *((RED_CLAIM_TTL, RED_CLAIM_MAX) if claim else
-                                                             (RED_FIXER_TTL, RED_FIXER_MAX)),
-                              meta={**lease_meta(holder), "family": fam, "outcome": None, "note": None, "notes": None,
-                                    "gate": bool(pic.get("gate")), "joined_at": t, "progressed": None,
-                                    **({} if claim else {"kind": "sibling", "primary": holder["name"]})})
-            if took and "epoch" in took:
-                red_family_tell(holder, pic, fam)
-                acts.append(f"{pic.get('workflow')} #{(pic.get('run') or {}).get('number')}: red {pic['key']} joined "
-                            f"its family {fam}'s fixer {holder['holder']}")
-            continue
-        after = float(item["data"].get("dispatch_after") or 0)
-        # NOTHING STOPS A GATE FIX, EVER (the owner, 2026-10-31): a gate red's fixer starts past the cap, and no fixer
-        # waits on laptop pressure (that holds only other work: gov_fits); a gate fixer still counts toward the cap
-        free, cap_why = (True, None) if pic.get("gate") else red_capacity(store, t - float(off.get("opened_at") or t), t)
-        if off["tier"] == "author":
-            why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
-        elif off["tier"] == "blame":
-            why = blame_waiting(pic.get("blame"))
-        elif after > t:
-            why = red_backoff_why(item["data"], after)
-        elif blocker:
-            why = blocker
-        elif not free:
-            why = cap_why
-        else:
-            why = None
-        if why:
-            if why != off.get("reason"):
-                store.offer_reason(off["id"], why)
-            continue
-        # ANOTHER WATCHED REPO'S RED: its fixer works in that repo's clone on this machine (red-repos.json `clone`)
-        po = pic.get("repo") or o_r
-        prepo = repo if po == o_r else red_repo_clone(po)
-        if po != o_r and not prepo:
-            why = f"no clone of {po} on this machine (red-repos.json `clone`)"
-            if why != off.get("reason"):
-                store.offer_reason(off["id"], why)
-            continue
-        gap = claude_trust_gap(prepo)
-        if gap:  # never a launch claude refuses: said on its offer, dispatched once trusted -- the owner was asked
-            why = f"NOT DISPATCHABLE: {gap}"  # when the repo was registered (fixersession.py trust_asks), never once per offer
-            if why != off.get("reason"):
-                store.offer_reason(off["id"], why)
-            continue
-        num = (pic.get("run") or {}).get("number")
-        holder_id = owner_holder(fam) if owned else f"laptop:fixer:red-{pic['key']}-{int(pic.get('attempts') or 0) + 1}"
-        meta = red_dispatch_meta(pic, fam, owned, off, num)
-        ttl, max_ = (OWNER_TTL, OWNER_MAX) if owned else (RED_FIXER_TTL, RED_FIXER_MAX)
-        took = store.take(off["id"], holder_id, ttl, max_, meta=meta)
-        if not took or "held" in took or "gone" in took:
-            continue
-        extra = []
-        if off["tier"] not in ("revert", "resume", "lander"):
-            for sib in offs:
-                if sib["id"] != off["id"] and sib["id"] not in gone and sib["tier"] not in ("author", "revert", "resume",
-                                                                                             "lander", "blame") \
-                        and red_queue_family(sib["picture"]) == fam:
-                    st_ = store.take(sib["id"], holder_id, ttl, max_, meta=meta)
-                    if st_ and "epoch" in st_:
-                        extra.append({"name": sib["lease"], "epoch": st_["epoch"], "secret": st_["secret"],
-                                      "picture": sib["picture"]})
-                        gone.add(sib["id"])
-        ok, msg = (owner_spawn if owned else red_spawn)(store, po, prepo, *((fam,) if owned else ()), off, took, extra)
-        if not ok:
-            for x in [{"name": off["lease"], **took}] + extra:
-                store.release(x["name"], x["epoch"], x["secret"], outcome=f"NOT STARTED: {str(msg)[:200]}")
-        acts.append(msg)
-    return acts
 
 
 def red_dispatch_meta(pic, fam, owned, off, num):

@@ -5,6 +5,7 @@ import contextlib
 import os
 import re
 import time
+from typing import Any
 from agentctl.core import env_num, err, hashlib_sha1
 from agentctl.statefile import read_record, write_json
 from agentctl.inboxentry import inbox_dir, inbox_entries, inbox_kind
@@ -342,42 +343,73 @@ def inbox_wait(kinds=None, since_ack=False, timeout=0, verbose=False, forever=Fa
     d = inbox_dir()
     os.makedirs(d, exist_ok=True)
     owner_any = kinds is None
-    want = {k.strip().upper().replace("-", "_") for k in (kinds or WAIT_KINDS_DEFAULT).split(",") if k.strip()}
-    auds = None if audience in (None, "", "all") else {x.strip() for x in str(audience).split(",") if x.strip()}
+    want, auds = wanted_kinds(kinds), wanted_audiences(audience)
     with alert_lock(d):
         alert_index(d)  # the first use migrates the backlog into the model: no flood
     poll = env_num("AGENTCTL_INBOX_POLL", INBOX_WAIT_POLL)
     t0, seen, printed = time.time(), None, set()
     while True:
-        try:
-            stamp = (os.stat(d).st_mtime_ns, os.stat(os.path.join(d, "acked")).st_mtime_ns
-                     if os.path.isdir(os.path.join(d, "acked")) else 0)
-        except OSError:
-            stamp = None
+        stamp = inbox_stamp(d)
         if stamp != seen:
             seen = stamp
-            hits = [e for e in inbox_entries() if not e["read"]
-                    and (auds is None or alert_audience(e) in auds)
-                    and ((e.get("kind") or inbox_kind(e.get("verdict"), e.get("final", True))) in want
-                         or (owner_any and alert_audience(e) == "owner"))]
+            hits = unread_hits(want, owner_any, auds)
             if forever:
-                for e in hits:
-                    if (e["id"], e.get("surfaced") or 1) not in printed:
-                        printed.add((e["id"], e.get("surfaced") or 1))
-                        print(entry_line(e), flush=True)
-                        if verbose:
-                            for line in e.get("tail") or []:
-                                print(f"    {line}", flush=True)
-                hits = []
-            if hits:
-                for e in hits:
-                    print(entry_line(e))
-                    if verbose:
-                        for line in e.get("tail") or []:
-                            print(f"    {line}")
-                print(f"inbox: {len(hits)} to route; then `~/bin/agentctl inbox <id> --ack` and run `inbox wait` again")
-                return 0
+                stream_hits(hits, printed, verbose)
+            elif hits:
+                return inbox_routed(hits, verbose)
         if timeout and time.time() - t0 >= timeout and not forever:
             print(f"inbox: no unread {','.join(sorted(want))} entry within {int(timeout)} s")
             return 2
         time.sleep(poll)
+
+
+def wanted_kinds(kinds: Any) -> set[str]:
+    """The kinds `inbox wait --kinds` names, upper-cased with `_` for `-` (WAIT_KINDS_DEFAULT when none)."""
+    return {k.strip().upper().replace("-", "_") for k in (kinds or WAIT_KINDS_DEFAULT).split(",") if k.strip()}
+
+
+def wanted_audiences(audience: Any) -> set[str] | None:
+    """The audiences `--audience` names, None for every one."""
+    return None if audience in (None, "", "all") else {x.strip() for x in str(audience).split(",") if x.strip()}
+
+
+def inbox_routed(hits: Any, verbose: bool) -> int:
+    """Print every unread hit, and say what to do with them: the wait's exit 0."""
+    for e in hits:
+        print_inbox_entry(e, verbose)
+    print(f"inbox: {len(hits)} to route; then `~/bin/agentctl inbox <id> --ack` and run `inbox wait` again")
+    return 0
+
+
+def inbox_stamp(d: str) -> tuple[int, int] | None:
+    """What changed in the inbox directory: its mtime and its acked/ directory's (None when it cannot be read)."""
+    try:
+        return (os.stat(d).st_mtime_ns, os.stat(os.path.join(d, "acked")).st_mtime_ns
+                if os.path.isdir(os.path.join(d, "acked")) else 0)
+    except OSError:
+        return None
+
+
+def unread_hits(want: Any, owner_any: Any, auds: Any) -> list[dict[str, Any]]:
+    """The unread entries of the audiences `auds` (None: all) that are of a wanted kind -- or, when any kind is wanted
+    (`owner_any`), addressed to the owner."""
+    return [e for e in inbox_entries() if not e["read"]
+            and (auds is None or alert_audience(e) in auds)
+            and ((e.get("kind") or inbox_kind(e.get("verdict"), e.get("final", True))) in want
+                 or (owner_any and alert_audience(e) == "owner"))]
+
+
+def stream_hits(hits: Any, printed: Any, verbose: bool) -> None:
+    """Print each hit once, as it appears (`printed`: the (id, surfaced) pairs already said)."""
+    for e in hits:
+        mark = (e["id"], e.get("surfaced") or 1)
+        if mark not in printed:
+            printed.add(mark)
+            print_inbox_entry(e, verbose, flush=True)
+
+
+def print_inbox_entry(e: Any, verbose: bool, flush: bool=False) -> None:
+    """The entry's line, and its tail under --verbose."""
+    print(entry_line(e), flush=flush)
+    for line in (e.get("tail") or []) if verbose else []:
+        print(f"    {line}", flush=flush)

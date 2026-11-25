@@ -29,5 +29,5 @@ MODULES = ("procrunner", "govpool", "usage", "core", "timefmt", "statefile", "mo
            "owner", "redvault", "ask", "redpending", "reddispatch", "redstep", "redview", "cireport", "watchtick",
            "recovery", "netwatch", "tools", "batchitem", "redhold", "queuepush", "orphans", "maintain", "invariants",
            "watchdog", "batchpush", "server", "snapshot", "batch", "batchcheck", "landqueue", "status", "statuspage",
-           "redstatus", "redtick", "syncsteps", "serversteps", "queueenter", "processor", "landdryrun", "slots",
-           "cliparser", "cli")
+           "redstatus", "batchtick", "offerdispatch", "redtick", "syncsteps", "queueenter", "landdryrun", "slots",
+           "cliparser", "serversteps", "processor", "cli")
