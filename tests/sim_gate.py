@@ -60,6 +60,11 @@ def scenarios():
     out += [(f"chaoshold-{s}", {"seed": s, "trees": 4, "profile": "CHAOS_OUTSIDE", "n_changes": 14}) for s in (3, 4)]
     out += [(f"redfix-behind-ordinary-{s}", {"seed": s, "calm": True, "trees": 2, "script": "T.REDFIX_BEHIND_ORDINARY"})
             for s in range(4)]
+    # v3 (2026-11-25): several runs of one red -- the fix naming an older run, the fix let go when its red learns the
+    # run, the fix of another failure (IW)
+    out += [(f"redepisode-{n}-{s}", {"seed": s, "calm": True, "trees": 2, "script": name})
+            for n, name in (("older", "REDFIX_OLDER_RUN"), ("heals", "REDFIX_HEALS"), ("other", "REDFIX_OTHER_FAILURE"))
+            for s in range(4)]
     return out
 
 

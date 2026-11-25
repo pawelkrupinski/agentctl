@@ -45,6 +45,7 @@ INVARIANT_KINDS = {
     "Ic": "no change past its deadline is silent in `land status`",
     "Id": "executors start in the documented priority order within a tick",
     "IX": "no executor for a decided change",
+    "IW": "a red fix of an open gate red the store names never waits for green past N ticks",
 }
 VIOLATIONS_MAX = 50  # lines one scenario keeps in the gate's count mode
 ROOT = "0" * 40
@@ -342,6 +343,10 @@ class Sim:
         self.heads = {}
         self.changes, self.by_eid = [], {}
         self.reds, self.red_run, self.red_since, self.red_clears_at, self.red_fix_due = set(), 100, None, None, None
+        # SEVERAL RUNS OF ONE RED (2026-11-25, batch #124): the gate reads the newest runs (reds); an OLDER run of the
+        # same red is named only by its red item in the store (red_item_runs: what the store holds, learned later by
+        # `learn-run`), and a run of another failure by no item at all
+        self.red_older, self.red_item, self.red_item_runs, self.fix_waits = None, None, set(), {}
         self.outside, self.outside_run, self.outside_clears = {}, 5000, {}  # reds outside the gate: {run: red id}
         # their own draws (a stream of their own: a seed without one replays exactly as before they were modelled)
         self.outside_rng = random.Random(f"outside-{seed}")
@@ -952,6 +957,8 @@ class Sim:
                 name = f"F{letters(cid)}"
             paths.append(f"{m}/src/main/{name}.scala" if m in SBT_MODULES else f"{m}/{name}.txt")
         fixes = {str(self.red_run)} if kind == "redfix" and self.reds else \
+            {self.red_older} if kind == "redfix-older" and self.reds else \
+            {f"{self.red_run}1"} if kind == "redfix-other" and self.reds else \
             {max(self.outside, key=int)} if kind == "outside-fix" and self.outside else set()
         bad = spec.get("bad")
         if bad is None:
@@ -984,7 +991,7 @@ class Sim:
                 paths.append(theirs.paths[0])
         base = self.main
         pids, head = [], base
-        for k in range(self.rng.choice((1, 1, 2))):
+        for k in range(1 if spec.get("one_commit") else self.rng.choice((1, 1, 2))):
             pid = f"p{cid}{letters(k)}"
             self.patches[pid] = Patch(pid, cid, paths if k == 0 else [paths[0]], fixes if k == 0 else (),
                                       bad=bad and k == 0, conflicts=conflicts)
@@ -1039,6 +1046,14 @@ class Sim:
                 self.patches[pid] = Patch(pid, -self.next_cid, list(spec["paths"]))
                 self.forge_push(self.child(self.main, pid), "outside")
                 continue
+            if spec.get("kind") == "open-red":  # a gate red with its item in the store (and an older run of it)
+                self.open_red(item=True, older_known=spec.get("older_known", True))
+                continue
+            if spec.get("kind") == "learn-run":
+                self.name_older_run()
+                continue
+            if spec.get("kind") in ("redfix-older", "redfix-other") and not self.reds:
+                self.open_red(item=True)
             if spec.get("kind") == "redfix" and not self.reds:
                 self.open_red()
             if spec.get("kind") == "outside-fix" and not self.outside:
@@ -1082,11 +1097,34 @@ class Sim:
         return A.read_record(os.path.join(self.d, "entries", f"{ch.eid}.json")) if ch.eid else None
 
     # ---------------------------------------------------------------- the forge
-    def open_red(self):
+    def open_red(self, item=False, older_known=True):
+        """item: also the red's item in the store, naming the gate's newest runs and (older_known) an older run of the
+        same red; one not known yet is named by `learn-run` later."""
         self.red_run += 1
         self.reds = {str(self.red_run), f"9{self.red_run}000"}
         self.red_since = self.tick
         self.red_clears_at = None
+        self.red_older = f"{self.red_run}0"
+        if item:
+            self.red_item = f"sim-gate-red-{self.red_run}"
+            self.red_item_runs = set(self.reds) | ({self.red_older} if older_known else set())
+            A.process_store().put_item("red", self.red_item, "leased", {
+                "key": self.red_item, "workflow": "Main", "gate": True, "red_kind": "test",
+                "runs": sorted(self.red_item_runs), "last_run": {"number": self.red_run}})
+
+    def name_older_run(self):
+        """The red's item names its older run now (a tick attached it)."""
+        st = A.process_store()
+        self.red_item_runs.add(self.red_older)
+        st.update_item("red", self.red_item, st.item("red", self.red_item)["version"], {"runs": sorted(self.red_item_runs)})
+
+    def close_red_item(self):
+        if self.red_item:
+            st = A.process_store()
+            it = st.item("red", self.red_item)
+            if it and it["state"] not in ("verified", "cleared"):
+                st.transition("red", it["id"], "verified", it["version"], event={"text": "sim: the gate went green"})
+            self.red_item, self.red_item_runs = None, set()
 
     def open_outside_red(self):
         """A red OUTSIDE the gate (08010c's Alert backtest #6): a store item, gate False; the gate stays green."""
@@ -1110,6 +1148,7 @@ class Sim:
         self.close_outside_reds()
         if self.red_clears_at is not None and self.tick >= self.red_clears_at:
             self.reds, self.red_since, self.red_clears_at = set(), None, None
+            self.close_red_item()
         if self.tick >= self.drain_from and self.reds and self.red_clears_at is None:
             self.red_clears_at = self.tick + 1  # the drain: the gate goes green
         if self.tick >= self.drain_from:  # and every red outside it no open fix is on its way for clears (a later run)
@@ -1260,6 +1299,18 @@ class Sim:
             if e["status"] == "checked" and due and before.get(eid, {}).get("status") == "checked":
                 self.violate("I3", f"red fix {eid} checked and not pushed: its push held behind other work")
         self.check_hold_invariants(st, entries)
+        # W. A RED FIX OF AN OPEN GATE RED THE STORE NAMES NEVER WAITS FOR GREEN (2026-11-25, batch #124: Main #2898
+        # red, the fix named #2896 -- a run of the same red its item named -- and waited for the green only it could
+        # bring): the simulation's own truth, the names the gate reads and its item holds
+        known = set(self.reds) | self.red_item_runs
+        for eid, e in entries.items():
+            if e.get("status") == "waiting" and self.reds and self.names_the_red(eid, known):
+                n = self.fix_waits[eid] = self.fix_waits.get(eid, 0) + 1
+                if n > self.profile.get("heal_bound", 3):
+                    self.violate("IW", f"red fix {eid} (names {sorted(e.get('fixes') or [])}) waiting for green {n} ticks "
+                                 f"though the store names it a run of the open red {sorted(known)}")
+            else:
+                self.fix_waits.pop(eid, None)
         # 4. A BATCH REACHES LANDED, BISECTING OR HELD WITHIN N TICKS (counted in its assembling/checking/pushing ticks)
         for bt in st.items("batch"):
             # a red pre-check round ended (batch.py THE BATCH IS THE MECHANISM): the bound counts the way to landing
@@ -1313,6 +1364,12 @@ class Sim:
                 on = self.patches_of(self.main)
                 if not set(ch.patches) <= on:
                     self.violate("I6", f"change {ch.eid} LANDED but {sorted(set(ch.patches) - on)} not on main: lost")
+
+    def names_the_red(self, eid, known):
+        """Whether EVERY commit of change eid carries a Fixes-Red naming one of `known` (the hook's rule: a production
+        commit naming no red waits, so a change with one commit that does not is no fix of the red)."""
+        ch = self.by_eid.get(eid)
+        return bool(ch) and all(self.patches[p].fixes & known for p in ch.patches)
 
     def check_hold_invariants(self, st, entries):
         """(b) EVERY CHANGE PAST ITS DEADLINE HAS A RECORDED HOLD, (c) NO CHANGE IS SILENT: every held change's
@@ -1494,6 +1551,30 @@ TIMELINE_08010C = [
     (4, {"label": "fix", "worktree": "backtest-fix", "kind": "outside-fix", "paths": ["infra/bin/backtest-alerts"]}),
     (5, {"label": "replay", "worktree": "fix-replay", "paths": ["infra/bin/backtest-alerts", "docs/replay.md"]}),
     (6, {"kind": "push", "paths": ["docs/moved-again.md"]}),
+]
+# SEVERAL RUNS OF ONE RED (2026-11-25, batch #124: Main #2898 red, the fix named #2896, an older run of the same red).
+# The fix naming an older run its red item holds lands on the red beside an ordinary change; the fix naming a run the
+# item only learns of a few ticks later (a tick attached it) is let go when it does (WR self-heals); the fix of ANOTHER
+# failure -- a run no item names -- waits for green, as the rule says.
+REDFIX_OLDER_RUN = [
+    (0, {"kind": "open-red"}),
+    (0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
+    (1, {"label": "fix", "worktree": "fix", "kind": "redfix-older", "one_commit": True, "paths": ["worker/src/main/Fix.scala"]}),
+    (1, {"label": "b", "worktree": "b", "paths": ["common/src/main/B.scala"]}),
+    (20, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]}),
+]
+REDFIX_HEALS = [
+    (0, {"kind": "open-red", "older_known": False}),
+    (0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
+    (1, {"label": "fix", "worktree": "fix", "kind": "redfix-older", "one_commit": True, "paths": ["worker/src/main/Fix.scala"]}),
+    (8, {"kind": "learn-run"}),
+    (30, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]}),
+]
+REDFIX_OTHER_FAILURE = [
+    (0, {"kind": "open-red"}),
+    (0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
+    (1, {"label": "fix", "worktree": "fix", "kind": "redfix-other", "one_commit": True, "paths": ["worker/src/main/Fix.scala"]}),
+    (20, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]}),
 ]
 FIX_08010C_BOUND = 8  # ticks from its arrival to LANDED (a check is 2-4 ticks; nothing may hold it)
 
