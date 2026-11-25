@@ -8,32 +8,26 @@ from agentctl.clock import Clock
 from agentctl.core import cherry_landed, env_num, fmt_age, git, git_ok, host_role, process_cache, remote
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
-from agentctl.classify import network_failure, network_only
 from agentctl.repos import movies_repo_path, precheck_hook, waiting_supported
-from agentctl.policy import policy_blocks
 from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries, waiting_state, wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_write
-from agentctl.clones import clone_shared, fetch_main, note_clone_suspect
-from agentctl.queueslots import check_tree, check_tree_slot, checker_lease, entry_owned, queue_verdict, set_change
+from agentctl.clones import clone_shared
+from agentctl.queueslots import check_tree_slot, checker_lease, entry_owned, set_change
 from agentctl.conditions import open_condition, run_probe
-from agentctl.queue import (
-    FETCH_MAIN_FAILED, INFRA_CHECK_FAILURE, STALLED_REASON, STALL_KEEP_PLACE, VERIFY_MODE, module_overlap,
-    range_paths, requeue_infra, verify_areas_supported, verify_supported)
+from agentctl.queue import VERIFY_MODE
 from agentctl.patches import equivalent_on
-from agentctl.generated import generated_entry
-from agentctl.conflicts import CONFLICT_PLACE_KEPT, conflict_cause, conflict_paths
-from agentctl.queuerecheck import recheck_reason
-from agentctl.redreplay import fix_replay_refusal
+from agentctl.conflicts import CONFLICT_PLACE_KEPT
 from agentctl.changekind import HOLD_SHOWN, classify_change, kind_text, queue_facts
 from agentctl.gov import gov_class_of
-from agentctl.waiting import already_landed, cancel_entry_remote, must_wait, waiting_commits
+from agentctl.waiting import already_landed, must_wait, waiting_commits
 from agentctl.queuesubmit import SUBMIT_FIELDS, submit_ref
 from agentctl.redseen import gate_reds
-from agentctl.blamerecords import blame_land_refusal
 from agentctl.queuebatch import run_entry_checks
-from agentctl.queuediff import CHECK_TIMEOUT, TIMEOUT_RETRIES, judge_failure, keys_text, rebase_in_tree
-from agentctl.statemachines import StaleVersion, TerminalState, change_event, machine_state
+from agentctl.statemachines import StaleVersion, TerminalState, machine_state
+from agentctl.queuecheck import (
+    adopted_run, check_mode, commits_here, fetched_main, judge_check_failure, requeued_for_infra, round_ended,
+    round_head, tip_refused)
 
 
 # ONE QUEUE, CLOSED BY CONTENT (2026-10-30 split brain: six pre-cutover entries in the laptop's local waiting dir and
@@ -199,42 +193,6 @@ def change_rows(store: Any) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda r: r["id"])
 
 
-def provisional_hint(tree, e):
-    """`; its F kept main's rows ...: rebase, run `regen`, land again` for a change whose generated files the check
-    tree merged keeping main's side of a row both changed (MAIN'S ROW, PROVISIONALLY, waiting.py); '' otherwise."""
-    files = e.get("provisional") or []
-    cmds = sorted({" ".join(g["regen"]) for g in (generated_entry(tree, f) for f in files) if g and g.get("regen")})
-    return (f"; its {', '.join(files)} kept {remote()}/main's rows where both sides changed them (no regen command "
-            f"runs where the queue does): rebase onto {remote()}/main, run {' and '.join(f'`{c}`' for c in cmds) or 'the regen command'}, "
-            "commit and land again") if files else ""
-
-
-# A ROW ONLY A REGEN DECIDES IS NO BOUNCE (2026-11-19, lane F2b): main re-measured the coupling-baseline rows the change
-# changed too; ci-runner runs no JVM, so the check tree kept main's rows (MAIN'S ROW, PROVISIONALLY, waiting.py) and the
-# checks' ratchet failed over them. That is no defect of the change, only a regeneration this host cannot run: the
-# change is HELD in its place (queued, not checked again) and its agent told ONE command -- `agentctl land` in its
-# worktree, which rebases onto main and runs the regen where the JVM is (the laptop's conflict_resolve) -- and the
-# change queued again from that worktree takes the held entry's place and queue age (server.py queue_change). A hold
-# nobody answers within CONFLICT_PLACE_KEPT is NEVER rejected (the owner, 2026-11-20: "2 drop the reject"): it RECOVERS
-# (regen_hold_overdue, below).
-def regen_hold(st, d, e, tree, failing, out):
-    """Hold change e for its agent's regeneration (above): queued with retry_after at the hold's end, `regen_hold` on
-    its entry, its author told the one command (the event's inbox entry). Returns 1 (nothing pushed)."""
-    files = e.get("provisional") or []
-    cmds = sorted({" ".join(g["regen"]) for g in (generated_entry(tree, f) for f in files) if g and g.get("regen")})
-    cmd = f"cd {e['worktree']} && ~/bin/agentctl land"
-    t = time.time()
-    why = (f"REGEN NEEDED {e['id']}: its {', '.join(files)} kept {remote()}/main's rows where both sides changed them "
-           f"(ci-runner runs no {' / '.join(cmds) or 'regen command'}) and its checks failed over them ({failing}); it "
-           f"keeps its place in the queue: run `{cmd}` (rebases onto {remote()}/main and runs "
-           f"{' and '.join(f'`{c}`' for c in cmds) or 'the regen'} on this machine)")
-    set_change(st, d, e, "queued", event=change_event(e, why, (out or "").splitlines()[-40:], code=None, final=False),
-               why=why, retry_after=t + CONFLICT_PLACE_KEPT,
-               regen_hold={"since": t, "cmd": cmd, "files": files, "head": e.get("head")})
-    wlog(d, f"{e['id']}: held for its regeneration ({', '.join(files)}): `{cmd}`")
-    return 1
-
-
 # AN OVERDUE REGEN HOLD RECOVERS (the owner, 2026-11-20: "1 approve, 2 drop the reject"; lane F2b's 24-h NOT LANDED is
 # struck). Past CONFLICT_PLACE_KEPT the change tick runs the regeneration AGAIN: a new round on the change's item
 # (`regen_round`), which the laptop's sync answers by starting `agentctl land` in its worktree once more (server.py
@@ -318,146 +276,57 @@ def check_entry(repo: str, eid: str, clock: Clock, store: Any) -> int:
 
 
 def _check_entry(st: Any, repo: str, d: str, e: dict[str, Any], i: int, clock: Clock, own: Any = None) -> int:
-    hook = precheck_hook(repo)
-    log_path = os.path.join(d, f"check-{e['id']}")
-    if e.get("status") != "checking":
-        set_change(st, d, e, "checking", event={"text": f"{e['id']}: checking"}, since=ts())
-    fetched, ferr = fetch_main(repo)  # a corruption signature marks the clone for repair (clone_heal_tick)
-    if not fetched:  # never checked on a stale main; git's own words say why (2026-10-29: "Could not read 409b8bb...")
-        last = (ferr.strip().splitlines() or ["?"])[-1][:240]
-        requeue_infra(st, d, e, f"{FETCH_MAIN_FAILED}: {last}", clock.time(), reason=FETCH_MAIN_FAILED, detail=ferr,
-                      repo=repo)
+    """One change's check round: main fetched, the change rebased onto it (or its remote run adopted), refused for its
+    blame or an unreplayed fix, the hook's checks run, and the change marked checked. 0: the round is over (checked,
+    requeued, landed already), 1: the change is rejected."""
+    mark_checking(st, d, e)
+    base = round_base(st, repo, d, e, clock)
+    if base is None:
         return 0
-    base = git(repo, "rev-parse", f"{remote()}/main").strip()
-    if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):  # phase 2: the change is on the remote, as land/<id>
-        lr = git(repo, "fetch", "--quiet", remote(), f"refs/heads/land/{e['id']}", check=False)
-        if not git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):
-            lerr = (lr.stderr or "").strip()
-            note_clone_suspect(repo, lerr)
-            requeue_infra(st, d, e, f"its commits are not here and refs/heads/land/{e['id']} gave none"
-                          + (f": {lerr.splitlines()[-1][:240]}" if lerr else ""), clock.time(), detail=lerr,
-                          repo=repo)
-            return 0
     rem = e.get("remote") or {}
-    # ON ITS OWN BASE (2026-11-15 22:42Z: the reconciler's restart on a new pin killed its detached checkers; their
-    # replacements, after main had moved, cancelled one half-done run and threw a green one away -- this adoption once
-    # demanded the CURRENT main, from before the push learned to judge a moved main, e6a5b93). The run is adopted on
-    # the base it checked, while main still holds that base; the push then judges what landed since, exactly as for a
-    # checker that had survived: re-checked when it overlaps, pushed without re-check when it does not.
-    adopt = (rem.get("head") == e["head"] and bool(rem.get("base")) and not rem.get("collected_at")
-             and rem.get("status") not in ("cancelled", "skipped", "abandoned")
-             and git_ok(repo, "cat-file", "-e", f"{rem.get('tip')}^{{commit}}")
-             and git_ok(repo, "merge-base", "--is-ancestor", rem["base"], base))
-    if adopt:  # a replacement checker (the last one lost its lease, died or re-exec'd mid-wait): the same tip, its run
-        tree = check_tree(repo, i, rem["tip"])
-        head, via, base = rem["tip"], None, rem["base"]
-    else:
-        if rem.get("run") is not None and not rem.get("status"):
-            cancel_entry_remote(st, e, "superseded by a new round of its checks")
-        e.pop("remote", None)
-        e.pop("remote_run", None)
-        e["round_since"] = ts()
-        save_entry(d, e)
-        tree = check_tree(repo, i, base)
-        conflicts = []
-        head, via = rebase_in_tree(d, tree, e, base, conflicts=conflicts)
-    if via:
-        already_landed(st, d, e, via if via != "an equivalent commit" else None)
-        return 0
-    if not head:
-        # policy: no-longer-applies
-        queue_verdict(st, d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main {base[:10]} "
-                      f"(main moved since QUEUED{conflict_cause(tree, e.get('base'), base, conflicts)}): rebase onto "
-                      f"{remote()}/main and land again (it keeps its place in the queue)",
-                      conflict_files=conflict_paths(conflicts), decided_on=base)
-        return 1
+    adopt = adopted_run(repo, e, rem, base)
+    tree, head, via, base, conflicts = round_head(st, d, e, repo, i, base, rem, adopt)
+    ended = round_ended(st, d, e, tree, base, head, via, conflicts)
+    if ended is not None:
+        return ended
     e["tip"] = head
     save_entry(d, e)
-    reds = gate_reds(repo) if waiting_supported(repo) else set()
-    commits = waiting_commits(tree, base, head)
-    dead = blame_land_refusal(tree, commits, st, e.get("worktree"))
-    if dead:  # queued before its blame was withdrawn or refuted (2026-11-01: revert-629 re-queued by orphan duty)
-        # policy: blame-dead
-        queue_verdict(st, d, e, "rejected", f"NOT LANDED: {dead}", decided_on=base)
+    commits, reds = waiting_commits(tree, base, head), gate_reds(repo) if waiting_supported(repo) else set()
+    if tip_refused(st, repo, d, e, tree, commits, base):
         return 1
-    # FIX REPLAY (redreplay.py): the laptop's land may hold no token; its replays ride with the submission (`replays`)
-    unreplayed = fix_replay_refusal(repo, commits, st, proofs=e.get("replays"))
-    if unreplayed and unreplayed[0] == "fix-replay" and policy_blocks("fix-replay", None, e["id"], unreplayed[1][:160]):
-        queue_verdict(st, d, e, "rejected", f"NOT LANDED: {unreplayed[1]}", decided_on=base)  # policy: fix-replay
-        return 1
-    if unreplayed and unreplayed[0] == "fix-replay-outside" \
-            and policy_blocks("fix-replay-outside", None, e["id"], unreplayed[1][:160]):
-        queue_verdict(st, d, e, "rejected", f"NOT LANDED: {unreplayed[1]}", decided_on=base)  # policy: fix-replay-outside
-        return 1
-    joining = bool(reds) and must_wait(repo, commits, reds, st)
-    cls = gov_class_of(repo, commits, reds)
-    mode = "--checks-only" if joining else "--range"
-    if adopt and rem.get("mode") == VERIFY_MODE:
-        mode = VERIFY_MODE
-    elif e.get("verify") and hook:  # THE RULE (recheck_reason) again, on the main this round checks on
-        _n, why = recheck_reason(tree, e.get("full_base") or e.get("checked_base") or base, base, head,
-                                 range_paths(tree, base, head), full_tip=e.get("full_tip"))
-        if why is None and verify_supported(precheck_hook(tree)):
-            mode = VERIFY_MODE
-            full_base_ = e.get("full_base") or e.get("checked_base") or base
-            areas = module_overlap(range_paths(tree, full_base_, base), range_paths(tree, base, head)) \
-                if verify_areas_supported(tree) else []
-            e["verify_areas"] = areas or None
-            if areas:
-                wlog(d, f"{e['id']}: sbt modules both sides touch ({', '.join(areas)}): verified with the area tests")
-        else:
-            wlog(d, f"{e['id']}: {why or f'the hook has no {VERIFY_MODE}'}: fully checked, not only verified")
-    where = "no hook"
-    if mode != VERIFY_MODE:
-        e.pop("verify_areas", None)
-    if hook:
-        ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
-        if ok is None:  # stalled: the laptop's, not the change's -- and what stalled it is said (2026-11-17: two
-            # 13-s "stalls" whose cause no record kept)
-            last = ((out or "").strip().splitlines() or [""])[-1].strip()[:240]
-            # ITS PLACE KEPT (2026-11-17, ref-srp-54ebae 2 h old: a 13-s stall's 5-min backoff let younger changes take
-            # every check tree, and it waited 15+ min more for one): the first STALL_KEEP_PLACE stalls in a row are due
-            # at once -- the tree it just freed goes to it, first by age; then the infra backoff as for any infra cause
-            same = int(e.get("infra_same") or 0) if e.get("infra_reason") == STALLED_REASON else 0
-            requeue_infra(st, d, e, f"its checks stalled ({where}{': ' + last if last else ''})", clock.time(),
-                          delay=0 if same < STALL_KEEP_PLACE else None, reason=STALLED_REASON, detail=out, repo=repo)
-            return 0
-        if not ok and INFRA_CHECK_FAILURE.search(out or ""):
-            requeue_infra(st, d, e, f"its checks failed on the laptop, not on the change "
-                             f"({INFRA_CHECK_FAILURE.search(out).group(0)})", clock.time())
-            return 0
-        if not ok and network_only(out):  # no verdict, on its first round too (judge_failure: the change's)
-            requeue_infra(st, d, e, f"{NETWORK_REASON} ({network_failure(out)})", clock.time(), reason=NETWORK_REASON,
-                          detail=out, repo=repo)
-            return 0
-        if not ok and CHECK_TIMEOUT.search(out or "") and int(e.get("timeout_retries") or 0) < TIMEOUT_RETRIES:
-            e["timeout_retries"] = int(e.get("timeout_retries") or 0) + 1
-            requeue_infra(st, d, e, f"its checks ran past their time cap ({where}; retry {e['timeout_retries']} of "
-                                f"{TIMEOUT_RETRIES})", clock.time(), reason="its checks ran past their time cap", detail=out, repo=repo)
-            return 0
-        known_red = None
-        if not ok:
-            side, what = judge_failure(repo, d, e, base, out, clock.time())
-            if side == "head" and e.get("provisional") and not CHECK_TIMEOUT.search(out or ""):
-                return regen_hold(st, d, e, tree, keys_text(what), out)  # A ROW ONLY A REGEN DECIDES IS NO BOUNCE
-            if side == "head":
-                timed = " (and they ran past their time cap, " \
-                        f"{TIMEOUT_RETRIES + 1} times)" if CHECK_TIMEOUT.search(out or "") else ""
-                # policy: checks-failed
-                queue_verdict(st, d, e, "rejected", f"NOT LANDED: the pre-push checks failed ({where}){timed}; failing "
-                              f"with this change only: {keys_text(what)}{provisional_hint(tree, e)}; the change "
-                              f"{e['head'][:10]} stays in {e['worktree']}", (out or "").splitlines(), decided_on=base)
-                return 1
-            srcs = sorted(set(what.values()))
-            known_red = {"keys": sorted(what), "where": srcs, "base": base}
-            wlog(d, f"{e['id']}: its checks failed only where its base fails too ({keys_text(what)}; {'; '.join(srcs)})"
-                    ": it waits behind that red")
-    full_base = (e.get("full_base") or e.get("checked_base") or base) if mode == VERIFY_MODE else base
-    full_tip = e.get("full_tip") if mode == VERIFY_MODE else head
-    areas = e.pop("verify_areas", None) if mode == VERIFY_MODE else None
+    hook = precheck_hook(repo)
+    mode = check_mode(d, e, tree, base, head, rem if adopt else {}, bool(reds) and must_wait(repo, commits, reds, st), hook)
+    done, where, known_red = run_hook_checks(st, repo, d, e, tree, base, head, mode, gov_class_of(repo, commits, reds),
+                                             os.path.join(d, f"check-{e['id']}"), clock, own) if hook \
+        else (None, "no hook", None)
+    if done is not None:
+        return done
+    mark_checked(st, d, e, i, base, head, mode, where, known_red)
+    return 0
+
+
+def run_hook_checks(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any, base: str, head: str, mode: str,
+                    cls: Any, log_path: str, clock: Clock, own: Any) -> tuple[int | None, str, Any]:
+    """The hook's checks over the change: (the round's exit code when it ended here, else None; where they ran; the
+    red they failed only as its base fails, if any). An infra failure (stalled, network, laptop, time cap) requeues."""
+    ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
+    if requeued_for_infra(st, repo, d, e, ok, out, where, clock):
+        return 0, where, None
+    if ok:
+        return None, where, None
+    return judge_check_failure(st, repo, d, e, tree, base, out, where, clock.time())
+
+
+def mark_checked(st: Any, d: str, e: dict[str, Any], i: int, base: str, head: str, mode: str, where: str,
+                 known_red: Any) -> None:
+    """The change marked checked: on its own base, or verified (the earlier full check carried to this main)."""
+    verify = mode == VERIFY_MODE
+    full_base = (e.get("full_base") or e.get("checked_base") or base) if verify else base
+    full_tip = e.get("full_tip") if verify else head
+    areas = e.pop("verify_areas", None) if verify else None
     verified = (f"verified {head[:10]} on {base[:10]} (fully checked on {full_base[:10]}"
                 + (f"; with the area tests: sbt modules both sides touch, {', '.join(areas)}" if areas else "") + ")") \
-        if mode == VERIFY_MODE else f"checked {head[:10]} on {base[:10]}"
+        if verify else f"checked {head[:10]} on {base[:10]}"
     set_change(st, d, e, "checked", data={"tip": head, "base": base, "mode": mode, "where": where},
                event={"text": f"{e['id']}: {verified} ({where})"
                       + (" -- failing only as its base fails" if known_red else "")},
@@ -465,7 +334,16 @@ def _check_entry(st: Any, repo: str, d: str, e: dict[str, Any], i: int, clock: C
                infra_reason=None, infra_same=0, known_red=known_red, verify=False, push_alone=None,
                verified_areas=areas)
     wlog(d, f"{e['id']}: {verified} ({where})")
-    return 0
 
 
-NETWORK_REASON = "its checks could not reach the network"
+
+
+def mark_checking(st: Any, d: str, e: dict[str, Any]) -> None:
+    if e.get("status") != "checking":
+        set_change(st, d, e, "checking", event={"text": f"{e['id']}: checking"}, since=ts())
+
+
+def round_base(st: Any, repo: str, d: str, e: dict[str, Any], clock: Clock) -> str | None:
+    """The main the round checks on, with the change's commits here; None when either failed (the change requeued)."""
+    base = fetched_main(st, repo, d, e, clock)
+    return base if base is not None and commits_here(st, repo, d, e, clock) else None

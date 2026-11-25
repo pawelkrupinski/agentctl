@@ -25,9 +25,10 @@ MODULES = ("procrunner", "govpool", "usage", "core", "timefmt", "statefile", "mo
            "livepage", "livestream", "statusagents", "pressure", "govusage", "gov", "checkslot", "cliops",
            "localrecheck", "govroute", "govcmd", "alertroute", "alertprobe", "alerts", "projector", "orphanreap",
            "statsrecords", "stats", "remotejobs", "remote", "redprobe", "blame", "batchrun", "holdgraph",
-           "queuebatch", "queuediff", "queueclose", "superseded", "park", "ownerleases", "sessionroll", "fixerlife",
-           "owner", "redvault", "ask", "redpending", "reddispatch", "redstep", "redview", "cireport", "watchtick",
-           "recovery", "netwatch", "tools", "batchitem", "redhold", "queuepush", "orphans", "maintain", "invariants",
-           "watchdog", "batchpush", "server", "snapshot", "batch", "batchcheck", "landqueue", "status", "statuspage",
-           "redstatus", "batchtick", "offerdispatch", "syncsteps", "queueenter", "landdryrun", "slots", "cliparser",
-           "ownerwrapper", "redcommands", "redtick", "serversteps", "processor", "cli")
+           "queuebatch", "queuediff", "ownerleases", "sessionroll", "fixerlife", "owner", "redvault", "ask",
+           "redpending", "reddispatch", "redstep", "redview", "cireport", "watchtick", "recovery", "netwatch",
+           "tools", "batchitem", "redhold", "server", "offerdispatch", "ownerwrapper", "queuecheck", "queueclose",
+           "superseded", "park", "queuepush", "orphans", "maintain", "invariants", "watchdog", "batchpush",
+           "snapshot", "batch", "batchcheck", "landqueue", "status", "statuspage", "redstatus", "batchtick",
+           "syncsteps", "queueenter", "landdryrun", "slots", "cliparser", "redcommands", "redtick", "serversteps",
+           "processor", "cli")
