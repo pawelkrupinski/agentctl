@@ -127,7 +127,6 @@ cognitive	token	34
 cognitive	transcript_paths	26
 cognitive	tunnel_watch	32
 cognitive	wait_all	41
-cognitive	waiting_run	37
 cognitive	with_inbox	25
 cognitive	workflow_jobs	26
 cognitive	workflow_timeout_bound	22
@@ -265,7 +264,6 @@ cyclomatic	token	16
 cyclomatic	transcript_paths	19
 cyclomatic	tunnel_watch	30
 cyclomatic	wait_all	26
-cyclomatic	waiting_run	27
 cyclomatic	with_inbox	26
 cyclomatic	workflow_jobs	19
 cyclomatic	workflow_timeout_bound	21
@@ -281,4 +279,3 @@ method-lines	red_dispatch	59
 method-lines	sweep_repo	61
 method-lines	sync_onto_main	61
 method-lines	sync_steps	57
-method-lines	waiting_run	67

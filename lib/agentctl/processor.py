@@ -6,7 +6,7 @@ import contextlib
 import os
 import signal
 import sys
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 from agentctl.clock import Clock
 from agentctl.core import SHORT, _bounded, attempt, env_num, err, git, git_ok, host_role, slug
 from agentctl.statefile import write_json
@@ -41,6 +41,70 @@ ALIASES_UNTIL = "2026-11-05"  # the old command names (design §14.5) answer unt
 # it and needs the token handed over again), then the alias goes -- removing it first would stop the sync.
 
 
+class ProcessorLoop:
+    """The loop's state (the failed rounds in a row, whether the stall is noted) and a method per stage of a round: the
+    steps, the stall note, the round's files, the pause."""
+
+    def __init__(self, repo: str, d: str, clock: Clock, store: Any, own: Any, drop: Any, steps: Sequence[Any],
+                 role: str, once: bool, argv: list[str]) -> None:
+        self.repo, self.d, self.clock, self.store, self.own, self.drop = repo, d, clock, store, own, drop
+        self.steps, self.role, self.once, self.argv = steps, role, once, argv
+        self.errors, self.stalled_noted = 0, False
+
+    def run_steps(self) -> bool:
+        """Every step of the round, bounded; whether any failed."""
+        write_beat("processor")
+        if not any(t.is_alive() for k, t in _bounded.items() if k.startswith("step:")):
+            restart_if_changed([self.own], self.argv)  # never under a step still at work in its thread (a push, say)
+        failed = False
+        for name, step in self.steps:
+            failed = run_step(name, step) is False or failed
+            write_beat("processor")
+            sd_notify("WATCHDOG=1")  # each bounded step is progress: systemd's WatchdogSec never cuts a long tick
+        return failed
+
+    def note_stall(self) -> None:
+        """NEVER FATAL (2026-10-29 22:31: the network dropped, every step failed, and this condition's own store
+        call -- the store is remote on the laptop -- raised StoreUnavailable out of the loop: the processor
+        died, launchd restarted it, and the restart holds no token until the owner hands it over).
+        Not noted now: tried again next round."""
+        try:
+            open_condition("STALLED", f"STALLED: the waiting processor's ticks failed {self.errors} times in a row; "
+                                      f"see {self.d}/processor.log and service.log",
+                           run_probe("waiting_ok", {"d": self.d, "since": self.clock.time()}), [], key="waiting-rounds",
+                           command="waiting", store=self.store)
+            self.stalled_noted = True
+        except (Exception, SystemExit) as e:
+            err(f"STALLED could not be noted ({str(e)[:160]}); the loop goes on")
+
+    def settle(self, failed: bool) -> None:
+        """What a round leaves: the failures in a row (and the stall note they earn), the round file, the snapshot."""
+        self.errors = self.errors + 1 if failed else 0
+        if self.errors == 0:
+            self.stalled_noted = False
+        if self.errors >= ROUND_ERRORS_MAX and not self.stalled_noted:
+            self.note_stall()
+        if not failed:
+            write_json(os.path.join(self.d, "round-ok.json"), {"at": self.clock.time()})
+        if self.role != "sync":  # the sync's state.json is ci-runner's, mirrored
+            try:
+                write_snapshot(self.d, self.store)
+            except Exception as e:
+                err(f"the snapshot could not be written: {e}")
+        sd_notify("WATCHDOG=1")
+
+    def drained(self) -> bool:
+        return self.once and (self.role == "sync" or (not queued_entries(self.d) and not waiting_entries(self.d)))
+
+    def run(self) -> int:
+        while not TICK_STOP[0]:  # SIGTERM (systemd's stop): between ticks, never inside one
+            self.settle(self.run_steps())
+            if self.drained():
+                return 0
+            self.drop.nap(env_num("AGENTCTL_TICK", TICK))
+        return 0
+
+
 def waiting_run(repo: str, clock: Clock, store: Any, once: bool = False, service: bool = False) -> int:
     """THE processor: ONE loop of ticks (design §3). On ci-runner (server_steps): the change items (executors,
     pushes), the batch, the watches, the gate line, the red tick, the recovery registry. On the laptop (sync_steps):
@@ -58,56 +122,19 @@ def waiting_run(repo: str, clock: Clock, store: Any, once: bool = False, service
         _IN_PROCESSOR[0] = True
         drop = TokenDrop(d, o_r, clock).open()
         stack.callback(drop.close)
-        errors, stalled_noted = 0, False
         role = host_role()
         if service:
             keep_awake()  # a plugged-in laptop never sleeps under the service (no-op off macOS)
         if service and role != "server":
             status_page_start()  # the read-only status page, a daemon thread (see "the status page"); never fatal
+
         def shared(fn: Callable[[], Any]) -> Callable[[], Any]:  # a step that uses the clone holds it shared: a repair's swap waits for it
             def run() -> Any:
                 with clone_shared(repo):
                     return fn()
             return run
         steps = sync_steps(repo, d, o_r, clock, store) if role == "sync" else server_steps(repo, d, shared, clock, store)
-        while True:
-            if TICK_STOP[0]:  # SIGTERM (systemd's stop): between ticks, never inside one
-                return 0
-            write_beat("processor")
-            if not any(t.is_alive() for k, t in _bounded.items() if k.startswith("step:")):
-                restart_if_changed([own], argv)  # never under a step still at work in its thread (a push, say)
-            failed = False
-            for name, step in steps:
-                failed = run_step(name, step) is False or failed
-                write_beat("processor")
-                sd_notify("WATCHDOG=1")  # each bounded step is progress: systemd's WatchdogSec never cuts a long tick
-            errors = errors + 1 if failed else 0
-            if errors == 0:
-                stalled_noted = False
-            if errors >= ROUND_ERRORS_MAX and not stalled_noted:
-                # NEVER FATAL (2026-10-29 22:31: the network dropped, every step failed, and this condition's own store
-                # call -- the store is remote on the laptop -- raised StoreUnavailable out of the loop: the processor
-                # died, launchd restarted it, and the restart holds no token until the owner hands it over).
-                # Not noted now: tried again next round.
-                try:
-                    open_condition("STALLED", f"STALLED: the waiting processor's ticks failed {errors} times in a row; "
-                                              f"see {d}/processor.log and service.log",
-                                   run_probe("waiting_ok", {"d": d, "since": clock.time()}), [], key="waiting-rounds",
-                                   command="waiting", store=store)
-                    stalled_noted = True
-                except (Exception, SystemExit) as e:
-                    err(f"STALLED could not be noted ({str(e)[:160]}); the loop goes on")
-            if not failed:
-                write_json(os.path.join(d, "round-ok.json"), {"at": clock.time()})
-            if role != "sync":  # the sync's state.json is ci-runner's, mirrored
-                try:
-                    write_snapshot(d, store)
-                except Exception as e:
-                    err(f"the snapshot could not be written: {e}")
-            sd_notify("WATCHDOG=1")
-            if once and (role == "sync" or (not queued_entries(d) and not waiting_entries(d))):
-                return 0
-            drop.nap(env_num("AGENTCTL_TICK", TICK))
+        return ProcessorLoop(repo, d, clock, store, own, drop, steps, role, once, argv).run()
 
 
 TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns between ticks
