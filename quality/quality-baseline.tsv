@@ -152,8 +152,6 @@ cognitive	red_run_on_way	19
 cognitive	red_run_retired	36
 cognitive	red_spawn	28
 cognitive	red_unheld	19
-cognitive	red_view_of_units	24
-cognitive	red_view_state	84
 cognitive	red_waits_on_step	21
 cognitive	refresh_pinned_recording	16
 cognitive	regen_hold_overdue	22
@@ -367,8 +365,6 @@ cyclomatic	red_run_on_way	21
 cyclomatic	red_run_retired	45
 cyclomatic	red_spawn	25
 cyclomatic	red_unheld	15
-cyclomatic	red_view_of_units	16
-cyclomatic	red_view_state	62
 cyclomatic	red_waits_on_step	23
 cyclomatic	refresh_pinned_recording	18
 cyclomatic	regen_hold_overdue	21
@@ -427,7 +423,6 @@ method-lines	red_fix_pending	260
 method-lines	red_job_reads	66
 method-lines	red_lease_ended	87
 method-lines	red_run_retired	51
-method-lines	red_view_state	85
 method-lines	regenerate	63
 method-lines	retire_jobs_of	55
 method-lines	stats_pass	71
