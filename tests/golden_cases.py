@@ -56,6 +56,11 @@ class Case:
         self.saved.setdefault(name, getattr(self.A, name))
         setattr(self.A, name, self.recorded(name, gen))
 
+    def put(self, name, value):
+        """A plain replacement (a module, a constant) of the name, restored afterwards."""
+        self.saved.setdefault(name, getattr(self.A, name))
+        setattr(self.A, name, value)
+
     def restore(self):
         for name, value in self.saved.items():
             setattr(self.A, name, value)

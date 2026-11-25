@@ -250,5 +250,87 @@ class RedFixReadTest(unittest.TestCase):
         check(self, A, "fix_check", build, lambda A: A.fix_check, 4000)
 
 
+NOW = 1_795_000_000.0
+ISO = ["2026-11-20T10:00:00Z", "2026-11-01T10:00:00Z", "2026-10-01T10:00:00Z", None]
+
+
+class RedFixesTest(unittest.TestCase):
+    @staticmethod
+    def clock(case):
+        import types
+        case.put("time", types.SimpleNamespace(time=lambda: NOW))
+        case.fake("ts", lambda rng: "2026-11-24T10:00:00Z")
+
+    def red_item(self, r, i):
+        return {"id": f"r{i}", "data": {"key": r.choice([None, f"k{i}", "k1"]), "runs": r.sample(["1", "2", 3], r.randint(0, 2)),
+                                        "refuted": r.sample(["sa", "sb", "sc"], r.randint(0, 2)), "unverified": r.sample(["sd", "sa"], r.randint(0, 1))}}
+
+    def test_red_fix_facts(self):
+        import types
+
+        def build(case):
+            r = case.rng
+            self.clock(case)
+            entries = [{"id": f"e{i}", "status": r.choice(["queued", "landed", "waiting", "rejected"]), "landed_at": r.choice(ISO),
+                        "updated": r.choice(ISO), "created": "2026-11-02T10:00:00Z", "fixes": r.choice([[], ["1"]]),
+                        "landed_sha": r.choice([None, "sa", "sb", "se"]), "commits": ["c"]} for i in range(r.randint(0, 4))]
+            reds = [self.red_item(r, i) for i in range(r.randint(0, 3))]
+
+            def state(rng, repo):
+                if rng.random() < 0.15:
+                    raise SystemExit("no token")
+                return ("d", "c", "w")
+            case.fake("waiting_state", state)
+            case.fake("waiting_entries", lambda rng, d, open_only=True: entries)
+            case.fake("entry_fixes", lambda rng, repo, e, store: rng.choice([[], ["1"], ["2", "3"]]))
+            case.fake("red_unrelated", lambda rng, repo, e: rng.random() < 0.3)
+            case.fake("landed_fix_commits", lambda rng, store, repo: raising(rng, 0.15, [("sx", 5.0, {"1"}, "s")] * rng.randint(0, 2)))
+            case.put("patch_id", lambda repo, sha: None if sha.endswith("b") else 1 / 0 if sha.endswith("c") else f"p{sha}")
+            case.fake("git", lambda rng, repo, *a, **k: types.SimpleNamespace(returncode=rng.choice([0, 0, 1]), stdout=rng.choice(["123\n", "x", ""])))
+            store = Probe(case, "store", items=lambda rng, kind: raising(rng, 0.1, reds))
+            return (maybe(r, "repo", 0.85), maybe(r, store, 0.9))
+        def facts_of(A):  # the patches dict's order follows a set's: compared sorted
+            def call(*args):
+                out = A.red_fix_facts(*args)
+                return {**out, "patches": sorted(out["patches"].items())}
+            return call
+        check(self, A, "red_fix_facts", build, facts_of, 3000)
+
+    def test_red_fix_candidates(self):
+        def build(case):
+            r = case.rng
+            self.clock(case)
+            case.fake("fix_reaches_red", lambda rng, repo, sha, d: rng.random() < 0.6)
+            case.fake("red_change_link", lambda rng, repo, d, commits: maybe(rng, "linked", 0.5))
+            ents = lambda: [{"id": f"e{i}", "status": r.choice(["queued", "checking", "landed", "rejected"]), "created": r.choice(ISO),  # noqa: E731
+                             "landed_at": r.choice(ISO), "updated": r.choice(ISO), "fixes": r.sample(["1", "2", "#3", "9"], r.randint(0, 3)),
+                             "diagnoses": r.choice([[], ["2"]]), "commits": r.choice([[], ["c1", "c2"]]), "landed_sha": r.choice([None, "sa", "sb"]),
+                             "worktree": "w", "session": "s"} for i in range(r.randint(0, 3))]
+            facts = {"entries": ents(), "untrailered": ents(), "landed": [(f"s{i}", r.choice([0.0, 50.0, 2e9, -3600.0, 1e9 - 3600]), set(r.sample(["1", "2", "k"], r.randint(0, 2))), "s")
+                                                                         for i in range(r.randint(0, 3))],
+                     "key_runs": {"k": r.sample(["1", "4"], r.randint(0, 2))}, "landed_at": r.choice([{}, {"sa": 1e9}, {"sa": 3e9}]), "repo": r.choice([None, "repo"])}
+            d = {"key": r.choice(["k", "z"]), "runs": ["1", 2], "opened_at": r.choice([0, 1e9, 2e9]), "gate": r.choice([None, True]),
+                 "history": [{"outcome": r.choice(["LANDED abcdef12", "x", None]), "at": r.choice(["2026-11-20T10:00:00Z", None, "junk"])}
+                             for _ in range(r.randint(0, 3))]}
+            return (d, facts)
+        check(self, A, "red_fix_candidates", build, lambda A: lambda d, facts: list(A.red_fix_candidates(d, facts)), 4000)
+
+    def test_red_run_on_way(self):
+        import types
+
+        def build(case):
+            r = case.rng
+            case.fake("git", lambda rng, repo, *a, **k: types.SimpleNamespace(returncode=rng.choice([0, 0, 1]), stdout=" ".join(f"c{i}" for i in range(rng.randint(0, 3)))))
+            case.fake("fix_reaches_red", lambda rng, repo, sha, d: rng.random() < 0.3)
+            run = lambda: {"status": r.choice(["completed", "in_progress", "queued", "queued"]), "headBranch": r.choice(["main"] * 9 + ["x"]),  # noqa: E731
+                           "headSha": r.choice([None, "h1", "h2", "h2", "base"]), "databaseId": r.randint(0, 9)}
+            snap = {"gate": [{"name": "w", "runs": [run() for _ in range(r.randint(0, 4))]}], "outside": [{"name": "w", "runs": [run()]}]}
+            snap = r.choice([None, {}] + [snap] * 8)
+            d = {"last_run": r.choice([None, {"headSha": "base", "databaseId": r.randint(0, 5)}, {"headSha": "base", "databaseId": 2}, {"databaseId": 2}]),
+                 "workflow": "w"}
+            return (d, snap, r.choice([None, "repo"]))
+        check(self, A, "red_run_on_way", build, lambda A: A.red_run_on_way, 3000)
+
+
 if __name__ == "__main__":
     unittest.main()
