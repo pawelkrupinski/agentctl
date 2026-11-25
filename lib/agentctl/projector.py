@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from typing import Any
 from contextlib import suppress
 from agentctl.core import attempt, env_num, err
 from agentctl.timefmt import iso_at
@@ -53,43 +54,77 @@ def project_changes(d, store):
 # id carries the event's seq, so a repeated pass writes nothing twice. The NOTIFIER sends a macOS notification for
 # an item's live severity=escalate event (notify_escalations: one per item, notified_at once delivered). Both run in the processor's loop; `agentctl inbox`, `inbox wait`,
 # the orchestrator's routing and the status line read the inbox as before.
-def project_events(store):
+def _event_id(ev: dict[str, Any]) -> str:
+    """The inbox entry id of an event: its time, its seq and its kind, so a repeated pass writes nothing twice."""
+    return (dt.datetime.fromtimestamp(ev["at"], dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+            + f"-ev{ev['seq']}-{re.sub(r'[^a-z]+', '-', ev['kind'])}")
+
+
+def _verdict_of(ev: dict[str, Any]) -> Any:
+    """The line an event tells: its verdict, else its text, else its kind."""
+    return (ev.get("refs") or {}).get("verdict") or ev.get("text") or ev["kind"]
+
+
+def _owner_of(aud: dict[str, Any]) -> Any:
+    """Whose entry it is: the audience's session, else its worktree."""
+    return aud.get("session") or aud.get("worktree") or "?"
+
+
+def _inbox_record(ev: dict[str, Any], eid: str) -> dict[str, Any]:
+    """The inbox entry, in today's format, of event ev (its audience, its verdict line or text, its tail and exit)."""
+    aud, refs = ev.get("audience") or {}, ev.get("refs") or {}
+    verdict = _verdict_of(ev)
+    final = refs.get("final", True)
+    rec = {"id": eid, "time": iso_at(ev["at"]),
+           "at": ev["at"], "command": refs.get("command") or ev["kind"].split(".")[0], "argv": [],
+           "cwd": aud.get("worktree") or safe_cwd(), "pid": os.getpid(), "final": final,
+           "exit": refs.get("exit", 0 if ev["severity"] == "info" else 1), "verdict": verdict,
+           "kind": inbox_kind(verdict, final), "owner": _owner_of(aud),
+           "claude_pid": aud.get("claude_pid"), "verdicts": [verdict], "tail": list(refs.get("tail") or [])[-25:],
+           "event": ev["seq"], "entry": refs.get("entry"), "item_type": ev.get("item_type"),
+           "item_id": ev.get("item_id")}
+    if refs.get("alert_item"):  # one item, several audiences (reverts.py: the lander's and the orchestrator's)
+        rec["alert_item"] = refs["alert_item"]
+    return rec
+
+
+def _new_inbox_record(ev: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
+    """(the inbox entry of event ev, the inbox directory), None when it has none to write: no audience and info only (or
+    no_inbox: a reminder, ask.py, is a notification alone -- the owner's ONE inbox entry for the red was written when
+    told), or already written."""
+    aud, refs = ev.get("audience") or {}, ev.get("refs") or {}
+    if (not aud and ev["severity"] == "info") or refs.get("no_inbox"):
+        return None
+    eid = _event_id(ev)
+    d = inbox_dir()
+    if os.path.exists(os.path.join(d, eid + ".json")):
+        return None
+    return _inbox_record(ev, eid), d
+
+
+def _write_alert(st: Any, ev: dict[str, Any], rec: dict[str, Any], d: str) -> bool:
+    """THE ALERT MODEL: ev's entry routed, merged into its item's live alert. False when it could not be written."""
+    red = attempt(lambda: st.item("red", ev["item_id"]) if ev.get("item_type") == "red" and ev.get("item_id") else None,
+                  None, catch=(Exception,))
+    try:
+        alert_write(rec, st=st, red=red, d=d)
+        return True
+    except OSError as ex:  # the cursor stays before it: written at the next cycle, never lost
+        err(f"projector: could not write {rec['id']} ({ex})")
+        return False
+
+
+def project_events(store: Any) -> int:
     """Write the inbox entries of the events since the projector's cursor; returns how many."""
     st = store
     cur = int(st.meta_get("projector_seq", 0) or 0)
     n = 0
     for ev in st.events(after=cur):
-        aud, refs = ev.get("audience") or {}, ev.get("refs") or {}
-        if (not aud and ev["severity"] == "info") or refs.get("no_inbox"):  # no_inbox: a reminder (ask.py) is a
-            cur = ev["seq"]  # notification alone -- the owner's ONE inbox entry for the red was written when told
-            continue
-        verdict = refs.get("verdict") or ev.get("text") or ev["kind"]
-        eid = (dt.datetime.fromtimestamp(ev["at"], dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
-               + f"-ev{ev['seq']}-{re.sub(r'[^a-z]+', '-', ev['kind'])}")
-        d = inbox_dir()
-        path = os.path.join(d, eid + ".json")
-        if os.path.exists(path):
-            cur = ev["seq"]
-            continue
-        final = refs.get("final", True)
-        rec = {"id": eid, "time": iso_at(ev["at"]),
-               "at": ev["at"], "command": refs.get("command") or ev["kind"].split(".")[0], "argv": [],
-               "cwd": aud.get("worktree") or safe_cwd(), "pid": os.getpid(), "final": final,
-               "exit": refs.get("exit", 0 if ev["severity"] == "info" else 1), "verdict": verdict,
-               "kind": inbox_kind(verdict, final), "owner": aud.get("session") or aud.get("worktree") or "?",
-               "claude_pid": aud.get("claude_pid"), "verdicts": [verdict], "tail": list(refs.get("tail") or [])[-25:],
-               "event": ev["seq"], "entry": refs.get("entry"), "item_type": ev.get("item_type"),
-               "item_id": ev.get("item_id")}
-        if refs.get("alert_item"):  # one item, several audiences (reverts.py: the lander's and the orchestrator's)
-            rec["alert_item"] = refs["alert_item"]
-        red = attempt(lambda: st.item("red", ev["item_id"]) if ev.get("item_type") == "red" and ev.get("item_id") else None,
-                      None, catch=(Exception,))
-        try:
-            alert_write(rec, st=st, red=red, d=d)  # THE ALERT MODEL: routed, merged into its item's live alert
+        new = _new_inbox_record(ev)
+        if new:
+            if not _write_alert(st, ev, *new):
+                break
             n += 1
-        except OSError as ex:  # the cursor stays before it: written at the next cycle, never lost
-            err(f"projector: could not write {eid} ({ex})")
-            break
         cur = ev["seq"]
     st.meta_set("projector_seq", cur)
     return n
@@ -125,10 +160,124 @@ def notify_failure(store):
 
 
 def _escalation_line(ev):
-    return str((ev.get("refs") or {}).get("verdict") or ev.get("text") or ev["kind"])
+    return (ev.get("refs") or {}).get("verdict") or ev.get("text") or ev["kind"]
 
 
-def notify_escalations(store):
+class EscalationPass:
+    """One pass of the notifier over W6's window of events: what to tell, what to mark untold, and what was delivered."""
+
+    def __init__(self, st: Any) -> None:
+        self.st = st
+        self.cur = int(st.meta_get("notifier_seq", 0) or 0)
+        self.evs = st.events(after=max(0, self.cur - NOTIFY_LOOKBACK), limit=5000)
+        self.t = st.clock()
+        self.told = attempt(lambda: json.loads(st.meta_get("notify_items") or "{}") or {}, {}, catch=(ValueError,))
+        self.items: dict[str, Any] = {}
+        self.live: dict[str, Any] = {}
+        self.covered: list[Any] = []
+
+    def key_of(self, ev: dict[str, Any]) -> str | None:
+        """The key of the item (or event) ev escalates, None when it is covered: its item has moved on (escalation_stale)."""
+        if not (ev.get("item_type") and ev.get("item_id")):
+            return f"event:{ev['seq']}"
+        k = f"{ev['item_type']}:{ev['item_id']}"
+        if k not in self.items:
+            self.items[k] = self.st.item(ev["item_type"], ev["item_id"])
+        if escalation_stale(self.items[k], ev):
+            self.covered.append(ev)
+            return None
+        return k
+
+    def collect(self) -> None:
+        """The newest pending escalation of each item into live, every other one into covered."""
+        for ev in self.evs:
+            if ev["severity"] != "escalate" or ev.get("notified_at"):
+                continue
+            k = self.key_of(ev)
+            if k is None:
+                continue
+            if event_audience(self.st, ev, self.items.get(k), self.t) != "owner":  # THE ALERT MODEL: only the owner's
+                self.covered.append(ev)
+                continue
+            if k in self.live:
+                self.covered.append(self.live[k])
+            self.live[k] = ev
+
+    def is_repeat(self, k: str, ev: dict[str, Any]) -> bool:
+        """ev repeats the item's last told escalation: the same kind and state, in the same spell."""
+        it, prev = self.items.get(k), self.told.get(k) or {}
+        return bool(prev and ev["kind"] not in ("red.ask", "red.remind") and prev.get("kind") == ev["kind"]
+                    and prev.get("state") == ev.get("to_state") and it is not None
+                    and abs(float(prev.get("since") or 0) - float(it.get("entered_at") or 0)) < 1e-6)
+
+    def to_tell(self) -> list[tuple[str, dict[str, Any], bool]]:
+        """(key, event, repeat) of each live escalation due: a repeat waits for its reminder schedule (ask_interval)."""
+        tell = []
+        for k, ev in self.live.items():
+            repeat = self.is_repeat(k, ev)
+            if repeat and self.t - float((self.told.get(k) or {}).get("at") or 0) < ask_interval(
+                    int((self.told.get(k) or {}).get("n") or 1)):
+                self.covered.append(ev)
+                continue
+            tell.append((k, ev, repeat))
+        return tell
+
+    def deliver(self, tell: list[Any]) -> tuple[list[Any], int]:
+        """(the escalations delivered, the notifications shown): more than NOTIFY_BURST are ONE summary."""
+        if len(tell) > NOTIFY_BURST:
+            text = f"{len(tell)} escalations: " + "; ".join(re.sub(r"\s+--\s+`.*$", "", _escalation_line(ev))[:70]
+                                                            for _k, ev, _r in tell)
+            ok = notify(f"agentctl: {len(tell)} escalations (catching up)", text[:220], group="agentctl-summary")
+            return (tell if ok else []), (1 if ok else 0)
+        done: list[Any] = []
+        for k, ev, r in tell:
+            url = attempt(lambda: notification_url(ev, self.st), None, catch=(Exception,))
+            if not notify(f"agentctl: {ev['kind']}", _escalation_line(ev)[:220], url=url,
+                          group=f"agentctl-{ev.get('item_type')}-{ev.get('item_id')}"):
+                break
+            done.append((k, ev, r))
+        return done, len(done)
+
+    def record(self, done: list[Any]) -> None:
+        """Mark the delivered escalations notified and remember each as its item's last told one."""
+        for k, ev, r in done:
+            self.st.mark_notified(ev["seq"])
+            it = self.items.get(k)
+            self.told[k] = {"at": self.t, "kind": ev["kind"], "state": ev.get("to_state"),
+                            "since": (it or {}).get("entered_at"),
+                            "n": int((self.told.get(k) or {}).get("n") or 0) + 1 if r else 1}
+
+    def note_failure(self, tell: list[Any], done: list[Any]) -> None:
+        """notify_failed: both channels failed (invariant WN reads it); cleared once nothing is left undelivered."""
+        st = self.st
+        if len(done) < len(tell):
+            st.meta_set("notify_failed", json.dumps({"at": self.t, "cause": notify_cause(), "fix": notify_fix(),
+                                                      "pending": len(tell) - len(done)}))
+        elif st.meta_get("notify_failed"):
+            st.meta_set("notify_failed", "")
+
+    def run(self) -> int:
+        st = self.st
+        self.collect()
+        tell = self.to_tell()
+        for ev in self.covered:
+            st.mark_notified(ev["seq"])
+        shown = 0
+        if tell:
+            done, shown = self.deliver(tell)
+            self.record(done)
+            self.note_failure(tell, done)
+        elif st.meta_get("notify_failed"):
+            st.meta_set("notify_failed", "")  # nothing left undelivered: no failure stands
+        keep = env_num("AGENTCTL_ASK_REMIND_MAX", ASK_REMIND_MAX) * 2
+        told = {k: v for k, v in self.told.items() if self.t - float(v.get("at") or 0) < keep}
+        st.meta_set("notify_items", json.dumps(told))
+        if self.evs and self.evs[-1]["seq"] > self.cur:
+            st.meta_set("notifier_seq", self.evs[-1]["seq"])
+        return shown
+
+
+def notify_escalations(store: Any) -> int:
     """ONE LIVE NOTIFICATION PER ITEM (2026-11-03, W6: 152 escalations "not notified" -- five reds re-escalating RED
     UNCLAIMED every 10 min for 5 h, each told on its own, 10-20 s apiece, the notifier 3 h behind and telling the owner
     "no taker" about reds held for an hour). Each pass, over W6's window (not only past the cursor: an event the cursor
@@ -142,77 +291,7 @@ def notify_escalations(store):
         and records notify_failed {at, cause, fix}: invariant WN raises ONE condition naming the failed channel's fix;
         W6 defers to it.
     Returns how many notifications were shown."""
-    st = store
-    cur = int(st.meta_get("notifier_seq", 0) or 0)
-    evs = st.events(after=max(0, cur - NOTIFY_LOOKBACK), limit=5000)
-    t = st.clock()
-    told = attempt(lambda: json.loads(st.meta_get("notify_items") or "{}") or {}, {}, catch=(ValueError,))
-    items, live, covered = {}, {}, []
-    for ev in evs:
-        if ev["severity"] != "escalate" or ev.get("notified_at"):
-            continue
-        if ev.get("item_type") and ev.get("item_id"):
-            k = f"{ev['item_type']}:{ev['item_id']}"
-            if k not in items:
-                items[k] = st.item(ev["item_type"], ev["item_id"])
-            if escalation_stale(items[k], ev):
-                covered.append(ev)
-                continue
-        else:
-            k = f"event:{ev['seq']}"
-        if event_audience(st, ev, items.get(k), t) != "owner":  # THE ALERT MODEL: only the owner's is told
-            covered.append(ev)
-            continue
-        if k in live:
-            covered.append(live[k])
-        live[k] = ev
-    tell = []
-    for k, ev in live.items():
-        it, prev = items.get(k), told.get(k) or {}
-        repeat = (prev and ev["kind"] not in ("red.ask", "red.remind") and prev.get("kind") == ev["kind"]
-                  and prev.get("state") == ev.get("to_state") and it is not None
-                  and abs(float(prev.get("since") or 0) - float(it.get("entered_at") or 0)) < 1e-6)
-        if repeat and t - float(prev.get("at") or 0) < ask_interval(int(prev.get("n") or 1)):
-            covered.append(ev)
-            continue
-        tell.append((k, ev, repeat))
-    for ev in covered:
-        st.mark_notified(ev["seq"])
-    shown = 0
-    if tell:
-        if len(tell) > NOTIFY_BURST:
-            text = f"{len(tell)} escalations: " + "; ".join(re.sub(r"\s+--\s+`.*$", "", _escalation_line(ev))[:70]
-                                                            for _k, ev, _r in tell)
-            ok = notify(f"agentctl: {len(tell)} escalations (catching up)", text[:220], group="agentctl-summary")
-            shown = 1 if ok else 0
-            done = tell if ok else []
-        else:
-            done = []
-            for k, ev, r in tell:
-                url = attempt(lambda: notification_url(ev, st), None, catch=(Exception,))
-                if not notify(f"agentctl: {ev['kind']}", _escalation_line(ev)[:220], url=url,
-                              group=f"agentctl-{ev.get('item_type')}-{ev.get('item_id')}"):
-                    break
-                done.append((k, ev, r))
-                shown += 1
-        for k, ev, r in done:
-            st.mark_notified(ev["seq"])
-            it = items.get(k)
-            told[k] = {"at": t, "kind": ev["kind"], "state": ev.get("to_state"),
-                       "since": (it or {}).get("entered_at"), "n": int((told.get(k) or {}).get("n") or 0) + 1 if r else 1}
-        if len(done) < len(tell):
-            st.meta_set("notify_failed", json.dumps({"at": t, "cause": notify_cause(), "fix": notify_fix(),
-                                                        "pending": len(tell) - len(done)}))
-        elif st.meta_get("notify_failed"):
-            st.meta_set("notify_failed", "")
-    elif st.meta_get("notify_failed"):
-        st.meta_set("notify_failed", "")  # nothing left undelivered: no failure stands
-    keep = env_num("AGENTCTL_ASK_REMIND_MAX", ASK_REMIND_MAX) * 2
-    told = {k: v for k, v in told.items() if t - float(v.get("at") or 0) < keep}
-    st.meta_set("notify_items", json.dumps(told))
-    if evs and evs[-1]["seq"] > cur:
-        st.meta_set("notifier_seq", evs[-1]["seq"])
-    return shown
+    return EscalationPass(store).run()
 
 
 def maybe_archive_leases(d, st, every=3600):

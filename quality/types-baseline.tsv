@@ -88,7 +88,7 @@ mypy-errors	policy	45
 mypy-errors	pressure	19
 mypy-errors	processorlink	17
 mypy-errors	procwatch	2
-mypy-errors	projector	25
+mypy-errors	projector	22
 mypy-errors	queue	28
 mypy-errors	queuebatch	57
 mypy-errors	queuecheck	34
@@ -162,7 +162,7 @@ mypy-errors	storestate	8
 mypy-errors	storetoken	46
 mypy-errors	stuckruns	4
 mypy-errors	superseded	26
-mypy-errors	syncsteps	50
+mypy-errors	syncsteps	48
 mypy-errors	tickrun	6
 mypy-errors	tickservice	8
 mypy-errors	tools	56

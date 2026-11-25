@@ -41,6 +41,25 @@ class EventsTest(unittest.TestCase):
         self.assertEqual((entry["kind"], entry["cwd"], entry["verdict"], entry["exit"]),
                          ("LANDED", "/w/a", "LANDED abc1234 (queued e1)", 0))
 
+    def test_a_reminder_with_no_inbox_moves_the_cursor_and_a_failed_write_leaves_it(self):
+        self.st.put_item("change", "n1", "queued")
+        self.st.transition("change", "n1", "queued", 1, event={"kind": "red.remind", "severity": "escalate",
+                                                               "text": "again", "refs": {"no_inbox": True}})
+        self.assertEqual(A.project_events(self.st), 0)
+        self.assertEqual(int(self.st.meta_get("projector_seq")), self.st.events()[-1]["seq"])
+        self.assertEqual(A.inbox_entries(), [])
+        self.st.put_item("change", "n2", "queued")
+        self.st.transition("change", "n2", "queued", 1, event={"kind": "change.stuck", "severity": "escalate",
+                                                               "text": "stuck", "refs": {}})
+        before, saved = self.st.meta_get("projector_seq"), A.alert_write
+        A.alert_write = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
+        try:
+            self.assertEqual(A.project_events(self.st), 0)
+        finally:
+            A.alert_write = saved
+        self.assertEqual(self.st.meta_get("projector_seq"), before)  # the cursor stays before it: written next cycle
+        self.assertEqual(A.project_events(self.st), 1)
+
     def test_the_notifier_notifies_each_escalation_once(self):
         self.st.put_item("change", "e2", "queued")
         self.st.transition("change", "e2", "queued", 1)  # queued past its deadline: an escalation

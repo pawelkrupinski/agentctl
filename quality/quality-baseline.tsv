@@ -100,7 +100,6 @@ cognitive	mem_stats	12
 cognitive	migrate_local_queue	19
 cognitive	name_causes	26
 cognitive	note_precheck	18
-cognitive	notify_escalations	64
 cognitive	open_condition	20
 cognitive	orphan_branches	27
 cognitive	outside_gate	22
@@ -119,7 +118,6 @@ cognitive	plan_worktrees	33
 cognitive	pressure_reading	23
 cognitive	previous_fixer_tree	14
 cognitive	project_changes	14
-cognitive	project_events	25
 cognitive	push_batchable	11
 cognitive	read_overlap	38
 cognitive	recheck_reason	24
@@ -312,7 +310,6 @@ cyclomatic	mem_stats	13
 cyclomatic	migrate_local_queue	13
 cyclomatic	name_causes	20
 cyclomatic	note_precheck	11
-cyclomatic	notify_escalations	47
 cyclomatic	open_condition	22
 cyclomatic	orphan_branches	20
 cyclomatic	out_of_build_reach	17
@@ -332,7 +329,6 @@ cyclomatic	plan_worktrees	23
 cyclomatic	pressure_reading	18
 cyclomatic	previous_fixer_tree	23
 cyclomatic	project_changes	11
-cyclomatic	project_events	21
 cyclomatic	push_batchable	14
 cyclomatic	push_candidates	14
 cyclomatic	read_overlap	25
@@ -424,7 +420,6 @@ method-lines	expire_cache	58
 method-lines	jvm_reap	57
 method-lines	live_registry_read	53
 method-lines	live_stream	51
-method-lines	notify_escalations	85
 method-lines	pick_commits	59
 method-lines	red_claim	62
 method-lines	red_dispatch	59
