@@ -42,6 +42,8 @@ def add_gov(sub: Subparsers) -> None:
     gus.add_argument("--cpu", type=float, required=True, help="CPU seconds it used")
     gus.add_argument("--load1", type=float, default=None, help="the 1-min load at its end (default: now)")
     gus.add_argument("--label", default="")
+    gus.add_argument("--meter", default="", help="how the CPU was measured: `tree` (the process tree, sampled); a run "
+                                                "without it is not counted (GOV_USAGE_METER)")
     gco = gvs.add_parser("cores", help="the cores a job is charged (measured p75, else its default)")
     gco.add_argument("--job", required=True)
     gco.add_argument("--class", dest="cls", default="agent", choices=list(GOV_CLASSES))

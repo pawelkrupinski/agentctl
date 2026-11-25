@@ -323,9 +323,31 @@ class GovernorTest(unittest.TestCase):
         self.assertIsNotNone(self.admit("agent", 1), "no job named (a jvm-gate.sh from before cores): memory only")
         self.assertEqual(A.gov_charged(A.gov_tickets()), 12.0)
 
-    def usage(self, job, cores, load1=1.0, n=3, wall=100):
+    def usage(self, job, cores, load1=1.0, n=3, wall=100, meter="tree"):
         for _ in range(n):
-            A.gov_record_usage(job, wall, cores * wall, load1)
+            A.gov_record_usage(job, wall, cores * wall, load1, meter=meter)
+
+    def test_two_testunits_wider_than_the_cores_are_not_both_admitted(self):
+        """2026-11-25: every testUnit's ps -S measure missed its forked test JVMs (0.5 cores while the fork ran at 5),
+        so the governor charged 0.5 and admitted them all: load 83 on 18 cores. Unmetered runs are not counted."""
+        self.usage("testUnit", 0.5, n=10, meter="")
+        self.assertEqual(A.gov_job_cores("testUnit"), 4.0, "the ps -S era's runs say nothing: the default")
+        self.usage("testUnit", 7.0)
+        self.assertEqual(A.gov_job_cores("testUnit"), 7.0, "the metered runs' p75")
+        keeper = self.admit("agent", 5, job="keeper")
+        self.assertIsNotNone(keeper)
+        self.assertIsNotNone(self.admit("agent", 0, job="testUnit"))
+        self.assertEqual(A.gov_charged(A.gov_tickets()), 7.0, "the keeper's server is charged once: its call's cores")
+        self.assertIsNone(self.admit("agent", 0, job="testUnit"), "7 + 7 > 12 cores")
+        self.assertIsNotNone(self.admit("agent", 5, job="keeper"), "a second server's keeper waits on no cores")
+
+    def test_a_metered_run_is_recorded_from_the_command_line(self):
+        with contextlib.redirect_stdout(io.StringIO()):
+            A.main(["gov", "usage", "--job", "test", "--wall", "100", "--cpu", "600", "--load1", "1", "--meter", "tree"])
+            for _ in range(2):
+                A.main(["gov", "usage", "--job", "test", "--wall", "100", "--cpu", "600", "--load1", "1"])
+        self.assertEqual([r["meter"] for r in A.gov_usage()], ["tree", "", ""])
+        self.assertIsNone(A.gov_measured_cores("test"), "one metered run is not enough")
 
     def test_a_jobs_cores_come_from_its_measured_uncontended_runs(self):
         self.assertEqual(A.gov_job_cores("testUnit"), 4.0, "the default until measured")
