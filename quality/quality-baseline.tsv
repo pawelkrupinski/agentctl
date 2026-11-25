@@ -108,7 +108,6 @@ cognitive	successor_state	33
 cognitive	sweep_land_refs	20
 cognitive	sync_onto_main	18
 cognitive	sync_steps	11
-cognitive	tick_reverts	48
 cognitive	token	34
 cognitive	transcript_paths	26
 cognitive	tunnel_watch	32
@@ -233,7 +232,6 @@ cyclomatic	status_worktree	17
 cyclomatic	successor_state	24
 cyclomatic	sweep_land_refs	17
 cyclomatic	sync_onto_main	16
-cyclomatic	tick_reverts	21
 cyclomatic	token	16
 cyclomatic	transcript_paths	19
 cyclomatic	tunnel_watch	30

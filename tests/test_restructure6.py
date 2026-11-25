@@ -454,7 +454,7 @@ class RevertsTest(unittest.TestCase):
             case.put("RED_PRIMARY", "o/primary")
             st = Probe(case, "st", clock=lambda rng: 77.0, meta_get=lambda rng, key: maybe(rng, rng.choice(["m" * 40, "old"]), 0.6),
                        meta_set=lambda rng, k, v: None, items=lambda rng, kind, states=None: [{"id": f"it{i}"} for i in range(rng.randint(0, 2))])
-            return (r.choice(["/repo", "", None]), st, r.choice([None, 5.0]), r.choice([None, "o/r"]))
+            return (r.choice(["/repo"] * 8 + ["", None]), st, r.choice([None, 5.0]), r.choice([None, "o/r"]))
         check(self, "tick_reverts", build, lambda A: A.tick_reverts, 8000)
 
 

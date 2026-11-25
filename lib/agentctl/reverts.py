@@ -178,38 +178,55 @@ def revert_close(st, it, how, by):
         return False
 
 
+class RevertTick:
+    """The reconciler's scan of main's new commits, a method per step: a commit that re-lands closes the notices it
+    answers, a commit that reverts opens one per landing it reverts. `out` collects the lines."""
+
+    def __init__(self, repo: Any, st: Any, t: float, o_r: str) -> None:
+        self.repo, self.st, self.t, self.o_r = repo, st, t, o_r
+        self.out: list[str] = []
+        self.idx: Any = None  # the lander index, built once the first reverting commit needs it
+
+    def read(self, main: str, cur_key: str, cur: Any) -> None:
+        """Scan since the cursor `cur` (None: the lookback) to `main`, then move the cursor."""
+        if cur and not git_ok(self.repo, "merge-base", "--is-ancestor", cur, main):
+            cur = None  # main rewritten under the cursor: read the lookback again (items dedupe)
+        commits = revert_scan(self.repo, cur, main, self.t)
+        if commits is not None:
+            for c in commits:
+                self.close_reworked(c)
+                if c["reverts"]:
+                    self.open_reverts(c)
+            self.st.meta_set(cur_key, main)
+
+    def close_reworked(self, c: dict[str, Any]) -> None:
+        for it in self.st.items("revert", REVERT_OPEN):
+            how = revert_closer(it, c)
+            if how and revert_close(self.st, it, how, c["sha"]):
+                self.out.append(f"revert {it['id']}: reworked ({how})")
+
+    def open_reverts(self, c: dict[str, Any]) -> None:
+        self.idx = lander_index(lander_records(self.st, self.o_r)) if self.idx is None else self.idx
+        for rec, reverted in revert_landings(self.repo, c, self.idx):
+            iid = revert_open(self.st, c, rec, reverted, self.t)
+            if iid:
+                self.out.append(f"revert {iid}: {c['sha'][:10]} reverts {', '.join(x['sha'][:10] for x in reverted)}"
+                                f" -- told {lander_name(rec.get('lander')) if rec and rec.get('lander') else 'the owner'}")
+
+
 def tick_reverts(repo, st, now_=None, o_r=None):
     """The reconciler's step: main's new commits scanned (re-lands close notices, reverts open them), then each notice
     past its deadline moved (open -> escalated, once, to the owner; escalated -> expired, quietly). Its lines."""
     t = now_ if now_ is not None else st.clock()
     o_r = o_r or RED_PRIMARY
-    out = []
     main = git(repo, "rev-parse", "-q", "--verify", f"refs/remotes/{remote()}/main", check=False).stdout.strip() \
         if repo else ""
     cur_key = f"revert_scan:{o_r}"
     cur = st.meta_get(cur_key) or None
+    tick = RevertTick(repo, st, t, o_r)
     if main and main != cur:
-        if cur and not git_ok(repo, "merge-base", "--is-ancestor", cur, main):
-            cur = None  # main rewritten under the cursor: read the lookback again (items dedupe)
-        commits = revert_scan(repo, cur, main, t)
-        if commits is not None:
-            idx = None
-            for c in commits:
-                for it in st.items("revert", REVERT_OPEN):
-                    how = revert_closer(it, c)
-                    if how and revert_close(st, it, how, c["sha"]):
-                        out.append(f"revert {it['id']}: reworked ({how})")
-                if not c["reverts"]:
-                    continue
-                idx = lander_index(lander_records(st, o_r)) if idx is None else idx
-                for rec, reverted in revert_landings(repo, c, idx):
-                    iid = revert_open(st, c, rec, reverted, t)
-                    if iid:
-                        out.append(f"revert {iid}: {c['sha'][:10]} reverts {', '.join(x['sha'][:10] for x in reverted)}"
-                                   f" -- told {lander_name(rec.get('lander')) if rec and rec.get('lander') else 'the owner'}")
-            st.meta_set(cur_key, main)
-    out += revert_deadlines(st, t)
-    return out
+        tick.read(main, cur_key, cur)
+    return tick.out + revert_deadlines(st, t)
 
 
 def revert_deadlines(st, t):
