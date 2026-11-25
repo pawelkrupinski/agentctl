@@ -440,5 +440,46 @@ class SmallOnesTest(unittest.TestCase):
         check(self, A, "watch_look", build, call, 4000)
 
 
+class Round4BackfillTest(unittest.TestCase):
+    """Proofs the golden digests alone left loose (round 6's backfill): the failure memo's expiry and the cut message."""
+
+    def test_red_run_retired_failure_memo_expires_and_message_is_cut(self):
+        import time
+        calls = []
+
+        def main(o_r):
+            calls.append(o_r)
+            raise RuntimeError("x" * 300)
+        saved = A.retire_main
+        A.retire_main = main
+        try:
+            A._retire_cache.clear()
+            args = ("o/rb", "W", {"databaseId": 7}, ["build"], 1_795_000_000)
+            self.assertIsNone(A.red_run_retired(*args))
+            self.assertEqual(len(A._retire_cache[("why", "o/rb")][1]), len("W #None: ") + 200)
+            self.assertIsNone(A.red_run_retired(*args))  # within the TTL: not asked again
+            self.assertEqual(len(calls), 1)
+            A._retire_cache[("fail", "o/rb")] = (time.time() - A.RETIRE_FAIL_TTL - 1, 0)
+            A.red_run_retired(*args)  # expired: asked again
+            self.assertEqual(len(calls), 2)
+            A._retire_cache[("fail", "o/rb")] = (time.time() - A.RETIRE_FAIL_TTL + 5, 0)
+            A.red_run_retired(*args)  # still inside
+            self.assertEqual(len(calls), 2)
+        finally:
+            A.retire_main = saved
+            A._retire_cache.clear()
+
+    def test_retire_jobs_of_keeps_every_job(self):
+        text = "name: w\non: push\njobs:\n" + "".join(f"  j{i}:\n    name: n{i}\n" for i in range(6))
+        self.assertEqual(list(A.retire_jobs_of(text)), [f"j{i}" for i in range(6)])
+
+    def test_own_inbox_entry_inside_worktree_only_by_path(self):
+        who = (None, "/w/a", None)
+        self.assertTrue(A.own_inbox_entry({"cwd": "/w/a/sub"}, who))
+        self.assertTrue(A.own_inbox_entry({"owner": "x@/w/a"}, who))
+        self.assertFalse(A.own_inbox_entry({"cwd": "/w/ab"}, who))
+        self.assertFalse(A.own_inbox_entry({"cwd": "/w/a"}, (None, None, None)))
+
+
 if __name__ == "__main__":
     unittest.main()
