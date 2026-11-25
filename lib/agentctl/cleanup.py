@@ -362,7 +362,7 @@ def bounded_fetch(repo, *extra, refs=()):
     return True if r.returncode == 0 else (r.stderr.strip().splitlines() or ["exit %d" % r.returncode])[-1][:160]
 
 
-def sweep_repo(repo, idle_days, dry, out):
+def sweep_repo(repo, idle_days, dry, out, store):
     name = os.path.basename(repo)
     now_ = time.time()
     fetched = bounded_fetch(repo, "--prune")
@@ -419,20 +419,20 @@ def sweep_repo(repo, idle_days, dry, out):
             out.append(f"  remote branch {b} not deleted: {e}")
     out.append("== branches whose owner is gone (worktree removed or pid dead) and whose runs all finished")
     try:
-        if not orphan_branches(repo, o_r or slug(repo), dry, out):
+        if not orphan_branches(repo, o_r or slug(repo), dry, out, store):
             out.append("  none")
     except (Exception, SystemExit) as e:
         out.append(f"  could not list them ({str(e)[:160]})")
 
 
-def cmd_sweep(a):
+def cmd_sweep(a, store):
     repos = [os.path.abspath(os.path.expanduser(r)) for r in (a.repo or SWEEP_REPOS)]
     out = [f"agentctl sweep {ts()}{' (DRY RUN)' if a.dry_run else ''}: unmerged and idle > {a.idle_days} d is listed, "
            "never deleted; remote branches proven merged into main are deleted (standing OK)"]
     rc = 0
     for repo in repos:
         try:
-            sweep_repo(repo, a.idle_days, a.dry_run, out)
+            sweep_repo(repo, a.idle_days, a.dry_run, out, store)
         except RuntimeError as e:
             out.append(f"== {os.path.basename(repo)}: {e}")
             rc = 1

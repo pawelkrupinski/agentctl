@@ -317,17 +317,18 @@ def land_lease_name(repo: str) -> str:
     return "land/" + re.sub(r"[^A-Za-z0-9._-]", "_", key.strip("/"))
 
 
-def land_lease_hold(repo: str) -> LeaseHold:
+def land_lease_hold(repo: str, store: Any) -> LeaseHold:
     return LeaseHold(land_lease_name(repo), env_num("AGENTCTL_LAND_LEASE_TTL", LAND_LEASE_TTL),
-                     env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX), meta={"repo": repo})
+                     env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX), meta={"repo": repo},
+                     store=store)
 
 
 @contextlib.contextmanager
-def land_lock(repo: str, clock: Clock) -> Iterator[bool]:
+def land_lock(repo: str, clock: Clock, store: Any) -> Iterator[bool]:
     """Hold the repository's landing lease, waiting for it (LAND_LOCK_TIMEOUT s at most) with a line saying who holds
     it and doing what, repeated every LAND_WAIT_REPORT_MIN minutes. Yields True when held, False when the wait timed
     out."""
-    h = land_lease_hold(repo)
+    h = land_lease_hold(repo, store)
     if not (h.acquire() or waited_for_lease(h, clock)):
         yield False
         return
@@ -336,10 +337,10 @@ def land_lock(repo: str, clock: Clock) -> Iterator[bool]:
 
 
 @contextlib.contextmanager
-def land_lock_if_free(repo: str) -> Iterator[bool]:
+def land_lock_if_free(repo: str, store: Any) -> Iterator[bool]:
     """The landing lease when it is free now, else False: the tick's pushes, where busy now is tried again next tick
     (never a tick held for hours)."""
-    h = land_lease_hold(repo)
+    h = land_lease_hold(repo, store)
     if not h.acquire():
         yield False
         return

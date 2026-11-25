@@ -8,7 +8,6 @@ import time
 import urllib.parse
 from agentctl.core import err, fmt_age, git, host_role, reds_dir, remote
 from agentctl.statefile import read_record, write_json
-from agentctl.store import open_store
 from agentctl.forge import api, forge_release_asset
 
 
@@ -63,10 +62,10 @@ def read_pins(o_r, tag):
 _pin_tried = [0.0]
 
 
-def stored_pins(st=None):
+def stored_pins(st):
     """The pins record the store holds (PIN_META), or None."""
     try:
-        v = (st or open_store()).meta_get(PIN_META)
+        v = st.meta_get(PIN_META)
         rec = json.loads(v) if v else None
     except (Exception, SystemExit) as e:
         err(f"pinned recording: the store's copy not read ({str(e).replace('agentctl: ', '')[:160]})")
@@ -74,10 +73,10 @@ def stored_pins(st=None):
     return rec if isinstance(rec, dict) and rec.get("pins") else None
 
 
-def store_pins(rec, st=None):
+def store_pins(rec, st):
     """The pins into the store (PIN_META) for the reconciler; the local cache marks them stored. Never fatal."""
     try:
-        (st or open_store()).meta_set(PIN_META, json.dumps({k: rec[k] for k in ("at", "repo", "tag", "pins")}))
+        st.meta_set(PIN_META, json.dumps({k: rec[k] for k in ("at", "repo", "tag", "pins")}))
     except (Exception, SystemExit) as e:
         err(f"pinned recording: not stored ({str(e).replace('agentctl: ', '')[:160]})")
         return rec
@@ -86,7 +85,7 @@ def store_pins(rec, st=None):
     return rec
 
 
-def refresh_pinned_recording(o_r, repo, now_=None, force=False, role=None):
+def refresh_pinned_recording(o_r, repo, st, now_=None, force=False, role=None):
     """The convergence pins, never fatal. The reconciler (role server) copies the store's record into its cache and
     never reads release assets itself. The laptop (local, or the sync in remote-store mode) re-reads them from the
     release at most every PIN_REFRESH s (PIN_RETRY s after a failure) with the token it holds, and writes them into the
@@ -94,13 +93,13 @@ def refresh_pinned_recording(o_r, repo, now_=None, force=False, role=None):
     t = now_ if now_ is not None else time.time()
     rec = read_record(pinned_path()) or {}
     if (role or host_role()) == "server":
-        got = stored_pins()
+        got = stored_pins(st)
         if got and {k: got.get(k) for k in ("at", "tag", "pins")} != {k: rec.get(k) for k in ("at", "tag", "pins")}:
             rec = {**got, "stored": True}
             write_json(pinned_path(), rec)
         return rec
     if rec.get("pins") and not rec.get("stored"):
-        rec = store_pins(rec)
+        rec = store_pins(rec, st)
     if not force and (t - float(rec.get("at") or 0) < PIN_REFRESH or t - _pin_tried[0] < PIN_RETRY):
         return rec
     _pin_tried[0] = t
@@ -112,7 +111,7 @@ def refresh_pinned_recording(o_r, repo, now_=None, force=False, role=None):
         if pins:
             rec = {"at": t, "repo": o_r, "tag": tag, "pins": pins}
             write_json(pinned_path(), rec)
-            rec = store_pins(rec)
+            rec = store_pins(rec, st)
     except (Exception, SystemExit) as e:
         err(f"pinned recording: not re-read ({str(e)[:160]})")
     return rec

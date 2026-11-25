@@ -8,7 +8,7 @@ import time
 import re
 from agentctl.core import process_cache
 from agentctl.timefmt import ts
-from agentctl.store import LeaseLost, open_store
+from agentctl.store import LeaseLost
 from agentctl.procs import socket_host
 from agentctl.redrecord import lease_is_live
 
@@ -40,9 +40,9 @@ _held_leases: list["LeaseHold"] = process_cache([])  # the LeaseHold objects thi
 class LeaseHold:
     """One lease this process holds: acquired (or not: held elsewhere), renewed on progress, released at the end."""
 
-    def __init__(self, name: str, ttl: float, max_hold: float, meta: dict[str, Any] | None = None, store: Any = None):
+    def __init__(self, name: str, ttl: float, max_hold: float, meta: dict[str, Any] | None = None, *, store: Any):
         self.name, self.ttl, self.max_hold, self.meta = name, ttl, max_hold, dict(meta or {}, pid=os.getpid())
-        self.store = store or open_store()
+        self.store = store
         self.lease: dict[str, Any] | None = None
         self.held: Any = None
 
@@ -69,9 +69,8 @@ class LeaseHold:
             self.lease = None
 
 
-def lease_live(name: str, store: Any = None) -> dict[str, Any] | None:
+def lease_live(name: str, st: Any) -> dict[str, Any] | None:
     """The live lease `name` (its row, meta decoded), or None."""
-    st = store or open_store()
     r: dict[str, Any] | None = st.get(name)
     if r and r["holder"] and r["expires_at"] > st.clock():
         r["meta"] = json.loads(r["meta"] or "{}")

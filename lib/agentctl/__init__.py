@@ -2,7 +2,7 @@
 
 Each module imports the standard library and the modules before it in MODULES, explicitly, and nothing else: a name
 is the module's own or imported. The entry (~/bin/agentctl) imports cli, the composition root: it wires what a module
-must not import (`wire_store(process_store)`, the probes, ...) and holds main. cli's imports reach every module.
+must not import (`CurrentStore(process_store)`, the probes, ...) and holds main. cli's imports reach every module.
 
 MODULES is every module in import order, each after every module it imports (devtools/placemodules.py writes it): the
 manifest the quality tools (quality/typecheck.py) and the tests' view of the package (tests/agentctl_view.py) read.

@@ -214,7 +214,7 @@ def orphan_candidates(repo, store, now_=None, dead=None, refused=None, lands=Non
             continue
         commits, key = orphan_key(repo, p)
         if commits and key:
-            why = blame_land_refusal(p, commits, p, records=records)
+            why = blame_land_refusal(p, commits, store, p, records=records)
             if why:  # 2026-11-01: movies-wt-revert-629 submitted as an orphan after its blame was withdrawn
                 if dead is not None:
                     dead.append((p, why))
@@ -293,7 +293,7 @@ def probe_orphan_landed(a: dict[str, Any], store: Any) -> tuple[bool, str]:
     sup = superseded_mark(rp)
     if sup:
         return True, f"superseded by {sup['by']}"
-    dead = blame_land_refusal(wt, _c, wt, store=store)
+    dead = blame_land_refusal(wt, _c, store, wt)
     if dead:
         return True, f"never landed: {dead}"
     kept = orphan_refusal(wt, _c)
@@ -356,7 +356,7 @@ def orphan_duty(store, repo=None, dry_run=False, now_=None):
     for wt, why in dead:  # a dead blame revert: never submitted; blame's own worktree removed (only its reverts in it)
         name = os.path.basename(wt)
         did.append(f"orphan {name}: not submitted ({why})" if dry_run else
-                   f"orphan {name}: not submitted ({why}); {blame_drop_revert_worktree(repo, wt, None, why)}")
+                   f"orphan {name}: not submitted ({why}); {blame_drop_revert_worktree(repo, wt, None, why, store)}")
     for wt, commits, key, verdict in cands:
         rec = st.get(key) or {"worktree": wt, "first": ts(), "actions": []}
         name = os.path.basename(wt)
@@ -394,7 +394,7 @@ def orphan_duty(store, repo=None, dry_run=False, now_=None):
             if acted >= ORPHAN_PER_PASS:  # a few a pass: the queue is shared
                 continue
             acted += 1  # SUBMITTED ONCE (design §11 I9): its checks then decide; a rejection is its red's to rescue
-            w = reland_worktree(None, {"worktree": wt, "attempt": 1, "repo": repo})
+            w = reland_worktree(None, {"worktree": wt, "attempt": 1, "repo": repo}, store)
             rec["actions"].append({"at": ts(), "what": "submit", "msg": w})
             did.append(f"orphan {name}: {rec['actions'][-1]['what']} ({verdict or 'never landed'})")
             if not str(w).startswith("not landed"):
@@ -419,7 +419,7 @@ def orphan_duty(store, repo=None, dry_run=False, now_=None):
                 elif acted < ORPHAN_PER_PASS:
                     acted += 1
                     rec["infra_retries"] = n + 1
-                    w = reland_worktree(None, {"worktree": wt, "attempt": n + 2, "repo": repo})
+                    w = reland_worktree(None, {"worktree": wt, "attempt": n + 2, "repo": repo}, store)
                     rec["actions"].append({"at": ts(), "what": "submit", "msg": w, "infra": after[:200]})
                     did.append(f"orphan {name}: submit again (its last try failed on infra: {after[:120]})")
                     if not str(w).startswith("not landed"):

@@ -22,9 +22,6 @@ BLOCKED = ("BLOCKED ON OWNER: `! secrets unlock movies`: `secrets run movies TMD
 class VaultBase(AskBase):
     def setUp(self):
         super().setUp()
-        saved = A.open_store
-        A.open_store = lambda *a, **k: self.st
-        self.addCleanup(setattr, A, "open_store", saved)
 
     def ios_red(self, key="oi77", n=77):
         return self.red(key=key, workflow="Order independence", job="ios", kind="test",
@@ -106,7 +103,7 @@ class VaultAskTest(VaultBase):
         self.assertIn('decide vault-movies "here"', line, "the one line to run is in the telling")
         eid = A.alert_write({"id": "20261116T034801000000-ev1-red-ask", "at": self.t[0], "command": "red", "cwd": "/",
                              "final": True, "exit": 1, "verdict": line, "verdicts": [line], "tail": [],
-                             "item_type": "red", "item_id": it["id"]}, A.CurrentStore())
+                             "item_type": "red", "item_id": it["id"]}, A.CurrentStore(A.process_store))
         rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-movies", "here")
         self.assertEqual(rc, 0, out)
         self.assertIn("DECIDED", out[0])

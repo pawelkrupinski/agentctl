@@ -174,7 +174,7 @@ def overlap_candidate(o, e, stacks):
     return o["id"] not in (e.get("cycle_ignore") or []) and not dependency_between(o, e, stacks)
 
 
-def overlap_hold(repo, d, e, entries, facts, t, stacks=None):
+def overlap_hold(st, repo, d, e, entries, facts, t, stacks=None):
     """(older entry, shared files, conflicting files or None) queued change e waits for (OVERLAPPING CHANGES ARE
     CHECKED AS ONE), or None. stacks: {id: the entry it is stacked on} (holdgraph.py A STACKED CHANGE WAITS FOR ITS
     PARENT): a parent and its stacked change are never each other's overlap, and each change's files are its own
@@ -198,8 +198,8 @@ def overlap_hold(repo, d, e, entries, facts, t, stacks=None):
             continue
         if conflict is None and o.get("status") == "queued" and not o.get("backlog_batch"):
             if together is None:
-                together = backlog_batchable(repo, d, e, t, facts)
-            if together and backlog_batchable(repo, d, o, t, facts):
+                together = backlog_batchable(st, repo, d, e, t, facts)
+            if together and backlog_batchable(st, repo, d, o, t, facts):
                 continue  # the next backlog batch checks them as one (its assembly resolves the `resolvable`)
         conflict = conflict or resolvable or None  # resolved only in a batch of the two: else it cannot be assembled
         if conflict:  # the one it cannot be assembled with is the one its author hears of
@@ -409,7 +409,7 @@ def queue_join(st, repo, d, e, tree, head, why=None):
     supersede_older_waiting(st, d, e["worktree"], e.get("branch") or "", e["id"])
     for k in QUEUE_ONLY_FIELDS:
         e.pop(k, None)
-    e.update(tip=head, commits=commits, fixes=sorted(fixes_of(repo, commits)))
+    e.update(tip=head, commits=commits, fixes=sorted(fixes_of(repo, commits, st)))
     line = note_waiting(d, os.path.join(d, f"check-{e['id']}"), head, e["id"]) + (f": {why}" if why else "")
     # policy: red-gate
     set_change(st, d, e, "waiting", event=change_event(e, line, code=None, final=False), decided=ts())
@@ -423,7 +423,7 @@ def checks_here():
     return host_role() != "server"
 
 
-def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, own=None):
+def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
     """(ok, output, where) of the change's checks: on the CI tier when the repo has the remote check workflow (owner
     decision 1; the reconciler is ci-runner's, the laptop runs no checks since its tick went), else in the tree,
     admitted by the governor. ok None: stalled."""
@@ -431,7 +431,7 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, o
     why = "its remote run, adopted" if adopted else "the CI tier (owner decision 1)"
     if adopted or remote_checks_supported(tree):
         wlog(d, f"{e['id']}: checks on {why}")
-        ok, out = remote_check(repo, e, base, head, mode, clock, own, red=cls == "red")
+        ok, out = remote_check(repo, e, base, head, mode, clock, st, own, red=cls == "red")
         if ok is not None:
             return ok, out, f"on ci-runner ({why})"
         if not checks_here():
@@ -461,7 +461,7 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, o
     return (None if rc is None else rc == 0), out, f"locally, check tree {os.path.basename(tree)}"
 
 
-def backlog_batchable(repo: str, d: str, e: dict[str, Any], t: float, facts: dict[str, Any] | None = None) -> bool:
+def backlog_batchable(st: Any, repo: str, d: str, e: dict[str, Any], t: float, facts: dict[str, Any] | None = None) -> bool:
     """Whether queued entry e may join a backlog batch now (THE BACKLOG BATCH, above): its KIND lets it (no red fix,
     no --no-batch, no batch_alone, no identity change it cannot tell: changekind.py) and its state does (queued, no verify round, no
     retry due, no own run or live checker)."""
@@ -470,23 +470,23 @@ def backlog_batchable(repo: str, d: str, e: dict[str, Any], t: float, facts: dic
         return False
     if rem.get("run") is not None and not rem.get("collected_at"):  # its own run: a checker adopts it
         return False
-    if checker_alive(e["id"]):
+    if checker_alive(st, e["id"]):
         return False
-    return kind_of(repo, e, facts, t)["backlog_batch"] is None
+    return kind_of(st, repo, e, facts, t)["backlog_batch"] is None
 
 
-def batch_queued(repo: str, d: str, entries: list[dict[str, Any]], facts: dict[str, Any] | None,
+def batch_queued(st: Any, repo: str, d: str, entries: list[dict[str, Any]], facts: dict[str, Any] | None,
                  t: float) -> list[dict[str, Any]]:
     """The queued, not-yet-checked entries a batch may take now (backlog_batchable, held behind no change outside it),
     oldest first."""
-    return sorted((e for e in entries if backlog_batchable(repo, d, e, t, facts)
-                   and not overlap_hold(repo, d, e, entries, facts, t)), key=lambda e: e["seq"])
+    return sorted((e for e in entries if backlog_batchable(st, repo, d, e, t, facts)
+                   and not overlap_hold(st, repo, d, e, entries, facts, t)), key=lambda e: e["seq"])
 
 
-def kind_of(repo, e, facts, t):
+def kind_of(st, repo, e, facts, t):
     """Entry e's kind (changekind.py classify_change) under facts (queue_facts of the gate's reds when None), read as
     it is now: a flag set since the tick began (push_alone, batch_alone, known_red) counts."""
-    return classify_change(e, facts if facts is not None else queue_facts(gate_reds(repo)), t, repo)
+    return classify_change(e, facts if facts is not None else queue_facts(gate_reds(repo), st), t, repo)
 
 
 _behind_said = process_cache({})  # (entry id, what) -> batch id: said once per batch

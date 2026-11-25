@@ -27,7 +27,7 @@ def push_batch_item(repo, d, st, it):
     if not members:
         batch_move(st, it, "assembling", text=f"batch {it['id']}: its changes are gone")
         return f"batch {it['id']}: nothing to push"
-    slot = tree_slot(d, i)  # its tree: never touched under a checker that took the slot since the batch's check
+    slot = tree_slot(st, d, i)  # its tree: never touched under a checker that took the slot since the batch's check
     if not slot.acquire():
         return f"batch {it['id']}: its check tree is busy"
     try:
@@ -39,7 +39,7 @@ def push_batch_item(repo, d, st, it):
 def _push_batch_item(repo, d, st, it, members, tip, base, i):
     _d, clone, _w = waiting_state(repo)
     tree = f"{clone}-wt-check-{i}"
-    with land_lock_if_free(repo) as held:
+    with land_lock_if_free(repo, st) as held:
         if not held:
             return f"batch {it['id']}: the landing lease is busy"
         git(repo, "fetch", "--quiet", remote(), "main", check=False)

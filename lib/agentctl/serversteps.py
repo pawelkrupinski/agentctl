@@ -80,8 +80,8 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
     return (("clone health", lambda: [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo, store)] if x]
              if heal_enabled(repo) else None),
             ("change items", lambda: project_changes(d, store)),
-            ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, clock, d,
-                                                                                                  store)])),
+            ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, clock, store,
+                                                                                                  d)])),
             ("stranded changes", lambda: stranded_changes(repo, d, store)),
             ("change tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d, clock, store)])),
             ("land hold", lambda: tick_land_hold(store)),

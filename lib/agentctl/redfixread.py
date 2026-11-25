@@ -10,7 +10,6 @@ from agentctl.procrunner import process_runner
 from agentctl.core import err, git, git_ok, process_cache, reds_dir, remote
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import gh_json
-from agentctl.store import open_store
 from agentctl.repos import red_repo_of
 from agentctl.workflows import fix_workflow_jobs
 from agentctl.trailers import trailer_values
@@ -51,7 +50,7 @@ def red_main_current(repo, snap):
     return True
 
 
-def landed_fix_commits(repo):
+def landed_fix_commits(store, repo):
     """[(sha, commit time, {values}, subject)]: Fixes-Red commits on origin/main in the last 3 days -- but for one whose
     `Red-Unrelated:` trailer says it names the red only to pass the gate (`red_unrelated`): landed, it is no more a fix
     than queued. Identity model convergence #2432 (2026-10-28): four CI speed-ups carrying `Fixes-Red: 2392` beside one
@@ -64,7 +63,7 @@ def landed_fix_commits(repo):
     for line in (r.stdout if r.returncode == 0 else "").splitlines():
         sha, ct, unrelated, vals, subj = (line.split("\t", 4) + ["", "", "", "", ""])[:5]
         if trailer_values(vals) and not unrelated.strip():
-            counted = fix_check(repo, sha, trailer_values(vals))[0]  # a trailer touching nothing the red reads: no fix
+            counted = fix_check(repo, sha, trailer_values(vals), store)[0]  # a trailer touching nothing the red reads: no fix
             if counted:
                 out.append((sha, float(ct or 0), counted, subj))
     return out
@@ -425,7 +424,7 @@ def fix_reaches_red(repo, sha, d):
     return bool(cache[k].get("ok"))
 
 
-def fix_check(repo, sha, values, store=None):
+def fix_check(repo, sha, values, store):
     """(the values that count as fixes, {value: why not} for those that do not): each `Fixes-Red:` value of commit sha
     against the reds it names (see above): a value counts when any red it names reads the commit. Cached per sha; a
     value naming no known red counts (unsure) and is not cached, so a red opened later is still checked."""
@@ -445,8 +444,7 @@ def fix_check(repo, sha, values, store=None):
     if not todo:
         return ok, bad
     try:
-        st = store or open_store()
-        items = [it for it in st.items("red") if it["data"].get("key")]
+        items = [it for it in store.items("red") if it["data"].get("key")]
     except (Exception, SystemExit):  # SystemExit: NoToken (the laptop's land with no token: the server checks again)
         items = []
     changed = None

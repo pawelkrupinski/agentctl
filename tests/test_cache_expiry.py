@@ -91,11 +91,11 @@ class CacheExpiryTest(unittest.TestCase):
         A.cmd_orphans = lambda a: 0
         A.orphan_duty = lambda store, dry_run=False: []
         A.write_beat = lambda name: None
-        A.cmd_sweep = lambda a: 0
+        A.cmd_sweep = lambda a, st: 0
         try:
             out = io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-                A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False), A.CurrentStore())
+                A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False), A.CurrentStore(A.process_store))
         finally:
             for k, v in saved.items():
                 setattr(A, k, v)

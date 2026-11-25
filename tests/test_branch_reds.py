@@ -114,7 +114,7 @@ class BranchRedTest(BranchBase):
         its = [i for i in st.items("red") if i["data"]["red_kind"] == "predicts"]
         self.assertTrue(its and all(i["state"] == "offered" and i["data"]["predicts"] == self.branch for i in its), its)
         self.assertIn("main will fail the same way next", A.fixer_prompt(units[0], "/wt", "/brief"))
-        red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.open_store())
+        red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.process_store())
         self.assertFalse(red)
         self.assertIn("branch reds: 1 → movies-wt-drift (convergence #2116 PREDICTS MAIN RED)", line)
         self.assertNotIn("no reds", line)
@@ -131,7 +131,7 @@ class BranchRedTest(BranchBase):
         self.addCleanup(setattr, A, "read_pins", saved)
         seen = []
         A.read_pins = lambda o_r, tag_: seen.append(tag_) or dict(pins)
-        A.refresh_pinned_recording(MOVIES, self.r.path, force=True, role="sync")  # the laptop reads the release
+        A.refresh_pinned_recording(MOVIES, self.r.path, A.CurrentStore(A.process_store), force=True, role="sync")  # the laptop reads the release
         self.assertEqual(seen, [tag])
 
     def test_the_pinned_recording_is_read_from_the_movies_repo_never_hard_coded(self):
@@ -155,7 +155,7 @@ class BranchRedTest(BranchBase):
         self.assertNotIn("PREDICTS", line)
         self.assertIn("(recording 3166 ≠ main's 573); blocks promoting recording 3166", line)
         self.assertEqual(A.predict_units(MOVIES, snap), [])
-        summary = A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path, store=A.open_store())[1]
+        summary = A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path, store=A.process_store())[1]
         self.assertIn("branch reds: 1 → movies-wt-drift (convergence #2116)", summary)
 
     def test_a_commit_not_on_main_predicts_nothing(self):
@@ -174,7 +174,7 @@ class BranchRedTest(BranchBase):
         self.assertEqual(len(A.branch_reds(self.snap())), 1)
         A.branch_exists = lambda o_r, b: False
         self.assertEqual(A.branch_reds(self.snap()), [])
-        self.assertEqual(A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.open_store())[1],
+        self.assertEqual(A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.process_store())[1],
                          "gate green · no reds")
         A.branch_exists = lambda o_r, b: True
         runs = json.load(open(os.path.join(self.d, "runs.json")))
@@ -236,7 +236,7 @@ class OrphanBranchRedTest(BranchBase):
                                brun(3554, 2371, self.on, self.b71, created=now, wf=IDRUN, wfile=IDRUN_FILE),
                                dict(run(40, 20, "Main", "main.yml", self.sha), event="push"),
                                dict(run(39, 19, CONV, CONV_FILE, self.sha), event="workflow_dispatch")])
-        self.store = A.open_store()
+        self.store = A.process_store()
 
     def reds(self, snap):
         return {e["run"]["number"]: e for e in snap["branches"] if e.get("red")}
@@ -258,7 +258,7 @@ class OrphanBranchRedTest(BranchBase):
         self.assertEqual(A.settle_branch_reds(MOVIES, snap, self.store), [])  # once
         self.assertEqual(A.route_branch_reds(MOVIES, snap), [])
         self.assertEqual([x for x in A.inbox_entries() if x["kind"] == "BRANCH_RED"], [])
-        line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.open_store())[1]
+        line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.process_store())[1]
         self.assertNotIn("NOBODY", line)
         self.assertNotIn("branch reds", line)
 
@@ -349,9 +349,8 @@ class OrphanBranchRedTest(BranchBase):
         self.addCleanup(setattr, A, "delete_remote_branch", saved)
         ids = {self.b65: 3548, self.b70: 3553}
         out = []
-        A.orphan_branches(self.r.path, MOVIES, False, out,
-                          lambda b: [dict(brun(ids.get(b, 1), 1, self.sha, b, wf=IDRUN, wfile=IDRUN_FILE))],
-                          store=self.store)
+        A.orphan_branches(self.r.path, MOVIES, False, out, self.store,
+                          lambda b: [dict(brun(ids.get(b, 1), 1, self.sha, b, wf=IDRUN, wfile=IDRUN_FILE))])
         self.assertEqual(deleted, [self.b65], out)
         self.assertTrue(any("its red closed as an orphan" in l for l in out), out)
 
@@ -375,12 +374,12 @@ class SweepOrphansTest(BranchBase):
             st = "in_progress" if b.endswith("-3") else "completed"
             return [dict(brun(90, 1, self.sha, b), status=st)]
         out = []
-        found = A.orphan_branches(self.r.path, MOVIES, False, out, runs_for)
+        found = A.orphan_branches(self.r.path, MOVIES, False, out, A.CurrentStore(A.process_store), runs_for)
         self.assertEqual(deleted, ["measure/pawel/aaaaaaaaa-1"])
         self.assertEqual(sorted(found), ["check/20261027-1-movies-wt-gone-1", "measure/pawel/aaaaaaaaa-1"])
         self.assertTrue(any("check/20261027-1-movies-wt-gone-1" in l and "listed, kept" in l for l in out), out)
         out2, deleted[:] = [], []
-        A.orphan_branches(self.r.path, MOVIES, True, out2, runs_for)
+        A.orphan_branches(self.r.path, MOVIES, True, out2, A.CurrentStore(A.process_store), runs_for)
         self.assertEqual(deleted, [])
         self.assertTrue(any(l.startswith("  would delete OWNER GONE branch measure/pawel/aaaaaaaaa-1") for l in out2), out2)
 

@@ -51,8 +51,8 @@ class Phase2Base(unittest.TestCase):
         c.close()
 
     def sync(self):
-        """This process plays the laptop's sync from here on: open_store() is RemoteStore(self.url) -- the server thread's
-        own open_store() calls included, which reach the same database through the API."""
+        """This process plays the laptop's sync from here on: the process store is RemoteStore(self.url) -- the server thread's
+        own process_store() calls included, which reach the same database through the API."""
         os.environ.pop("AGENTCTL_ROLE", None)
         os.environ.update(AGENTCTL_STORE_URL=self.url, AGENTCTL_STORE_TOKEN="tok-pawel")
 
@@ -143,9 +143,9 @@ class RemoteStoreTest(Phase2Base):
         evs = r.events(after=0)
         self.assertTrue(any(e["kind"] == "condition.closed" for e in evs))
 
-    def test_open_store_returns_a_remote_store_when_the_url_is_set_and_every_method_goes_through_the_rpc(self):
+    def test_process_store_returns_a_remote_store_when_the_url_is_set_and_every_method_goes_through_the_rpc(self):
         self.sync()
-        s = A.open_store()  # the composition root's opener (cli wires process_store)
+        s = A.process_store()  # the composition root's opener (cli wires process_store)
         self.assertIsInstance(s, A.RemoteStore)
         self.assertNotIsInstance(A.Store(), A.RemoteStore)  # the class is the file store, never another one
         self.assertIsInstance(A.Store(path=os.path.join(self.tmp, "x.db")), A.Store)
@@ -160,13 +160,13 @@ class RemoteStoreTest(Phase2Base):
         os.environ.pop("AGENTCTL_ROLE")
         os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"
         self.assertEqual(A.host_role(), "sync")  # the laptop: always the sync, never a store of its own
-        self.assertEqual(A.open_store().url, "http://127.0.0.1:9")  # the default (ci-runner's; the tests' closed port)
+        self.assertEqual(A.process_store().url, "http://127.0.0.1:9")  # the default (ci-runner's; the tests' closed port)
         self.assertEqual(A.main(["store", "use", self.url]), 0)
-        self.assertIsInstance(A.open_store(), A.RemoteStore)
-        self.assertEqual(A.open_store().url, self.url)
+        self.assertIsInstance(A.process_store(), A.RemoteStore)
+        self.assertEqual(A.process_store().url, self.url)
         with self.assertRaises(A.StoreUnavailable):  # a store that does not answer is never switched to
             A.main(["store", "use", "http://127.0.0.1:9"])
-        self.assertEqual(A.open_store().url, self.url)
+        self.assertEqual(A.process_store().url, self.url)
         with self.assertRaises(SystemExit):
             A.main(["store", "use", "--local"])  # gone with the laptop's store
         with self.assertRaises(SystemExit):
@@ -957,14 +957,14 @@ class LandHoldTest(Phase2Base):
         os.environ["AGENTCTL_ROLE"] = "server"  # ci-runner's reconciler
         os.environ.pop("AGENTCTL_STORE_URL")
         d, _c, _w = A.waiting_state(self.repo)
-        self.assertIsNotNone(A.land_hold(A.open_store()))
+        self.assertIsNotNone(A.land_hold(A.process_store()))
         saved = A.waiting_entries, A.current_batch
         A.waiting_entries = lambda d_, **kw: [{"id": "e1"}]  # a change waits: only the hold stops the batch
         try:
             self.assertEqual(A.tick_batch(self.repo, d, *on_clock(A.Clock())), ["held"])
         finally:
             A.waiting_entries, A.current_batch = saved
-        A.write_snapshot(d, A.CurrentStore())
+        A.write_snapshot(d, A.CurrentStore(A.process_store))
         self.sync()
         st = A.state_read()
         self.assertEqual(st["hold"]["why"], "infra deploy")
@@ -999,7 +999,7 @@ class CurrentStoreTest(Phase2Base):
     def test_a_long_running_holder_follows_store_use(self):
         os.environ.pop("AGENTCTL_ROLE")
         os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"
-        cs = A.CurrentStore()
+        cs = A.CurrentStore(A.process_store)
         with self.assertRaises(A.StoreUnavailable):
             cs.acquire("red/w", "laptop:fixer:w", 600, 3600)  # the default store does not answer here
         self.assertEqual(A.main(["store", "use", self.url]), 0)
@@ -1027,22 +1027,22 @@ class CloseAfterWatchTest(Phase2Base):
 
 class W7Test(Phase2Base):
     def test_w7_flags_a_sync_behind_the_event_feed_and_clears_once_it_projects(self):
-        self.assertEqual(A.inv_w7(A.Clock(), A.CurrentStore())[0], True)  # the server: no sync here to lag
+        self.assertEqual(A.inv_w7(A.Clock(), A.CurrentStore(A.process_store))[0], True)  # the server: no sync here to lag
         self.sync()
-        self.assertEqual(A.inv_w7(A.Clock(), A.CurrentStore())[0], True)  # no events
+        self.assertEqual(A.inv_w7(A.Clock(), A.CurrentStore(A.process_store))[0], True)  # no events
         it = self.st.put_item("condition", "w7", "open", {})
         self.st.transition("condition", "w7", "closed", it["version"], event={"text": "x"})
         seq = max(e["seq"] for e in self.st.events())
         c = self.st.db()
         c.execute("UPDATE events SET at=? WHERE seq=?", (time.time() - 3600, seq))
         c.close()
-        ok, why = A.inv_w7(A.Clock(), A.CurrentStore())
+        ok, why = A.inv_w7(A.Clock(), A.CurrentStore(A.process_store))
         self.assertEqual(ok, False)
         self.assertIn("behind ci-runner's events", why)
         self.st.meta_set("projector_seq", seq)  # the sync projected it
-        self.assertEqual(A.inv_w7(A.Clock(), A.CurrentStore())[0], True)
+        self.assertEqual(A.inv_w7(A.Clock(), A.CurrentStore(A.process_store))[0], True)
         os.environ["AGENTCTL_STORE_URL"] = "http://127.0.0.1:9"
-        self.assertIsNone(A.inv_w7(A.Clock(), A.CurrentStore())[0])  # the store down: no verdict
+        self.assertIsNone(A.inv_w7(A.Clock(), A.CurrentStore(A.process_store))[0])  # the store down: no verdict
         self.assertIn("W7", A.INVARIANTS)
 
 

@@ -5,7 +5,6 @@ import os
 import re
 from agentctl.core import HOME, PROTECTED_BRANCHES, _tokens, err, git, remote
 from agentctl.timefmt import ts
-from agentctl.store import open_store
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import fixes_red_in_message
 from agentctl.redrecord import RED_TERMINAL, red_what
@@ -18,7 +17,6 @@ from agentctl.cleanup import own_ancestry
 from agentctl.fixerland import dispatch_log
 from agentctl.redmove import red_stop_holder
 from agentctl.waiting import cancel_submitted
-from agentctl.remotestore import RemoteStore
 from agentctl.redopen import red_offer
 from agentctl.culpritfix import blame_culprit
 from agentctl.statemachines import machine_state
@@ -38,13 +36,13 @@ from agentctl.statemachines import machine_state
 REVERTS_CHANGE = re.compile(r"^Reverts-Change:\s*(\S+)", re.M)
 
 
-def blame_records(store=None):
+def blame_records(store):
     """(dead, live) from every red's blame. dead: {change: [{run, why, verdict, worktree, sha}]} -- the reverts blame
     withdrew or saw refuted ("not the culprit"), or whose red ended without them ("obsolete"); live: {"runs": {change: {run}}, "worktrees": {path}} -- the confirmed blames whose
     revert stands (a change blamed AGAIN for a newer red is reverted for that red: never refused)."""
     dead, live = {}, {"runs": {}, "worktrees": set()}
     try:
-        items = (store or open_store()).items("red")
+        items = store.items("red")
     except (Exception, SystemExit):
         return dead, live
     for it in items:
@@ -80,17 +78,16 @@ def blame_records(store=None):
     return dead, live
 
 
-def blame_records_quiet():
+def blame_records_quiet(st):
     """blame_records for `agentctl land` on the laptop: a land never needs a token (it never runs `secrets`), so a
     remote store is read only with a token already in hand; else nothing here -- ci-runner's submission and its checker
     refuse the revert with their own store (submit_change, _check_entry)."""
-    st = open_store()
-    if isinstance(st, RemoteStore) and not (os.environ.get("AGENTCTL_STORE_TOKEN") or _tokens.get("movies")):
+    if st.needs_token and not (os.environ.get("AGENTCTL_STORE_TOKEN") or _tokens.get("movies")):
         return {}, {"runs": {}, "worktrees": set()}
     return blame_records(st)
 
 
-def blame_land_refusal(repo, commits, worktree=None, store=None, records=None):
+def blame_land_refusal(repo, commits, store, worktree=None, records=None):
     """Why these commits (from `worktree`) must never land, or None: a commit carrying `Reverts-Change: <change>` for a
     change blame withdrew or saw refuted (not the culprit) -- unless a confirmed blame of a newer red reverts that change
     again, under its own Fixes-Red -- or the worktree blame made for such a revert."""
@@ -133,7 +130,7 @@ def blame_only_reverts(repo, wt, change=None):
     return shas
 
 
-def blame_drop_revert_worktree(repo, wt, change=None, why="its blame was withdrawn"):
+def blame_drop_revert_worktree(repo, wt, change, why, store):
     """Remove the worktree blame made for a revert that will never land, and its branch: only when its commits are all
     blame's reverts (blame_only_reverts), its tree clean and nobody in it; its open queue entries cancelled. Logged in
     agentctl-deleted.log. Returns one line saying what."""
@@ -150,7 +147,7 @@ def blame_drop_revert_worktree(repo, wt, change=None, why="its blame was withdra
     dirty = git(rw, "status", "--porcelain", "--untracked-files=no", check=False)
     if dirty.returncode or dirty.stdout.strip():
         return f"revert worktree {rw.replace(HOME, '~')} kept: uncommitted changes"
-    cancelled = blame_cancel_changes_of(rw, why)
+    cancelled = blame_cancel_changes_of(rw, why, store)
     branch = git(rw, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
     head = git(rw, "rev-parse", "HEAD", check=False).stdout.strip()
     root = os.path.realpath(worktrees(rw)[0]["worktree"])
@@ -166,11 +163,10 @@ def blame_drop_revert_worktree(repo, wt, change=None, why="its blame was withdra
     return msg + (f"; cancelled {', '.join(cancelled)}" if cancelled else "")
 
 
-def blame_cancel_changes_of(wt, why):
+def blame_cancel_changes_of(wt, why, st):
     """Cancel every open queued change submitted from `wt`; returns their ids."""
     rw, out = os.path.realpath(wt), []
     try:
-        st = open_store()
         items = st.items("change")
     except (Exception, SystemExit):
         return out
@@ -213,7 +209,7 @@ def blame_withdraw(store, it, why, repo=None):
     nb = {k: v for k, v in b.items() if k not in ("culprit", "revert", "revived", "parent", "evidence", "reland_due")}
     nb.update(state="undetermined", why=f"withdrawn: {why}", withdrawn=w)
     red_stop_holder(store, d["key"], f"the blame of {ch} was withdrawn: {why}", "blame withdrawn", force=True)
-    dropped = blame_drop_revert_worktree(repo, rv.get("worktree"), ch, why) if rv.get("worktree") else "no revert worktree"
+    dropped = blame_drop_revert_worktree(repo, rv.get("worktree"), ch, why, store) if rv.get("worktree") else "no revert worktree"
     line = (f"RED BLAME WITHDRAWN: {red_what(d)}: {blame_change_name(g)} is not the culprit ({why}); its revert never "
             f"lands; {dropped}; the normal fixer flow")
     inbox_write("red", line, [line], [], 0)

@@ -273,7 +273,7 @@ class ClearedOwnerAlertTest(AlertBase):
                "time": "t", "at": at, "command": command, "cwd": cwd or self.wt, "final": True, "exit": 1,
                "verdict": verdict, "kind": A.inbox_kind(verdict), "verdicts": [verdict], "tail": [],
                "audience": "owner", "item": item}
-        return A.alert_write(rec, A.CurrentStore())
+        return A.alert_write(rec, A.CurrentStore(A.process_store))
 
     def closed_why(self, eid):
         return (A.read_record(os.path.join(self.inbox, eid + ".json")).get("closed") or {}).get("why")

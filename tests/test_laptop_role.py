@@ -91,9 +91,6 @@ class LaptopRoleTest(unittest.TestCase):
         self.on(MBP)
         u = {"workflow": "Main Pipeline", "run": {"number": 1053, "databaseId": 1}, "job": "build-and-test",
              "key": "0c8eea91b712", "repo": "pawelkrupinski/core"}
-        saved = A.open_store
-        A.open_store = lambda *a, **k: self.st
-        self.addCleanup(setattr, A, "open_store", saved)
         ok, msg = A.red_dispatch("pawelkrupinski/core", None, u, store=self.st)
         self.assertFalse(ok)
         self.assertIn("NOT DISPATCHED: laptop role held by Pawes-MacBook-Pro-2", msg)
@@ -103,7 +100,7 @@ class LaptopRoleTest(unittest.TestCase):
             saved_fn = getattr(A, name)
             setattr(A, name, lambda *a, _n=name, **k: ran.append(_n) or [])
             self.addCleanup(setattr, A, name, saved_fn)
-        steps = dict(A.sync_steps(None, None, "pawelkrupinski/movies", *on_clock(A.Clock())))
+        steps = dict(A.sync_steps(None, None, "pawelkrupinski/movies", A.Clock(), self.st))
         for name in ("laptop role", "notifier", "alerts", "claims", "dispatcher", "pins", "drift explorer"):
             steps[name]()
         self.assertEqual(ran, [], "standby: none of the laptop's duties")

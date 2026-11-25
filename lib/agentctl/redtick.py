@@ -396,9 +396,9 @@ def cmd_red(a, clock, st):
         print(f"automatic dispatch: {'ON' if not b else 'OFF -- ' + b}")
         return 0
     if a.rcmd == "owner":
-        return red_owner(a)
+        return red_owner(a, st)
     if a.rcmd == "fixer":
-        return red_fixer(a)
+        return red_fixer(a, st)
     if a.rcmd == "unblame":
         items = red_targets(st, o_r, a.run, create=False)
         if not items:
@@ -449,7 +449,7 @@ def maybe_publish_gate(repo, store):
         try:
             o_r = slug(repo)
             snap = ci_state_refresh(o_r, write=False)  # ONE read of GitHub per cycle; everything below reads it
-            refresh_pinned_recording(o_r, repo)  # what PREDICTS MAIN RED compares a branch run's recording with
+            refresh_pinned_recording(o_r, repo, store)  # what PREDICTS MAIN RED compares a branch run's recording with
             ci_state_write(snap)
             # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or
             # held (never NOBODY). Bounded: a dispatch's worktree checkout finishes on the tick's own thread

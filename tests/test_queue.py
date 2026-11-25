@@ -81,7 +81,7 @@ class QueueTest(WaitingTest):
                 A.push_change(self.r.path, d, e, *on_clock(self.clock))
             else:
                 break
-        A.project_events(A.CurrentStore())  # the processor's projector: the events become the inbox entries
+        A.project_events(A.CurrentStore(A.process_store))  # the processor's projector: the events become the inbox entries
         e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
         return 1 if e["status"] == "rejected" else 0
 
@@ -140,7 +140,7 @@ class QueueTest(WaitingTest):
         self.assertIn(f"{eb}: its push waits for batch", " ".join(did))
         self.assertEqual(entry(eb)["status"], "checked", "no solo push under the checking batch")
         self.assertEqual(self.remote_log()[0], "the hook's plans")
-        st = A.open_store()
+        st = A.process_store()
         bt = self.batch()
         st.transition("batch", bt["id"], "pushing", bt["version"])  # passed: its tree is about to be pushed from
         wc, _ = self.agent("c", "worker/src/main/C.scala", "c\n", msg="c: queued")
@@ -232,10 +232,10 @@ class QueueTest(WaitingTest):
             self.assertEqual(self.check(eid), 0)
             wts.append(wt)
             ids.append(eid)
-        A.project_changes(d, A.CurrentStore())  # the server tick's projection of every entry
-        rows = A.change_rows(A.CurrentStore())
+        A.project_changes(d, A.CurrentStore(A.process_store))  # the server tick's projection of every entry
+        rows = A.change_rows(A.CurrentStore(A.process_store))
         self.assertEqual([(r["id"], r["state"]) for r in rows], [(i, "waiting") for i in ids], "one item per change")
-        A.write_snapshot(d, A.CurrentStore())
+        A.write_snapshot(d, A.CurrentStore(A.process_store))
         line = A.status_line()
         self.assertIn("waiting: 3 — ", line)
         for wt in wts:
@@ -252,7 +252,7 @@ class QueueTest(WaitingTest):
         self.assertEqual([self.entries()[i.rsplit("-", 1)[-1]]["status"] for i in ids], ["landed"] * 3)
         self.assertEqual(len(self.pushed()), 1, "one push")
         self.assertEqual(self.remote_log()[:3], ["c: held", "b: held", "a: held"])
-        self.assertEqual(A.change_rows(A.CurrentStore()), [])
+        self.assertEqual(A.change_rows(A.CurrentStore(A.process_store)), [])
 
     def test_failing_checks_are_not_landed_in_the_inbox(self):
         wt, _ = self.agent("a", "BROKEN", "x\n")
@@ -278,12 +278,12 @@ class QueueTest(WaitingTest):
         eid, _ = self.queued(wt)
         real, n = A.run_entry_checks, []
 
-        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, own=None):
+        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
             n.append(1)
             if len(n) <= 2:  # the same sbt module (web): an overlap, so each move means a new round
                 other, _ = self.agent(f"m{len(n)}", f"web/src/main/M{len(n)}.scala", "m\n", msg=f"main moves {len(n)}")
                 sh(other, "git", "push", "-q", "origin", "HEAD:main")
-            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, own)
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
         A.run_entry_checks = moving
         self.addCleanup(setattr, A, "run_entry_checks", real)
         self.assertEqual(self.check(eid), 0)
@@ -296,13 +296,13 @@ class QueueTest(WaitingTest):
         """Main moves during the first round's checks: one commit per (path, text) landed by another agent."""
         real, n = A.run_entry_checks, []
 
-        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, own=None):
+        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
             n.append(1)
             if len(n) == 1:
                 for i, (path, text) in enumerate(moves):
                     other, _ = self.agent(f"m{i}", path, text, msg=f"main moves {i}")
                     sh(other, "git", "push", "-q", "origin", "HEAD:main")
-            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, own)
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
         A.run_entry_checks = moving
         self.addCleanup(setattr, A, "run_entry_checks", real)
         return n
@@ -365,7 +365,7 @@ class QueueTest(WaitingTest):
         wt, _ = self.agent("a", "web/src/main/NetFlake.scala", "a\n", msg="a: one")
         eid, _ = self.queued(wt)
         A.check_entry(self.r.path, eid, *on_clock(self.clock))
-        A.project_events(A.CurrentStore())
+        A.project_events(A.CurrentStore(A.process_store))
         self.assertTrue(os.path.exists(flag), "its check ran, and failed on the network")
         e = self.entries()[eid.rsplit("-", 1)[-1]]
         self.assertEqual((e["status"], e.get("infra_reason")), ("queued", A.NETWORK_REASON))
@@ -408,14 +408,14 @@ class QueueTest(WaitingTest):
         eid, _ = self.queued(wt)
         real, n = A.run_entry_checks, []
 
-        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, own=None):
+        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
             n.append(1)
             if len(n) == 1:
                 other = self.r.worktree("wt-del", branch="del")
                 sh(other, "git", "rm", "-q", "scripts/data/venues.tsv")
                 sh(other, "git", "commit", "-q", "-m", "venues gone")
                 sh(other, "git", "push", "-q", "origin", "HEAD:main")
-            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, own)
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
         A.run_entry_checks = moving
         self.addCleanup(setattr, A, "run_entry_checks", real)
         self.assertEqual(self.check(eid), 0)
@@ -456,7 +456,7 @@ class QueueTest(WaitingTest):
         head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
         full = "f" * 40
         calls = self.fake_github("success", head, ref=f"check/verify-{full}-x")
-        ok, out = A.remote_check(self.r.path, {"id": "x", "full_base": full}, "base", head, "--verify-only", self.clock)
+        ok, out = A.remote_check(self.r.path, {"id": "x", "full_base": full}, "base", head, "--verify-only", self.clock, A.CurrentStore(A.process_store))
         self.assertTrue(ok, out)
         self.assertIn(("DELETE", f"git/refs/heads/check/verify-{full}-x"), calls)
 
@@ -466,12 +466,12 @@ class QueueTest(WaitingTest):
         is check/red-<...>, which precommit-check.yml runs on movies-check-red-fix, the lane ci-runner serves first."""
         head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
         calls = self.fake_github("success", head, ref="check/red-x")
-        ok, out = A.remote_check(self.r.path, {"id": "x"}, "base", head, "--checks-only", self.clock, red=True)
+        ok, out = A.remote_check(self.r.path, {"id": "x"}, "base", head, "--checks-only", self.clock, A.CurrentStore(A.process_store), red=True)
         self.assertTrue(ok, out)
         self.assertIn(("DELETE", "git/refs/heads/check/red-x"), calls)
         full = "f" * 40
         calls = self.fake_github("success", head, ref=f"check/red-verify-{full}-x")
-        ok, out = A.remote_check(self.r.path, {"id": "x", "full_base": full}, "base", head, "--verify-only", self.clock, red=True)
+        ok, out = A.remote_check(self.r.path, {"id": "x", "full_base": full}, "base", head, "--verify-only", self.clock, A.CurrentStore(A.process_store), red=True)
         self.assertTrue(ok, out)
         self.assertIn(("DELETE", f"git/refs/heads/check/red-verify-{full}-x"), calls)
 
@@ -695,9 +695,9 @@ class QueueTest(WaitingTest):
         seen = []
         real = A.run_entry_checks
 
-        def recording(repo, d, e, tree, base, head, mode, cls, log_path, clock, own=None):
+        def recording(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
             seen.append((mode, e.get("verify_areas")))
-            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, own)
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
         A.run_entry_checks = recording
         self.addCleanup(setattr, A, "run_entry_checks", real)
         self.moves_once(("worker/src/test/scala/BSpec.scala", "b\n"), ("docs/n.md", "n\n"))
@@ -713,9 +713,9 @@ class QueueTest(WaitingTest):
         seen = []
         real = A.run_entry_checks
 
-        def recording(repo, d, e, tree, base, head, mode, cls, log_path, clock, own=None):
+        def recording(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
             seen.append((mode, e.get("verify_areas")))
-            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, own)
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
         A.run_entry_checks = recording
         self.addCleanup(setattr, A, "run_entry_checks", real)
         self.moves_once(("worker/src/main/W.scala", "w\n"))
@@ -737,7 +737,7 @@ class QueueTest(WaitingTest):
         full = "f" * 40
         calls = self.fake_github("success", head, ref=f"check/verifyareas-{full}-x")
         ok, out = A.remote_check(self.r.path, {"id": "x", "full_base": full, "verify_areas": ["worker"]}, "base", head,
-                                 "--verify-only", self.clock)
+                                 "--verify-only", self.clock, A.CurrentStore(A.process_store))
         self.assertTrue(ok, out)
         self.assertIn(("DELETE", f"git/refs/heads/check/verifyareas-{full}-x"), calls)
 
@@ -806,7 +806,7 @@ class QueueTest(WaitingTest):
         eid, _ = self.queued(wt)
         seen = []
 
-        def remote(repo, e, base, head, mode, clock, own=None, red=False):
+        def remote(repo, e, base, head, mode, clock, st, own=None, red=False):
             seen.append((base, head, mode))
             e["remote_run"] = 4242
             return True, "precommit-check.yml run 4242 (#77): success"
@@ -824,7 +824,7 @@ class QueueTest(WaitingTest):
         os.remove(self.pushes)
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)
-        A.remote_check = lambda repo, e, base, head, mode, clock, own=None, red=False: (None, "no run started")
+        A.remote_check = lambda repo, e, base, head, mode, clock, st, own=None, red=False: (None, "no run started")
         saved = A.checks_here
         A.checks_here = lambda: True  # the laptop: its own tools
         self.addCleanup(setattr, A, "checks_here", saved)
@@ -840,7 +840,7 @@ class QueueTest(WaitingTest):
         os.remove(self.pushes)
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)
-        A.remote_check = lambda repo, e, base, head, mode, clock, own=None, red=False: (None, "push of check/x failed: remote: boom")
+        A.remote_check = lambda repo, e, base, head, mode, clock, st, own=None, red=False: (None, "push of check/x failed: remote: boom")
         self.check(eid, rounds=1)  # the tests run as ci-runner (AGENTCTL_ROLE=server)
         self.assertEqual(self.calls_of("--range"), [], "nothing checked in a ci-runner tree")
         self.assertEqual(self.pushed(), [])
@@ -879,13 +879,13 @@ class QueueTest(WaitingTest):
     def test_remote_check_pushes_a_check_branch_reads_the_verdict_and_deletes_the_branch(self):
         head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
         calls = self.fake_github("success", head)
-        ok, out = A.remote_check(self.r.path, {"id": "e1"}, "base", head, "--checks-only", self.clock)
+        ok, out = A.remote_check(self.r.path, {"id": "e1"}, "base", head, "--checks-only", self.clock, A.CurrentStore(A.process_store))
         self.assertTrue(ok, out)
         self.assertIn("check/e1", sh(self.r.root, "git", "--git-dir", self.r.bare, "branch", "--list", "check/*"),
                       "pushed for the run (deleted through the API, faked here)")
         self.assertIn(("DELETE", "git/refs/heads/check/e1"), calls)
         calls = self.fake_github("failure", head)
-        ok, out = A.remote_check(self.r.path, {"id": "e1"}, "base", head, "--checks-only", self.clock)
+        ok, out = A.remote_check(self.r.path, {"id": "e1"}, "base", head, "--checks-only", self.clock, A.CurrentStore(A.process_store))
         self.assertFalse(ok)
         self.assertIn("[error] BROKEN is in the tree", out)
         self.assertIn(("DELETE", "git/refs/heads/check/e1"), calls)
@@ -909,7 +909,7 @@ class QueueTest(WaitingTest):
         for _ in range(2):  # the second tick: it stays blocked, never flips back to assembling
             self.drive()  # (THE BATCH IS THE MECHANISM: its red pre-check runs, then it is blocked again)
             self.assertEqual(self.batch()["state"], "blocked-red", "nothing in it may land on red")
-        self.assertIsNone(A.batch_goes_first(A.open_store(), d))
+        self.assertIsNone(A.batch_goes_first(A.process_store(), d))
         wb, _ = self.agent("b", "scripts/b.sh", "echo b\n", msg="b: tools only")
         eb, _ = self.queued(wb)
         self.assertEqual(self.check(eb), 0)
@@ -922,16 +922,16 @@ class QueueTest(WaitingTest):
     def test_the_batchs_check_on_ci_runner_is_the_fast_only_set_on_a_check_fast_branch(self):
         head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
         calls = self.fake_github("success", head, ref="check/fast-batch-x")
-        ok, out = A.remote_check(self.r.path, {"id": "batch-x"}, "base", head, "--fast-only", self.clock)
+        ok, out = A.remote_check(self.r.path, {"id": "batch-x"}, "base", head, "--fast-only", self.clock, A.CurrentStore(A.process_store))
         self.assertTrue(ok, out)
         self.assertIn(("DELETE", "git/refs/heads/check/fast-batch-x"), calls)  # the branch names the mode for the workflow
         seen, saved = [], (A.remote_check, A.remote_checks_supported, A.precheck_hook, A.batch_mode)
-        A.remote_check = lambda repo, e, base, tip, mode, clock, own=None, red=False: seen.append((e["id"], mode)) or (True, "ok")
+        A.remote_check = lambda repo, e, base, tip, mode, clock, st, own=None, red=False: seen.append((e["id"], mode)) or (True, "ok")
         A.remote_checks_supported = lambda tree: True
         A.precheck_hook = lambda tree: "/hook"
         A.batch_mode = lambda hook: "--fast-only"
         try:  # the server role (the harness's): its batch check goes to the CI tier
-            self.assertEqual(A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "c" * 40, self.clock), (True, "ok", False))
+            self.assertEqual(A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "c" * 40, self.clock, A.CurrentStore(A.process_store)), (True, "ok", False))
         finally:
             A.remote_check, A.remote_checks_supported, A.precheck_hook, A.batch_mode = saved
         self.assertEqual(seen, [("batch-cccccccccc", "--fast-only")])
@@ -943,18 +943,18 @@ class QueueTest(WaitingTest):
         seen, saved = [], (A.remote_check, A.remote_checks_supported, A.precheck_hook, A.batch_mode)
         self.addCleanup(lambda: [setattr(A, n, v) for n, v in zip(
             ("remote_check", "remote_checks_supported", "precheck_hook", "batch_mode"), saved)])
-        A.remote_check = lambda repo, e, base, tip, mode, clock, own=None, red=False: seen.append((e["id"], red)) or (True, "ok")
+        A.remote_check = lambda repo, e, base, tip, mode, clock, st, own=None, red=False: seen.append((e["id"], red)) or (True, "ok")
         A.remote_checks_supported = lambda tree: True
         A.precheck_hook = lambda tree: "/hook"
         A.batch_mode = lambda hook: "--fast-only"
-        A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "c" * 40, self.clock, cls="red")
-        A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "d" * 40, self.clock)
+        A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "c" * 40, self.clock, A.CurrentStore(A.process_store), cls="red")
+        A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "d" * 40, self.clock, A.CurrentStore(A.process_store))
         self.assertEqual(seen, [("batch-cccccccccc", True), ("batch-dddddddddd", False)])
         lanes, real = [], A.batch_check
         self.addCleanup(setattr, A, "batch_check", real)
         A.batch_check = lambda *a, cls="check", **k: lanes.append(cls) or (False, "boom", False)
         A.bisect(self.r.path, self.r.path, [{"id": "a", "tip": "a" * 40}, {"id": "b", "tip": "b" * 40}], "c" * 40,
-                 self.r.path, self.clock, cls="red")
+                 self.r.path, self.clock, A.CurrentStore(A.process_store), cls="red")
         self.assertEqual(set(lanes), {"red"}, "and so is each check of its bisect")
 
     def test_a_check_the_laptop_failed_is_queued_again_not_rejected(self):
@@ -981,7 +981,7 @@ class QueueTest(WaitingTest):
         e = self.entries()[eid.rsplit("-", 1)[-1]]
         self.assertEqual((e["status"], e["infra_retries"]), ("queued", 1 + A.QUEUE_INFRA_RETRIES),
                          "infra never rejects a change (design §5.1)")
-        evs = [x for x in A.open_store().events() if x["item_id"] == eid and x["severity"] == "escalate"]
+        evs = [x for x in A.process_store().events() if x["item_id"] == eid and x["severity"] == "escalate"]
         self.assertTrue(evs, "from the third infra re-queue on, each one escalates")
 
     def test_a_check_whose_environment_lacked_the_gitops_manifests_is_an_infra_retry_not_a_rejection(self):
@@ -1037,10 +1037,10 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.entries()[eid.rsplit("-", 1)[-1]]["ref"], f"refs/heads/land/{eid}")
         d, _c, _w = A.waiting_state(self.r.path)
         A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore()), [], "queued: its ref stays")
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)), [], "queued: its ref stays")
         self.assertEqual(self.check(eid), 0)  # landed
         A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore()), [f"refs/heads/land/{eid}: deleted"])
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)), [f"refs/heads/land/{eid}: deleted"])
         self.assertEqual(self.remote_refs(), [])
 
     def test_sweep_keeps_the_ref_of_a_change_only_the_store_holds_open(self):
@@ -1052,15 +1052,15 @@ class QueueTest(WaitingTest):
         eid, _out = self.queued(wt)
         d, _c, _w = A.waiting_state(self.r.path)
         os.remove(os.path.join(d, "entries", f"{eid}.json"))  # held by the store alone
-        A.open_store().put_item("change", eid, "queued", {"worktree": wt, "head": sha})
+        A.process_store().put_item("change", eid, "queued", {"worktree": wt, "head": sha})
         A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore()), [], "open in the store: its ref stays")
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)), [], "open in the store: its ref stays")
         self.assertEqual(self.remote_refs(), [f"refs/heads/land/{eid}"])
         # unknown to both: kept while young, deleted (and logged) past 24 h
         sh(self.r.path, "git", "push", "--quiet", "origin", f"{sha}:refs/heads/land/20200101-000000-x-aaaaaa",
            f"{sha}:refs/heads/land/{time.strftime('%Y%m%d-%H%M%S')}-y-bbbbbb")
         A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore()),
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)),
                          ["refs/heads/land/20200101-000000-x-aaaaaa: unknown to entries and store, %d h old" % (
                              A.entry_id_age("20200101-000000", time.time()) // 3600),
                           "refs/heads/land/20200101-000000-x-aaaaaa: deleted"])
@@ -1414,7 +1414,7 @@ class RemotePickupTest(QueueTest):
         """Step 6 (reconcile_checking deleted): a wedged checker stops renewing check/<entry>; once the lease lapses
         the tick starts a replacement, which adopts the decided run."""
         d, e = self.checking_entry()
-        st = A.open_store()
+        st = A.process_store()
         got = st.acquire(f"check/{e['id']}", "a wedged checker", 600, 3600)
         self.assertEqual(self.tick(d)[1], [], "a live checker: nothing started")
         st.release(f"check/{e['id']}", got["epoch"], got["secret"])  # its lease lapsed (here at once)
@@ -1425,7 +1425,7 @@ class RemotePickupTest(QueueTest):
 
     def test_checking_past_its_deadline_with_no_checker_is_queued_again_as_infra(self):
         d, e = self.checking_entry()
-        st = A.open_store()
+        st = A.process_store()
         st.put_item("change", e["id"], "checking")
         self.tick(d)  # in time: unchanged
         self.assertEqual(self.entry(e["id"])["status"], "checking")
@@ -1440,7 +1440,7 @@ class RemotePickupTest(QueueTest):
 
     def test_superseding_an_entry_cancels_its_run(self):
         d, e = self.checking_entry()
-        A.supersede(A.CurrentStore(), d, e, "newer", "queued again")
+        A.supersede(A.CurrentStore(A.process_store), d, e, "newer", "queued again")
         self.assertEqual(self.state["cancelled"], [99])
 
     def test_a_replacement_after_main_moved_adopts_the_run_on_its_own_base(self):
@@ -1483,7 +1483,7 @@ class RemotePickupTest(QueueTest):
         other, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: two")
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
         saved_rc = A.remote_check
-        A.remote_check = lambda repo, e_, base, head, mode, clock, own=None, red=False: (True, "precommit-check.yml: success")
+        A.remote_check = lambda repo, e_, base, head, mode, clock, st, own=None, red=False: (True, "precommit-check.yml: success")
         self.addCleanup(setattr, A, "remote_check", saved_rc)
         seen = []
         real = A.run_entry_checks
@@ -1610,7 +1610,7 @@ class RemoteRunProgressTest(unittest.TestCase):
         A.cancel_run = lambda o_r, run, why: cancelled.append(why)
         A.delete_check_branch = lambda o_r, b: None
         try:
-            return A.remote_check(tmp, e, "b", "t", "--checks-only", FakeClock(t0)), cancelled
+            return A.remote_check(tmp, e, "b", "t", "--checks-only", FakeClock(t0), A.CurrentStore(A.process_store)), cancelled
         finally:
             (A.remote_poll, A.cancel_run, A.slug, A.waiting_state, A.delete_check_branch) = saved
 
@@ -1735,7 +1735,7 @@ class MinimalRecheckTest(QueueTest):
     def status_of(self, eid):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            A.land_status_entry(A.open_store(), eid, time.time())
+            A.land_status_entry(A.process_store(), eid, time.time())
         return out.getvalue()
 
     def test_a_main_move_outside_what_its_checks_read_keeps_the_verdict(self):
@@ -1968,7 +1968,7 @@ entry's own id, in its author's worktree."""
     def test_by_content_a_store_item_no_queue_carries(self):
         """The laptop's look: a change item the store holds, closed by content (close_item_landed)."""
         wt, head = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: by hand")
-        st = A.open_store()
+        st = A.process_store()
         st.put_item("change", "x-95", "waiting", {"worktree": wt, "head": head})
         sh(wt, "git", "push", "-q", "origin", "HEAD:main")
         A._landed_looked.clear()

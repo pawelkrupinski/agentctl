@@ -31,7 +31,7 @@ class NeverGreenTest(RedsBase):
         return [it for it in self.st.items("red") if it["data"]["workflow"] == "Alert backtest"]
 
     def summary(self):
-        return A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), store=A.open_store())[1]
+        return A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), store=A.process_store())[1]
 
     def test_a_never_green_workflows_red_is_untracked_until_its_first_green_run(self):
         self.backtest((903, 3, "failure"), (902, 2, "failure"), (901, 1, "failure"))
@@ -126,7 +126,7 @@ class RegistryGateTest(RedsBase):
         self.assertEqual(A.gate_report_only(MOVIES, "Main", {"databaseId": 40, "conclusion": "failure"}),
                          (True, "report only, unproven: deps"))
         A._gate_lists.clear()
-        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.open_store())
+        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store())
         self.assertFalse(red, text)
         self.assertIn("Main: RED, REPORT ONLY (run 40 #20, failure): report only, unproven: deps", text)
         self.tick()
@@ -137,7 +137,7 @@ class RegistryGateTest(RedsBase):
         A._report_only_mem.clear()
         self.registry("2722")
         self.assertEqual(self.gate_reds(), {"20", "40"}, "a proven row's red holds the push")
-        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.open_store())
+        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store())
         self.assertTrue(red, text)
 
     def test_a_job_with_no_row_is_unproven_as_the_hook_reads_it_and_ci_why_names_the_missing_row(self):
@@ -153,7 +153,7 @@ class RegistryGateTest(RedsBase):
         self.assertIn("no row in .github/gating-checks.tsv: brand-new", why)
         self.assertEqual(self.gate_reds(), set(), "the hook's verdict: report only, no push held")
         A._gate_lists.clear()
-        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.open_store())
+        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store())
         self.assertFalse(red, text)
         self.assertIn("Main: RED, REPORT ONLY", text)
         self.assertIn("no row in .github/gating-checks.tsv: brand-new", text)

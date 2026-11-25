@@ -44,7 +44,7 @@ STATUS_PAGE_FALLBACK = 3015
 STATUS_PAGE_HOSTS = (STATUS_PAGE_HOST, "127.0.0.1", "localhost")
 
 
-def cmd_status(a):
+def cmd_status(a, store):
     if getattr(a, "open", False):
         return status_page_open()
     t = time.time()
@@ -52,7 +52,7 @@ def cmd_status(a):
     if a.line:  # THE STATUS LINE IS THE SNAPSHOT ALONE: no store RPC, no network (2026-11-22: 2-4.6 s, "gate ?")
         print(h["line"])
         return 0
-    standby = None if on_ci_runner() else laptop_role_standby()  # ONE MACHINE HOLDS THE LAPTOP ROLE
+    standby = None if on_ci_runner() else laptop_role_standby(store)  # ONE MACHINE HOLDS THE LAPTOP ROLE
     print((f"STANDBY: {standby}\n" if standby else "") + render_status(h, t))
     return 0
 

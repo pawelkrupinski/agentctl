@@ -281,12 +281,12 @@ class UnboundTest(unittest.TestCase):
 
     def test_the_ticks_push_never_waits_for_a_busy_landing_lease(self):
         with tempfile.TemporaryDirectory() as d:
-            st = A.open_store()
+            st = A.process_store()
             subprocess.run(["git", "init", "-q", d], check=True)
             name = A.land_lease_name(d)
             st.acquire(name, "other:land:1", 600, 3600)
             t0 = time.monotonic()
-            with A.land_lock_if_free(d) as held:
+            with A.land_lock_if_free(d, A.CurrentStore(A.process_store)) as held:
                 self.assertFalse(held)
             self.assertLess(time.monotonic() - t0, 5)
 
@@ -322,7 +322,7 @@ class BatchRetryTest(unittest.TestCase):
         saved = A.batch_check
         A.batch_check = lambda *a, **k: next(results)
         try:
-            culprit, _out = A.bisect(d, d, batch, "base", d, FakeClock())
+            culprit, _out = A.bisect(d, d, batch, "base", d, FakeClock(), A.CurrentStore(A.process_store))
         finally:
             A.batch_check = saved
         self.assertIsNone(culprit)  # flaky: nobody rejected
@@ -335,19 +335,18 @@ class RequeueTest(unittest.TestCase):
         st = A.Store(path=os.path.join(d, "store.db"))
         e = {"id": "e1", "seq": 1, "status": "checking", "worktree": "/w"}
         A.write_json(os.path.join(d, "entries", "e1.json"), e)
-        saved_store, saved_wlog = A.open_store, A.wlog
-        A.open_store = lambda *a, **k: st
+        saved_wlog = A.wlog
         A.wlog = lambda d_, m: None
         try:
             waits = []
             for _ in range(4):
-                A.requeue_infra(A.CurrentStore(), d, e, "the push failed on infra (closed by remote host)", time.time())
+                A.requeue_infra(st, d, e, "the push failed on infra (closed by remote host)", time.time())
                 waits.append(round(e["retry_after"] - time.time()))
                 self.assertEqual(e["status"], "queued")
                 st.transition("change", "e1", "checking", st.item("change", "e1")["version"])
                 e["status"] = "checking"
         finally:
-            A.open_store, A.wlog = saved_store, saved_wlog
+            A.wlog = saved_wlog
         self.assertEqual([w // 60 for w in waits], [5, 10, 30, 60])
         sev = [x["severity"] for x in st.events() if x["to_state"] == "queued"]
         self.assertEqual(sev, ["info", "info", "escalate", "escalate"])

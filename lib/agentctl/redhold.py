@@ -43,7 +43,7 @@ def change_progress(st, it, t):
     waiting on a red gate is the caller's), else why not."""
     state = it["state"]
     if state in ("checking", "pushing"):
-        return None if checker_alive(it["id"]) or state == "pushing" else "its checks run with no live checker"
+        return None if checker_alive(st, it["id"]) or state == "pushing" else "its checks run with no live checker"
     if state in HOLD_SHOWN:
         hold = change_hold_visible(st, it, {}, t)
         stuck = change_hold_stuck(st, hold, it, t)

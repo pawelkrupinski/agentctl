@@ -51,7 +51,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.r.push()
 
     def hold_of(self, eid):
-        return (A.open_store().item("change", eid)["data"] or {}).get("hold") or {}
+        return (A.process_store().item("change", eid)["data"] or {}).get("hold") or {}
 
     def the_live_cycle(self):
         """The queue of 2026-11-23 rebuilt: landing (queued, verifying its combined tree), kick (stacked on landing,
@@ -71,7 +71,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         A.check_entry(self.r.path, eg, *on_clock(self.clock))
         self.assertEqual(self.entry(eg)["status"], "checked")
         e = self.entry(el)
-        A.set_change(A.CurrentStore(), self.d, e, "queued", event={"text": "verify"}, verify=True, full_base=e["base"],
+        A.set_change(A.CurrentStore(A.process_store), self.d, e, "queued", event={"text": "verify"}, verify=True, full_base=e["base"],
                      full_tip=e["head"], retry_after=0)
         k = self.entry(ek)
         k["seq"] = self.entry(el)["seq"] - 1  # its kept place: older than its parent
@@ -112,14 +112,14 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         o = self.entry(eo)
         o["seq"] = self.entry(ek)["seq"] - 1
         A.save_entry(self.d, o)
-        A.set_change(A.CurrentStore(), self.d, o, "checking")
+        A.set_change(A.CurrentStore(A.process_store), self.d, o, "checking")
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.hold_of(el).get("blocker"), eo, "landing waits for the older change in flight")
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.entry(eg)["status"], "landed", f"gitops pushes: {self.hold_of(eg)}")
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "worker/src/main/B.scala")
-        self.assertEqual([c["id"] for c in A.backlog_candidates(self.r.path, self.d, set(), A.CurrentStore())], [ea, eb])
+        self.assertEqual([c["id"] for c in A.backlog_candidates(self.r.path, self.d, set(), A.CurrentStore(A.process_store))], [ea, eb])
 
     def test_the_exact_cycle_a_stack_unseen_closes_is_broken_by_its_oldest_change(self):
         """With no stack seen (an entry from before the rule, a parent's commits re-cut), the three holds close the
@@ -140,7 +140,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertTrue(ek in self.started or self.hold_of(ek).get("kind") == "push-batch",
                         f"the oldest change proceeds: checked now, or in the next push batch ({self.hold_of(ek)})")
         self.assertEqual(self.entry(ek)["cycle_ignore"], [eg])
-        rows = A.status_landing(A.open_store(), self.clock.time())["changes"]
+        rows = A.status_landing(A.process_store(), self.clock.time())["changes"]
         self.assertIn("HOLD CYCLE", next(r for r in rows if r["id"] == ek)["cycle"] or "", "status says so")
         self.assertNotIn("HOLD CYCLE", " ".join(A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))), "broken once, not every tick")
         final = self.drive_to_rest([el, ek, eg])

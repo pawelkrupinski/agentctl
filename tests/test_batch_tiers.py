@@ -64,7 +64,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
         return sh(self.r.root, "git", "--git-dir", self.r.bare, "show", f"main:{path}") + "\n"
 
     def held(self, eid):
-        return (A.open_store().item("change", eid)["data"] or {}).get("hold") or {}
+        return (A.process_store().item("change", eid)["data"] or {}).get("hold") or {}
 
     # ------------------------------------------------------------------------------------------- tier 2: snapshots
     def test_split_shared_js_replayed_a_snapshot_both_change_is_no_hold(self):
@@ -74,7 +74,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
         ey = self.change("split-shared-js", files={"src/z.txt": "z\n", SNAP: "m\nz\n"})
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertNotEqual(self.held(ey).get("kind"), "overlap", self.held(ey))
-        self.assertIsNone(A.overlap_hold(self.r.path, self.d, self.entry(ey), [self.entry(eo), self.entry(ey)], None,
+        self.assertIsNone(A.overlap_hold(A.CurrentStore(A.process_store), self.r.path, self.d, self.entry(ey), [self.entry(eo), self.entry(ey)], None,
                                          A.time.time()), "nothing holds it behind scrapers-2")
 
     def test_a_snapshot_git_merges_cleanly_is_regenerated_all_the_same_and_lands_in_one_check(self):
@@ -161,7 +161,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
                      "--format=%(trailers:key=Auto-Resolved,valueonly)", "main")
         self.assertIn(f"{LIST}: line 4: kept both sides' added lines (1 ours, then 1 theirs, a comma between)", trailer,
                       "the landed commit says what was resolved")
-        said = [ev["text"] for ev in A.open_store().item_events("change", eb) if "AUTO-RESOLVED" in (ev.get("text") or "")]
+        said = [ev["text"] for ev in A.process_store().item_events("change", eb) if "AUTO-RESOLVED" in (ev.get("text") or "")]
         self.assertTrue(said, "its author is told, while it checks")
 
     def test_a_resolution_failing_the_batchs_checks_is_the_culprit_and_falls_back_to_the_hold(self):

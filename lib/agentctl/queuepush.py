@@ -126,7 +126,7 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
                 continue
             did += _push_checked(repo, d, st, clock, t, e, fix, todo, pheld, kinds)
             continue
-        alive = checker_alive(e["id"])
+        alive = checker_alive(st, e["id"])
         if state == "checking" and not alive and t > it["deadline"]:
             requeue_infra(st, d, e, "its check passed its deadline with no live checker", t)
             did.append(f"{e['id']}: re-queued (checking past its deadline)")
@@ -171,11 +171,11 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
                 did.append(f"{e['id']}: its check waits for the next backlog batch")
             note_hold(st, e, "backlog-batch", "its check waits for the next backlog batch", t)
             continue
-        slot = check_tree_slot(repo, d, fix=fix)
+        slot = check_tree_slot(st, repo, d, fix=fix)
         if not slot:
             note_hold(st, e, "trees", "every check tree is busy (a check slot)", t)
             continue
-        if not fix and batch_seq is not None and batch_seq < e["seq"] and not check_tree_slot_free(repo, d) \
+        if not fix and batch_seq is not None and batch_seq < e["seq"] and not check_tree_slot_free(st, repo, d) \
                 and policy_blocks("older-batch", st, e["id"], "the last free check tree kept for the older batch"):
             slot[1].release()  # AGE ORDER: the last free tree is the older changes' batch's
             if not _behind_said.get((e["id"], "older batch")):
@@ -207,7 +207,7 @@ def queued_waiting_on_changes(repo, d, st, t, e, fix, todo, facts, stacks):
     if parent is not None and parent.get("status") in OPEN_PARENT_STATES \
             and parent["id"] not in (e.get("cycle_ignore") or []):
         return stacked_wait(st, t, e, parent), True
-    hold = overlap_hold(repo, d, e, todo, facts, t, stacks)
+    hold = overlap_hold(st, repo, d, e, todo, facts, t, stacks)
     if hold and fix:  # a red fix never waits: its author is told of a conflict, and it goes on
         return hold_for_overlap(st, d, e, *hold, waits=False, repo=repo), False
     if not hold:
@@ -362,7 +362,7 @@ def backlog_candidates(repo, d, reds, st, t=None, facts=None):
     # slowly serialises every change behind it. One whose round has not started is a push batch member instead.
     if any(push_due(st, e, t) and not e.get("backlog_batch") for e in entries):  # its push is due at the next tick
         return []
-    out = batch_queued(repo, d, entries, facts, t)[:batch_max()]
+    out = batch_queued(st, repo, d, entries, facts, t)[:batch_max()]
     return out if len(out) >= backlog_min() else []
 
 
@@ -399,14 +399,14 @@ def backlog_held(repo, d, reds, st, t=None, facts=None):
 PUSH_BATCH_MIN = 2  # changes owing a verify round that make a push batch
 
 
-def push_batchable(repo, d, e, t, main, facts=None):
+def push_batchable(st, repo, d, e, t, main, facts=None):
     """Whether entry e would need a verify round on main (THE PUSH BATCH above) and may share one: its KIND lets it (no
     red fix, no --no-batch, batch_alone, push_alone or known red: changekind.py) and it is checked on an older main, or
     queued for its verify round with no checker on it."""
     rem = e.get("remote") or {}
     if e.get("backlog_batch") or float(e.get("retry_after") or 0) > t:
         return False
-    if kind_of(repo, e, facts, t)["push_batch"] is not None:
+    if kind_of(st, repo, e, facts, t)["push_batch"] is not None:
         return False
     if e.get("status") == "checked":  # one keeping its verdict on main (MINIMAL RECHECKS) owes no verify round
         return bool(e.get("checked_base")) and e["checked_base"] != main and not verdict_kept(repo, e, main)
@@ -414,7 +414,7 @@ def push_batchable(repo, d, e, t, main, facts=None):
         return False
     if rem.get("run") is not None and not rem.get("collected_at"):  # its own run: a checker adopts it
         return False
-    return not checker_alive(e["id"])
+    return not checker_alive(st, e["id"])
 
 
 def push_candidates(repo, d, reds, st, t=None, facts=None):
@@ -432,11 +432,11 @@ def push_candidates(repo, d, reds, st, t=None, facts=None):
            and classify_change(e, facts, t)["red_fix"] for e in entries):
         return []
     main = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
-    owing = [e for e in entries if push_batchable(repo, d, e, t, main, facts)]
+    owing = [e for e in entries if push_batchable(st, repo, d, e, t, main, facts)]
     if not owing:
         return []
     ids = {e["id"] for e in owing}
-    out = sorted(owing + [e for e in batch_queued(repo, d, entries, facts, t) if e["id"] not in ids],
+    out = sorted(owing + [e for e in batch_queued(st, repo, d, entries, facts, t) if e["id"] not in ids],
                  key=lambda e: e["seq"])
     out = drift_serialize(repo, out)[:batch_max()]
     return out if len(out) >= max(2, int(env_num("AGENTCTL_PUSH_BATCH_MIN", PUSH_BATCH_MIN))) else []
@@ -448,9 +448,9 @@ def push_held(repo, d, reds, st, t=None, facts=None):
     return set() if current_batch(st, d) else {c["id"] for c in push_candidates(repo, d, reds, st, t, facts)}
 
 
-def check_tree_slot_free(repo, d):
+def check_tree_slot_free(st, repo, d):
     """Whether a check tree is free now (its lease taken and given back at once)."""
-    slot = check_tree_slot(repo, d)
+    slot = check_tree_slot(st, repo, d)
     if slot:
         slot[1].release()
     return bool(slot)

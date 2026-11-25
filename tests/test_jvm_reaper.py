@@ -106,13 +106,13 @@ class MaintainTest(unittest.TestCase):
         runs, saved = [], (A.cmd_orphans, A.cmd_sweep, A.HOME)
         tmp = tempfile.mkdtemp()
         A.cmd_orphans = lambda a: runs.append(("reap", a.kill, a.safe)) or 0
-        A.cmd_sweep = lambda a: runs.append(("sweep", a.dry_run)) or 0
+        A.cmd_sweep = lambda a, st: runs.append(("sweep", a.dry_run)) or 0
         A.HOME = tmp
         os.environ["AGENTCTL_SWEEP_HOUR"] = "0"
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 for _ in range(3):
-                    A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False), A.CurrentStore())
+                    A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False), A.CurrentStore(A.process_store))
         finally:
             A.cmd_orphans, A.cmd_sweep, A.HOME = saved
             os.environ.pop("AGENTCTL_SWEEP_HOUR")

@@ -82,29 +82,29 @@ class TunnelTest(unittest.TestCase):
 
     def test_watch_kicks_after_two_rate_limited_then_escalates(self):
         down = lambda: "timeout"
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1000, down), "down")
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1010, down), "kicked")
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1030, down), "down")  # < 60 s since the kick
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1075, down), "kicked")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1000, down), "down")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1010, down), "kicked")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1030, down), "down")  # < 60 s since the kick
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1075, down), "kicked")
         self.assertEqual(len(self.kicks), 2)
         self.assertEqual(self.inbox, [])
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1135, down), "escalated")  # 125 s after the first kick
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1140, down), "down")  # only once
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1135, down), "escalated")  # 125 s after the first kick
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1140, down), "down")  # only once
         self.assertEqual(len(self.inbox), 1)
         self.assertIn("STALLED", self.inbox[0])
 
     def test_watch_lossy_uplink_is_a_network_note_not_a_kick(self):
         down, lossy, clean = (lambda: "timeout"), (lambda: 0.5), (lambda: 0.0)
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1000, down, uplink=lossy), "network")
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1010, down, uplink=lossy), "network")
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1500, down, uplink=lossy), "network")  # minutes on: still no STALLED
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1000, down, uplink=lossy), "network")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1010, down, uplink=lossy), "network")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1500, down, uplink=lossy), "network")  # minutes on: still no STALLED
         self.assertEqual(self.kicks, [])
         self.assertEqual(len(self.inbox), 1)  # one NETWORK note per outage
         self.assertIn("NETWORK", self.inbox[0])
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1510, lambda: "ok"), "restored")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1510, lambda: "ok"), "restored")
         # the uplink is fine again but the tunnel is not: the kick / escalation path as usual
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1520, down, uplink=clean), "down")
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1530, down, uplink=clean), "kicked")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1520, down, uplink=clean), "down")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1530, down, uplink=clean), "kicked")
 
     def test_the_tunnel_agent_has_room_for_the_connections_a_lossy_link_strands(self):
         # 2026-11-17: launchd's default 256 open files; on a lossy uplink each forwarded connection a client gave up on
@@ -121,42 +121,42 @@ class TunnelTest(unittest.TestCase):
         # 2026-11-17: a phone hotspot losing 15-20% to 1.1.1.1; every sample under the old 20% bound kicked the tunnel
         # (11 kicks in one outage), each dropping every in-flight request for a reconnect over the same lossy link
         down = lambda: "timeout"
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1000, down, uplink=lambda: 0.1), "network")  # one lost ping of 10 is lossy
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1010, down, uplink=lambda: 0.05), "network")  # a dip: still the network's
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1020, down, uplink=lambda: 0.05), "network")
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1500, down, uplink=lambda: 0.05), "network")  # minutes on: no STALLED either
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1000, down, uplink=lambda: 0.1), "network")  # one lost ping of 10 is lossy
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1010, down, uplink=lambda: 0.05), "network")  # a dip: still the network's
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1020, down, uplink=lambda: 0.05), "network")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1500, down, uplink=lambda: 0.05), "network")  # minutes on: no STALLED either
         self.assertEqual(self.kicks, [])
         self.assertEqual(len(self.inbox), 1)
         # a clean sample ends the network's excuse: a forward still dead then is the tunnel's, kicked at once
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1510, down, uplink=lambda: 0.0), "kicked")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1510, down, uplink=lambda: 0.0), "kicked")
 
     def test_a_lossy_uplink_shows_the_gate_as_network_not_unread(self):
         # 2026-10-29: ~20% loss to 1.1.1.1 and the jump host kept the forward timing out; restarts only churned it
         down, lossy, clean = (lambda: "timeout"), (lambda: A.UPLINK_LOSS_MAX), (lambda: 0.0)  # AT the bound: lossy
         A.publish_gate_summary("o/r", "gate green · no reds", epoch=A.time.time() - 3600)
         self.assertIn("gate UNREAD", A.status_line())
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), A.time.time(), down, uplink=lossy), "network")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.time.time(), down, uplink=lossy), "network")
         line = A.status_line()
         self.assertIn("gate NETWORK (lossy uplink: 10% loss", line)
         self.assertNotIn("UNREAD", line)
         self.assertEqual(self.kicks, [])  # no restart
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), A.time.time(), lambda: "ok"), "restored")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.time.time(), lambda: "ok"), "restored")
         self.assertIn("gate UNREAD", A.status_line())  # the NETWORK reading is gone with the outage
         # the uplink fine and the forward dead (05:27-05:50): the end-to-end probe kicks after two failures
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), A.time.time(), down, uplink=clean), "down")
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), A.time.time() + 10, down, uplink=clean), "kicked")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.time.time(), down, uplink=clean), "down")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.time.time() + 10, down, uplink=clean), "kicked")
 
     def test_network_change_kicks_the_tunnel_and_marks_the_gate(self):
         A._last_route[0] = "unseen"
         home, phone = ("en0", "172.30.154.83"), ("en0", "172.20.10.1")
         saved, A.mark_gate_dirty = A.mark_gate_dirty, (lambda: self.inbox.append("DIRTY"))
         try:
-            self.assertEqual(A.network_watch(A.CurrentStore(), lambda: home, lambda: self.kicks.append(1)), "")  # first look: no change
-            self.assertEqual(A.network_watch(A.CurrentStore(), lambda: home, lambda: self.kicks.append(1)), "")
-            self.assertEqual(A.network_watch(A.CurrentStore(), lambda: None, lambda: self.kicks.append(1)), "offline")
+            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), lambda: home, lambda: self.kicks.append(1)), "")  # first look: no change
+            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), lambda: home, lambda: self.kicks.append(1)), "")
+            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), lambda: None, lambda: self.kicks.append(1)), "offline")
             self.assertEqual(self.kicks, [])
-            self.assertEqual(A.network_watch(A.CurrentStore(), lambda: phone, lambda: self.kicks.append(1)), "changed")  # back online
-            self.assertEqual(A.network_watch(A.CurrentStore(), lambda: home, lambda: self.kicks.append(1)), "changed")  # another network
+            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), lambda: phone, lambda: self.kicks.append(1)), "changed")  # back online
+            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), lambda: home, lambda: self.kicks.append(1)), "changed")  # another network
             self.assertEqual(len(self.kicks), 2)
             self.assertEqual(self.inbox, ["DIRTY", "DIRTY"])
         finally:
@@ -167,12 +167,12 @@ class TunnelTest(unittest.TestCase):
         self.assertTrue(r is None or (r[0] and r[1]))
 
     def test_watch_single_blip_and_recovery(self):
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1000, lambda: "refused"), "down")
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1010, lambda: "ok"), "ok")
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1020, lambda: "refused"), "down")  # counter restarted
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1000, lambda: "refused"), "down")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1010, lambda: "ok"), "ok")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1020, lambda: "refused"), "down")  # counter restarted
         self.assertEqual(self.kicks, [])
-        A.tunnel_watch(A.CurrentStore(), 1030, lambda: "refused")
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(), 1040, lambda: "ok"), "restored")
+        A.tunnel_watch(A.CurrentStore(A.process_store), 1030, lambda: "refused")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), 1040, lambda: "ok"), "restored")
         self.assertEqual(self.inbox, [])
 
 
@@ -191,9 +191,9 @@ class OutageWithoutStoreTest(unittest.TestCase):
         A.open_condition, A.launchctl_kick = down, lambda: None
         try:
             t = time.time()
-            self.assertEqual(A.tunnel_watch(A.CurrentStore(), t, probe=lambda: "refused"), "down")
-            self.assertEqual(A.tunnel_watch(A.CurrentStore(), t + 1, probe=lambda: "refused"), "kicked")
-            self.assertEqual(A.tunnel_watch(A.CurrentStore(), t + 1 + A.TUNNEL_RESTORE_WAIT, probe=lambda: "refused"), "escalated")
+            self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), t, probe=lambda: "refused"), "down")
+            self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), t + 1, probe=lambda: "refused"), "kicked")
+            self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), t + 1 + A.TUNNEL_RESTORE_WAIT, probe=lambda: "refused"), "escalated")
             self.assertTrue(A.read_json_file(A.tunnel_state_path())["escalated"])
         finally:
             A.open_condition, A.launchctl_kick = saved[0], saved[1]

@@ -24,7 +24,7 @@ from agentctl.worktrees import worktree_exclude
 from agentctl.fixerenv import fixer_env
 from agentctl.inbox import INBOX_TAIL
 from agentctl.dispatchblock import claude_cli, interactive_mode
-from agentctl.store import CurrentStore, StoreAuthFailed, StoreUnavailable
+from agentctl.store import StoreAuthFailed, StoreUnavailable
 from agentctl.redrecord import red_active, red_what
 from agentctl.leases import lease_meta
 from agentctl.redreplay import sync_brief
@@ -194,7 +194,7 @@ def in_turn_of(s, transcript):
     return bool(ent and ent.get("id") and not bg_turn_over(ent, transcript))
 
 
-def red_owner(a):
+def red_owner(a, st):
     """THE OWNER'S WRAPPER (detached; `agentctl red owner --family F`): its heartbeat lease, its reds' leases renewed
     by the turn's progress, one session resumed turn after turn, each turn's leases released with the turn's verdict.
     A turn is bounded as a fixer's is: RED_FIXER_WALL, and a session missing from `claude agents` three polls running
@@ -204,7 +204,6 @@ def red_owner(a):
     rec = read_record(path) or {}
     wt = rec.get("worktree")
     me = os.getpid()
-    st = CurrentStore()
     standby = laptop_role_standby(st)
     if standby:  # ONE MACHINE HOLDS THE LAPTOP ROLE (server.py): a standby machine runs no owner
         print(f"RED OWNER {fam}: NOT STARTED ({standby})")

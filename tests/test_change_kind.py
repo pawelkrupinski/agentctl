@@ -82,7 +82,7 @@ class ChangeKindTest(unittest.TestCase):
         governor like an ordinary check."""
         self.red("r-out", ["6"])
         saved = A.fixes_of
-        A.fixes_of = lambda repo, commits: {"6"} if commits else set()
+        A.fixes_of = lambda repo, commits, store: {"6"} if commits else set()
         try:
             self.assertEqual(A.gov_class_of("/nonexistent", ["c1"], set(), self.st), "red")
             self.assertEqual(A.gov_class_of("/nonexistent", [], set(), self.st), "check")

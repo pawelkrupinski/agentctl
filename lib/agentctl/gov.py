@@ -400,7 +400,7 @@ def cmd_suite(a):
 def gov_class_of(repo, commits, reds, st=None):
     """red when the commits' Fixes-Red names an open red -- the gate's (reds) or any other the store has open: the
     change's KIND (changekind.py classify_change) -- else check."""
-    fixes = fixes_of(repo, commits)
+    fixes = fixes_of(repo, commits, st)
     if not fixes:
         return "check"
     return "red" if classify_change({"fixes": sorted(fixes)}, queue_facts(reds, st))["red_fix"] else "check"

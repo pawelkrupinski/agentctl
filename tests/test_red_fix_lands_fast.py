@@ -135,7 +135,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         d, _c, _w = A.waiting_state(self.r.path)
         held = []
         for i in range(1, A.QUEUE_POOL + 1):
-            h = A.tree_slot(d, i)
+            h = A.tree_slot(A.CurrentStore(A.process_store), d, i)
             self.assertTrue(h.acquire())
             held.append(h)
         return d, held
@@ -175,7 +175,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         wa, _ = self.agent("a", "web/src/main/C.scala", "c\n", msg="a: waits for green")
         ea, _ = self.queued(wa)
         self.check(ea)  # red: it joins `waiting`
-        st = A.open_store()
+        st = A.process_store()
         A.new_batch(st, d, "checking")
         wf, _ = self.agent("fix", "web/src/main/A.scala", "a\n", msg="the fix\n\nFixes-Red: 7")
         ef, _ = self.queued(wf)
@@ -211,7 +211,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
 
     # -- the invariant ------------------------------------------------------------------------------------------------
     def test_watchdog_wr_escalates_a_red_fix_waiting_on_green_or_queued_too_long(self):
-        st = A.open_store()
+        st = A.process_store()
         st.put_item("change", "c-fix", "waiting", {"fixes": ["7"], "submitted_at": A.time.time()})
         ok, why = A.inv_wr(A.Clock(), st=st, reds={"7"})
         self.assertFalse(ok, why)

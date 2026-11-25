@@ -54,6 +54,8 @@ class RemoteStore:
     """Store's methods over the phase-2 API (`POST /v1/store/<method>`), plus the §6.3 calls the sync needs. The token
     is the caller's own store token ($AGENTCTL_STORE_TOKEN, else the one agentctl reads for movies)."""
 
+    needs_token = True  # a call goes out with the caller's token (the file store reads a local database: Store.needs_token)
+
     def __init__(self, url, tok=None, clock=None, timeout=60, retries=None):
         self.url, self._tok, self.clock, self.timeout = url.rstrip("/"), tok, clock or time.time, timeout
         self.retries = retries

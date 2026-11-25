@@ -17,7 +17,7 @@ from agentctl.fixchange import fixes_named, red_fix_fresh
 from agentctl.redlink import red_change_link
 
 
-def commit_fixes(repo, sha, store=None):
+def commit_fixes(repo, sha, store):
     """The `Fixes-Red:` values of commit sha that count as fixes (fix_check)."""
     v = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", sha, check=False)
     vals = trailer_values(v.stdout if v.returncode == 0 else "")
@@ -27,7 +27,7 @@ def commit_fixes(repo, sha, store=None):
 _trailer_fixes = process_cache({})
 
 
-def entry_fixes(repo, e):
+def entry_fixes(repo, e, store):
     """The runs a queued change says it fixes: its `fixes` (recorded at submission from its Fixes-Red trailers), else
     read again from its commits' trailers (cached per commit) -- an entry that lost the field still links its red."""
     if e.get("fixes"):
@@ -37,7 +37,7 @@ def entry_fixes(repo, e):
         if c not in _trailer_fixes:
             r = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", c, check=False)
             vals = trailer_values(r.stdout) if r.returncode == 0 else set()
-            _trailer_fixes[c] = sorted(fix_check(repo, c, vals)[0]) if vals else []  # only those that count
+            _trailer_fixes[c] = sorted(fix_check(repo, c, vals, store)[0]) if vals else []  # only those that count
         out += _trailer_fixes[c]
     return out
 
@@ -55,7 +55,7 @@ def red_fix_facts(repo, store):
                     e.get("landed_at") or e.get("updated") or e.get("created") or ts()).timestamp() < 7 * 86400)
             except (ValueError, TypeError):
                 recent = False
-            fx = entry_fixes(repo, e) if recent or e.get("fixes") else None
+            fx = entry_fixes(repo, e, store) if recent or e.get("fixes") else None
             if fx and not red_unrelated(repo, e):
                 entries.append({**e, "fixes": fx})
             elif not fx and e.get("status") in FIX_OPEN:  # no Fixes-Red: linked only by the files it edits
@@ -65,7 +65,7 @@ def red_fix_facts(repo, store):
     else:
         queue_unread = None
     try:
-        landed = landed_fix_commits(repo)
+        landed = landed_fix_commits(store, repo)
     except (Exception, SystemExit):
         landed = []
     key_runs, key_aside = {}, {}
@@ -335,9 +335,9 @@ def red_entry_status(facts, eid):
     return next((e.get("status") for e in facts.get("entries") or [] if e.get("id") == eid), None)
 
 
-def fixes_of(repo, commits):
+def fixes_of(repo, commits, store):
     """The run ids/numbers the commits' Fixes-Red: trailers name -- those that count as fixes (fix_check)."""
     out = set()
     for c in commits:
-        out |= commit_fixes(repo, c)  # only those that count: touching what the red's job reads (fix_check)
+        out |= commit_fixes(repo, c, store)  # only those that count: touching what the red's job reads (fix_check)
     return out

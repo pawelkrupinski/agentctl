@@ -13,7 +13,7 @@ import time
 import urllib.parse
 from agentctl.core import env_num, err, git, remote, state_root
 from agentctl.timefmt import iso_epoch, now, ts
-from agentctl.store import Store, open_store, store_errors
+from agentctl.store import Store, store_errors
 from agentctl.repos import server_repo
 from agentctl.trailers import do_not_land
 from agentctl.waitingdir import save_entry, waiting_entries, waiting_state
@@ -40,7 +40,7 @@ from agentctl.statemachines import MACHINES, StaleVersion, TerminalState, machin
 # checked by the store itself (THE STORE'S OWN TOKENS below): an --allow-user login gets the whole API, a
 # --metrics-user login GET /metrics alone, anyone else 403, no token 401. The reconciler (`agentctl tick` there) opens
 # the same database in-process: two units, one WAL file, so a reconciler crash leaves leases, submissions and the event
-# feed up. RemoteStore is Store's twin over the API: on the laptop `open_store()` IS one, so the laptop's sync, its
+# feed up. RemoteStore is Store's twin over the API: on the laptop the process store IS one, so the laptop's sync, its
 # dispatcher, `red claim` and the fixers' wrappers work against ci-runner's store unchanged.
 #
 # TWO ROLES, ONE WRITER (owner decision 7, 2026-10-29: no laptop standby reconciler; the laptop's own store and its
@@ -61,7 +61,7 @@ for _m in STORE_RPC:
 
 
 def process_store(clock=None):
-    """The store this process uses (cli wires it as open_store's opener): the remote store when a store URL is set
+    """The store this process uses (cli hands it to CurrentStore as its opener): the remote store when a store URL is set
     (store_url: every sync process), else the file store (the server's own database)."""
     url = store_url()
     return RemoteStore(url, clock=clock) if url else Store(clock=clock)
@@ -142,7 +142,7 @@ def submit_change(st, body, repo=None):
     if why:
         raise ValueError(f"NOT LANDED: {why}")
     why = blame_land_refusal(repo, body["commits"] if isinstance(body["commits"], list) else
-                             str(body["commits"]).split(), body.get("worktree"))
+                             str(body["commits"]).split(), st, body.get("worktree"))
     if why:
         raise ValueError(f"NOT LANDED: {why}")
     d = waiting_state(repo)[0]

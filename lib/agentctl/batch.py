@@ -210,11 +210,11 @@ def say_batch(d, lines):
 # assembling again every 5 min -- and an assembling batch goes first, so three checked changes that could land on red
 # waited behind it for over an hour. Now red, a batch assembles only when something in it may land now (batch_ready);
 # otherwise it is blocked-red, which holds no solo change, until the gate turns or a change that may go joins.
-def batch_ready(repo, waiting, reds):
+def batch_ready(repo, waiting, reds, st):
     """The changes a batch takes now, in batch order: red, only those that may land on red; after a drift-red batch at
     most one identity-model change (drift_serialize)."""
-    order = batch_order(repo, waiting, reds)
-    return drift_serialize(repo, [e for e in order if not reds or not must_wait(repo, e["commits"], reds)]
+    order = batch_order(repo, waiting, reds, st)
+    return drift_serialize(repo, [e for e in order if not reds or not must_wait(repo, e["commits"], reds, st)]
                            )[:waiting_batch_max()]
 
 
@@ -250,7 +250,7 @@ def _tick_batch(repo, d, st, seen):
 def red_precheck(repo, d, st, it, waiting, reds):
     """The blocked-red waiting batch's step: pre-check every waiting change as one tree when its membership or main
     changed since the last pre-check and a check tree is free (THE BATCH IS THE MECHANISM, above)."""
-    order = [e for e in batch_order(repo, waiting, reds) if must_wait(repo, e["commits"], reds)][:waiting_batch_max()]
+    order = [e for e in batch_order(repo, waiting, reds, st) if must_wait(repo, e["commits"], reds, st)][:waiting_batch_max()]
     if not order:
         return []
     # AGAIN ONLY WHEN ITS MEMBERS CHANGE: main moving while red (a tools-only change, the fix) is judged once, at green,
@@ -260,7 +260,7 @@ def red_precheck(repo, d, st, it, waiting, reds):
         return []
     if (it["data"].get("precheck_failed") or [None])[1:] == [e["id"] for e in order]:  # failed as it is: changes must
         return []  # come or go
-    slot = check_tree_slot(repo, d)
+    slot = check_tree_slot(st, repo, d)
     if not slot:
         return [f"batch {it['id']}: its red pre-check waits for a check tree"]
     i, h = slot
@@ -350,7 +350,7 @@ def batch_step(repo, d, seen, st):
         push = push_candidates(repo, d, reds, st, t, facts) if not it or depth == "verify" else []
         ready = push or (backlog_candidates(repo, d, reds, st, t, facts) if not it or depth == "full" else [])
         if not it:
-            if not ready or not check_tree_slot_free(repo, d):
+            if not ready or not check_tree_slot_free(st, repo, d):
                 return []
             it = new_batch(st, d, "assembling", depth="verify" if push else "full")
         elif not ready:  # the gate went red, or the changes went their own ways: no batch to assemble
@@ -361,7 +361,7 @@ def batch_step(repo, d, seen, st):
         if not waiting and not it:
             return []
         unread_note(d, reds, waiting, st)
-        ready = (batch_ready(repo, waiting, reds) if (not reds or fix_waits)
+        ready = (batch_ready(repo, waiting, reds, st) if (not reds or fix_waits)
                  and (not it or it["state"] in ("blocked-red", "assembling")) else [])
     go = bool(ready)  # red: a fix waits AND something may land on red now (see BLOCKED BY WHAT MUST WAIT)
     if not it:
@@ -386,7 +386,7 @@ def batch_step(repo, d, seen, st):
             if not waiting:
                 batch_move(st, it, "landed", {"members": []}, text=f"batch {it['id']}: nothing left to land")
             return []
-        slot = check_tree_slot(repo, d)
+        slot = check_tree_slot(st, repo, d)
         if not slot:
             return [f"batch {it['id']}: waiting for a check tree"]
         i, h = slot

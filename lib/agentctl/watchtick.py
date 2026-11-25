@@ -33,7 +33,7 @@ def watch_landed(repo: str, sha: str, pushed_at: float | None, clock: Clock, sto
         return 0
     pushed_at = pushed_at or clock.time()
     try:
-        fixes = sorted(set(fixes) | fixes_of(repo, [sha]))
+        fixes = sorted(set(fixes) | fixes_of(repo, [sha], store))
     except Exception:
         fixes = sorted(set(fixes))
     claim = WatchClaim(store, repo, sha, pushed_at, o_r, clock, close)

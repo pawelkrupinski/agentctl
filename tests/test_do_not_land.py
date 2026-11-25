@@ -75,10 +75,10 @@ class DoNotLandTest(LandBase):
         self.r.write("p.txt", "x\n")
         sha = self.r.commit("PROTOTYPE: measure only")
         with self.assertRaises(ValueError) as c:
-            A.submit_change(A.CurrentStore(), {"id": "n-1", "worktree": self.r.path, "head": sha, "commits": [sha]}, repo=self.r.path)
+            A.submit_change(A.CurrentStore(A.process_store), {"id": "n-1", "worktree": self.r.path, "head": sha, "commits": [sha]}, repo=self.r.path)
         self.assertIn("NOT LANDED", str(c.exception))
         with self.assertRaises(ValueError):
-            A.submit_change(A.CurrentStore(), {"id": "n-2", "worktree": self.r.path, "head": sha, "commits": ["x"],
+            A.submit_change(A.CurrentStore(A.process_store), {"id": "n-2", "worktree": self.r.path, "head": sha, "commits": ["x"],
                              "branch": "measure/y"}, repo=self.r.path)
 
 

@@ -90,7 +90,7 @@ RED_PRECHECK_MODE = "--checks-only"  # a waiting batch's pre-check while main is
 BATCH_FULL_MODE = "--range"  # a backlog batch's check: the full landing check a change gets (check/batch-<tip> on CI)
 
 
-def batch_check(repo, d, tree, base, tip, clock, cls="check", depth="fast", runs=None, range_base=None):
+def batch_check(repo, d, tree, base, tip, clock, st, cls="check", depth="fast", runs=None, range_base=None):
     """The hook's dry run over base..tip in `tree` (depth fast: batch_mode's; full, a backlog batch: the full landing
     check, BATCH_FULL_MODE; verify, a push batch: the combined tree's VERIFY_MODE over range_base..tip, range_base the
     oldest member's full base), on a fresh sbt server, under the stall abort. (ok, output, stalled): a stall -- land's
@@ -107,7 +107,7 @@ def batch_check(repo, d, tree, base, tip, clock, cls="check", depth="fast", runs
         # (a push batch's branch: check/verify-<range base>-batch-<tip>, the workflow's --verify-only <range base>..HEAD)
         e = {"id": f"batch-{tip[:10]}", "head": tip, **({"full_base": rng_base} if depth == "verify" else {})}
         # a gate red's fix in it (cls red): check/red-<...>, the lane ci-runner serves first, as a lone fix's check
-        ok, out = remote_check(repo, e, base, tip, mode, clock, red=cls == "red")
+        ok, out = remote_check(repo, e, base, tip, mode, clock, st, red=cls == "red")
         if runs is not None and e.get("remote_run"):
             runs[tip] = e["remote_run"]
         return (ok, out, False) if ok is not None else (False, out, True)
@@ -130,13 +130,13 @@ def batch_check(repo, d, tree, base, tip, clock, cls="check", depth="fast", runs
     return False, out, True
 
 
-def bisect(repo, d, batch, base, bwt, clock, depth="fast", runs=None, failed_out=None, range_base=None, cls="check"):
+def bisect(repo, d, batch, base, bwt, clock, st, depth="fast", runs=None, failed_out=None, range_base=None, cls="check"):
     """The batch failed: the first entry whose prefix fails (binary search over the prefixes' tips, in the batch's tree
     bwt). (index, output) of the culprit; (None, output) when the whole batch passes on its own again (flaky or infra).
     A backlog or push batch (failed_out: its check's output) is not checked whole again first: each check is a landing
     check's 30-40 min or a verify round's ~10, and the culprit's confirmation below still clears a flaky failure."""
     lo, hi, out_hi = 0, len(batch) - 1, ""
-    check = lambda tip: batch_check(repo, d, bwt, base, tip, clock, cls=cls, depth=depth, runs=runs, range_base=range_base)
+    check = lambda tip: batch_check(repo, d, bwt, base, tip, clock, st, cls=cls, depth=depth, runs=runs, range_base=range_base)
     if depth in ("full", "verify") and failed_out is not None:
         out_hi = failed_out
     else:

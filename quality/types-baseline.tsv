@@ -22,7 +22,7 @@ mypy-errors	cireport	66
 mypy-errors	ciwhy	56
 mypy-errors	classify	1
 mypy-errors	cleanup	51
-mypy-errors	cli	24
+mypy-errors	cli	16
 mypy-errors	clones	1
 mypy-errors	conditions	40
 mypy-errors	config	19
@@ -132,7 +132,7 @@ mypy-errors	reverts	46
 mypy-errors	rundispatch	11
 mypy-errors	runexplain	44
 mypy-errors	runsigs	22
-mypy-errors	server	71
+mypy-errors	server	69
 mypy-errors	serverclone	36
 mypy-errors	serversteps	28
 mypy-errors	sessionpaths	14
@@ -144,7 +144,7 @@ mypy-errors	statsrecords	89
 mypy-errors	status	108
 mypy-errors	statusagents	39
 mypy-errors	statuspage	55
-mypy-errors	store	78
+mypy-errors	store	77
 mypy-errors	storeauth	22
 mypy-errors	storestate	8
 mypy-errors	storetoken	46

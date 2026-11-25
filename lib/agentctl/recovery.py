@@ -158,7 +158,7 @@ def reland_tree(wt):
     return tree
 
 
-def reland_worktree(cond, a):
+def reland_worktree(cond, a, store):
     """`agentctl land` again for the change in a["worktree"], from a throwaway tree at its HEAD (it fetches and rebases
     there: a conflict is a real NOT LANDED). 'landing ...' when started, else why not (the caller says it: never a
     silent drop)."""
@@ -168,7 +168,7 @@ def reland_worktree(cond, a):
     if git(wt, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
         return f"not landed again: {wt} has uncommitted changes"
     commits = git(wt, "rev-list", f"{remote()}/main..HEAD", check=False).stdout.split()
-    why = blame_land_refusal(wt, commits, wt) or held_commit(wt, commits)
+    why = blame_land_refusal(wt, commits, store, wt) or held_commit(wt, commits)
     if why:
         return f"not landed again: {why}"
     try:

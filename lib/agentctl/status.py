@@ -17,7 +17,7 @@ from agentctl.redfamilies import red_family
 from agentctl.cistate import state_read
 from agentctl.gatesummary import GATE_LINE, GATE_SUMMARY_MAX_AGE
 from agentctl.dispatchblock import cached_dispatch_blocker
-from agentctl.store import open_store
+from agentctl.store import Store
 from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.leases import lease_meta
 from agentctl.reverts import REVERT_OPEN, revert_brief, revert_line
@@ -54,7 +54,7 @@ STATUS_BATCH_OPEN = ("blocked-red", "assembling", "checking", "pushing", "bisect
 def status_store():
     """The store the page reads: the remote one with short timeouts when the laptop is the sync, else the local one."""
     url = store_url()
-    return RemoteStore(url, timeout=STATUS_STORE_TIMEOUT) if url else open_store()
+    return RemoteStore(url, timeout=STATUS_STORE_TIMEOUT) if url else Store()
 
 
 def status_run_url(repo, number, run=None):

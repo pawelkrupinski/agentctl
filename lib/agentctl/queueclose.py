@@ -9,7 +9,6 @@ from agentctl.core import cherry_landed, env_num, fmt_age, git, git_ok, host_rol
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
 from agentctl.classify import network_failure, network_only
-from agentctl.store import open_store
 from agentctl.repos import movies_repo_path, precheck_hook, waiting_supported
 from agentctl.policy import policy_blocks
 from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries, waiting_state, wlog
@@ -86,10 +85,10 @@ def close_item_landed(st, cid, why, via=None):
         return False
 
 
-def close_landed_changes(repo, clock, d=None, store=None):
+def close_landed_changes(repo, clock, store, d=None):
     """Every open change whose commits are on main by content closes as LANDED: the queue entries of d (with their
     items), then the store's other open items (by their head). Returns what it did."""
-    st, t = store or open_store(clock.time), clock.time()
+    st, t = store, clock.time()
     did, carried = [], set()
     for e in waiting_entries(d, open_only=False) if d else []:
         if e.get("status") in ENTRY_FINAL or e.get("status") == "pushing":
@@ -292,7 +291,7 @@ def check_entry(repo: str, eid: str, clock: Clock, store: Any) -> int:
     (leases), it takes the change to checking and leaves it checked (with the tip and base it passed on), rejected (a
     test failure, a conflict) or queued again (infra). It never pushes: the tick does (push_change)."""
     d, _c, _w = waiting_state(repo)
-    lease = checker_lease(eid)
+    lease = checker_lease(store, eid)
     if not lease.acquire():  # another checker holds it (and progresses)
         return 0
     own = entry_owned(eid)
@@ -304,7 +303,7 @@ def check_entry(repo: str, eid: str, clock: Clock, store: Any) -> int:
         if not e or e.get("status") not in ("queued", "checking") or e.get("backlog_batch"):  # a backlog batch's
             return 0
         fix = bool(e.get("fixes")) and classify_change(e, queue_facts(gate_reds(repo), store), clock.time())["red_fix"]
-        slot = check_tree_slot(repo, d, fix=fix)
+        slot = check_tree_slot(store, repo, d, fix=fix)
         if not slot:  # all trees busy: it stays queued, the tick starts it again when one frees
             return 0
         i, slot_h = slot
@@ -376,13 +375,13 @@ def _check_entry(st: Any, repo: str, d: str, e: dict[str, Any], i: int, clock: C
     save_entry(d, e)
     reds = gate_reds(repo) if waiting_supported(repo) else set()
     commits = waiting_commits(tree, base, head)
-    dead = blame_land_refusal(tree, commits, e.get("worktree"))
+    dead = blame_land_refusal(tree, commits, st, e.get("worktree"))
     if dead:  # queued before its blame was withdrawn or refuted (2026-11-01: revert-629 re-queued by orphan duty)
         # policy: blame-dead
         queue_verdict(st, d, e, "rejected", f"NOT LANDED: {dead}", decided_on=base)
         return 1
     # FIX REPLAY (redreplay.py): the laptop's land may hold no token; its replays ride with the submission (`replays`)
-    unreplayed = fix_replay_refusal(repo, commits, proofs=e.get("replays"))
+    unreplayed = fix_replay_refusal(repo, commits, st, proofs=e.get("replays"))
     if unreplayed and unreplayed[0] == "fix-replay" and policy_blocks("fix-replay", None, e["id"], unreplayed[1][:160]):
         queue_verdict(st, d, e, "rejected", f"NOT LANDED: {unreplayed[1]}", decided_on=base)  # policy: fix-replay
         return 1
@@ -390,7 +389,7 @@ def _check_entry(st: Any, repo: str, d: str, e: dict[str, Any], i: int, clock: C
             and policy_blocks("fix-replay-outside", None, e["id"], unreplayed[1][:160]):
         queue_verdict(st, d, e, "rejected", f"NOT LANDED: {unreplayed[1]}", decided_on=base)  # policy: fix-replay-outside
         return 1
-    joining = bool(reds) and must_wait(repo, commits, reds)
+    joining = bool(reds) and must_wait(repo, commits, reds, st)
     cls = gov_class_of(repo, commits, reds)
     mode = "--checks-only" if joining else "--range"
     if adopt and rem.get("mode") == VERIFY_MODE:
@@ -412,7 +411,7 @@ def _check_entry(st: Any, repo: str, d: str, e: dict[str, Any], i: int, clock: C
     if mode != VERIFY_MODE:
         e.pop("verify_areas", None)
     if hook:
-        ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, own)
+        ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
         if ok is None:  # stalled: the laptop's, not the change's -- and what stalled it is said (2026-11-17: two
             # 13-s "stalls" whose cause no record kept)
             last = ((out or "").strip().splitlines() or [""])[-1].strip()[:240]

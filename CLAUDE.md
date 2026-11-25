@@ -58,7 +58,7 @@ movies model (movies "Code quality ratchets" and "Coupling"):
   modules it imports (a FOUNDATION -- a module importing no module but other foundations, a leaf helper like
   `statefile` -- is no collaborator: extracting a concept into its own module never raises its users' fan-out), and
   mypy checks the modules concatenated in `MODULES` order. What a module must not import -- the remote store, a
-  missing token's inbox condition -- is wired at the composition root (cli: `wire_store(process_store)`,
+  missing token's inbox condition -- is wired at the composition root (cli: `CurrentStore(process_store)`,
   `wire_token_missing_note(token_unavailable_note)`), never reached by a module calling up. The tests read and patch
   the modules as one object, `A` (`tests/agentctl_view.py`: `A.<name> = fake` replaces the name in every module
   binding it), until the collaborators are injected.

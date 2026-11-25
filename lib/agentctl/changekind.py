@@ -3,7 +3,6 @@
 
 import time
 from agentctl.core import fmt_age
-from agentctl.store import open_store
 from agentctl.redrecord import RED_TERMINAL, red_names
 from agentctl.queueslots import checker_alive
 from agentctl.fixchange import fixes_named
@@ -62,12 +61,12 @@ def red_kind_of(d):
     return "gate" if d.get("gate") else str(d.get("red_kind") or "outside")
 
 
-def queue_facts(gate, st=None):
+def queue_facts(gate, st):
     """THE FACTS a change is classified against: {"gate": the gate's current red names (gate_reds), "open": {name: [red
     id, red kind]} for every red the store has open}. An unreadable store gives no open reds: the gate's still count."""
     open_ = {}
     try:
-        items = (st if st is not None else open_store()).items("red")
+        items = st.items("red")
     except Exception:  # an unreadable store orders nothing: the gate's reds still do
         items = []
     for it in items:
@@ -168,7 +167,7 @@ def change_hold_visible(st, it, e, t):
         return hold
     if (e or {}).get("backlog_batch"):
         return {"kind": "batch", "why": f"a member of batch {e['backlog_batch']}", "batch": e["backlog_batch"]}
-    if it["state"] == "queued" and checker_alive(it["id"]):
+    if it["state"] == "queued" and checker_alive(st, it["id"]):
         return {"kind": "starting", "why": "its executor is starting"}
     return None
 

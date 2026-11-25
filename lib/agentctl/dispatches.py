@@ -9,7 +9,6 @@ from agentctl.core import HOME, PROTECTED_BRANCHES, dispatches_dir, git, git_ok,
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import RUN_FIELDS, gh_json
-from agentctl.store import open_store
 from agentctl.procs import proc_alive, process_start, safe_cwd
 from agentctl.waitingdir import waiting_dir
 from agentctl.fixerrecords import agent_name
@@ -270,7 +269,7 @@ def orphaned_red(store, o_r, runs):
     return None
 
 
-def orphan_branches(repo, o_r, dry, out, runs_for=None, store=None):
+def orphan_branches(repo, o_r, dry, out, store, runs_for=None):
     """The sweep's part: remote tracked branches whose owner is gone (worktree removed or pid dead), or whose branch red
     closed as an orphan (no owner at all), and whose runs all finished. measure/* ones are deleted (the standing OK: a
     finished measure/* branch); the rest are listed."""
@@ -278,10 +277,7 @@ def orphan_branches(repo, o_r, dry, out, runs_for=None, store=None):
     runs_for = runs_for or (lambda b: gh_json(o_r, "run", "list", "--branch", b, "--limit", "20", "--json", RUN_FIELDS))
     recorded = {r.get("branch") for r in dispatch_records() if r.get("branch")}
     found = []
-    try:
-        st = store or open_store()
-    except (Exception, SystemExit):
-        st = None
+    st = store
     for line in git(repo, "ls-remote", "--heads", remote(), check=False).stdout.splitlines():
         sha, ref = line.split()
         b = ref.removeprefix("refs/heads/")

@@ -82,7 +82,7 @@ class LeaseHistoryTest(unittest.TestCase):
         self.t = [1_000_000.0]
         self.st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"), clock=lambda: self.t[0])
         self.saved_root = os.environ.get("AGENTCTL_STATE_ROOT")
-        os.environ["AGENTCTL_STATE_ROOT"] = tempfile.mkdtemp()  # cmd_lease's own open_store()
+        os.environ["AGENTCTL_STATE_ROOT"] = tempfile.mkdtemp()  # cmd_lease's own process store
 
     def tearDown(self):
         if self.saved_root is None:
@@ -109,7 +109,7 @@ class LeaseHistoryTest(unittest.TestCase):
     def test_lease_list_shows_the_live_and_the_lately_freed_unless_all(self):
         import contextlib, io, types
         now = A.time.time()
-        st = A.open_store()
+        st = A.process_store()
         a = st.acquire("t/live", "me", 600, 900)
         b = st.acquire("t/recent", "me", 600, 900)
         st.release("t/recent", b["epoch"], b["secret"])
@@ -121,7 +121,7 @@ class LeaseHistoryTest(unittest.TestCase):
         for all_, want in ((False, ["t/live", "t/recent"]), (True, ["t/live", "t/old", "t/recent"])):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                A.cmd_lease(types.SimpleNamespace(prefix="t/", all=all_), A.CurrentStore())
+                A.cmd_lease(types.SimpleNamespace(prefix="t/", all=all_), A.CurrentStore(A.process_store))
             self.assertEqual(sorted(l.split()[0] for l in out.getvalue().splitlines() if l.startswith("t/")), want)
             self.assertEqual("not shown: --all" in out.getvalue(), not all_)
         self.assertTrue(a)
@@ -131,25 +131,26 @@ class CheckLeaseTest(unittest.TestCase):
     """Check slots and a change's check are leases (phase 1 step 4): a checker that stops progressing frees both."""
     def test_slots_are_leases_and_a_live_checker_blocks_a_second(self):
         d = tempfile.mkdtemp()
+        st = A.CurrentStore(A.process_store)
         os.environ["AGENTCTL_CHECK_TREES"] = "2"
         try:
-            a, b = A.check_tree_slot("/r", d), A.check_tree_slot("/r", d)
+            a, b = A.check_tree_slot(st, "/r", d), A.check_tree_slot(st, "/r", d)
             self.assertEqual((a[0], b[0]), (1, 2))
-            self.assertIsNone(A.check_tree_slot("/r", d))  # both busy
+            self.assertIsNone(A.check_tree_slot(st, "/r", d))  # both busy
             a[1].release()
-            c = A.check_tree_slot("/r", d)
+            c = A.check_tree_slot(st, "/r", d)
             self.assertEqual(c[0], 1)
             for x in (b, c):
                 x[1].release()
         finally:
             os.environ.pop("AGENTCTL_CHECK_TREES")
-        one = A.checker_lease("e9")
+        one = A.checker_lease(st, "e9")
         self.assertTrue(one.acquire())
-        self.assertTrue(A.checker_alive("e9"))
-        self.assertFalse(A.checker_lease("e9").acquire())  # a second checker of the same entry steps aside
+        self.assertTrue(A.checker_alive(st, "e9"))
+        self.assertFalse(A.checker_lease(st, "e9").acquire())  # a second checker of the same entry steps aside
         self.assertEqual(one.renew("p1"), "ok")
         one.release()
-        self.assertIsNone(A.checker_alive("e9"))
+        self.assertIsNone(A.checker_alive(st, "e9"))
 
 
 if __name__ == "__main__":

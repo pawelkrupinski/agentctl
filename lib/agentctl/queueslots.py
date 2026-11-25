@@ -25,10 +25,11 @@ CHECK_LEASE_TTL = 10 * 60
 CHECK_LEASE_MAX = 3 * 3600
 
 
-def tree_slot(d, i, max_hold=None):
+def tree_slot(st, d, i, max_hold=None):
     """THE lease of check tree i: whoever touches the tree -- a checker, the batch, a push -- holds it."""
     return LeaseHold(f"slot/check/{os.path.basename(d.rstrip('/'))}/{i}",
-                     env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), max_hold or CHECK_LEASE_MAX)
+                     env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), max_hold or CHECK_LEASE_MAX,
+                     store=st)
 
 
 # A RED FIX NEVER WAITS FOR GREEN (the owner, 2026-11-16: "Red fix should never wait for green build (obv)"): every
@@ -46,24 +47,24 @@ RED_FIX_TREE = "redfix"  # <clone>-wt-check-redfix, under its own lease: only a 
 # (kind red_fix); where the GATE decides (waiting for green, a known red), the gate's reds alone still do (gate_fix).
 
 
-def check_tree_slot(repo, d, fix=False):
+def check_tree_slot(st, repo, d, fix=False):
     """(index, LeaseHold) of a free check tree slot, or None when all QUEUE_POOL are busy; a red fix (fix) tries the
     red-fix tree first."""
     for i in ([RED_FIX_TREE] if fix else []) + list(range(1, int(env_num("AGENTCTL_CHECK_TREES", QUEUE_POOL)) + 1)):
-        h = tree_slot(d, i)
+        h = tree_slot(st, d, i)
         if h.acquire():
             return i, h
     return None
 
 
-def checker_lease(eid):
+def checker_lease(st, eid):
     return LeaseHold(f"check/{eid}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), CHECK_LEASE_MAX,
-                     meta={"entry": eid})
+                     meta={"entry": eid}, store=st)
 
 
-def checker_alive(eid):
+def checker_alive(st, eid):
     """The live checker lease of entry eid (meta: its pid), or None."""
-    return lease_live(f"check/{eid}")
+    return lease_live(f"check/{eid}", st)
 
 
 def check_tree(repo, i, sha):

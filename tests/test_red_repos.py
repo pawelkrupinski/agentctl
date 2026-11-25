@@ -211,15 +211,15 @@ class TickTest(RedReposBase):
                 self.others(advance=60)
         self.assertNotIn("skipped", errb.getvalue())
         self.assertNotIn(INFRA, self.by_repo())
-        conds = [c for c in A.open_conditions(A.CurrentStore()) if c["key"] == "red-read-access"]
+        conds = [c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"] == "red-read-access"]
         self.assertEqual(len(conds), 1)
         self.assertIn("needs the agentctl-reader App", conds[0]["text"])
         self.assertIn(INFRA, conds[0]["text"])
         self.assertIn(CORE, conds[0]["text"])
         self.apps.add("reader")  # the App configured on the host
         self.assertIsNone(A.red_read_token(INFRA))
-        A.recovery_tick(A.CurrentStore(), force=True)
-        self.assertEqual([c for c in A.open_conditions(A.CurrentStore()) if c["key"] == "red-read-access"], [])
+        A.recovery_tick(A.CurrentStore(A.process_store), force=True)
+        self.assertEqual([c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"] == "red-read-access"], [])
         self.others(advance=60)
         self.assertIn(INFRA, self.by_repo())
 

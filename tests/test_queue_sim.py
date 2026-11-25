@@ -292,7 +292,7 @@ class Timeline08010cTest(unittest.TestCase):
             replay = {(k, label.get(b)) for _t, k, b, _f in sim.holds.get(
                 next(c for c in sim.changes if c.label == "replay").eid, []) if k == "overlap"}
             self.assertEqual(replay, {("overlap", "fix")}, f"seed {seed}: fix-replay waits for the fix it overlaps")
-            st = queue_sim.A.open_store()
+            st = queue_sim.A.process_store()
             self.assertEqual([i for i in st.items("issue") if "[change-unheld" in i["data"]["text"]], [],
                              f"seed {seed}: no change was past its deadline unheld")
 
@@ -310,7 +310,7 @@ class Timeline08010cTest(unittest.TestCase):
 # invariant. A mutation whose anchor is gone fails here, naming it: update it with the code.
 MUTATIONS = {
     "ee7b744 (the batch keeps its age-order place)": (
-        'if not fix and batch_seq is not None and batch_seq < e["seq"] and not check_tree_slot_free(repo, d) \\\n'
+        'if not fix and batch_seq is not None and batch_seq < e["seq"] and not check_tree_slot_free(st, repo, d) \\\n'
         '                and policy_blocks("older-batch", st, e["id"], "the last free check tree kept for the older batch"):',
         "if False:  # MUTATION", "loadlone"),
     "pushes first, then the holds": (

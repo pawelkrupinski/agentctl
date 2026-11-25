@@ -90,7 +90,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequenc
     def pins():
         """The convergence pins read with the owner's token the processor holds and written into the store: the
         reconciler on ci-runner reads them from there (ci-lander may not read releases). Bounded: a network read."""
-        if not run_bounded("pins", lambda: refresh_pinned_recording(o_r, repo, role="sync"),
+        if not run_bounded("pins", lambda: refresh_pinned_recording(o_r, repo, store, role="sync"),
                            env_num("AGENTCTL_STEP_BOUND", 120)):
             err("pinned recording: still reading from an earlier cycle")
 

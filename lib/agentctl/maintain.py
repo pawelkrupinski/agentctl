@@ -94,7 +94,7 @@ def cmd_maintain(a, store):
     today, hour = dt.date.today().isoformat(), dt.datetime.now().hour
     if a.sweep or (st.get("sweep") != today and hour >= int(env_num("AGENTCTL_SWEEP_HOUR", MAINTAIN_SWEEP_HOUR))):
         print("== sweep (daily)")
-        rc = cmd_sweep(argparse.Namespace(repo=None, idle_days=SWEEP_IDLE_DAYS, dry_run=a.dry_run, no_report=a.dry_run))
+        rc = cmd_sweep(argparse.Namespace(repo=None, idle_days=SWEEP_IDLE_DAYS, dry_run=a.dry_run, no_report=a.dry_run), store)
         if not a.dry_run:
             write_json(path, {**st, "sweep": today, "sweep_rc": rc, "sweep_at": ts()})
     else:

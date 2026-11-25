@@ -82,9 +82,9 @@ class SameProbeTest(RegistryBase):
             rec = Recorder()
             A.PROBES[kind] = rec
             args = {"x": kind}
-            c = A.open_condition("UNKNOWN", f"UNKNOWN: {kind} is down", A.run_probe(kind, args), [], key=f"k-{kind}", store=A.CurrentStore())
+            c = A.open_condition("UNKNOWN", f"UNKNOWN: {kind} is down", A.run_probe(kind, args), [], key=f"k-{kind}", store=A.CurrentStore(A.process_store))
             self.assertIsNotNone(c, kind)
-            self.assertEqual(A.recovery_tick(A.CurrentStore(), force=True)[0][:10], "RECOVERED:", kind)
+            self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), force=True)[0][:10], "RECOVERED:", kind)
             self.assertEqual(rec.calls, [args, args], kind)  # the opening check and the closing check: one function
             self.assertFalse(os.path.exists(c.get("path") or A.recovery_dir(f"k-{kind}.json")), kind)
         unread = [e for e in self.entries("UNKNOWN") if not e["read"]]
@@ -94,24 +94,24 @@ class SameProbeTest(RegistryBase):
 
     def test_a_failing_probe_backs_off_and_a_passing_one_opens_nothing(self):
         A.PROBES["tcp"] = Recorder(fails=3)
-        A.open_condition("UNKNOWN", "UNKNOWN: port", A.run_probe("tcp", {"host": "h", "port": 1}), [], key="p", store=A.CurrentStore())
+        A.open_condition("UNKNOWN", "UNKNOWN: port", A.run_probe("tcp", {"host": "h", "port": 1}), [], key="p", store=A.CurrentStore(A.process_store))
         t = time.time()
-        self.assertEqual(A.recovery_tick(A.CurrentStore(), t + 1000), [])
-        c = A.open_conditions(A.CurrentStore())[0]
+        self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), t + 1000), [])
+        c = A.open_conditions(A.CurrentStore(A.process_store))[0]
         self.assertEqual(c["fails"], 1)
         self.assertGreater(c["next_check"], t + 1000 + A.PROBE_EVERY["tcp"])
-        self.assertEqual(A.recovery_tick(A.CurrentStore(), t + 1001), [])  # not due: not probed
+        self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), t + 1001), [])  # not due: not probed
         self.assertEqual(len(A.PROBES["tcp"].calls), 2)
         A.PROBES["http"] = Recorder(fails=0)
-        self.assertIsNone(A.open_condition("UNKNOWN", "UNKNOWN: x", A.run_probe("http", {"url": "u"}), [], store=A.CurrentStore()))
+        self.assertIsNone(A.open_condition("UNKNOWN", "UNKNOWN: x", A.run_probe("http", {"url": "u"}), [], store=A.CurrentStore(A.process_store)))
         self.assertEqual(self.entries("UNKNOWN")[-1]["verdict"], "UNKNOWN: port")
 
     def test_on_recover_actions_run_once(self):
         ran = []
         A.RECOVER_ACTIONS["kick_tunnel"] = lambda c, a, st: ran.append(a) or "kicked"
         A.PROBES["route"] = Recorder()
-        A.open_condition("NETWORK", "NETWORK: offline", A.run_probe("route"), [("kick_tunnel", {"n": 1})], key="net", store=A.CurrentStore())
-        lines = A.recovery_tick(A.CurrentStore(), force=True) + A.recovery_tick(A.CurrentStore(), force=True)
+        A.open_condition("NETWORK", "NETWORK: offline", A.run_probe("route"), [("kick_tunnel", {"n": 1})], key="net", store=A.CurrentStore(A.process_store))
+        lines = A.recovery_tick(A.CurrentStore(A.process_store), force=True) + A.recovery_tick(A.CurrentStore(A.process_store), force=True)
         self.assertEqual(ran, [{"n": 1}])
         self.assertEqual(len(lines), 1)
         self.assertIn("kicked", lines[0])
@@ -137,7 +137,7 @@ class BlipTest(RegistryBase):
     def test_a_failure_that_clears_inside_the_grace_opens_nothing(self):
         self.assertIsNone(self.sighting(0))
         self.assertIsNone(self.sighting(70))
-        self.assertEqual((A.open_conditions(A.CurrentStore()), self.entries("UNKNOWN")), ([], []))
+        self.assertEqual((A.open_conditions(A.CurrentStore(A.process_store)), self.entries("UNKNOWN")), ([], []))
 
     def test_a_failure_seen_again_past_the_grace_opens_once(self):
         self.assertIsNone(self.sighting(0))
@@ -150,11 +150,11 @@ class BlipTest(RegistryBase):
         self.assertIsNone(self.sighting(0))
         self.assertIsNone(self.sighting(A.CONDITION_PENDING_LAPSE + 1))  # the last sighting lapsed: a new run
         self.assertIsNone(self.sighting(100))
-        self.assertEqual(A.open_conditions(A.CurrentStore()), [])
+        self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
 
     def test_other_kinds_and_a_zero_grace_open_at_once(self):
-        self.assertIsNotNone(A.open_condition("STALLED", "STALLED: x", A.run_probe("token", {}), [], key="s", store=A.CurrentStore()))
-        self.assertIsNotNone(A.open_condition("UNKNOWN", "UNKNOWN: y", A.run_probe("token", {}), [], key="u", grace=0, store=A.CurrentStore()))
+        self.assertIsNotNone(A.open_condition("STALLED", "STALLED: x", A.run_probe("token", {}), [], key="s", store=A.CurrentStore(A.process_store)))
+        self.assertIsNotNone(A.open_condition("UNKNOWN", "UNKNOWN: y", A.run_probe("token", {}), [], key="u", grace=0, store=A.CurrentStore(A.process_store)))
 
 
 class HostTest(RegistryBase):
@@ -167,7 +167,7 @@ class HostTest(RegistryBase):
                         else os.environ.pop("AGENTCTL_ROLE", None))
 
     def test_the_laptops_condition_is_probed_on_the_laptop_never_on_ci_runner(self):
-        st = A.open_store()  # one store, both hosts (the laptop's is ci-runner's through the API)
+        st = A.process_store()  # one store, both hosts (the laptop's is ci-runner's through the API)
         rec = Recorder(fails=1)
         A.PROBES["tcp"] = rec
         self.role("sync-test")
@@ -184,7 +184,7 @@ class HostTest(RegistryBase):
         self.assertEqual(len(rec.calls), 2)
 
     def test_a_token_condition_the_server_opened_is_cleared_by_the_laptops_probe(self):
-        st = A.open_store()
+        st = A.process_store()
         rec = Recorder(fails=1)
         A.PROBES["token"] = rec
         self.role("server")
@@ -201,41 +201,41 @@ class ConditionItemTest(RegistryBase):
     def test_open_escalate_by_deadline_close_by_its_probe_and_old_files_migrate(self):
         ok = [False]
         A.PROBES["tunnel"] = lambda a: (ok[0], "down" if not ok[0] else "up")
-        A.open_condition("STALLED", "STALLED: x", A.run_probe("tunnel"), [], key="k1", store=A.CurrentStore())
-        st = A.open_store()
+        A.open_condition("STALLED", "STALLED: x", A.run_probe("tunnel"), [], key="k1", store=A.CurrentStore(A.process_store))
+        st = A.process_store()
         it = st.item("condition", "k1")
         self.assertEqual((it["state"], it["level"]), ("open", 0))
-        self.assertEqual(A.recovery_tick(A.CurrentStore(), now_=time.time() + 11 * 60), [])
+        self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), now_=time.time() + 11 * 60), [])
         it = st.item("condition", "k1")
         self.assertEqual(it["level"], 1)
         self.assertEqual([e["severity"] for e in st.events() if e["item_id"] == "k1"][-1], "escalate")
         self.assertGreater(it["deadline"], time.time() + 3600)  # the next escalation in 2 h
         ok[0] = True
-        self.assertEqual(len(A.recovery_tick(A.CurrentStore(), force=True)), 1)
+        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), force=True)), 1)
         self.assertEqual(st.item("condition", "k1")["state"], "closed")
-        self.assertEqual(A.open_conditions(A.CurrentStore()), [])
+        self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
         os.makedirs(A.recovery_dir(), exist_ok=True)  # a condition file from before step 12: an item now
         A.write_json(A.recovery_dir("old.json"), {"key": "old", "kind": "NETWORK", "text": "NETWORK: x",
                                                   "probe": {"kind": "tunnel", "args": {}}, "next_check": 1e12})
-        A.recovery_tick(A.CurrentStore())
+        A.recovery_tick(A.CurrentStore(A.process_store))
         self.assertFalse(os.path.exists(A.recovery_dir("old.json")))
-        self.assertEqual([c["key"] for c in A.open_conditions(A.CurrentStore())], ["old"])  # an item now, its probe due at its own time
+        self.assertEqual([c["key"] for c in A.open_conditions(A.CurrentStore(A.process_store))], ["old"])  # an item now, its probe due at its own time
 
 
 class NoBypassTest(RegistryBase):
     def test_no_condition_without_its_probe(self):
         for bad in (None, {"kind": "tunnel"}, True, "tunnel"):
             with self.assertRaises(A.ConditionBypass):
-                A.open_condition("STALLED", "STALLED: x", bad, [], store=A.CurrentStore())
+                A.open_condition("STALLED", "STALLED: x", bad, [], store=A.CurrentStore(A.process_store))
         with self.assertRaises(TypeError):
-            A.open_condition("STALLED", "STALLED: x", store=A.CurrentStore())  # no default: the probe is required
+            A.open_condition("STALLED", "STALLED: x", store=A.CurrentStore(A.process_store))  # no default: the probe is required
         with self.assertRaises(A.ConditionBypass):
             A.ProbeResult("tunnel", {}, False, "forged")
         with self.assertRaises(A.ConditionBypass):
             A.run_probe("no-such-probe")
         A.PROBES["tunnel"] = Recorder()
         with self.assertRaises(A.ConditionBypass):
-            A.open_condition("STALLED", "STALLED: x", A.run_probe("tunnel"), [("no-such-action", {})], store=A.CurrentStore())
+            A.open_condition("STALLED", "STALLED: x", A.run_probe("tunnel"), [("no-such-action", {})], store=A.CurrentStore(A.process_store))
 
     def test_a_condition_kind_inbox_entry_is_refused_outside_open_condition(self):
         for v in ("STALLED: tunnel", "UNKNOWN: gate", "NETWORK: uplink", "NOT LANDED: stalled push"):
@@ -299,24 +299,24 @@ class DetectorsTest(RegistryBase):
         saved = A.uplink_loss, A.launchctl_kick
         A.uplink_loss, A.launchctl_kick = (lambda: 0.9), (lambda: None)
         try:
-            self.assertEqual(A.tunnel_watch(A.CurrentStore()), "network")
+            self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store)), "network")
         finally:
             A.uplink_loss, A.launchctl_kick = saved
-        self.assertEqual([c["probe"]["kind"] for c in A.open_conditions(A.CurrentStore())], ["tunnel"])
+        self.assertEqual([c["probe"]["kind"] for c in A.open_conditions(A.CurrentStore(A.process_store))], ["tunnel"])
         self.assertEqual(len(self.entries("NETWORK")), 1)
         A.PROBES["tunnel"].fails = 0
-        A.recovery_tick(A.CurrentStore(), force=True)
-        self.assertEqual(A.open_conditions(A.CurrentStore()), [])
+        A.recovery_tick(A.CurrentStore(A.process_store), force=True)
+        self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
         self.assertTrue(all(e["read"] for e in self.entries("NETWORK")))
         self.assertFalse(A.read_json_file(A.tunnel_state_path()).get("network"))
 
     def test_network_offline_clears_on_the_route_probe(self):
         A.PROBES["route"] = Recorder()
         A._last_route[0] = ("en0", "10.0.0.1")
-        self.assertEqual(A.network_watch(A.CurrentStore(), route=lambda: None, kick=lambda: None), "offline")
-        self.assertEqual(A.open_conditions(A.CurrentStore())[0]["probe"]["kind"], "route")
-        A.recovery_tick(A.CurrentStore(), force=True)
-        self.assertEqual(A.open_conditions(A.CurrentStore()), [])
+        self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), route=lambda: None, kick=lambda: None), "offline")
+        self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store))[0]["probe"]["kind"], "route")
+        A.recovery_tick(A.CurrentStore(A.process_store), force=True)
+        self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
 
 
 class UntilGreenTest(RedBase):
@@ -329,7 +329,7 @@ class UntilGreenTest(RedBase):
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
         self.addCleanup(lambda: os.environ.__setitem__("AGENTCTL_STATE_ROOT", saved) if saved is not None
                         else os.environ.pop("AGENTCTL_STATE_ROOT", None))
-        self.st = A.open_store()
+        self.st = A.process_store()
 
     def snap(self, conclusion):
         A._gate_lists.clear()

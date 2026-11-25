@@ -135,33 +135,26 @@ class FixCheckTest(FixCheckBase):
 
 
 class LandingTest(FixCheckBase):
-    def with_store(self):
-        saved = A.open_store
-        A.open_store = lambda *a, **k: self.st
-        self.addCleanup(lambda: setattr(A, "open_store", saved))
-
     def test_a_trailer_that_does_not_count_waits_on_a_red_gate_and_names_no_fix(self):
-        self.with_store()
         saved = A.is_production_path
         A.is_production_path = lambda p: True
         self.addCleanup(lambda: setattr(A, "is_production_path", saved))
         bad = self.change([SPEC + "IdentitySliceCasesSpec.scala"], ("2375",))
-        self.assertTrue(A.must_wait(self.r.path, [bad], {"2375", "9375"}))
-        self.assertEqual(A.fixes_of(self.r.path, [bad]), set())
+        self.assertTrue(A.must_wait(self.r.path, [bad], {"2375", "9375"}, self.st))
+        self.assertEqual(A.fixes_of(self.r.path, [bad], self.st), set())
         good = self.change([SPEC + "IdentityDriftSpec.scala"], ("2375",))
-        self.assertFalse(A.must_wait(self.r.path, [good], {"2375", "9375"}))
-        self.assertEqual(A.fixes_of(self.r.path, [good]), {"2375"})
+        self.assertFalse(A.must_wait(self.r.path, [good], {"2375", "9375"}, self.st))
+        self.assertEqual(A.fixes_of(self.r.path, [good], self.st), {"2375"})
 
     def test_a_landed_commit_whose_trailer_does_not_count_is_no_landed_fix(self):
-        self.with_store()
         bad = self.change([SPEC + "IdentitySliceCasesSpec.scala"], ("2375",))
         good = self.change([SPEC + "IdentityDriftSpec.scala"], ("2375",))
         self.r.push()
-        shas = [x[0] for x in A.landed_fix_commits(self.r.path)]
+        shas = [x[0] for x in A.landed_fix_commits(self.st, self.r.path)]
         self.assertIn(good, shas)
         self.assertNotIn(bad, shas)
         it = self.st.item("red", "drift")
-        self.assertEqual(A.red_fix_of(it, {"entries": [], "landed": [x for x in A.landed_fix_commits(self.r.path)
+        self.assertEqual(A.red_fix_of(it, {"entries": [], "landed": [x for x in A.landed_fix_commits(self.st, self.r.path)
                                                                      if x[0] == bad]}), None)
 
 
@@ -215,12 +208,9 @@ class PerRedTest(FixCheckBase):
                                                      "opened_at": 0})
 
     def facts(self):
-        return {"entries": [], "landed": A.landed_fix_commits(self.r.path), "repo": self.r.path}
+        return {"entries": [], "landed": A.landed_fix_commits(self.st, self.r.path), "repo": self.r.path}
 
     def ios_fix(self):
-        saved = A.open_store
-        A.open_store = lambda *a, **k: self.st
-        self.addCleanup(lambda: setattr(A, "open_store", saved))
         sha = self.change(["ios/KinowoUITests/CardShareMenuUITests.swift"], ("74",))
         self.r.push()
         return sha

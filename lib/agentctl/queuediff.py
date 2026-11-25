@@ -201,7 +201,7 @@ def push_change(repo, d, e, clock, st):
     # held, the PUSH TREE: a checker holds its slot for its remote run's whole wait (up to CHECK_LEASE_MAX), and a
     # push waiting for it sat `busy` 30 min past its deadline (2026-11-06, three changes, every tree held).
     for i in (e.get("tree") or 1, PUSH_TREE):
-        slot = tree_slot(d, i)
+        slot = tree_slot(st, d, i)
         if slot.acquire():
             try:
                 return _push_change(repo, d, e, i, clock, st)
@@ -218,7 +218,7 @@ def _push_change(repo, d, e, i, clock, st):
     hook = precheck_hook(repo)
     log_path = os.path.join(d, f"check-{e['id']}")
     tree = check_tree_for_push(repo, e, i)
-    with land_lock_if_free(repo) as held:
+    with land_lock_if_free(repo, st) as held:
         if not held:
             return "busy"
         now_ = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or {}
@@ -304,13 +304,13 @@ def _push_change(repo, d, e, i, clock, st):
         reds = gate_reds(repo) if waiting_supported(repo) else set()
         kr = None if classify_change(e, gate_facts(reds), clock.time())["gate_fix"] else e.get("known_red")  # a gate red's fix
         # failing only as main fails lands: no wait
-        if kr or (reds and must_wait(repo, commits, reds)):
+        if kr or (reds and must_wait(repo, commits, reds, st)):
             why = (f"its checks failed only where {remote()}/main fails too ({keys_text(kr['keys'])}: "
                    f"{'; '.join(kr['where'])}): not held against it; it lands with the batch once main is green "
                    "or the red's fix lands") if kr else None
             queue_join(st, repo, d, e, tree, head, why)
             return "joined"
-        fixes = sorted(fixes_of(repo, commits))
+        fixes = sorted(fixes_of(repo, commits, st))
         set_change(st, d, e, "pushing", data={"rechecks": e["rechecks"]} if e.get("rechecks") else None,
                    event={"text": f"{e['id']}: pushing {head[:10]}"})
         pushed_at = clock.time()

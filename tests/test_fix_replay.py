@@ -97,22 +97,19 @@ class FixReplayTest(unittest.TestCase):
         self.assertIsNone(A.fix_replay_refusal(self.r.path, self.fix("Fixes-Red: 5"), self.st))
 
     def test_land_refuses_it_before_queueing(self):
-        saved = A.open_store
-        A.open_store = lambda *a, **k: self.st
-        self.addCleanup(setattr, A, "open_store", saved)
         self.fix("Fixes-Red: 5")
         sh = lambda *args: A.subprocess.run(args, cwd=self.r.path, capture_output=True, text=True)  # noqa: E731
         import io, contextlib
         out, errs = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errs):
-            rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock())
+            rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock(), self.st)
         # a red OUTSIDE the gate: warn-only (the owner, 2026-11-20) -- it warns, never blocks
         self.assertIsNone(rc)
         self.assertIn("POLICY UNAPPROVED fix-replay-outside", errs.getvalue())
         with approved("fix-replay-outside"):  # were it ever approved, it refuses as it was written to
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
-                rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock())
+                rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock(), self.st)
         self.assertEqual((rc, head), (1, None))
         self.assertIn("NOT LANDED: Alert backtest #5 [backtest] has a replay", out.getvalue())
 
@@ -131,20 +128,20 @@ class FixReplayTest(unittest.TestCase):
         self.assertTrue(A.rebase_in_progress(self.r.path))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc, _ = A.sync(self.r.path, "origin/main", sh, FakeClock())
+            rc, _ = A.sync(self.r.path, "origin/main", sh, FakeClock(), self.st)
         self.assertEqual(rc, 1)
         self.assertIn("a rebase is in progress", out.getvalue())
         self.assertTrue(A.rebase_in_progress(self.r.path), "never land's to abort: it would reset the branch")
         sh("git", "rebase", "--abort")
         real = A.sync_onto_main
 
-        def leaves_one(repo, main_ref, sh_, clock, release_hold=False):  # a path that stops mid-rebase
+        def leaves_one(repo, main_ref, sh_, clock, store, release_hold=False):  # a path that stops mid-rebase
             sh_("git", "rebase", "-q", mine)
             return 1, None
         A.sync_onto_main = leaves_one
         self.addCleanup(setattr, A, "sync_onto_main", real)
         with contextlib.redirect_stdout(io.StringIO()):
-            A.sync(self.r.path, "origin/main", sh, FakeClock())
+            A.sync(self.r.path, "origin/main", sh, FakeClock(), self.st)
         self.assertIsNone(A.rebase_in_progress(self.r.path), "a rebase land started is aborted on its way out")
 
     # ---------------------------------------------------------------- gate reds (the owner, 2026-11-20)
@@ -238,25 +235,22 @@ class FixReplayTest(unittest.TestCase):
         self.assertIn("agentctl ran `grep -q fixed marker.txt`: base=PASS head=PASS", why)
 
     def test_land_refuses_a_gate_fix_without_its_replay_and_lands_a_proven_one(self):
-        saved = A.open_store
-        A.open_store = lambda *a, **k: self.st
-        self.addCleanup(setattr, A, "open_store", saved)
         self.gate_red()
         sh = lambda *args: A.subprocess.run(args, cwd=self.r.path, capture_output=True, text=True)  # noqa: E731
         import io, contextlib
         self.fix("Fixes-Red: 2600")
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            rc, _head = A.sync(self.r.path, "origin/main", sh, FakeClock())
+            rc, _head = A.sync(self.r.path, "origin/main", sh, FakeClock(), self.st)
         self.assertEqual(rc, 1)
         self.assertIn("NOT LANDED: Main #2600 [unit (web)] is a gate red", out.getvalue())
         A.git(self.r.path, "reset", "-q", "--hard", self.base)
         self.r.write("marker.txt", "fixed\n")
         self.r.commit("the fix\n\nFixes-Red: 2600\nFix-Replay: grep -q fixed marker.txt")
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock())
+            rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock(), self.st)
         self.assertIsNone(rc)
-        fields = A.change_fields(self.r.path, "origin/main", head, A.argparse.Namespace())
+        fields = A.change_fields(self.r.path, "origin/main", head, A.argparse.Namespace(), self.st)
         self.assertEqual([(p["cmd"], p["base"], p["head"]) for p in fields["replays"]],
                          [("grep -q fixed marker.txt", "FAIL", "PASS")], "the proof rides with the submission")
         self.assertIn("replays", A.SUBMIT_FIELDS)
@@ -304,7 +298,7 @@ class ServerRefusesUnreplayedFixTest(test_backlog_batch.BacklogBatchTest):
         self.r.write("infra/test/alert-backtest-allowlist.yml", "a guess\n", at=wt)
         self.r.commit("backtest: a guess\n\nFixes-Red: 5", at=wt)
         eid = self.queued(wt)[0]  # no red known when it queued: the laptop could not tell
-        A.open_store().put_item("red", "5254bffda9d2", "offered", {
+        A.process_store().put_item("red", "5254bffda9d2", "offered", {
             "key": "5254bffda9d2", "workflow": "Alert backtest", "jobs": ["backtest"], "runs": ["5", "44459271435"],
             "last_run": {"number": 5, "databaseId": 44459271435}, "red_kind": "outside"})
         with approved("fix-replay-outside"):  # outside the gate it only warns, unless approved (test_policy.py)
@@ -320,7 +314,7 @@ class ServerRefusesUnreplayedGateFixTest(test_backlog_batch.BacklogBatchTest):
         self.r.write("web/src/main/Fix.scala", "a fix\n", at=wt)
         self.r.commit("web: a fix\n\nFixes-Red: 2600", at=wt)
         eid = self.queued(wt)[0]
-        A.open_store().put_item("red", "9d1e2a7c4b10", "offered", {
+        A.process_store().put_item("red", "9d1e2a7c4b10", "offered", {
             "key": "9d1e2a7c4b10", "workflow": "Main", "jobs": ["unit (web)"], "runs": ["2600"],
             "last_run": {"number": 2600}, "red_kind": "gate", "gate": True})
         A.check_entry(self.r.path, eid, *on_clock(self.clock))

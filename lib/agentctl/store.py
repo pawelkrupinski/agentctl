@@ -1,4 +1,4 @@
-# agentctl, part `store`: the store: one SQLite database of leases, offers, items and their events, behind open_store
+# agentctl, part `store`: the store: one SQLite database of leases, offers, items and their events, passed in (CurrentStore)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import json
@@ -45,6 +45,8 @@ class Store(OfferTable):
     absolute max hold; an expired lease is free. Every acquire bumps the epoch (a fencing token) and draws a secret that
     renew and release need."""
 
+    needs_token = False  # a local database: no credential (RemoteStore.needs_token: a call goes out with the caller's)
+
     SCHEMA = ("CREATE TABLE IF NOT EXISTS leases (name TEXT PRIMARY KEY, holder TEXT NOT NULL, epoch INTEGER NOT NULL, "
               "secret TEXT NOT NULL, acquired_at REAL, renewed_at REAL, expires_at REAL, max_until REAL, progress TEXT, "
               "item TEXT, meta TEXT)",
@@ -64,7 +66,7 @@ class Store(OfferTable):
               # one item's history (stats.py reads it per finished item)
               "CREATE INDEX IF NOT EXISTS events_item ON events (item_type, item_id, seq)")
 
-    def __init__(self, path=None, clock=None):
+    def __init__(self, path: str | None = None, clock: Callable[[], float] | None = None) -> None:
         self.path = path or state_root("store.db")
         self.clock = clock or time.time
 
@@ -445,32 +447,17 @@ class Store(OfferTable):
         finally:
             c.close()
 
-# THE STORE SEAM: the store a process uses is chosen once, at the composition root (cli: wire_store(process_store), the
-# remote store when a store URL is set), not by the Store class (its constructor is the file store, nothing else).
-# Until it is wired -- a part loaded on its own -- open_store() opens the file store.
-_store_opener: list[Callable[..., Any]] = []
-
-
-def wire_store(opener: Callable[..., Any]) -> None:
-    """Make opener(clock=None) the store every open_store() returns (the composition root, once)."""
-    _store_opener[:] = [opener]
-
-
-def open_store(clock: Callable[[], float] | None = None) -> Any:
-    """The process's state store: the wired opener's, else the file store."""
-    return (_store_opener[0] if _store_opener else Store)(clock=clock)
-
-
 class CurrentStore:
     """THE STORE IS PASSED IN (CLAUDE.md, "Design"): cli, the composition root, hands it to each command, tick and
-    checker. Each call goes to the store open_store(clock) gives then: a long-running process follows `store use URL`
-    (2026-10-29: a fixer renewed its leases on the old store for hours). clock: the store's time, None for the wall's."""
+    checker. Each call goes to the store opener(clock) gives then (cli: process_store, the remote store when a store URL
+    is set, else the file store): a long-running process follows `store use URL` (2026-10-29: a fixer renewed its leases
+    on the old store for hours). clock: the store's time, None for the wall's."""
 
-    def __init__(self, clock: Callable[[], float] | None = None) -> None:
-        self._clock = clock
+    def __init__(self, opener: Callable[..., Any], clock: Callable[[], float] | None = None) -> None:
+        self._opener, self._clock = opener, clock
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(open_store(self._clock), name)
+        return getattr(self._opener(clock=self._clock), name)
 
 
 # §5.4 a condition (the recovery registry folded in), phase 1 step 12: open escalates 10 min after opening, then every

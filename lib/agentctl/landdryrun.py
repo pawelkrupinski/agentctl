@@ -112,8 +112,8 @@ def network_requeue(repo, head, out, log_path, clock, store, a=None):
                        "land again once the remote answers")
     d, _clone, _wt = waiting_state(repo)
     if host_role() == "sync":  # ONE QUEUE: ci-runner's (its checks run there, its own network)
-        return submit_to_server(repo, d, change_fields(repo, f"{remote()}/main", head, a), store, note=f" after {why}")
-    e, _ahead = queue_change(store, d, change_fields(repo, f"{remote()}/main", head, a))
+        return submit_to_server(repo, d, change_fields(repo, f"{remote()}/main", head, a, store), store, note=f" after {why}")
+    e, _ahead = queue_change(store, d, change_fields(repo, f"{remote()}/main", head, a, store))
     submit_ref(repo, d, e)
     requeue_infra(store, d, e, why, clock.time(), reason=NETWORK_REASON, detail=out, repo=repo)
     e = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or e
@@ -193,7 +193,7 @@ def judge_against_baseline(repo, hook, head, out, log_path):
 def precheck(repo, main_ref, sh, log_path, a, clock, store):
     """Before the lock: sync and the hook's dry run (the long part). None when land goes on to the lock (with
     a.prechecked = (head, base) when the dry run passed there), else land's rc."""
-    rc, head = sync(repo, main_ref, sh, clock, getattr(a, "release_hold", False))
+    rc, head = sync(repo, main_ref, sh, clock, store, getattr(a, "release_hold", False))
     if rc is not None:
         return rc
     hook = precheck_hook(repo)
@@ -204,7 +204,7 @@ def precheck(repo, main_ref, sh, log_path, a, clock, store):
     # will join `waiting` and land with the batch at green.
     reds = gate_reds(repo) if waiting_supported(repo) else set()
     commits = waiting_commits(repo, f"{remote()}/main", head)
-    joining = bool(reds) and must_wait(repo, commits, reds)
+    joining = bool(reds) and must_wait(repo, commits, reds, store)
     rc = dry_run(repo, hook, head, log_path, "before the lock", clock, store, mode="--checks-only" if joining else "--range",
                  cls=gov_class_of(repo, commits, reds), a=a)
     if rc is not None:

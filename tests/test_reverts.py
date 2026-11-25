@@ -128,15 +128,10 @@ class RevertNoticeTest(unittest.TestCase):
         self.assertEqual(A.revert_deadlines(self.st, self.t[0]), [], "an acked notice never escalates")
 
     def cli(self, *argv):
-        saved = A.open_store
-        A.open_store = lambda *a, **k: self.st
-        try:
-            buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
-                code = A.main(list(argv))
-            return code, buf.getvalue()
-        finally:
-            A.open_store = saved
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = A.main(list(argv), store=self.st)
+        return code, buf.getvalue()
 
     def test_a_second_ack_of_a_closed_notice_says_who_acked_it_and_keeps_its_note(self):
         """2026-11-22: the orchestrator acked 7380cf9d775c-604134d1a582, then its authoring agent's own ack said "no

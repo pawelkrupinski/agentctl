@@ -50,13 +50,13 @@ def waiting_commits(repo, base, head):
     return git(repo, "rev-list", "--reverse", f"{base}..{head}").split()
 
 
-def must_wait(repo, commits, reds):
+def must_wait(repo, commits, reds, store):
     """A production commit with no Fixes-Red: naming a red run waits; tools-only and declared fixes go (the hook's rule)."""
     for c in commits:
         paths = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c).split("\n")
         if not any(p and is_production_path(p) for p in paths):
             continue
-        if not (commit_fixes(repo, c) & reds):  # a trailer that does not count (fix_check) is no fix: it waits
+        if not (commit_fixes(repo, c, store) & reds):  # a trailer that does not count (fix_check) is no fix: it waits
             return True
     return False
 
@@ -149,7 +149,7 @@ def diagnoses_of(repo, commits):
     return out
 
 
-def batch_order(repo, entries, reds):
+def batch_order(repo, entries, reds, store):
     """The order a batch is built in: a fix for the current red first, then (main red) what may land while red -- tools
     only, or every commit carrying a Fixes-Red for a red run -- then the rest; by join order within each."""
     facts = gate_facts(reds)
@@ -157,7 +157,7 @@ def batch_order(repo, entries, reds):
     def rank(e):
         if reds and classify_change(e, facts)["gate_fix"]:  # its KIND: a fix of the gate's red (changekind.py)
             return 0
-        if reds and not must_wait(repo, e["commits"], reds):
+        if reds and not must_wait(repo, e["commits"], reds, store):
             return 1
         return 2
     return sorted(entries, key=lambda e: (rank(e), e["seq"]))

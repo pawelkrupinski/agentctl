@@ -49,7 +49,7 @@ class RedsBase(RedBase):
         os.environ["AGENTCTL_RECOVERY_DIR"] = os.path.join(self.tmp.name, "recovery")
         os.environ["AGENTCTL_RUNNERS_PAGE_CACHE"] = os.path.join(self.tmp.name, "runners-page.json")
         self.t = [time.time()]
-        self.st = A.open_store(clock=lambda: self.t[0])
+        self.st = A.process_store(clock=lambda: self.t[0])
         A._blocker_cache.clear()
 
     def tearDown(self):
@@ -349,7 +349,7 @@ class FixTest(RedsBase):
         copy = subprocess.run(["git", "-C", cw, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
         self.assertNotEqual(copy, sha)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": cw, "branch": "copy", "head": copy, "commits": [copy]})
+        e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": cw, "branch": "copy", "head": copy, "commits": [copy]})
         e["status"] = "waiting"
         A.save_entry(d, e)
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": cw, "head": copy, "submitted_at": self.t[0]})
@@ -369,7 +369,7 @@ class FixTest(RedsBase):
         self.r.write("fix.txt", "queued\n", at=wt)
         sha = self.r.commit("fix FooSpec\n\nFixes-Red: 19", at=wt)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": wt, "branch": "repo-wt-queued", "head": sha, "commits": [sha]})  # no `fixes`
+        e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": "repo-wt-queued", "head": sha, "commits": [sha]})  # no `fixes`
         e["status"] = "waiting"
         A.save_entry(d, e)
         self.tick()
@@ -403,7 +403,7 @@ class FixTest(RedsBase):
         self.r.write("fix.txt", "flakes\n", at=wt)
         sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": wt, "branch": "repo-wt-flakes", "head": sha, "commits": [sha]})
+        e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": "repo-wt-flakes", "head": sha, "commits": [sha]})
         e["status"] = "waiting"
         A.save_entry(d, e)
         self.tick()
@@ -435,7 +435,7 @@ class FixTest(RedsBase):
         self.r.write("fix.txt", "gone\n", at=wt)
         sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": wt, "branch": "repo-wt-gone", "head": sha, "commits": [sha]})
+        e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": "repo-wt-gone", "head": sha, "commits": [sha]})
         e["status"] = "waiting"
         A.save_entry(d, e)
         self.tick()
@@ -451,7 +451,7 @@ class FixTest(RedsBase):
         self.r.write("fix.txt", f"{name}\n", at=wt)
         sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": wt, "branch": f"repo-wt-{name}", "head": sha, "commits": [sha]})
+        e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": f"repo-wt-{name}", "head": sha, "commits": [sha]})
         A.save_entry(d, e)
         self.tick()
         self.assertEqual((self.only()["state"], self.only()["data"]["fix"]["entry"]), ("fix-pending", e["id"]))
@@ -563,7 +563,7 @@ class FixTest(RedsBase):
         self.r.write("fix.txt", "stale\n", at=wt)
         sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": wt, "branch": "repo-wt-stale", "head": sha, "commits": [sha]})
+        e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": "repo-wt-stale", "head": sha, "commits": [sha]})
         e["status"] = "waiting"
         A.save_entry(d, e)
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
@@ -606,7 +606,7 @@ class FixTest(RedsBase):
         """A queue entry naming run 20 whose FILE still reads open, its store change LANDED with `tip` -- the tip of the
         change's own check tree, which the landing may have re-cut (Order independence #78, 2026-11-16)."""
         d = A.waiting_state(self.r.path)[0]
-        e, _ = A.queue_change(A.CurrentStore(), d, {"worktree": name, "branch": name, "head": head or tip, "commits": [head or tip],
+        e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": name, "branch": name, "head": head or tip, "commits": [head or tip],
                                   "fixes": ["20"]})
         e["status"] = "joined"
         A.save_entry(d, e)
@@ -1493,9 +1493,9 @@ class OldRedTest(RedsBase):
         self.made_callable_only([(True, "success")])
         snap = self.snap()
         self.assertEqual([o["name"] for o in snap["outside"]], ["Report run timings"])  # still observed, never re-opened
-        summary = A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path, store=A.open_store())[1]
+        summary = A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path, store=A.process_store())[1]
         self.assertNotIn("Report run timings", summary)
-        full = A.ci_why(MOVIES, snap=snap, repo=self.r.path, store=A.open_store())[1]
+        full = A.ci_why(MOVIES, snap=snap, repo=self.r.path, store=A.process_store())[1]
         self.assertNotIn("offered at the next tick", full)
         self.assertIn("fixing: verified: Report run timings runs only when called", full)
 
@@ -1774,14 +1774,12 @@ class BackgroundSessionTest(RedsBase):
                             "started": A.ts(), "log": A.reds_dir("20", "claude-1.log")})
         # the 2nd set_meta: the session's id, sent when `claude agents` first lists it
         flaky = DroppingStore(self.st, get={2, 3, 4}, set_meta={2}, renew={1}, release={1})
-        saved = A.open_store, {sg: signal.getsignal(sg) for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
+        saved = {sg: signal.getsignal(sg) for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
         os.environ.update(FAKE_CLAUDE_SLEEP="10", AGENTCTL_RED_RENEW="0.3", AGENTCTL_LEASE_SECRET=took["secret"])
-        A.open_store = lambda *a, **k: flaky
         try:
-            rc = A.red_fixer(types.SimpleNamespace(record=path, repo=self.r.path))
+            rc = A.red_fixer(types.SimpleNamespace(record=path, repo=self.r.path), flaky)
         finally:
-            A.open_store = saved[0]
-            for sg, h in saved[1].items():
+            for sg, h in saved.items():
                 signal.signal(sg, h)
             os.environ.update(FAKE_CLAUDE_SLEEP="0")
             os.environ.pop("AGENTCTL_RED_RENEW", None)

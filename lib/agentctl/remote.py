@@ -6,7 +6,7 @@ import re
 from agentctl.core import env_num, err, fmt_age, git, host_role, remote, slug
 from agentctl.timefmt import parse_time
 from agentctl.classify import check_push_failure, credential_failure
-from agentctl.store import LeaseLost, open_store
+from agentctl.store import LeaseLost
 from agentctl.forge import api, forge_actions_run, forge_actions_runs, forge_delete_branch, forge_find_run
 from agentctl.waitingdir import save_entry, waiting_state, wlog
 from agentctl.storetoken import token
@@ -160,7 +160,7 @@ def remote_poll(o_r, rem, now):
     return rem
 
 
-def save_remote(d, e, rem):
+def save_remote(d, e, rem, st):
     """The remote check's record in the entry, saved at once (a replacement checker adopts it); `remote_run` mirrors the
     run for the push's hook and `waiting status`."""
     e["remote"] = rem
@@ -170,20 +170,19 @@ def save_remote(d, e, rem):
         e.pop("remote_run", None)
     if d and e.get("seq") is not None:
         save_entry(d, e)
-    remote_mirror(e.get("id"), rem)
+    remote_mirror(e.get("id"), rem, st)
 
 
 # WHAT A CHECKING CHANGE WAITS ON (2026-11-20: `land status <id>` said only "OPEN: checking for 25 min" for five changes
 # whose checks ran, queued or were lost on ci-runner): the remote check's run, branch, jobs and progress go on the change
 # item too, which every host's `land status` reads.
-def remote_mirror(eid, rem):
+def remote_mirror(eid, rem, st):
     """rem's summary on change item eid (`check`), when it changed; quiet when the store cannot take it."""
     if not eid:
         return
     keep = ("branch", "run", "run_status", "status", "pushed_at", "progress_at", "unlisted_at", "jobs", "decided_at")
     summary = {k: rem.get(k) for k in keep if rem.get(k) is not None}
     try:
-        st = open_store()
         it = st.item("change", eid)
         if it and (it.get("data") or {}).get("check") != summary:
             st.update_item("change", eid, it["version"], {"check": summary})
@@ -255,7 +254,7 @@ def check_branch_push(repo, head, branch, sleep):
 REMOTE_POLL_CAP = 30  # s
 
 
-def remote_check(repo, e, base, head, mode, clock, own=None, red=False):
+def remote_check(repo, e, base, head, mode, clock, st, own=None, red=False):
     """(ok, output) of the change's checks on ci-runner; ok None when no verdict came (the caller checks locally).
     The run belongs to the ENTRY, not to this process: its record (`remote` in the entry) is saved the moment the branch is
     pushed and again when the run is found, so a checker that dies or is replaced mid-wait strands nothing -- the next one
@@ -282,7 +281,7 @@ def remote_check(repo, e, base, head, mode, clock, own=None, red=False):
             return None, check_push_failure(branch, r.stderr, host_role())
         rem = {"branch": branch, "head": e.get("head"), "base": base, "tip": head, "mode": mode, "run": None,
                "pushed_at": clock.time(), "status": None}
-        save_remote(d, e, rem)
+        save_remote(d, e, rem, st)
         try:
             record_dispatch(branch=branch, workflow=REMOTE_WORKFLOW, worktree=e.get("worktree"), sha=head,
                             agent="land queue", pid=os.getpid(), purpose=f"pre-commit check of queue entry {e['id']}")
@@ -299,7 +298,7 @@ def remote_check(repo, e, base, head, mode, clock, own=None, red=False):
                     pass
             if new != rem:
                 rem = new
-                save_remote(d, e, rem)
+                save_remote(d, e, rem, st)
         except Terminated:
             raise
         except (Exception, SystemExit) as ex:  # GitHub down for a while: keep reading until the bound
@@ -314,7 +313,7 @@ def remote_check(repo, e, base, head, mode, clock, own=None, red=False):
             if rem.get("ghost"):
                 cancel_run(o_r, rem["run"], "a ghost run: no runner scheduler can see it")
             rem["collected_at"] = clock.time()
-            save_remote(d, e, rem)
+            save_remote(d, e, rem, st)
             delete_check_branch(o_r, rem["branch"])
             if rem["status"] in ("success", "failure"):
                 return rem["status"] == "success", rem["out"]
@@ -322,14 +321,14 @@ def remote_check(repo, e, base, head, mode, clock, own=None, red=False):
         age = clock.time() - rem["pushed_at"]
         if rem.get("run") is None and age > REMOTE_START:
             rem.update(status="abandoned", collected_at=clock.time())
-            save_remote(d, e, rem)
+            save_remote(d, e, rem, st)
             delete_check_branch(o_r, rem["branch"])
             return None, f"no {REMOTE_WORKFLOW} run started for {rem['branch']} in {REMOTE_START // 60} min"
         idle = clock.time() - float(rem.get("progress_at") or rem["pushed_at"])
         if age > REMOTE_TIMEOUT_MAX or (age > REMOTE_TIMEOUT and idle > REMOTE_IDLE):
             cancel_run(o_r, rem["run"], "the remote check timed out")
             rem.update(status="abandoned", collected_at=clock.time())
-            save_remote(d, e, rem)
+            save_remote(d, e, rem, st)
             delete_check_branch(o_r, rem["branch"])
             return None, (f"{REMOTE_WORKFLOW} run {rem['run']} undecided after {int(age // 60)} min, "
                           f"no progress for {int(idle // 60)} min")

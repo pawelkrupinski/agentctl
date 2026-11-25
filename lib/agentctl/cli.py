@@ -8,7 +8,7 @@ import io
 import sys
 import time
 from typing import Any, Callable
-from agentctl.store import CurrentStore, wire_store
+from agentctl.store import CurrentStore
 from agentctl.ghapp import cmd_github_app
 from agentctl.config import cmd_config
 from agentctl.storetoken import wire_token_missing_note
@@ -61,7 +61,6 @@ from agentctl.processor import cmd_tick, cmd_waiting
 
 
 # THE COMPOSITION ROOT: what every process wires before any command runs.
-wire_store(process_store)
 wire_probes({"disk_free": probe_disk_free, "quota_reset": probe_quota_reset,
              "waiting_ok": probe_waiting_ok, "workflow_green": probe_workflow_green,
              "http": probe_http, "tcp": probe_tcp, "route": probe_route, "tunnel": probe_tunnel,
@@ -85,7 +84,12 @@ def wire_collaborators(clock: Clock, store: Any) -> None:
     wire_token_missing_note(lambda ns, why: token_unavailable_note(ns, why, store))
 
 
-wire_collaborators(Clock(), CurrentStore())
+wire_collaborators(Clock(), CurrentStore(process_store))
+
+
+def with_store(command: Callable[..., Any], store: Any) -> Callable[[argparse.Namespace], Any]:
+    """The command that takes the process's store as its second argument, as the handler table calls it: with the args."""
+    return lambda a: command(a, store)
 
 
 # ---------------------------------------------------------------- main
@@ -94,14 +98,14 @@ def main(argv: list[str] | None = None, clock: Clock | None = None, runner: Proc
     """The entry: wires the process's collaborators (the clock, the process runner and the store: a test passes its
     own) and runs the command."""
     clock = clock or Clock()
-    store = store if store is not None else CurrentStore(clock.time)
+    store = store if store is not None else CurrentStore(process_store, clock.time)
     wire_collaborators(clock, store)
     wire_runner(runner or ProcessRunner())
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:
         return selftest()
     a = parser().parse_args(argv)
-    handler: Callable[[argparse.Namespace], Any] = {"maintain": lambda a: cmd_maintain(a, store), "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": lambda a: cmd_red(a, clock, store), "decide": lambda a: cmd_decide(a, store), "config": cmd_config, "issue": lambda a: cmd_issue(a, store), "revert": lambda a: cmd_revert(a, store), "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": lambda a: cmd_inbox(a, store), "recover": lambda a: cmd_recover(a, store), "watchdog": lambda a: cmd_watchdog(a, clock, store), "lease": lambda a: cmd_lease(a, store), "laptop": lambda a: cmd_laptop(a, store), "status": cmd_status, "queue": cmd_queue_retired, "tick": lambda a: cmd_tick(a, clock, store), "store": cmd_store, "github-app": cmd_github_app, "waiting": lambda a: cmd_waiting(a, clock, store), "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": lambda a: cmd_supersede(a, store), "park": lambda a: cmd_park(a, store), "unpark": cmd_unpark, "watch": lambda a: cmd_watch(a, clock, store), "sweep": cmd_sweep, "ci-why": lambda a: cmd_ci_why(a, store), "land": lambda a: cmd_land(a, clock, store), "land-precheck": lambda a: cmd_land_precheck(a, store), "env": cmd_env}[a.cmd]
+    handler: Callable[[argparse.Namespace], Any] = {"maintain": with_store(cmd_maintain, store), "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
+               "red": lambda a: cmd_red(a, clock, store), "decide": with_store(cmd_decide, store), "config": cmd_config, "issue": with_store(cmd_issue, store), "revert": with_store(cmd_revert, store), "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": with_store(cmd_inbox, store), "recover": with_store(cmd_recover, store), "watchdog": lambda a: cmd_watchdog(a, clock, store), "lease": with_store(cmd_lease, store), "laptop": with_store(cmd_laptop, store), "status": with_store(cmd_status, store), "queue": cmd_queue_retired, "tick": lambda a: cmd_tick(a, clock, store), "store": cmd_store, "github-app": cmd_github_app, "waiting": lambda a: cmd_waiting(a, clock, store), "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": with_store(cmd_supersede, store), "park": with_store(cmd_park, store), "unpark": cmd_unpark, "watch": lambda a: cmd_watch(a, clock, store), "sweep": with_store(cmd_sweep, store), "ci-why": with_store(cmd_ci_why, store), "land": lambda a: cmd_land(a, clock, store), "land-precheck": with_store(cmd_land_precheck, store), "env": cmd_env}[a.cmd]
     command = inbox_command(a)
     return with_inbox(command, handler, a) if command else handler(a)
 

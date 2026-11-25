@@ -220,7 +220,7 @@ def land_in_worktree(repo, a, clock, store):
                 rc = precheck(repo, main_ref, sh, log_path, a, clock, store)
                 if rc is not None:
                     break
-            with land_lock(repo, clock) as held:
+            with land_lock(repo, clock, store) as held:
                 if not held:
                     print("NOT LANDED: timed out waiting for the landing lock (another land is running its checks); "
                           "land again.")
@@ -276,11 +276,11 @@ def proven_push(repo, head, main_ref, log_path, a, store):
 def land_loop(repo, main_ref, sh, log_path, a, clock, store):
     for attempt in range(LAND_RETRIES + 1):
         lock_note("fetch and rebase")
-        rc, head = sync(repo, main_ref, sh, clock, getattr(a, "release_hold", False))
+        rc, head = sync(repo, main_ref, sh, clock, store, getattr(a, "release_hold", False))
         if rc is not None:
             return rc
         reds = gate_reds(repo) if waiting_supported(repo) else set()
-        if reds and must_wait(repo, waiting_commits(repo, f"{remote()}/main", head), reds):
+        if reds and must_wait(repo, waiting_commits(repo, f"{remote()}/main", head), reds, store):
             # checked already (before the lock, without the gate): only the cherry-pick onto `waiting` here
             return join(store, repo, log_path, a, head)
         hook = precheck_hook(repo)
@@ -299,7 +299,7 @@ def land_loop(repo, main_ref, sh, log_path, a, clock, store):
                 return rc
         a.prechecked = None  # a retry after a push race checks its new base again
         try:  # the runs the pushed commits claim to fix: the watch verifies them
-            a.fixes = sorted(fixes_of(repo, waiting_commits(repo, f"{remote()}/main", head)))
+            a.fixes = sorted(fixes_of(repo, waiting_commits(repo, f"{remote()}/main", head), store))
         except Exception:
             a.fixes = []
         try:  # THE LANDER (lander.py): what this push carries, keyed so the commits are found on main again
@@ -349,7 +349,7 @@ def join(st, repo, log_path, a, head):
         eid = f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}"
         supersede_older_waiting(st, d, repo, branch, eid)
         e = {"id": eid, "seq": seq, "worktree": repo, "branch": branch, "head": head, "commits": commits,
-             "fixes": sorted(fixes_of(repo, commits)), "status": "waiting", "created": ts(), "tip": head,
+             "fixes": sorted(fixes_of(repo, commits, st)), "status": "waiting", "created": ts(), "tip": head,
              "follow": bool(getattr(a, "follow", False))}
         save_entry(d, e)
     print(note_waiting(d, log_path, head, e["id"]), flush=True)

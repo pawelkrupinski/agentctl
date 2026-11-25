@@ -34,7 +34,7 @@ class OwnerOnlyBase(VaultBase):
         v = ev["refs"]["verdict"]
         return A.alert_write({"id": f"20261119T000000{ev['seq']:06d}-ev{ev['seq']}-red-ask", "at": self.t[0],
                               "command": "red", "cwd": "/", "final": True, "exit": 1, "verdict": v, "verdicts": [v],
-                              "tail": [], "item_type": "red", "item_id": ev.get("item_id")}, A.CurrentStore())
+                              "tail": [], "item_type": "red", "item_id": ev.get("item_id")}, A.CurrentStore(A.process_store))
 
     def unread_owner(self):
         return [e for e in A.inbox_entries() if not e["read"] and e.get("audience") == "owner"]
@@ -274,7 +274,7 @@ class TrustAskTest(OwnerOnlyBase):
         for n, item in ((1, "red:0c8eea91b712.12"), (2, "red:0c8eea91b712.13")):
             A.alert_write({"id": f"20261119T03010{n}000000-ev{n}-red-ask", "at": self.t[0] + n, "command": "red",
                            "cwd": "/", "final": True, "exit": 1, "verdict": line, "verdicts": [line], "tail": [],
-                           "alert_item": item}, A.CurrentStore())
+                           "alert_item": item}, A.CurrentStore(A.process_store))
         asks = self.unread_owner()
         self.assertEqual(len(asks), 1)
         self.assertEqual(asks[0]["count"], 2)

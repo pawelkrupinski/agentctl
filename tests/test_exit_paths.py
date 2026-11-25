@@ -121,7 +121,7 @@ class LandSignalTest(LandBase):
         self.assertEqual(open(os.path.join(self.r.path, "f2.txt")).read(), "uncommitted edit\n", "the stash restored")
         self.assertEqual(sh(self.r.path, "git", "stash", "list"), "")
         self.assertEqual(A.git_in_progress(self.r.path), set())
-        self.assertIsNone(A.lease_live(A.land_lease_name(self.r.path)), "the landing lease released")
+        self.assertIsNone(A.lease_live(A.land_lease_name(self.r.path), A.CurrentStore(A.process_store)), "the landing lease released")
 
 
 class GuardedCommandsTest(unittest.TestCase):

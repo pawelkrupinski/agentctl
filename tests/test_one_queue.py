@@ -18,7 +18,7 @@ class OneQueueBase(Base):
         A.WAITING_DIR = os.path.join(self.tmp.name, "waiting-state")
         A._landed_looked.clear()
         self.d = A.waiting_state(self.r.path)[0]
-        self.st = A.open_store()
+        self.st = A.process_store()
 
     def tearDown(self):
         A.WAITING_DIR = self.saved_dir
@@ -54,7 +54,7 @@ class LandedByContentTest(OneQueueBase):
         wt, head = self.change("proxy-park", "a\n")
         self.entry("20261028-162641-movies-wt-proxy-park-92", wt, head)
         via = self.land_rebased(head)
-        did = A.close_landed_changes(self.r.path, A.Clock(), self.d, self.st)
+        did = A.close_landed_changes(self.r.path, A.Clock(), self.st, self.d)
         self.assertEqual(len(did), 1, did)
         e = A.read_record(os.path.join(self.d, "entries", "20261028-162641-movies-wt-proxy-park-92.json"))
         self.assertEqual((e["status"], e["landed_sha"]), ("landed", via))
@@ -78,7 +78,7 @@ class LandedByContentTest(OneQueueBase):
         wt, head = self.change("open", "c\n")
         self.entry("open-1", wt, head, status="queued")
         self.st.put_item("change", "far-1", "waiting", {"head": "1" * 40})
-        self.assertEqual(A.close_landed_changes(self.r.path, A.Clock(), self.d, self.st), [])
+        self.assertEqual(A.close_landed_changes(self.r.path, A.Clock(), self.st, self.d), [])
         self.assertEqual(A.change_landed(self.r.path, "1" * 40), (None, None))
         self.assertEqual(A.change_landed(self.r.path, head), (False, None))
 
@@ -86,10 +86,10 @@ class LandedByContentTest(OneQueueBase):
         wt, head = self.change("later", "d\n")
         self.entry("later-1", wt, head)
         t = time.time()
-        self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t), self.d, self.st), [])
+        self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t), self.st, self.d), [])
         self.land_rebased(head)
-        self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t + 5), self.d, self.st), [])
-        self.assertEqual(len(A.close_landed_changes(self.r.path, FakeClock(t + A.LANDED_LOOK_EVERY), self.d, self.st)), 1)
+        self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t + 5), self.st, self.d), [])
+        self.assertEqual(len(A.close_landed_changes(self.r.path, FakeClock(t + A.LANDED_LOOK_EVERY), self.st, self.d)), 1)
 
 
 class FakeRemote:
@@ -169,7 +169,7 @@ class StrandedTest(OneQueueBase):
         self.assertEqual(A.stranded_changes(self.r.path, self.d, self.st), ["x-101"])
         [c] = [c for c in A.open_conditions(self.st) if c["key"].startswith("change-stranded")]
         self.assertIn("STRANDED CHANGE x-101", c["text"])
-        A.cancel_submitted(A.CurrentStore(), "x-101", repo=self.r.path)  # `land cancel` reaches an item no entry carries
+        A.cancel_submitted(A.CurrentStore(A.process_store), "x-101", repo=self.r.path)  # `land cancel` reaches an item no entry carries
         self.assertEqual(self.st.item("change", "x-101")["state"], "cancelled")
         A.recovery_tick(now_=time.time() + 3600, force=True, store=self.st)
         self.assertEqual([c for c in A.open_conditions(self.st) if c["key"].startswith("change-stranded")], [])
@@ -180,7 +180,7 @@ class SupersedeTest(OneQueueBase):
         wt, head = self.change("proxy-park", "a\n")
         self.st.put_item("change", "x-95", "waiting", {"worktree": wt, "head": "4" * 40})
         self.st.put_item("change", "y-1", "waiting", {"worktree": "/elsewhere", "head": "5" * 40})
-        r = A.submit_change(A.CurrentStore(), {"id": "new-1", "worktree": wt, "head": head, "commits": [head]}, repo=self.r.path)
+        r = A.submit_change(A.CurrentStore(A.process_store), {"id": "new-1", "worktree": wt, "head": head, "commits": [head]}, repo=self.r.path)
         self.assertEqual(r["id"], "new-1")
         self.assertEqual(self.st.item("change", "x-95")["state"], "superseded")
         self.assertEqual(self.st.item("change", "x-95")["data"]["superseded_by"], "new-1")
@@ -196,12 +196,12 @@ class OneViewTest(OneQueueBase):
         saved = os.environ.get("AGENTCTL_MOVIES_REPO")
         os.environ["AGENTCTL_MOVIES_REPO"] = self.r.path
         try:
-            ok, detail = A.inv_w1(A.Clock(), A.CurrentStore())
+            ok, detail = A.inv_w1(A.Clock(), A.CurrentStore(A.process_store))
             self.assertFalse(ok)
             self.assertIn("x-92 (waiting: waiting for green, the gate unread (no CI snapshot)) is 11 h old", detail)
             self.land_rebased(head)
             A._landed_looked.clear()
-            ok, detail = A.inv_w1(A.Clock(), A.CurrentStore())  # its own landed look closes x-92 before it counts
+            ok, detail = A.inv_w1(A.Clock(), A.CurrentStore(A.process_store))  # its own landed look closes x-92 before it counts
         finally:
             os.environ["AGENTCTL_MOVIES_REPO"] = saved
         self.assertTrue(ok, detail)
@@ -236,13 +236,13 @@ class TreeSlotTest(OneQueueBase):
         trees = []
         saved = A._push_change
         A._push_change = lambda repo, d, e, i, clock, st: trees.append(i) or "landed"
-        other = A.tree_slot(self.d, 1)
+        other = A.tree_slot(self.st, self.d, 1)
         self.assertTrue(other.acquire())
         try:
             e = {"id": "c-1", "tree": 1, "tip": "6" * 40, "status": "checked"}
             self.assertEqual(A.push_change(self.r.path, self.d, e, *on_clock(A.Clock())), "landed")
             self.assertEqual(trees, [A.PUSH_TREE], "never the tree another checker holds")
-            push = A.tree_slot(self.d, A.PUSH_TREE)
+            push = A.tree_slot(self.st, self.d, A.PUSH_TREE)
             self.assertTrue(push.acquire(), "the push tree's lease is released after the push")
             try:
                 self.assertEqual(A.push_change(self.r.path, self.d, e, *on_clock(A.Clock())), "busy", "both held: it waits")
@@ -256,7 +256,7 @@ class TreeSlotTest(OneQueueBase):
             other.release()
 
     def test_a_batch_push_never_touches_a_check_tree_another_checker_holds(self):
-        other = A.tree_slot(self.d, 1)
+        other = A.tree_slot(self.st, self.d, 1)
         self.assertTrue(other.acquire())
         try:
             e = {"id": "c-1", "tree": 1, "tip": "6" * 40, "status": "checked"}

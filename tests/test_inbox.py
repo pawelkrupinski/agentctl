@@ -136,13 +136,13 @@ class InboxTest(unittest.TestCase):
     def test_an_entry_is_stamped_by_the_clock_the_composition_root_wired(self):
         from fake_clock import FakeClock
         clock = FakeClock(t=1_700_000_000.0)
-        A.wire_collaborators(clock, A.CurrentStore())
+        A.wire_collaborators(clock, A.CurrentStore(A.process_store))
         try:
             A.inbox_write("wait", "run o/r#1: success", [], [], 0)
             self.assertNotEqual(A.inbox_write("wait", "run o/r#2: success", [], [], 0),
                                 A.inbox_write("wait", "run o/r#3: success", [], [], 0), "a standing clock: one id each")
         finally:
-            A.wire_collaborators(A.Clock(), A.CurrentStore())
+            A.wire_collaborators(A.Clock(), A.CurrentStore(A.process_store))
         e = min(self.entries(), key=lambda x: x["id"])
         self.assertEqual(e["at"], 1_700_000_000.0)
         self.assertTrue(e["id"].startswith("20231114T221320"), e["id"])
@@ -331,7 +331,7 @@ class InboxTest(unittest.TestCase):
                "final": True, "exit": 1, "verdict": "AGENTCTL ISSUE 20261104T044122-55799d open 15 d (filed by x): y",
                "kind": "OTHER", "verdicts": [], "tail": [], "item_type": "issue", "item_id": "20261104T044122-55799d",
                "audience": "owner"}
-        A.alert_write(rec, A.CurrentStore())
+        A.alert_write(rec, A.CurrentStore(A.process_store))
         os.environ["AGENTCTL_INBOX_POLL"] = "0.02"
         try:
             code, out = self.run_main(["inbox", "wait", "--since-ack", "--timeout", "5"])

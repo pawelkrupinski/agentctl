@@ -308,7 +308,7 @@ class DecideTest(AskBase):
         line = 'RED BLOCKED ON OWNER: WAITING ON YOU: x -- Answer: `! ~/bin/agentctl decide k "<your answer>"`'
         eid = A.alert_write({"id": "20261105T000000000000-1-red", "at": self.t[0], "command": "red", "cwd": "/",
                              "final": True, "exit": 1, "verdict": line, "kind": "BLOCKED", "verdicts": [line],
-                             "tail": [], "audience": "owner", "item": "run:x -- Main #1"}, A.CurrentStore())
+                             "tail": [], "audience": "owner", "item": "run:x -- Main #1"}, A.CurrentStore(A.process_store))
         A.red_move(self.st, self.st.item("red", it["id"]), "cleared", "RED CLEARED: a newer run is green")
         rc, out = A.red_decide(self.st, O_R, "k", "yes")
         self.assertEqual(rc, 0, out)

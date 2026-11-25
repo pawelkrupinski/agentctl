@@ -242,14 +242,14 @@ class WatchTest(Base):
         self.assertEqual(rc2, 0, out2)
         self.assertEqual(len(self.listed), looks, "the second follower read the first one's verdict, not GitHub")
         self.assertIn("WATCH OK", out2)
-        [it] = A.open_store().items("watch")
+        [it] = A.process_store().items("watch")
         self.assertEqual((it["id"], it["state"]), (self.sha, "ok"))
-        self.assertEqual([e["to_state"] for e in A.open_store().events() if e["item_type"] == "watch"], ["ok"])
+        self.assertEqual([e["to_state"] for e in A.process_store().events() if e["item_type"] == "watch"], ["ok"])
 
     def test_a_follower_of_a_sha_another_live_follower_watches_waits_for_its_verdict(self):
-        A.start_watch(A.CurrentStore(), self.r.path, self.sha, self.pushed_at, o_r=MOVIES,
+        A.start_watch(A.CurrentStore(A.process_store), self.r.path, self.sha, self.pushed_at, o_r=MOVIES,
                       follower={"followed_by": "ci-runner:4242", "followed_until": time.time() + 3600})
-        st = A.open_store()
+        st = A.process_store()
 
         def theirs_decides(_s):  # the other follower's verdict, on the item
             it = st.item("watch", self.sha)
@@ -262,14 +262,14 @@ class WatchTest(Base):
         self.assertIn("WATCH OK: Main #7 green", out)
 
     def test_a_follower_takes_over_a_watch_whose_follower_lapsed(self):
-        A.start_watch(A.CurrentStore(), self.r.path, self.sha, self.pushed_at, o_r=MOVIES,
+        A.start_watch(A.CurrentStore(A.process_store), self.r.path, self.sha, self.pushed_at, o_r=MOVIES,
                       follower={"followed_by": "ci-runner:4242", "followed_until": time.time() - 1})
         self.main.append(run(1, self.sha))
         self.conv.append(run(2, self.sha, created=self.pushed_at + 5))
         rc, out = self.watch()
         self.assertEqual(rc, 0, out)
         self.assertGreater(len(self.listed), 0)
-        self.assertEqual(A.open_store().item("watch", self.sha)["state"], "ok")
+        self.assertEqual(A.process_store().item("watch", self.sha)["state"], "ok")
 
     def test_a_follower_the_local_owned_lock_refuses_gives_its_claim_back(self):
         """Review round 8: a follower that claimed the item and then met another local watcher's Owned lock returned
@@ -280,26 +280,26 @@ class WatchTest(Base):
         rc, out = self.watch()
         self.assertEqual(rc, 2, out)
         self.assertIn("already watches", out)
-        self.assertFalse(A.open_store().item("watch", self.sha)["data"].get("followed_by"), "the claim was given back")
+        self.assertFalse(A.process_store().item("watch", self.sha)["data"].get("followed_by"), "the claim was given back")
 
     def test_a_sha_whose_watch_ended_unknown_is_rewatched_claimed_and_its_verdict_kept(self):
         """Review round 8: the re-watch of an `unknown` item ran unclaimed, so its verdict was never stored and every
         later follower watched GitHub again. It claims the item like any follower and keeps its verdict there."""
-        it = A.start_watch(A.CurrentStore(), self.r.path, self.sha, self.pushed_at, o_r=MOVIES)
-        A.open_store().transition("watch", self.sha, "unknown", it["version"], data={"verdict": "WATCH UNKNOWN: stuck"})
+        it = A.start_watch(A.CurrentStore(A.process_store), self.r.path, self.sha, self.pushed_at, o_r=MOVIES)
+        A.process_store().transition("watch", self.sha, "unknown", it["version"], data={"verdict": "WATCH UNKNOWN: stuck"})
         self.main, self.conv = [run(11, self.sha)], [run(21, self.sha)]
         claimed = []
         saved = A.watch_look
 
         def look(*a, **kw):  # while it watches, the item is this follower's
-            claimed.append(A.open_store().item("watch", self.sha)["data"].get("followed_by"))
+            claimed.append(A.process_store().item("watch", self.sha)["data"].get("followed_by"))
             return saved(*a, **kw)
         A.watch_look = look
         self.addCleanup(setattr, A, "watch_look", saved)
         rc, out = self.watch()
         self.assertEqual(rc, 0, out)
         self.assertTrue(claimed and all(claimed), claimed)
-        it = A.open_store().item("watch", self.sha)
+        it = A.process_store().item("watch", self.sha)
         self.assertEqual((it["data"].get("outcome"), it["data"].get("followed_by")), ("ok", None))
         self.assertIn("WATCH OK: Main #11 green", it["data"]["verdict"])
         looks = len(self.listed)
@@ -327,7 +327,7 @@ class LandWatchTest(Base):
 
         def fake(repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=()):
             # the lease is free while watching: another lander could take it now
-            r = A.open_store().get(A.land_lease_name(repo))
+            r = A.process_store().get(A.land_lease_name(repo))
             assert not r or not r["holder"] or r["expires_at"] <= time.time(), "the landing lease is held while watching"
             self.calls.append((sha, pushed_at))
             print("WATCH RED: Main #5 test")
@@ -398,19 +398,19 @@ class WatchItemTest(unittest.TestCase):
     def test_pending_then_ok_closes_the_worktree_and_tells_its_author(self):
         wt = os.path.join(self.root, "wt")
         os.makedirs(wt)
-        A.start_watch(A.CurrentStore(), "/repo", "a" * 40, time.time(), worktree=wt, close=wt, session="s1")
+        A.start_watch(A.CurrentStore(A.process_store), "/repo", "a" * 40, time.time(), worktree=wt, close=wt, session="s1")
         A.watch_eval = lambda *a: None
         self.assertEqual(A.tick_watches(*on_clock(A.Clock())), [])
-        self.assertEqual(A.open_store().item("watch", "a" * 40)["state"], "watching")
+        self.assertEqual(A.process_store().item("watch", "a" * 40)["state"], "watching")
         A.watch_eval = lambda *a: ("ok", "WATCH OK: Main #5 green, convergence #6 green (aaaaaaaaaa)", [])
         self.assertEqual(A.tick_watches(*on_clock(FakeClock(time.time() + 120))), [f"watch {'a' * 10}: ok"])
         self.assertEqual(self.closed, [wt])
-        A.project_events(A.CurrentStore())
+        A.project_events(A.CurrentStore(A.process_store))
         [e] = A.inbox_entries()
         self.assertEqual((e["kind"], e["cwd"], e["exit"]), ("OK", wt, 0))
 
     def test_a_watch_a_live_follower_holds_is_left_to_it(self):
-        A.start_watch(A.CurrentStore(), "/repo", "c" * 40, time.time(), worktree="/w",
+        A.start_watch(A.CurrentStore(A.process_store), "/repo", "c" * 40, time.time(), worktree="/w",
                       follower={"followed_by": "laptop:1", "followed_until": time.time() + 600})
         looked = []
         A.watch_eval = lambda *a: looked.append(1) or ("ok", "WATCH OK", [])
@@ -423,14 +423,14 @@ class WatchItemTest(unittest.TestCase):
         """Review round 7: the item named its repo by the laptop's path; ci-runner's tick, taking over a dead laptop
         follower's watch, looked there, failed every look and ended it UNKNOWN. The repo is its slug, resolved here."""
         laptop = "/Users/somebody/projects/movies-wt-gone"  # no such path on this host
-        A.start_watch(A.CurrentStore(), laptop, "d" * 40, time.time(), worktree=laptop, close=laptop,
+        A.start_watch(A.CurrentStore(A.process_store), laptop, "d" * 40, time.time(), worktree=laptop, close=laptop,
                       follower={"followed_by": "laptop:4242", "followed_until": time.time() - 1})
         looked = []
         A.watch_eval = lambda repo, *a: looked.append(repo) or ("ok", "WATCH OK: Main #5 green (dddddddddd)", [])
         self.assertEqual(A.tick_watches(*on_clock(A.Clock())), [f"watch {'d' * 10}: ok"])
         self.assertEqual(looked, [self.here], "looked at in this host's clone, never the laptop's path")
         self.assertEqual(self.closed, [], "the laptop's worktree is not this host's to close")
-        A.start_watch(A.CurrentStore(), self.here, "e" * 40, time.time(), worktree=self.here)  # made here: its own path, as it is
+        A.start_watch(A.CurrentStore(A.process_store), self.here, "e" * 40, time.time(), worktree=self.here)  # made here: its own path, as it is
         A.watch_eval = lambda repo, *a: looked.append(repo) or None
         A.tick_watches(*on_clock(A.Clock()))
         self.assertEqual(looked[-1], self.here)
@@ -438,31 +438,31 @@ class WatchItemTest(unittest.TestCase):
     def test_a_watch_of_a_repo_this_host_has_no_clone_of_waits_for_its_deadline(self):
         A.WATCH["someone/else"] = A.WATCH["pawelkrupinski/movies"]
         self.addCleanup(A.WATCH.pop, "someone/else", None)
-        A.start_watch(A.CurrentStore(), "/elsewhere", "f" * 40, time.time(), worktree="/w", o_r="someone/else")
+        A.start_watch(A.CurrentStore(A.process_store), "/elsewhere", "f" * 40, time.time(), worktree="/w", o_r="someone/else")
         looked = []
         A.watch_eval = lambda *a: looked.append(a) or ("ok", "WATCH OK", [])
         self.assertEqual(A.tick_watches(*on_clock(A.Clock())), [])
         self.assertEqual(looked, [], "no clone here: nothing looked at")
-        self.assertEqual(A.open_store().item("watch", "f" * 40)["state"], "watching")
+        self.assertEqual(A.process_store().item("watch", "f" * 40)["state"], "watching")
 
     def test_a_follower_never_renews_a_claim_another_follower_took_over(self):
         """Review round 7: renew() wrote its lease over whoever held the item, so a follower whose claim lapsed (asleep)
         took it back from the one that had taken it over."""
-        claim = A.WatchClaim(A.CurrentStore(), "/repo", "g" * 40, time.time(), "pawelkrupinski/movies", FakeClock())
-        A.start_watch(A.CurrentStore(), "/repo", "g" * 40, time.time(), worktree="/w",
+        claim = A.WatchClaim(A.CurrentStore(A.process_store), "/repo", "g" * 40, time.time(), "pawelkrupinski/movies", FakeClock())
+        A.start_watch(A.CurrentStore(A.process_store), "/repo", "g" * 40, time.time(), worktree="/w",
                       follower={"followed_by": "ci-runner:7", "followed_until": time.time() + 600})
         claim.renew()
-        self.assertEqual(A.open_store().item("watch", "g" * 40)["data"]["followed_by"], "ci-runner:7")
-        A.open_store().update_item("watch", "g" * 40, A.open_store().item("watch", "g" * 40)["version"], claim.lease(time.time() - 900))
+        self.assertEqual(A.process_store().item("watch", "g" * 40)["data"]["followed_by"], "ci-runner:7")
+        A.process_store().update_item("watch", "g" * 40, A.process_store().item("watch", "g" * 40)["version"], claim.lease(time.time() - 900))
         claim.renew()
-        self.assertGreater(A.open_store().item("watch", "g" * 40)["data"]["followed_until"], time.time(), "its own: renewed")
+        self.assertGreater(A.process_store().item("watch", "g" * 40)["data"]["followed_until"], time.time(), "its own: renewed")
 
     def test_undecided_past_its_deadline_is_unknown_and_escalates(self):
-        A.start_watch(A.CurrentStore(), "/repo", "b" * 40, time.time(), worktree="/w")
+        A.start_watch(A.CurrentStore(A.process_store), "/repo", "b" * 40, time.time(), worktree="/w")
         A.watch_eval = lambda *a: None
         A.tick_watches(*on_clock(FakeClock(time.time() + 4 * 3600)))
-        self.assertEqual(A.open_store().item("watch", "b" * 40)["state"], "unknown")
-        self.assertEqual(A.open_store().events()[-1]["severity"], "escalate")
+        self.assertEqual(A.process_store().item("watch", "b" * 40)["state"], "unknown")
+        self.assertEqual(A.process_store().events()[-1]["severity"], "escalate")
 
 
 if __name__ == "__main__":

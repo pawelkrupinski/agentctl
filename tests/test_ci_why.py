@@ -208,17 +208,16 @@ class CiWhyTest(FakeForge):
         # ...so a production fix naming #42 goes while #43 is red; one naming #39 (before the green #40) waits
         from test_agentctl import Repo
         r = Repo(self.tmp.name)
-        saved_store = A.open_store
-        A.open_store = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("no store in this test"))
-        try:
-            def fix(run_no):
-                r.write("web/src/main/scala/A.scala", f"fix {run_no}\n")
-                return r.commit(f"a fix\n\nFixes-Red: {run_no}")
-            self.assertFalse(A.must_wait(r.path, [fix(42)], reds), "a fix naming the episode's earlier run goes")
-            self.assertTrue(A.must_wait(r.path, [fix(39)], reds), "a fix naming an older episode's run waits")
-            self.assertTrue(A.must_wait(r.path, [fix(41)], reds), "a fix naming a run failing another way waits")
-        finally:
-            A.open_store = saved_store
+        def no_store(clock=None):
+            raise RuntimeError("no store in this test")
+        store = A.CurrentStore(no_store)
+
+        def fix(run_no):
+            r.write("web/src/main/scala/A.scala", f"fix {run_no}\n")
+            return r.commit(f"a fix\n\nFixes-Red: {run_no}")
+        self.assertFalse(A.must_wait(r.path, [fix(42)], reds, store), "a fix naming the episode's earlier run goes")
+        self.assertTrue(A.must_wait(r.path, [fix(39)], reds, store), "a fix naming an older episode's run waits")
+        self.assertTrue(A.must_wait(r.path, [fix(41)], reds, store), "a fix naming a run failing another way waits")
 
     def test_a_gating_workflow_not_on_main_yet_gates_nothing_and_the_rest_is_read(self):
         # 2026-11-08 16:35-18:10: agentctl's GATING named identity-takes.yml before the movies commit adding it reached
@@ -604,5 +603,5 @@ class CachedGateTest(CiWhyTest):
         subprocess.run(["git", "-C", clone, "remote", "add", "origin", "git@github.com:pawelkrupinski/movies.git"], check=True)
         self.scenario([])
         A._last_gate_publish[0] = 0
-        A.maybe_publish_gate(clone, A.CurrentStore())
+        A.maybe_publish_gate(clone, A.CurrentStore(A.process_store))
         self.assertTrue(A.cached_gate_summary(A.slug(clone))[0] or os.path.exists(self.gs))

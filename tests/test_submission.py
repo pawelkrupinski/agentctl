@@ -34,13 +34,13 @@ class BinWorktreeTest(unittest.TestCase):
                        check=True)
         with open(f, "w") as fh:
             fh.write("edited\n")
-        self.assertTrue(A.inv_wb(A.Clock(), A.CurrentStore())[0], "edited just now: somebody is at it")
+        self.assertTrue(A.inv_wb(A.Clock(), A.CurrentStore(A.process_store))[0], "edited just now: somebody is at it")
         old = time.time() - 3600
         os.utime(f, (old, old))
         saved = A.process_cwds
         A.process_cwds = lambda: {}
         try:
-            ok, detail = A.inv_wb(A.Clock(), A.CurrentStore())
+            ok, detail = A.inv_wb(A.Clock(), A.CurrentStore(A.process_store))
         finally:
             A.process_cwds = saved
         self.assertFalse(ok)

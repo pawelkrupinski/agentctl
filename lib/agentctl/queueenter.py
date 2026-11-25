@@ -38,11 +38,11 @@ from agentctl.landqueue import queue_command
 from agentctl.statemachines import machine_state
 
 
-def change_fields(repo, main_ref, head, a):
+def change_fields(repo, main_ref, head, a, store):
     """A queue entry's fields for the change at head in repo (land's own submission)."""
     commits = waiting_commits(repo, f"{remote()}/main", head)
     return {"worktree": repo, "branch": branch_of(repo), "head": head, "commits": commits,
-            "fixes": sorted(fixes_of(repo, commits)), "diagnoses": sorted(diagnoses_of(repo, commits)) or None,
+            "fixes": sorted(fixes_of(repo, commits, store)), "diagnoses": sorted(diagnoses_of(repo, commits)) or None,
             "keep_worktree": bool(getattr(a, "keep_worktree", False)),
             "no_batch": bool(getattr(a, "no_batch", False)),
             "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
@@ -129,7 +129,7 @@ def cmd_land_precheck(a, store):
 def enqueue(repo, main_ref, sh, a, clock, store):
     """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor. A red
     fixer's land then waits for the verdict (fixer_land)."""
-    rc, head = sync(repo, main_ref, sh, clock, getattr(a, "release_hold", False))
+    rc, head = sync(repo, main_ref, sh, clock, store, getattr(a, "release_hold", False))
     if rc is not None:
         return rc
     d, _clone, _wt = waiting_state(repo)
@@ -143,10 +143,10 @@ def enqueue(repo, main_ref, sh, a, clock, store):
             start_fast_precheck(repo, main_ref, head, eid, a)
     if host_role() == "sync":  # THE LAPTOP'S LAND NEEDS NO VAULT (see submit_to_server)
         with no_vault():
-            rc = submit_to_server(repo, d, change_fields(repo, main_ref, head, a), store, after_queued=after_queued,
+            rc = submit_to_server(repo, d, change_fields(repo, main_ref, head, a, store), store, after_queued=after_queued,
                                   waits=waits)
     else:
-        fields = change_fields(repo, main_ref, head, a)
+        fields = change_fields(repo, main_ref, head, a, store)
         e, ahead = queue_change(store, d, fields)
         submit_ref(repo, d, e)
         print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the "
@@ -239,7 +239,7 @@ def rebase_in_progress(repo):
 # the next land's `rebase --abort` reset the branch to the pre-rebase commit, dropping them). A land that finds a rebase
 # already in progress refuses -- it is the agent's to finish or abort, never land's to discard -- and a rebase land
 # started is aborted on whatever path land leaves it unfinished.
-def sync(repo, main_ref, sh, clock, release_hold=False):
+def sync(repo, main_ref, sh, clock, store, release_hold=False):
     """sync_onto_main, never leaving a rebase it started in progress; refused when one is in progress already."""
     pending = rebase_in_progress(repo)
     if pending:
@@ -248,10 +248,10 @@ def sync(repo, main_ref, sh, clock, release_hold=False):
               "and an abort resets the branch -- then land again")
         return 1, None
     with WorktreeGuard(repo):
-        return sync_onto_main(repo, main_ref, sh, clock, release_hold)
+        return sync_onto_main(repo, main_ref, sh, clock, store, release_hold)
 
 
-def sync_onto_main(repo, main_ref, sh, clock, release_hold=False):
+def sync_onto_main(repo, main_ref, sh, clock, store, release_hold=False):
     """Fetch, rebase onto origin/main, the squash guard: (rc, None) when land is decided here, else (None, head).
     A commit with a `Hold: <why>` trailer is refused unless release_hold (`land --release-hold`: the owner's go)."""
     r = sh("git", "fetch", "--quiet", remote(), "main")
@@ -278,8 +278,8 @@ def sync_onto_main(repo, main_ref, sh, clock, release_hold=False):
               "drop the trailer).")
         return 1, None
     # policy: blame-dead
-    why = blame_land_refusal(repo, waiting_commits(repo, f"{remote()}/main", head), repo,
-                             records=blame_records_quiet())
+    why = blame_land_refusal(repo, waiting_commits(repo, f"{remote()}/main", head), store, repo,
+                             records=blame_records_quiet(store))
     if why:
         print(f"NOT LANDED: {why}. A withdrawn or refuted blame revert is dead: drop this worktree "
               "(`git worktree remove`), never land it.")
@@ -305,7 +305,7 @@ def sync_onto_main(repo, main_ref, sh, clock, release_hold=False):
         print(f"LANDED {head} (the rebase left nothing: already on {remote()}/main)")
         return 0, None
     head = land_before_queue(repo, head)
-    if fix_replay_blocks(repo, head):
+    if fix_replay_blocks(repo, head, store):
         return 1, None
     problems = check_range(repo, f"{remote()}/main", head, [], int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)))
     if problems:
@@ -366,10 +366,10 @@ def fix_replay_proofs(repo, head):
     return _fix_replay_proofs[(base, head)]
 
 
-def fix_replay_blocks(repo, head):
+def fix_replay_blocks(repo, head, store):
     """True (its NOT LANDED printed) when FIX REPLAY refuses the push origin/main..head."""
     commits = waiting_commits(repo, f"{remote()}/main", head)
-    verdict = fix_replay_refusal(repo, commits, proofs=fix_replay_proofs(repo, head))
+    verdict = fix_replay_refusal(repo, commits, store, proofs=fix_replay_proofs(repo, head))
     if not verdict:
         return False
     pid, why = verdict

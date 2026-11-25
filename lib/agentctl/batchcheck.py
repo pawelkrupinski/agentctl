@@ -143,11 +143,11 @@ def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
     # ONE EXECUTOR HOLDS THE BATCH THROUGH ITS CHECK AND ITS WHOLE BISECT (several checks of up to 2 h each): under a
     # change's CHECK_LEASE_MAX (3 h) the bisect lost its lease mid-way, read as a stall, and blamed "flaky" -- the culprit
     # was never rejected. Its machine bounds it (checking 2 h + bisecting 4 h); the leases' max hold matches.
-    lease = LeaseHold(f"check/batch-{bid}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), BATCH_LEASE_MAX)
+    lease = LeaseHold(f"check/batch-{bid}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), BATCH_LEASE_MAX, store=st)
     if not lease.acquire():
         return 0
     i = it["data"]["tree"]
-    slot = tree_slot(d, i, BATCH_LEASE_MAX)
+    slot = tree_slot(st, d, i, BATCH_LEASE_MAX)
     try:
         if not slot.acquire():
             return 0
@@ -161,7 +161,7 @@ def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
         range_base = it["data"].get("range_base")
         if it["state"] == "checking":
             for attempt in range(BATCH_INFRA_RETRIES + 1):  # AN INFRA FAILURE IS NO BISECT (batch_infra_failure)
-                ok, out, stalled = batch_check(repo, d, tree, base, tip, clock, it["data"].get("cls") or "check", depth,
+                ok, out, stalled = batch_check(repo, d, tree, base, tip, clock, st, it["data"].get("cls") or "check", depth,
                                                runs, range_base=range_base)
                 infra = None if ok or stalled else batch_infra_failure(out)
                 if not infra or attempt == BATCH_INFRA_RETRIES:
@@ -189,7 +189,7 @@ def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
                 return 0
             it = batch_move(st, it, "bisecting", {"failed_out": (out or "")[-20000:]},
                             text=f"batch {bid}: {tip[:10]} failed its check; bisecting")
-        culprit, cout = bisect(repo, d, members, base, tree, clock, depth, runs, it["data"].get("failed_out"),
+        culprit, cout = bisect(repo, d, members, base, tree, clock, st, depth, runs, it["data"].get("failed_out"),
                                range_base=range_base, cls=it["data"].get("cls") or "check")
         it = st.item("batch", bid)
         if culprit is None and depth == "red":  # every prefix passed: no verdict, pre-checked again at the next change

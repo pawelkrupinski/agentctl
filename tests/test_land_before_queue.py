@@ -32,7 +32,7 @@ class LandBeforeQueueTest(unittest.TestCase):
         sh = lambda *args: A.subprocess.run(args, cwd=self.r.path, capture_output=True, text=True)  # noqa: E731
         errs = io.StringIO()
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(errs):
-            rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock())
+            rc, head = A.sync(self.r.path, "origin/main", sh, FakeClock(), A.CurrentStore(A.process_store))
         return rc, head, errs.getvalue()
 
     def test_a_commit_the_step_adds_rides_the_same_push(self):

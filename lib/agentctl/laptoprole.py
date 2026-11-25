@@ -8,7 +8,6 @@ import sys
 from agentctl.procrunner import process_runner
 from agentctl.core import process_cache
 from agentctl.timefmt import day_hhmmz
-from agentctl.store import open_store
 from agentctl.procs import socket_host
 from agentctl.leases import lease_meta
 from agentctl.core import env_num, err, state_root
@@ -59,11 +58,11 @@ def laptop_role_holder():
     return f"role:{role_host()}:{machine_id()}"
 
 
-def laptop_role_standby(store=None, t=None):
+def laptop_role_standby(store, t=None):
     """None when this machine may do laptop duties (it holds the role, or no live holder stands); else the standby
     line naming the holder. Read only: never acquires."""
     try:
-        st = store or open_store()
+        st = store
         t = st.clock() if t is None else t
         row = st.get(LAPTOP_ROLE_LEASE)
     except Exception:  # an unread store decides nothing here: the duty's own store calls fail on their own

@@ -49,7 +49,7 @@ cognitive	blame_drop_revert_worktree	13
 cognitive	blame_land_refusal	30
 cognitive	blame_note	12
 cognitive	blame_open	24
-cognitive	blame_records	36
+cognitive	blame_records	35
 cognitive	blame_status	13
 cognitive	blame_step	26
 cognitive	blame_withdraw	16
@@ -70,7 +70,7 @@ cognitive	classify_change	41
 cognitive	classify_job	27
 cognitive	claude_trust_gap	14
 cognitive	close_condition	19
-cognitive	close_landed_changes	20
+cognitive	close_landed_changes	19
 cognitive	close_superseded	17
 cognitive	close_worktree	20
 cognitive	cmd_checks	12
@@ -118,10 +118,10 @@ cognitive	failure_keys	18
 cognitive	fetch_job_log_api	11
 cognitive	file_unheld_change	13
 cognitive	fix_between	21
-cognitive	fix_check	38
+cognitive	fix_check	37
 cognitive	fix_job_steps	25
 cognitive	fix_path_unread	12
-cognitive	fix_replay_refusal	26
+cognitive	fix_replay_refusal	25
 cognitive	fix_replay_trailers	30
 cognitive	fix_workflow_jobs	14
 cognitive	fixer_prompt	39
@@ -199,7 +199,7 @@ cognitive	note_precheck	18
 cognitive	notification_url	12
 cognitive	notify_escalations	69
 cognitive	open_condition	20
-cognitive	orphan_branches	29
+cognitive	orphan_branches	27
 cognitive	orphan_candidates	41
 cognitive	orphan_duty	101
 cognitive	outside_gate	22
@@ -347,7 +347,7 @@ cognitive	settle_branch_reds	31
 cognitive	sleep_intervals	12
 cognitive	snap_reds	16
 cognitive	spotlight_exclude	23
-cognitive	stats_pass	51
+cognitive	stats_pass	50
 cognitive	status_agents	29
 cognitive	status_data	14
 cognitive	status_families	19
@@ -455,7 +455,7 @@ cyclomatic	blame_hint	14
 cyclomatic	blame_land_refusal	15
 cyclomatic	blame_note	14
 cyclomatic	blame_open	29
-cyclomatic	blame_records	30
+cyclomatic	blame_records	29
 cyclomatic	blame_reland	11
 cyclomatic	blame_status	13
 cyclomatic	blame_step	19
@@ -479,7 +479,7 @@ cyclomatic	classify_change	27
 cyclomatic	classify_job	34
 cyclomatic	claude_trust_gap	16
 cyclomatic	close_condition	15
-cyclomatic	close_landed_changes	16
+cyclomatic	close_landed_changes	15
 cyclomatic	close_superseded	23
 cyclomatic	close_worktree	25
 cyclomatic	cmd_checks	17
@@ -526,10 +526,10 @@ cyclomatic	failure_detail	17
 cyclomatic	fetch_job_log_api	12
 cyclomatic	file_unheld_change	15
 cyclomatic	fix_between	22
-cyclomatic	fix_check	32
+cyclomatic	fix_check	31
 cyclomatic	fix_job_steps	19
 cyclomatic	fix_path_unread	15
-cyclomatic	fix_replay_refusal	24
+cyclomatic	fix_replay_refusal	23
 cyclomatic	fix_replay_trailers	16
 cyclomatic	fix_workflow_jobs	13
 cyclomatic	fixer_env	12
@@ -616,7 +616,7 @@ cyclomatic	note_precheck	11
 cyclomatic	notification_url	12
 cyclomatic	notify_escalations	49
 cyclomatic	open_condition	22
-cyclomatic	orphan_branches	22
+cyclomatic	orphan_branches	20
 cyclomatic	orphan_candidates	36
 cyclomatic	orphan_duty	53
 cyclomatic	orphan_why	11
@@ -653,7 +653,6 @@ cyclomatic	project_events	22
 cyclomatic	push_batchable	14
 cyclomatic	push_candidates	14
 cyclomatic	queue_change	13
-cyclomatic	queue_facts	11
 cyclomatic	queue_full	33
 cyclomatic	read_build	24
 cyclomatic	read_overlap	25
@@ -774,7 +773,7 @@ cyclomatic	settle_branch_reds	20
 cyclomatic	snap_reds	11
 cyclomatic	snapshots_both_changed	12
 cyclomatic	spotlight_exclude	16
-cyclomatic	stats_pass	40
+cyclomatic	stats_pass	39
 cyclomatic	status_agents	26
 cyclomatic	status_data	15
 cyclomatic	status_families	19
@@ -839,7 +838,7 @@ method-lines	cmd_red	90
 method-lines	dry_run	53
 method-lines	expire_cache	60
 method-lines	explain_run_jobs	119
-method-lines	fix_check	52
+method-lines	fix_check	51
 method-lines	fixer_prompt	124
 method-lines	gov_admit	80
 method-lines	inbox_wait	55
@@ -861,10 +860,10 @@ method-lines	red_dispatch	65
 method-lines	red_dispatcher	116
 method-lines	red_fix_facts	62
 method-lines	red_fix_pending	260
-method-lines	red_fixer	211
+method-lines	red_fixer	210
 method-lines	red_job_reads	66
 method-lines	red_lease_ended	87
-method-lines	red_owner	241
+method-lines	red_owner	240
 method-lines	red_owner.step	102
 method-lines	red_run_retired	51
 method-lines	red_step	157

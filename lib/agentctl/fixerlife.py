@@ -9,7 +9,7 @@ import time
 from agentctl.core import env_num, fmt_age
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.store import CurrentStore, StoreAuthFailed, StoreUnavailable
+from agentctl.store import StoreAuthFailed, StoreUnavailable
 from agentctl.repos import red_repo_of
 from agentctl.redrecord import lease_is_live, red_lease
 from agentctl.claudefiles import bg_transcript, fixer_verdict
@@ -143,7 +143,7 @@ def fixer_quiet(verdict):
     return v.startswith("ENDED: ") or bool(GAVE_UP_FIXED.match(v) or GAVE_UP_DECIDE.match(v))
 
 
-def red_fixer(a):
+def red_fixer(a, st):
     """The dispatched fixer's wrapper (detached): start its background claude session under the red's lease, renew the
     lease by its progress every RED_RENEW_EVERY s, `claude stop` it when the lease is lost (RED-STOP.md), release the
     lease with the verdict from the session's final answer."""
@@ -153,7 +153,6 @@ def red_fixer(a):
     session = rec.get("session")  # known once `claude agents` lists the session (--bg picks its id)
     me = os.getpid()
     who = f"red-fixer-{num}"
-    st = CurrentStore()
     name, epoch = rec.get("lease"), rec.get("epoch")
     secret = os.environ.pop("AGENTCTL_LEASE_SECRET", None)
     extra = [(x["name"], x["epoch"], json.loads(os.environ.get("AGENTCTL_LEASE_SECRETS") or "{}").get(x["name"]))

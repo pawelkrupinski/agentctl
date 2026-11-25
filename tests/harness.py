@@ -132,7 +132,7 @@ def _reset_process_state():
         # since e4d02a4): a test's standing clock stamped the next test's inbox entries 400 s behind the wall, and
         # test_orphans' infra retry read its verdict as older than its submit -- in CI's worker order only.
         if mod.__name__ == "agentctl.cli":
-            mod.wire_collaborators(mod.Clock(), mod.CurrentStore())
+            mod.wire_collaborators(mod.Clock(), mod.CurrentStore(mod.process_store))
 
 
 # --- the per-test timeout -------------------------------------------------------------------------------------------

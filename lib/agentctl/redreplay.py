@@ -6,7 +6,6 @@ import re
 import subprocess
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, git, remote, state_root
-from agentctl.store import open_store
 from agentctl.repos import red_repo_conf, red_repo_of
 from agentctl.trailers import commit_trailers, trailer_values
 from agentctl.land import tool_env
@@ -174,7 +173,7 @@ def gate_fix_replay_refusal(d, claimed, bare, nones, proofs):
             "base=/head= of your own: `agentctl land` from the laptop runs it at origin/main and at your fix)")
 
 
-def fix_replay_refusal(repo, commits, store=None, proofs=None):
+def fix_replay_refusal(repo, commits, store, proofs=None):
     """(policy id, why) when the Fixes-Red: of commits is refused by FIX REPLAY (above) -- `fix-replay` for a gate red,
     enforced; `fix-replay-outside` for a red outside the gate whose workflow names a replay, warn-only -- or None.
     proofs: agentctl's own replays (run_fix_replays; the submission's `replays`). An unread store refuses nothing (the
@@ -186,7 +185,7 @@ def fix_replay_refusal(repo, commits, store=None, proofs=None):
         return None
     try:
         with no_vault():  # THE LAPTOP'S LAND NEEDS NO VAULT: never `secrets` for this read (no token: no refusal)
-            items = [it for it in (store or open_store()).items("red") if it["data"].get("key")
+            items = [it for it in store.items("red") if it["data"].get("key")
                      and it["state"] not in RED_TERMINAL]
     except (Exception, SystemExit):
         return None

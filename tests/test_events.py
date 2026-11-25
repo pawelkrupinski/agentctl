@@ -62,12 +62,7 @@ class EventsTest(unittest.TestCase):
         self.assertTrue(all(e["notified_at"] for e in self.st.events() if e["severity"] == "escalate"))
         os.environ["AGENTCTL_W6_MAX"] = "0"
         self.addCleanup(os.environ.pop, "AGENTCTL_W6_MAX", None)
-        saved = A.open_store
-        A.open_store = lambda *a, **k: self.st
-        try:
-            self.assertTrue(A.inv_w6(A.Clock(), A.CurrentStore())[0])
-        finally:
-            A.open_store = saved
+        self.assertTrue(A.inv_w6(A.Clock(), self.st)[0])
 
     def test_a_change_never_leaves_the_queue_without_its_authors_inbox_entry(self):
         """2026-10-30 `…-76336e`: its NOT LANDED entry did not carry the item id (a search by id found nothing), and
@@ -101,7 +96,7 @@ class EventsTest(unittest.TestCase):
                                kinds=None, since_ack=False, timeout=0)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            A.cmd_inbox(a, A.CurrentStore())
+            A.cmd_inbox(a, A.CurrentStore(A.process_store))
         return buf.getvalue()
 
     def test_w8_names_a_change_that_left_the_queue_silently(self):
@@ -111,17 +106,12 @@ class EventsTest(unittest.TestCase):
         c.execute("UPDATE events SET audience='{}', severity='info' WHERE item_id='s1'")  # a writer around transition
         c.close()
         self.assertEqual(A.change_exits_unannounced(self.st), ["s1"])
-        saved = A.open_store
-        A.open_store = lambda *a, **k: self.st
-        try:
-            ok, why = A.inv_w8(A.Clock(), A.CurrentStore())
-            self.assertFalse(ok)
-            self.assertIn("s1", why)
-            os.environ["AGENTCTL_W8_WINDOW"] = "-60"  # it ages out of the window: the condition clears itself
-            self.addCleanup(os.environ.pop, "AGENTCTL_W8_WINDOW", None)
-            self.assertTrue(A.inv_w8(A.Clock(), A.CurrentStore())[0])
-        finally:
-            A.open_store = saved
+        ok, why = A.inv_w8(A.Clock(), self.st)
+        self.assertFalse(ok)
+        self.assertIn("s1", why)
+        os.environ["AGENTCTL_W8_WINDOW"] = "-60"  # it ages out of the window: the condition clears itself
+        self.addCleanup(os.environ.pop, "AGENTCTL_W8_WINDOW", None)
+        self.assertTrue(A.inv_w8(A.Clock(), self.st)[0])
 
     def test_w8_does_not_name_a_change_that_left_the_queue_while_it_read(self):
         """2026-11-17 10:14:46 `…-ref-scrapers-2a9c4e` (and 2026-11-16 11:32 `…-keeperflake-054603`): W8 read every
@@ -186,11 +176,8 @@ class NotifierDeliveryTest(unittest.TestCase):
         os.environ["AGENTCTL_NOTIFY"] = self.hook
         self.t = [1_000_000.0]
         self.st = A.Store(path=os.path.join(self.root, "store.db"), clock=lambda: self.t[0])
-        self.saved_store = A.open_store
-        A.open_store = lambda *a, **k: self.st
 
     def tearDown(self):
-        A.open_store = self.saved_store
         for k, v in self.saved.items():
             if v is None:
                 os.environ.pop(k, None)
@@ -269,7 +256,7 @@ class NotifierDeliveryTest(unittest.TestCase):
         self.escalate("slow")
         self.assertEqual(A.notify_escalations(self.st), 0)
         self.assertEqual(A.notify_cause(), "osascript: timed out after 1 s")
-        ok, detail = A.inv_wn(A.Clock(), A.CurrentStore())
+        ok, detail = A.inv_wn(A.Clock(), self.st)
         self.assertIs(ok, False)
         self.assertIn("(osascript: timed out after 1 s; 1 waiting)", detail)
         self.assertIn("overloaded", detail)
@@ -305,17 +292,17 @@ class NotifierDeliveryTest(unittest.TestCase):
         open(os.path.join(self.root, "down"), "w").close()
         self.assertEqual(A.notify_escalations(self.st), 0)
         self.assertEqual(len(self.unmarked()), 5, "nothing reached the owner: nothing is recorded as told")
-        ok, detail = A.inv_wn(A.Clock(), A.CurrentStore())
+        ok, detail = A.inv_wn(A.Clock(), self.st)
         self.assertIs(ok, False)
         self.assertIn("notify.sh: exit 1", detail)
         self.assertIn("fix the notification command ($AGENTCTL_NOTIFY)", detail)
-        self.assertIsNone(A.inv_w6(A.Clock(), A.CurrentStore())[0], "W6 defers to WN: one condition, not one per waiting escalation")
+        self.assertIsNone(A.inv_w6(A.Clock(), self.st)[0], "W6 defers to WN: one condition, not one per waiting escalation")
         os.remove(os.path.join(self.root, "down"))
         self.t[0] += 60
         self.assertEqual(A.notify_escalations(self.st), 1)  # caught up: one summary
         self.assertEqual(self.unmarked(), [])
-        self.assertIs(A.inv_wn(A.Clock(), A.CurrentStore())[0], True)
-        self.assertIs(A.inv_w6(A.Clock(), A.CurrentStore())[0], True)
+        self.assertIs(A.inv_wn(A.Clock(), self.st)[0], True)
+        self.assertIs(A.inv_w6(A.Clock(), self.st)[0], True)
 
     def test_one_live_notification_per_item_re_notified_on_the_reminder_schedule(self):
         self.escalate("r1", times=3)  # three re-escalations pending at once
