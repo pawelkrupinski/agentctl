@@ -26,7 +26,7 @@ from agentctl.fixerland import unlanded_commits
 from agentctl.red import red_active_of
 from agentctl.redmove import red_move
 from agentctl.rundispatch import red_verify_dispatch
-from agentctl.redseen import run_jobs
+from agentctl.stuckruns import run_jobs
 from agentctl.redblock import BLOCK_MAX, BLOCK_TTL, owner_cmd_unsafe, owner_details, red_run_units
 from agentctl.redopen import red_offer
 from agentctl.redclaim import red_targets, root_checkout

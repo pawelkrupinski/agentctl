@@ -9,7 +9,7 @@ import re
 import time
 from typing import Any, Callable
 from contextlib import suppress
-from agentctl.core import err, fmt_age, git, git_ok, process_cache, state_root
+from agentctl.core import attempt, err, fmt_age, git, git_ok, process_cache, state_root
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, gh_json
 from agentctl.classify import SETUP_STEP
@@ -29,21 +29,39 @@ def registry_name(name):
     return str(name or "").split(" / ")[-1]
 
 
+def workflow_unproven_why(rows: Any, wfile: str) -> str | None:
+    """'report only: <wfile> is unproven (<note>)' when the registry holds the gate workflow's own row as unproven."""
+    wrow = next((r for r in rows if r["kind"] == "workflow" and r["workflow"] == wfile), None)
+    if wrow and wrow["proven"] == "unproven":
+        return f"report only: {wfile} is unproven ({wrow.get('note') or 'no green run yet'})"
+    return None
+
+
+def failed_job_states(rows: Any, wfile: str, failed: list[Any]) -> tuple[dict[Any, str], list[Any]]:
+    """({failed job: its registry state, a job with no row read as unproven}, [the failed jobs with no row])."""
+    state = {r["name"]: r["proven"] for r in rows if r["kind"] == "job" and r["workflow"] == wfile}
+    proven = {n: state.get(n, state.get(registry_name(n))) for n in failed}
+    missing = [n for n in failed if proven[n] is None]
+    return {n: p or "unproven" for n, p in proven.items()}, missing
+
+
 def gate_report_only_jobs(rows, wfile, jobs):
     """(True, why) when every failed job of a red run of gate workflow wfile is unproven -- or an aggregate following
     one -- and one is; or when wfile's own row is unproven: gating_checks.py report_only, the hook's rule exactly. A
     failed job with NO row is unproven, as the hook reads it (movies' rule: a new check gates only once it has been
     green), and `why` names the missing row -- every gate job should have one (the registry's lint)."""
-    wrow = next((r for r in rows if r["kind"] == "workflow" and r["workflow"] == wfile), None)
-    if wrow and wrow["proven"] == "unproven":
-        return True, f"report only: {wfile} is unproven ({wrow.get('note') or 'no green run yet'})"
-    state = {r["name"]: r["proven"] for r in rows if r["kind"] == "job" and r["workflow"] == wfile}
+    unproven_why = workflow_unproven_why(rows, wfile)
+    if unproven_why:
+        return True, unproven_why
     failed = [j.get("name") for j in jobs or [] if j.get("conclusion") in RED_CONCLUSIONS]
     if not failed:
         return False, "no failed job"
-    proven = {n: state.get(n, state.get(registry_name(n))) for n in failed}
-    missing = [n for n in failed if proven[n] is None]
-    proven = {n: p or "unproven" for n, p in proven.items()}
+    proven, missing = failed_job_states(rows, wfile, failed)
+    return failed_jobs_verdict(proven, failed, missing)
+
+
+def failed_jobs_verdict(proven: dict[Any, str], failed: list[Any], missing: list[Any]) -> tuple[bool, str]:
+    """gate_report_only_jobs' answer from the failed jobs' registry states (`proven`) and those with no row."""
     unproven = [n for n in failed if proven[n] == "unproven"]
     gating = [n for n in failed if proven[n] not in ("unproven", "aggregate")]
     said = (f"; no row in {GATING_CHECKS_FILE}: {', '.join(missing)} (read as unproven -- add its row)"
@@ -61,16 +79,20 @@ def gate_report_only(o_r, name, run):
     if not gated_repo(o_r) or not run or run.get("conclusion") not in RED_CONCLUSIONS:
         return False, "not a red gate run"
     rid = str(run.get("databaseId") or "")
+    if rid in _report_only_mem:
+        return _report_only_mem[rid]
     try:
         rows = gating_checks(o_r)
         wfile = next((f for n, f in gate_flows(o_r) if n == name), name)
-        if rid and rid in _report_only_mem:
-            return _report_only_mem[rid]
         jobs = gh_json(o_r, "run", "view", rid, "--json", "jobs").get("jobs") or []
     except (Exception, SystemExit) as e:  # SystemExit: NoToken
         return False, f"unread ({str(e)[:120]}): it gates"
-    out = gate_report_only_jobs(rows, wfile, jobs)
-    if "no row in" in out[1] and rid not in _report_only_mem:  # said once per run: every gate job should have a row
+    return remember_report_only(name, rid, gate_report_only_jobs(rows, wfile, jobs))
+
+
+def remember_report_only(name: str, rid: str, out: tuple[bool, str]) -> tuple[bool, str]:
+    """out, kept for run rid; a missing registry row is said once per run: every gate job should have one."""
+    if "no row in" in out[1] and rid not in _report_only_mem:
         err(f"{name} run {rid}: {out[1].split('; ', 1)[-1]}")
     if rid:
         _report_only_mem[rid] = out
@@ -185,27 +207,38 @@ def run_no_verdict(o_r, r):
     return nv
 
 
+def newest_decided(runs: list[Run], no_verdict: Callable[[Run], bool]) -> tuple[Run | None, Run | None]:
+    """(the newest decided run of `runs` (newest first) that has a verdict, the newest decided run with none). A run
+    for which no_verdict(run) holds is an incomplete one: it says nothing, and the search goes on past it."""
+    nov = None
+    for r in runs:
+        if not is_decided(r):
+            continue
+        if not no_verdict(r):
+            return r, nov
+        nov = nov or r
+    return None, nov
+
+
+def flows_to_read(o_r: Any, flows: Any) -> Any:
+    """[(name, file)] gate_runs reads: `flows`, else a gated repo's registry, else every workflow with a recent run on main."""
+    flows = flows or (gate_flows(o_r) if gated_repo(o_r) else None)
+    if flows:
+        return flows
+    # listing: only names the workflows to read; each is then read on its own (main_runs)
+    recent = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "40", "--json", RUN_FIELDS)
+    return [(n, n) for n in dict.fromkeys(r["workflowName"] for r in recent)]
+
+
 def gate_runs(o_r, flows=None):
     """[(workflow, newest decided run on main | None, newer unfinished run | None, red_streak of its runs)]. flows: the
     workflows to read ([(name, file)]); default a gated repo's registry (gate_flows), else every workflow with a recent
     run on main."""
-    flows = flows or (gate_flows(o_r) if gated_repo(o_r) else None)
-    if not flows:
-        # listing: only names the workflows to read; each is then read on its own (main_runs)
-        recent = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "40", "--json", RUN_FIELDS)
-        flows = [(n, n) for n in dict.fromkeys(r["workflowName"] for r in recent)]
     out = []
-    for name, wfile in flows:
+    for name, wfile in flows_to_read(o_r, flows):
         runs = main_runs(o_r, wfile)
-        decided, nov = None, None
         nv = (lambda r: run_no_verdict(o_r, r)) if name in NO_VERDICT_FLOWS else (lambda r: False)
-        for r in runs:
-            if is_decided(r):
-                if nv(r):
-                    nov = nov or r  # the newest incomplete run: no verdict, it says nothing
-                    continue
-                decided = r
-                break
+        decided, nov = newest_decided(runs, nv)
         newer = next((r for r in runs if r.get("status") != "completed"), None)
         if newer and decided and newer["databaseId"] < decided["databaseId"]:
             newer = None
@@ -264,6 +297,13 @@ def red_for(since, now=None):
 RUN_ID_MIN = 10 ** 8
 
 
+def paged_to_number(o_r: Any, wfile: str, n: Any) -> list[Run]:
+    """The runs of workflow file wfile on main paged to where run number n sits ([] when it is 1000+ back or newer)."""
+    newest = main_runs(o_r, wfile, limit=1)
+    gap = int(newest[0]["number"]) - int(n) if newest else -1
+    return main_runs(o_r, wfile, limit=min(1000, gap + 50)) if 0 <= gap < 1000 else []
+
+
 def runs_of_number(o_r, n):
     """The runs on main whose run NUMBER is n, newest list first: the newest 200 on main, else each gate workflow's
     run list paged to where #n sits (a workflow's numbers count down its list)."""
@@ -275,21 +315,13 @@ def runs_of_number(o_r, n):
             if str(r.get("number")) == n and r.get("databaseId") not in seen:
                 seen.add(r.get("databaseId"))
                 hits.append(r)
-    try:
-        # listing: a run number's hits in the newest 200; each gate workflow not hit is asked on its own below
-        take(gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS))
-    except (Exception, SystemExit) as e:
-        err(f"ci-why: could not list main's runs ({str(e)[:120]})")
+    # listing: a run number's hits in the newest 200; each gate workflow not hit is asked on its own below
+    attempt(lambda: take(gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)),
+            None, catch=(Exception, SystemExit), what="ci-why: could not list main's runs")
     for name, wfile in red_gate_flows(o_r):
-        if any(r.get("workflowName") == name for r in hits):
-            continue
-        try:
-            newest = main_runs(o_r, wfile, limit=1)
-            gap = int(newest[0]["number"]) - int(n) if newest else -1
-            if 0 <= gap < 1000:
-                take(main_runs(o_r, wfile, limit=min(1000, gap + 50)))
-        except (Exception, SystemExit, ValueError, KeyError):
-            continue
+        if not any(r.get("workflowName") == name for r in hits):
+            attempt(lambda: take(paged_to_number(o_r, wfile, n)), None,
+                    catch=(Exception, SystemExit, ValueError, KeyError))
     gate = {g for g, _ in red_gate_flows(o_r)}
     return sorted(hits, key=lambda r: (r.get("workflowName") not in gate, r.get("conclusion") not in RED_CONCLUSIONS))
 
@@ -342,34 +374,54 @@ def outside_from_snap(snap):
     return out
 
 
-def queue_full(o_r, number, q):
+def serving_runners(q: dict[str, Any], want: set[str]) -> dict[str, Any]:
+    """{name: runner} of the queue snapshot's runners whose labels include all of `want`; {} when a label cannot be read."""
+    runners = ((q.get("limits") or {}).get("runners") or {}).items()
+    return attempt(lambda: {n: r for n, r in runners if want <= set(json.loads(r.get("labels") or "[]"))},
+                   {}, catch=(ValueError, TypeError))
+
+
+def slot_usage(q: dict[str, Any], serving: dict[str, Any]) -> tuple[int, int]:
+    """(busy slots, capacity) of the `serving` runners in queue snapshot q."""
+    cap = sum(int(r.get("capacity") or 0) for r in serving.values())
+    return sum(1 for x in q.get("running") or [] if x.get("runner") in serving), cap
+
+
+def waiting_ahead(waits: list[dict[str, Any]], mine: list[dict[str, Any]], label: str) -> tuple[int, int]:
+    """(how many jobs on `label` have waited longer than the run's own, the longest wait) in seconds."""
+    waited = [int(w.get("secs") or 0) for w in waits if w.get("label") == label]
+    own = max(int(w.get("secs") or 0) for w in mine if w.get("label") == label)
+    return sum(1 for x in waited if x > own), max(waited)
+
+
+def label_full_says(q: dict[str, Any], waits: list[dict[str, Any]], mine: list[dict[str, Any]], label: str) -> str | None:
+    """'<labels> full (busy/cap busy, M ahead, oldest Xm)' when every runner serving `label` is up with all its slots
+    busy, else None (a free slot, a runner down, or a label that cannot be read). mine: the run's waiting jobs."""
+    want = attempt(lambda: set(json.loads(label)), None, catch=(ValueError, TypeError))
+    serving = serving_runners(q, want) if want is not None else {}
+    if want is None or not serving or not all(r.get("state") == "running" for r in serving.values()):
+        return None
+    busy, cap = slot_usage(q, serving)
+    if busy < cap:
+        return None
+    ahead, oldest = waiting_ahead(waits, mine, label)
+    return f"{', '.join(sorted(want))} full ({busy}/{cap} busy, {ahead} ahead, oldest {fmt_age(oldest)})"
+
+
+def waiting_jobs(q: dict[str, Any] | None, o_r: Any, number: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(every waiting job of queue snapshot q, those of run #number of o_r)."""
+    waits = (q or {}).get("waiting_jobs") or []
+    return waits, [w for w in waits if w.get("repo") == o_r and str(w.get("run")) == str(number)] if number is not None else []
+
+
+def queue_full(o_r: Any, number: Any, q: dict[str, Any] | None) -> str | None:
     """'queued: <label> full (N/N busy, M ahead, oldest Xm)' when run #number of o_r waits only on labels whose every
     serving runner is up with all its slots busy, else None (a free slot, a runner down, or nothing known: stuck)."""
-    if not q or number is None:
-        return None
-    waits = q.get("waiting_jobs") or []
-    mine = [w for w in waits if w.get("repo") == o_r and str(w.get("run")) == str(number)]
+    waits, mine = waiting_jobs(q, o_r, number)
     if not mine:
         return None
-    says = []
-    for label in sorted({w.get("label") for w in mine}):
-        try:
-            want = set(json.loads(label))
-            serving = {n: r for n, r in ((q.get("limits") or {}).get("runners") or {}).items()
-                       if want <= set(json.loads(r.get("labels") or "[]"))}
-        except (ValueError, TypeError):
-            return None
-        if not serving or any(r.get("state") != "running" for r in serving.values()):
-            return None
-        cap = sum(int(r.get("capacity") or 0) for r in serving.values())
-        busy = sum(1 for x in q.get("running") or [] if x.get("runner") in serving)
-        if busy < cap:
-            return None
-        queue_ = [int(w.get("secs") or 0) for w in waits if w.get("label") == label]
-        own = max(int(w.get("secs") or 0) for w in mine if w.get("label") == label)
-        says.append(f"{', '.join(sorted(want))} full ({busy}/{cap} busy, {sum(1 for x in queue_ if x > own)} ahead, "
-                    f"oldest {fmt_age(max(queue_))})")
-    return "queued: " + "; ".join(says)
+    says = [label_full_says(q, waits, mine, label) for label in sorted({str(w.get("label")) for w in mine})]
+    return None if None in says else "queued: " + "; ".join(says)
 
 
 def run_in_lists(n: Any) -> Any:

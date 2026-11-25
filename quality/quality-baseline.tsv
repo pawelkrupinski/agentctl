@@ -113,9 +113,7 @@ cognitive	fixers_land_watch	28
 cognitive	forge_branches	12
 cognitive	forge_run_list	22
 cognitive	gate_flow_names	17
-cognitive	gate_report_only_jobs	11
 cognitive	gate_run_record	18
-cognitive	gate_runs	19
 cognitive	gate_runs_pass	17
 cognitive	gating_checks	29
 cognitive	generated_parse	16
@@ -198,7 +196,6 @@ cognitive	project_events	25
 cognitive	projected_transition	13
 cognitive	ps_busy_cores	11
 cognitive	push_batchable	11
-cognitive	queue_full	20
 cognitive	read_build	42
 cognitive	read_overlap	38
 cognitive	recheck_reason	24
@@ -228,16 +225,12 @@ cognitive	red_fix_held	35
 cognitive	red_fix_of	16
 cognitive	red_fix_pending	213
 cognitive	red_flake_check	15
-cognitive	red_gone	13
-cognitive	red_import_merge	14
 cognitive	red_job_reads	69
 cognitive	red_job_retired	19
 cognitive	red_joined_idle	18
 cognitive	red_lease_ended	48
 cognitive	red_main_verify	14
-cognitive	red_merge_rekeyed	17
 cognitive	red_migrate	11
-cognitive	red_obs_of_units	26
 cognitive	red_offer	31
 cognitive	red_owner_push	12
 cognitive	red_owner_reminders	38
@@ -254,7 +247,6 @@ cognitive	red_spawn	28
 cognitive	red_tick_others	13
 cognitive	red_unblock	16
 cognitive	red_unheld	19
-cognitive	red_units	16
 cognitive	red_url	12
 cognitive	red_vault_decide	15
 cognitive	red_view_of_units	24
@@ -283,7 +275,6 @@ cognitive	run_entry_checks	17
 cognitive	run_local_recheck	14
 cognitive	run_sigs	11
 cognitive	run_verdict	20
-cognitive	runs_of_number	17
 cognitive	sbt_serving	18
 cognitive	sbt_stuck_reasons	24
 cognitive	scala_code	24
@@ -305,9 +296,6 @@ cognitive	status_transcript_last	15
 cognitive	status_worktree	15
 cognitive	status_worktree_read	12
 cognitive	step_window_lines	11
-cognitive	stuck_child	17
-cognitive	stuck_limit	11
-cognitive	stuck_runs	77
 cognitive	submit_change	12
 cognitive	successor_state	33
 cognitive	superseded_duty	19
@@ -322,7 +310,6 @@ cognitive	token	34
 cognitive	transcript_paths	26
 cognitive	tunnel_probe	11
 cognitive	tunnel_watch	32
-cognitive	unkicked_unit	14
 cognitive	until_done_finish	13
 cognitive	wait_all	41
 cognitive	waiting_run	37
@@ -460,10 +447,7 @@ cyclomatic	forge_workflow_names	11
 cyclomatic	free_worktree	11
 cyclomatic	gate_fix_replay_refusal	20
 cyclomatic	gate_flow_names	22
-cyclomatic	gate_report_only	14
-cyclomatic	gate_report_only_jobs	26
 cyclomatic	gate_run_record	30
-cyclomatic	gate_runs	17
 cyclomatic	gate_runs_pass	21
 cyclomatic	gating_checks	21
 cyclomatic	generated_parse	17
@@ -565,7 +549,6 @@ cyclomatic	project_events	21
 cyclomatic	push_batchable	14
 cyclomatic	push_candidates	14
 cyclomatic	queue_change	13
-cyclomatic	queue_full	33
 cyclomatic	read_build	24
 cyclomatic	read_overlap	25
 cyclomatic	recheck_reason	23
@@ -596,9 +579,7 @@ cyclomatic	red_fix_held	38
 cyclomatic	red_fix_of	14
 cyclomatic	red_fix_pending	174
 cyclomatic	red_flake_check	17
-cyclomatic	red_gone	15
 cyclomatic	red_history	13
-cyclomatic	red_import_merge	22
 cyclomatic	red_job_reads	22
 cyclomatic	red_job_reads.scan	32
 cyclomatic	red_job_retired	21
@@ -606,16 +587,13 @@ cyclomatic	red_joined_idle	18
 cyclomatic	red_lease_ended	46
 cyclomatic	red_main_current	18
 cyclomatic	red_main_verify	20
-cyclomatic	red_merge_rekeyed	28
 cyclomatic	red_never_green	14
-cyclomatic	red_obs_of_units	16
 cyclomatic	red_offer	38
 cyclomatic	red_owner_push	16
 cyclomatic	red_owner_reminders	29
 cyclomatic	red_precheck	13
 cyclomatic	red_quota_waits	17
 cyclomatic	red_record	55
-cyclomatic	red_rekeyed	11
 cyclomatic	red_release	15
 cyclomatic	red_renew_blocks	25
 cyclomatic	red_renew_holders	11
@@ -627,7 +605,6 @@ cyclomatic	red_stop_holder	11
 cyclomatic	red_tick_others	11
 cyclomatic	red_unblock	14
 cyclomatic	red_unheld	15
-cyclomatic	red_units	13
 cyclomatic	red_url	13
 cyclomatic	red_vault_decide	13
 cyclomatic	red_verify_dispatch	11
@@ -677,8 +654,6 @@ cyclomatic	status_transcript_last	13
 cyclomatic	status_worktree	17
 cyclomatic	status_worktree_read	15
 cyclomatic	step_window_lines	14
-cyclomatic	stuck_limit	15
-cyclomatic	stuck_runs	36
 cyclomatic	submit_change	16
 cyclomatic	successor_state	24
 cyclomatic	superseded_duty	11
@@ -689,7 +664,6 @@ cyclomatic	tick_reverts	21
 cyclomatic	token	16
 cyclomatic	transcript_paths	19
 cyclomatic	tunnel_watch	30
-cyclomatic	unkicked_unit	18
 cyclomatic	until_done_finish	15
 cyclomatic	wait_all	26
 cyclomatic	waiting_run	27

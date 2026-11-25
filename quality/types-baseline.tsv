@@ -19,8 +19,8 @@ mypy-errors	branches	73
 mypy-errors	buildview	42
 mypy-errors	changekind	27
 mypy-errors	checkslot	26
-mypy-errors	cireport	66
-mypy-errors	ciwhy	56
+mypy-errors	cireport	65
+mypy-errors	ciwhy	57
 mypy-errors	classify	1
 mypy-errors	cleanup	43
 mypy-errors	cleanuppass	8
@@ -124,12 +124,12 @@ mypy-errors	redrecord	4
 mypy-errors	redreplay	19
 mypy-errors	redrepos	12
 mypy-errors	redretired	63
-mypy-errors	redseen	66
+mypy-errors	redseen	56
 mypy-errors	redstatus	6
 mypy-errors	redstep	50
 mypy-errors	redtick	86
 mypy-errors	reduntracked	45
-mypy-errors	redvault	48
+mypy-errors	redvault	47
 mypy-errors	redverify	21
 mypy-errors	redview	28
 mypy-errors	redworkflow	4
@@ -139,7 +139,7 @@ mypy-errors	remotestore	26
 mypy-errors	repos	29
 mypy-errors	reverts	46
 mypy-errors	rundispatch	11
-mypy-errors	runexplain	44
+mypy-errors	runexplain	43
 mypy-errors	runsigs	22
 mypy-errors	server	61
 mypy-errors	serverclone	36
@@ -158,6 +158,7 @@ mypy-errors	store	77
 mypy-errors	storeauth	22
 mypy-errors	storestate	8
 mypy-errors	storetoken	46
+mypy-errors	stuckruns	5
 mypy-errors	superseded	26
 mypy-errors	syncsteps	50
 mypy-errors	tickrun	6

@@ -4,22 +4,22 @@
 import os
 import subprocess
 import time
+from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import env_num, err, fmt_age, git, git_ok, pct, reds_dir, remote, slug
+from agentctl.core import attempt, env_num, err, fmt_age, git, git_ok, reds_dir, remote, slug
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_record
 from agentctl.classify import norm_line
-from agentctl.forge import RED_CONCLUSIONS, gh_json, runner_queue, stuck_durations
+from agentctl.forge import RED_CONCLUSIONS
 from agentctl.repos import gated_repo
 from agentctl.workflows import LOCAL_FLOW
-from agentctl.ciwhy import _gate_lists, gate_report_only, gate_runs, queue_full, streak_runs
+from agentctl.ciwhy import _gate_lists, gate_report_only, gate_runs, streak_runs
 from agentctl.runsigs import classifier_version, run_names, run_sigs
 from agentctl.redrecord import RED_TERMINAL, red_what
-from agentctl.red import STUCK_FACTOR, STUCK_FLOOR, red_key
+from agentctl.red import STUCK_FACTOR, red_key
 from agentctl.redmove import red_close
 from agentctl.waiting import GATE_UNREAD, gate_unread_why
 from agentctl.branches import branch_reds, entry_predicts
-from agentctl.outsideflows import stuck_history, stuck_timeout
 
 
 # -- what is red now: one observation per key, from the CI-state snapshot
@@ -43,27 +43,31 @@ def streak_sigs(o_r, name, r, budget):
     return (rec or {}).get("sigs") or []
 
 
+def streak_run_names(o_r: Any, name: str, decided: Any, sruns: list[Any], sig: dict[str, Any], streak: dict[Any, Any], budget: list[int]) -> set[str]:
+    """The names of `decided` and of the streak's runs that failed THIS way (signature `sig`; their signatures, by this
+    classifier, read once into `streak`: run id -> signatures)."""
+    names = set(run_names(decided))
+    for r in sruns:
+        rid = r.get("databaseId")
+        if rid == decided.get("databaseId"):
+            continue
+        if rid not in streak:
+            streak[rid] = streak_sigs(o_r, name, r, budget)
+        if any(x.get("job") == sig["job"] and norm_line(x.get("line")) == norm_line(sig["line"]) for x in streak[rid]):
+            names |= run_names(r)
+    return names
+
+
 def red_units(o_r, name, decided, runs, sigs, gate, budget=None):
     """The failing jobs of one red run as units: [{workflow, job, kind, line, run, runs, names, gate}]. budget: the
     tick's re-reads of stale streak signatures (a one-element list; default STREAK_REREADS)."""
     sruns = streak_runs(runs) if runs else []
     budget = budget if budget is not None else [int(env_num("AGENTCTL_STREAK_REREADS", STREAK_REREADS))]
     streak = {}
-    units = []
     sigs = [s for s in sigs if s.get("kind") != "incomplete"]  # a `verdict complete` beside a real failure is no red
     # (job_is_verdict_report: reporting only)
-    for s in sigs:
-        names = set(run_names(decided))
-        for r in sruns:  # the streak's runs that failed THIS way (their signatures, by this classifier)
-            if r.get("databaseId") == decided.get("databaseId"):
-                continue
-            rid = r.get("databaseId")
-            if rid not in streak:
-                streak[rid] = streak_sigs(o_r, name, r, budget)
-            if any(x.get("job") == s["job"] and norm_line(x.get("line")) == norm_line(s["line"]) for x in streak[rid]):
-                names |= run_names(r)
-        units.append({"workflow": name, "job": s["job"], "kind": s["kind"], "line": s["line"], "run": decided,
-                      "runs": runs, "names": names, "gate": gate})
+    units = [{"workflow": name, "job": s["job"], "kind": s["kind"], "line": s["line"], "run": decided, "runs": runs,
+              "names": streak_run_names(o_r, name, decided, sruns, s, streak, budget), "gate": gate} for s in sigs]
     if not units:  # no failed job listed (or none readable): the run itself is the red
         units.append({"workflow": name, "job": "?", "kind": "unclear", "line": "", "run": decided, "runs": runs,
                       "names": set(run_names(decided)), "gate": gate})
@@ -97,24 +101,39 @@ def gate_red_units(o_r, rows, others=(), rereads=None):
 KIND_ORDER = {"test": 0, "unclear": 1, "infra": 2}
 
 
+def lineless_failure(line: Any) -> bool:
+    """A failure line that says nothing of its own: empty, or only the name of a step that failed."""
+    return not norm_line(line) or str(line).startswith("step failed:")
+
+
+def unit_key(u: dict[str, Any]) -> str:
+    """The red key of a unit. An infra-shaped failure with no error line of its own (a runner, a crashed leg, a timing
+    report that failed because others did) is ONE red for the workflow's run, never one per job: one cause, one fixer."""
+    if u.get("key"):
+        return u["key"]
+    if u["kind"] in ("infra", "unclear") and lineless_failure(u.get("line")):
+        return red_key(u["workflow"], "infra", "infra-shaped, no error line")
+    return red_key(u["workflow"], u["job"], u["line"])
+
+
+def new_observation(key: str, u: dict[str, Any]) -> dict[str, Any]:
+    """The first observation of the red `key`, from its unit."""
+    run = {k: u["run"].get(k) for k in ("number", "databaseId", "headSha", "createdAt", "updatedAt")}
+    red_kind = u.get("red_kind") or ("predicts" if u.get("predicts") else "local" if u["workflow"] == LOCAL_FLOW
+                                     else "gate" if u["gate"] else "outside")
+    return {"key": key, "workflow": u["workflow"], "jobs": [u["job"]], "job": u["job"], "kind": u["kind"],
+            "line": (u.get("line") or "")[:300], "run": run, "names": set(u.get("names") or ()),
+            "gate": bool(u["gate"]), "red_kind": red_kind, "predicts": u.get("predicts"), "runs_list": u.get("runs") or []}
+
+
 def red_obs_of_units(units):
     """{key: observation}: the units grouped by key (a matrix of jobs failing the same way is one red)."""
     obs = {}
     for u in sorted(units, key=lambda u: KIND_ORDER.get(u["kind"], 1)):
-        lineless = not norm_line(u.get("line")) or str(u.get("line")).startswith("step failed:")
-        # an infra-shaped failure with no error line of its own (a runner, a crashed leg, a timing report that failed
-        # because others did): ONE red for the workflow's run, never one per job -- one cause, one fixer
-        key = u.get("key") or (red_key(u["workflow"], "infra", "infra-shaped, no error line")
-                               if u["kind"] in ("infra", "unclear") and lineless else red_key(u["workflow"], u["job"], u["line"]))
+        key = unit_key(u)
         o = obs.get(key)
-        run = {k: u["run"].get(k) for k in ("number", "databaseId", "headSha", "createdAt", "updatedAt")}
         if o is None:
-            red_kind = u.get("red_kind") or ("predicts" if u.get("predicts") else "local" if u["workflow"] == LOCAL_FLOW
-                                             else "gate" if u["gate"] else "outside")
-            obs[key] = {"key": key, "workflow": u["workflow"], "jobs": [u["job"]], "job": u["job"], "kind": u["kind"],
-                        "line": (u.get("line") or "")[:300], "run": run, "names": set(u.get("names") or ()),
-                        "gate": bool(u["gate"]), "red_kind": red_kind, "predicts": u.get("predicts"),
-                        "runs_list": u.get("runs") or []}
+            obs[key] = new_observation(key, u)
         else:
             o["jobs"] = sorted(set(o["jobs"]) | {u["job"]})
             o["names"] |= set(u.get("names") or ())
@@ -134,117 +153,6 @@ def stuck_obs(snap):
                               + (f", {s['limit_from']})" if s.get("limit_from") else ")"),
                       "run": r, "runs": [], "names": run_names(r)})
     return red_obs_of_units(units)
-
-
-# THE STUCK LIMIT IS THE WORKFLOW'S OWN (the owner, 2026-11-06, deciding red 971723aec893: six false stuck reds in a
-# week). Record scrape fixtures #165/#172 (daily, 32-65 min a run) and Identity drift explorer #1 (its first run) were
-# judged against the 30-minute floor because the newest-200 run list held none of their finished runs. Now a workflow
-# with fewer than STUCK_MIN_HISTORY finished runs in the list has its own last 30 finished runs read (history_of, only
-# once one of its runs is past the floor); with fewer still, its jobs' timeout-minutes bound it (timeout_of). A run
-# waiting on a run it dispatched (a workflow_dispatch run of another workflow created after its first job started,
-# still undecided) is judged by that child: `waits_on`, no red -- the child is judged on its own. A run whose unfinished
-# jobs all wait for runners whose every slot is busy is `queued`, not stuck, whatever ran before.
-STUCK_MIN_HISTORY = 5
-UNSTARTED = ("queued", "waiting", "pending", "requested")
-
-
-# A SCHEDULED BOT WAITS ITS TURN (issue 20261108T135045-06bcab: Scala Steward #145, a daily run queued behind a
-# CPU-saturated ci-runner -- checks first, by design -- was stuck at 1 h): a run its schedule started that has not
-# started a job yet waits its turn behind checks, so its limit is at least STUCK_SCHEDULED; once a job runs, the
-# workflow's own limit judges it.
-STUCK_SCHEDULED = 6 * 3600
-STUCK_SCHEDULED_EVENTS = ("schedule", "repository_dispatch")  # movies' scheduler dispatches the crons (repository_dispatch)
-
-
-def stuck_limit(name, runs, history_of, timeout_of, how=None):
-    """max(STUCK_FACTOR x the p90 of the workflow's finished runs, STUCK_FLOOR): from the list, else its own history;
-    with too few of those, its jobs' timeout-minutes bound (when readable). how: a dict told where it came from."""
-    durs = stuck_durations(runs)
-    if len(durs) < STUCK_MIN_HISTORY and history_of:
-        seen = {r.get("databaseId") for r in runs if r.get("status") == "completed"}
-        durs += stuck_durations([r for r in history_of(name) or [] if r.get("databaseId") not in seen])
-    limit = max(STUCK_FACTOR * (pct(durs, 90) if durs else 0), STUCK_FLOOR)
-    src = f"from {len(durs)} runs" if durs else "the floor"
-    if len(durs) < STUCK_MIN_HISTORY and timeout_of:
-        bound = timeout_of(name)
-        if bound and bound > limit:
-            limit, src = bound, f"its jobs' timeouts ({len(durs)} runs)"
-    if how is not None:
-        how["src"] = src
-    return limit
-
-
-def stuck_child(lists, name, since):
-    """'<workflow> #N' of an undecided workflow_dispatch run of another workflow created at or after `since` (the run
-    its parent dispatched and waits on), or None."""
-    for other, runs in lists.items():
-        if other == name:
-            continue
-        for r in runs:
-            if r.get("event") == "workflow_dispatch" and r.get("status") != "completed" and r.get("createdAt"):
-                try:
-                    if parse_time(r["createdAt"]).timestamp() >= since:
-                        return f"{other} #{r.get('number')}"
-                except (ValueError, TypeError):
-                    continue
-    return None
-
-
-def stuck_runs(lists, now_=None, o_r=None, jobs_of=None, queue=None, history_of=None, timeout_of=None):
-    """[{name, run, age, limit[, queued | waits_on]}]: per workflow, its undecided runs older than its stuck limit
-    (stuck_limit). A run's age counts from its first job's start (Convergence bisect #2385, run 3568: an hour queued
-    behind a measurement holding every `measure` slot was called a stuck red): a run whose unfinished jobs all wait,
-    only on labels whose every runner is up with all slots busy, carries `queued`; one waiting on a run it dispatched,
-    `waits_on`. Neither is a red."""
-    t = now_ if now_ is not None else time.time()
-    jobs_of = jobs_of or (lambda r: run_jobs(o_r, r))
-    if history_of is None and o_r:
-        history_of = lambda name: stuck_history(o_r, name)  # noqa: E731
-    if timeout_of is None and o_r:
-        timeout_of = lambda name: stuck_timeout(o_r, name)  # noqa: E731
-    out = []
-    for name, runs in lists.items():
-        limit, how = None, {}  # read only once one of its runs is past the floor: the history and the file cost a read
-        for r in runs:
-            if r.get("status") != "completed" and r.get("createdAt"):
-                try:
-                    age = t - parse_time(r["createdAt"]).timestamp()
-                except (ValueError, TypeError):
-                    continue
-                if age <= STUCK_FLOOR:
-                    continue
-                if limit is None:
-                    limit = stuck_limit(name, runs, history_of, timeout_of, how)
-                lim = limit
-                if age <= lim:
-                    continue
-                jobs = jobs_of(r)
-                starts = sorted(parse_time(j["startedAt"]).timestamp() for j in jobs or [] if j.get("startedAt"))
-                queued, waits_on = None, None
-                if starts:
-                    age = t - starts[0]
-                open_jobs = [j for j in jobs or [] if j.get("status") != "completed"]
-                if jobs is not None and open_jobs and all(j.get("status") in UNSTARTED for j in open_jobs):
-                    # nothing running: queued, not stuck, when every runner that could take it is busy
-                    queued = queue_full(o_r, r.get("number"), runner_queue(t) if queue is None else queue)
-                    if not starts and r.get("event") in STUCK_SCHEDULED_EVENTS:  # a scheduled bot not started yet
-                        lim = max(lim, STUCK_SCHEDULED)
-                if age > lim:
-                    if starts and not queued:
-                        waits_on = stuck_child(lists, name, starts[0])
-                    s = {"name": name, "run": {k: r.get(k) for k in ("number", "databaseId", "headSha", "createdAt")},
-                         "age": age, "limit": lim,
-                         "limit_from": "its schedule" if lim != limit else how.get("src")}
-                    out.append({**s, "queued": queued} if queued else {**s, "waits_on": waits_on} if waits_on else s)
-    return out
-
-
-def run_jobs(o_r, run):
-    """The run's jobs ([{name, status, startedAt, ...}]), or None when they cannot be read."""
-    try:
-        return gh_json(o_r, "run", "view", str(run.get("databaseId")), "--json", "jobs").get("jobs") or []
-    except (Exception, SystemExit):
-        return None
 
 
 UNKICKED_AFTER = 60 * 60  # a convergence-relevant main push with no convergence (or Identity takes) run on main by then is a red
@@ -293,43 +201,60 @@ def unkicked_obs(o_r, repo, snap, now_=None):
     return red_obs_of_units(units) if units else {}
 
 
-def unkicked_unit(repo, snap, now_, name, paths_file, matcher, kicker):
-    """unkicked_obs's red unit for one suite, or None."""
-    if not repo or not snap:
-        return None
-    runs = next((g.get("runs") or [] for g in snap.get("gate") or [] if g["name"] == name), [])
-    if not runs:
-        return None
+def unkicked_push(repo: Any) -> tuple[str, float] | None:
+    """(origin/main's head, its commit time) in this clone, or None when either cannot be read."""
     head = git(repo, "rev-parse", f"refs/remotes/{remote()}/main", check=False).stdout.strip()
     ct = git(repo, "log", "-1", "--format=%ct", head, check=False).stdout.strip() if head else ""
-    if not head or not ct.isdigit():
-        return None
+    return (head, float(ct)) if head and ct.isdigit() else None
+
+
+def touches_suite_paths(repo: Any, base: Any, head: str, paths_file: str, matcher: str) -> bool:
+    """Is `base` (the suite's newest main run's commit, known in this clone) .. head a change to the suite's paths?"""
+    return bool(base) and git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}") \
+        and convergence_relevant(repo, base, head, paths_file, matcher) is True
+
+
+def kick_overdue(newest: dict[str, Any], ct: float, t: float) -> bool:
+    """Is the push (commit time ct) older than UNKICKED_AFTER at `t` with no run of the suite since: its newest run
+    `newest` was created before the push (an unreadable creation time: nothing to judge)?"""
+    if t - ct < env_num("AGENTCTL_UNKICKED_AFTER", UNKICKED_AFTER):
+        return False
+    return not attempt(lambda: parse_time(newest.get("createdAt")).timestamp() >= ct, True,
+                       catch=(ValueError, TypeError, AttributeError))
+
+
+def suite_runs(snap: dict[str, Any], name: str) -> list[Any]:
+    """The snapshot's runs on main of gate workflow `name`, newest first."""
+    return next((g.get("runs") or [] for g in snap.get("gate") or [] if g["name"] == name), [])
+
+
+def unkicked_unit(repo, snap, now_, name, paths_file, matcher, kicker):
+    """unkicked_obs's red unit for one suite, or None."""
+    runs = suite_runs(snap, name) if repo and snap else []
+    pushed = unkicked_push(repo) if runs else None
     t = now_ if now_ is not None else time.time()
-    if t - float(ct) < env_num("AGENTCTL_UNKICKED_AFTER", UNKICKED_AFTER):
+    if not pushed or not kick_overdue(runs[0], pushed[1], t):
         return None
+    head, ct = pushed
     newest = runs[0]
-    try:
-        if parse_time(newest.get("createdAt")).timestamp() >= float(ct):
-            return None  # a run started since the push: kicked
-    except (ValueError, TypeError, AttributeError):
+    if not touches_suite_paths(repo, newest.get("headSha"), head, paths_file, matcher):
         return None
-    base = newest.get("headSha")
-    if not base or not git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}") \
-            or convergence_relevant(repo, base, head, paths_file, matcher) is not True:
-        return None
-    u = {"key": red_key(name, "kick", "convergence not kicked"), "workflow": name, "job": "kick", "kind": "infra",
-         "red_kind": "stuck-run", "gate": True,
-         "line": f"no {name} run on main for {head[:10]} ({fmt_age(t - float(ct))} after it; the newest is "
-                 f"#{newest.get('number')} on {str(base)[:10]}): {kicker} did not dispatch it",
-         "run": {"number": f"unkicked-{head[:10]}", "databaseId": None, "headSha": head}, "runs": [], "names": set()}
-    return u
+    return unkicked_red(name, kicker, head, newest, t - ct)
+
+
+def unkicked_red(name: str, kicker: str, head: str, newest: dict[str, Any], age: float) -> dict[str, Any]:
+    """The red unit of suite `name` not kicked: origin/main's `head` is `age` seconds old and `newest` is its newest run."""
+    return {"key": red_key(name, "kick", "convergence not kicked"), "workflow": name, "job": "kick", "kind": "infra",
+            "red_kind": "stuck-run", "gate": True,
+            "line": f"no {name} run on main for {head[:10]} ({fmt_age(age)} after it; the newest is "
+                    f"#{newest.get('number')} on {str(newest.get('headSha'))[:10]}): {kicker} did not dispatch it",
+            "run": {"number": f"unkicked-{head[:10]}", "databaseId": None, "headSha": head}, "runs": [], "names": set()}
 
 
 def red_rekeyed(d, obs):
     """A line-less or unreadable red whose own run is now read in full under other keys (its jobs merged into the run's
     one infra red, or its failed jobs read at last): superseded by that red, never 'cleared by a newer run'."""
-    if d["key"] in obs or not (d.get("job") == "?" or not norm_line(d.get("line"))
-                               or str(d.get("line")).startswith("step failed:")):
+    if d["key"] in obs or not (d.get("job") == "?" or lineless_failure(d.get("line"))):
         return False
     rid = (d.get("last_run") or {}).get("databaseId")
     same_run = [o for o in obs.values() if o["workflow"] == d.get("workflow") and o["run"].get("databaseId") == rid]
@@ -345,15 +270,23 @@ def red_import_merge(into, other):
     by_id = lambda r: int((r or {}).get("databaseId") or 0)
     m = {**into, **{k: v for k, v in other.items() if v not in (None, [], {}, "") and not into.get(k)
                     and k not in RED_DERIVED_FIELDS}}
-    m["runs"] = sorted(set(map(str, into.get("runs") or [])) | set(map(str, other.get("runs") or [])))
-    m["jobs"] = sorted(set(into.get("jobs") or []) | set(other.get("jobs") or []))
     m["last_run"] = max((into.get("last_run"), other.get("last_run")), key=by_id) or into.get("last_run")
+    return {**m, **red_import_history(into, other), **red_import_unions(into, other)}
+
+
+def red_import_unions(into: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
+    """The runs and jobs of both spells of a red, united."""
+    return {"runs": sorted(set(map(str, into.get("runs") or [])) | set(map(str, other.get("runs") or []))),
+            "jobs": sorted(set(into.get("jobs") or []) | set(other.get("jobs") or []))}
+
+
+def red_import_history(into: dict[str, Any], other: dict[str, Any]) -> dict[str, Any]:
+    """The merged red's opening (the earlier), attempts (the most) and history (`other`'s first, then `into`'s own)."""
     opened = [float(x) for x in (into.get("opened_at"), other.get("opened_at")) if x]
-    if opened:
-        m["opened_at"] = min(opened)
-    m["attempts"] = max(int(into.get("attempts") or 0), int(other.get("attempts") or 0))
-    m["history"] = (other.get("history") or []) + [h for h in into.get("history") or [] if h not in (other.get("history") or [])]
-    return m
+    theirs = other.get("history") or []
+    return {**({"opened_at": min(opened)} if opened else {}),
+            "attempts": max(int(into.get("attempts") or 0), int(other.get("attempts") or 0)),
+            "history": theirs + [h for h in into.get("history") or [] if h not in theirs]}
 
 
 def red_merge_rekeyed(store, active, obs):
@@ -365,34 +298,55 @@ def red_merge_rekeyed(store, active, obs):
     FileNotFoundException) and #2493 (the GermanyConvergenceSpec annotation) were one failure as three reds, and the
     fix waiting under `Fixes-Red: 2406` never held #2493's. Returns what it did; `active` is updated in place."""
     acts = []
-    if not obs:
-        return acts
     cv = classifier_version()
-    for key, it in list(active.items()):
+    for key, it in list(active.items()) if obs else ():
         d = it["data"]
         if key in obs or it["state"] in RED_TERMINAL or d.get("red_kind") in ("local", "stuck-run", "predicts") \
                 or d.get("classifier") == cv:
             continue  # keyed by THIS classifier: a re-read of its run under other keys clears nothing (cf. red_gone)
-        runs = set(map(str, d.get("runs") or []))
-        jobs = {str(j) for j in (d.get("jobs_seen") or d.get("jobs") or [d.get("job")]) if j and j != "?"}
-        into = [o for o in obs.values() if o["key"] != key and o["key"] in active and o["workflow"] == d.get("workflow")
-                and runs & set(map(str, o.get("names") or ())) and jobs & set(o.get("jobs") or ())]
-        if not into:
-            continue
-        target = store.item("red", active[into[0]["key"]]["id"])
-        td = target["data"]
-        merged = red_import_merge(td, d)
-        merged["refuted"] = sorted(set(td.get("refuted") or []) | set(d.get("refuted") or []))
-        merged["merged_from"] = sorted(set(td.get("merged_from") or []) | {key})
-        store.update_item("red", target["id"], target["version"],
-                          {k: v for k, v in merged.items() if k not in RED_DERIVED_FIELDS and k != "key"})
-        active[td["key"]] = store.item("red", target["id"])
-        red_close(store, store.item("red", it["id"]), "cleared",
-                  f"re-keyed: the same failure as red {td['key']} ({red_what(td)}), merged into it with its runs "
-                  f"{', '.join(sorted(runs))}")
-        active.pop(key, None)
-        acts.append(f"merged red {key} ({red_what(d)}) into {td['key']}: one failure, re-keyed")
+        into = rekey_target(active, obs, key, d)
+        if into:
+            acts.append(merge_rekeyed(store, active, key, it, into))
     return acts
+
+
+def red_job_names(d: dict[str, Any]) -> set[str]:
+    """The names of the jobs a red's data holds (those seen, else its jobs, else its one job), `?` aside."""
+    return {str(j) for j in d.get("jobs_seen") or d.get("jobs") or [d.get("job")] if j and j != "?"}
+
+
+def shares_run_and_job(o: dict[str, Any], runs: set[str], jobs: set[str]) -> bool:
+    """Does observation o name one of the run names `runs` and hold one of the job names `jobs`?"""
+    return bool(runs & set(map(str, o.get("names") or ())) and jobs & set(o.get("jobs") or ()))
+
+
+def rekey_target(active: dict[str, Any], obs: dict[str, Any], key: str, d: dict[str, Any]) -> dict[str, Any] | None:
+    """The observation of another open red of the workflow that red `key` (data d) is now the same failure as -- one of
+    its own runs' names, and one of its jobs, among that red's -- or None."""
+    runs = set(map(str, d.get("runs") or []))
+    jobs = red_job_names(d)
+    into = [o for o in obs.values() if o["key"] != key and o["key"] in active and o["workflow"] == d.get("workflow")]
+    return next((o for o in into if shares_run_and_job(o, runs, jobs)), None)
+
+
+def merge_rekeyed(store: Any, active: dict[str, Any], key: str, it: dict[str, Any], into: dict[str, Any]) -> str:
+    """Merge red `key` (item it) into the open red of observation `into`, close it as re-keyed, update `active`; the
+    line saying so."""
+    d = it["data"]
+    runs = set(map(str, d.get("runs") or []))
+    target = store.item("red", active[into["key"]]["id"])
+    td = target["data"]
+    merged = red_import_merge(td, d)
+    merged["refuted"] = sorted(set(td.get("refuted") or []) | set(d.get("refuted") or []))
+    merged["merged_from"] = sorted(set(td.get("merged_from") or []) | {key})
+    store.update_item("red", target["id"], target["version"],
+                      {k: v for k, v in merged.items() if k not in RED_DERIVED_FIELDS and k != "key"})
+    active[td["key"]] = store.item("red", target["id"])
+    red_close(store, store.item("red", it["id"]), "cleared",
+              f"re-keyed: the same failure as red {td['key']} ({red_what(td)}), merged into it with its runs "
+              f"{', '.join(sorted(runs))}")
+    active.pop(key, None)
+    return f"merged red {key} ({red_what(d)}) into {td['key']}: one failure, re-keyed"
 
 
 def red_gone_why(d, obs):
@@ -414,16 +368,20 @@ def red_gone(it, obs, snap):
         return False  # a flake is already gone: only its fix ends it
     if d.get("red_kind") in ("local", "stuck-run", "predicts"):
         return True
-    # ONLY a newer DECIDED run of the same workflow ON MAIN clears it (the snapshot's `latest` reads main's runs only;
-    # a branch or measure run never counts)
-    # -- or its OWN run, rerun green (issue 20261112T164528-14afee: core #987's attempt 2 concluded success, same
-    # databaseId, and the red was re-dispatched): cleared, and red_flake_check opens its flake when no commit between
-    # can have fixed it (a rerun to green is a flake, never a fix)
+    return cleared_by_latest_run(d, snap)
+
+
+def cleared_by_latest_run(d: dict[str, Any], snap: Any) -> bool:
+    """Has the workflow's latest decided run on main left red `d` behind? ONLY a newer DECIDED run of the same workflow
+    ON MAIN clears it (the snapshot's `latest` reads main's runs only; a branch or measure run never counts) -- or its
+    OWN run, rerun green (issue 20261112T164528-14afee: core #987's attempt 2 concluded success, same databaseId, and the
+    red was re-dispatched): cleared, and red_flake_check opens its flake when no commit between can have fixed it (a
+    rerun to green is a flake, never a fix)."""
     last = ((snap or {}).get("latest") or {}).get(d.get("workflow"))
-    own = int((d.get("last_run") or {}).get("databaseId") or 0)
-    return bool(last) and last.get("headBranch", "main") == "main" and (
-        int(last.get("databaseId") or 0) > own
-        or int(last.get("databaseId") or 0) == own and last.get("conclusion") == "success")
+    if not last or last.get("headBranch", "main") != "main":
+        return False
+    own, newest = int((d.get("last_run") or {}).get("databaseId") or 0), int(last.get("databaseId") or 0)
+    return newest > own or newest == own and last.get("conclusion") == "success"
 
 
 def gate_reds(repo: str) -> set[str]:

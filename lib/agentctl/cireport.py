@@ -17,7 +17,8 @@ from agentctl.gatesummary import SUMMARY_MAX_REDS
 from agentctl.dispatchblock import short_flow
 from agentctl.redrecord import red_active, red_what
 from agentctl.branches import branch_lines, branch_state, branch_summary
-from agentctl.redseen import gate_red_units, predict_units, stuck_runs
+from agentctl.redseen import gate_red_units, predict_units
+from agentctl.stuckruns import stuck_runs
 from agentctl.redobserve import local_red, local_stale, local_units
 from agentctl.reduntracked import red_untracked_runs
 from agentctl.redcrash import CRASH_LOOP_CAUSE, DECISION_CAUSE
