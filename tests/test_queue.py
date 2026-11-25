@@ -1037,10 +1037,10 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.entries()[eid.rsplit("-", 1)[-1]]["ref"], f"refs/heads/land/{eid}")
         d, _c, _w = A.waiting_state(self.r.path)
         A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d), [], "queued: its ref stays")
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore()), [], "queued: its ref stays")
         self.assertEqual(self.check(eid), 0)  # landed
         A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d), [f"refs/heads/land/{eid}: deleted"])
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore()), [f"refs/heads/land/{eid}: deleted"])
         self.assertEqual(self.remote_refs(), [])
 
     def test_sweep_keeps_the_ref_of_a_change_only_the_store_holds_open(self):
@@ -1054,13 +1054,13 @@ class QueueTest(WaitingTest):
         os.remove(os.path.join(d, "entries", f"{eid}.json"))  # held by the store alone
         A.open_store().put_item("change", eid, "queued", {"worktree": wt, "head": sha})
         A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d), [], "open in the store: its ref stays")
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore()), [], "open in the store: its ref stays")
         self.assertEqual(self.remote_refs(), [f"refs/heads/land/{eid}"])
         # unknown to both: kept while young, deleted (and logged) past 24 h
         sh(self.r.path, "git", "push", "--quiet", "origin", f"{sha}:refs/heads/land/20200101-000000-x-aaaaaa",
            f"{sha}:refs/heads/land/{time.strftime('%Y%m%d-%H%M%S')}-y-bbbbbb")
         A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d),
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore()),
                          ["refs/heads/land/20200101-000000-x-aaaaaa: unknown to entries and store, %d h old" % (
                              A.entry_id_age("20200101-000000", time.time()) // 3600),
                           "refs/heads/land/20200101-000000-x-aaaaaa: deleted"])

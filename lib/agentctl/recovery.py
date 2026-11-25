@@ -25,7 +25,6 @@ from agentctl.worktrees import mark_internal
 from agentctl.inbox import entry_line
 from agentctl.ciwhy import ci_state_load
 from agentctl.statemachines import machine_state
-from agentctl.store import open_store
 from agentctl.redrecord import red_what
 from agentctl.conditions import open_condition, recovery_dir, run_probe
 from agentctl.alerts import inbox_wait
@@ -196,9 +195,9 @@ def recover_clear_hold(cond: dict[str, Any] | None, a: dict[str, Any], st: Any) 
 # escalated NOW is level-triggered: every red or condition item whose state escalated and that still sits in it (a red
 # offered with nobody taking it, a fix unverified, a condition still open). Taking the red, verifying the fix, the probe
 # passing: the item leaves that state and the escalation is gone -- nobody acks a solved problem.
-def escalated_now(store=None):
+def escalated_now(store):
     """[(item type, item, words)] of the items escalated and still in that state."""
-    st = store or open_store()
+    st = store
     out = []
     t = time.time()
     for it in st.items("red", ["offered", "fix-pending"]):  # only what is the OWNER's (THE ALERT MODEL, alerts.py)
@@ -223,9 +222,9 @@ def entry_ids(e):
     return [x for x in [e.get("entry")] + list(e.get("entries") or []) if x]
 
 
-def cmd_inbox(a):
+def cmd_inbox(a, store):
     if a.ids[:1] == ["escalated"]:  # the status line's: what is escalated now (the notifier already told) -- bold
-        line = escalation_line(escalated_now())
+        line = escalation_line(escalated_now(store))
         if line:
             print(line)
         return 0

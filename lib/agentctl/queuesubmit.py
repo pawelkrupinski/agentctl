@@ -10,7 +10,7 @@ from typing import Optional
 from agentctl.core import env_num, err, fmt_age, git, git_ok, remote, scratch, spawn_detached
 from agentctl.classify import (
     TransientNetwork, credential_failure, is_transient_network, net_retry, redact_credentials)
-from agentctl.store import StoreUnavailable, open_store
+from agentctl.store import StoreUnavailable
 from agentctl.selfcode import TOOL_PATH
 from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries
 from agentctl.land import push_bounds, run_watched, tool_env
@@ -59,7 +59,7 @@ def entry_id_age(eid, t):
         return None
 
 
-def sweep_land_refs(repo, d, now_=None, store=None):
+def sweep_land_refs(repo, d, store, now_=None):
     """Every LAND_REF_SWEEP_EVERY s: each remote land/<entry> ref whose change is decided, deleted. Since phase 2 the
     changes live in ci-runner's STORE, not in entries/ (2026-11-04: every queued change looked unknown and lost its
     ref at the next sweep): a change either source holds open keeps its ref; one NEITHER knows is deleted only past
@@ -73,7 +73,7 @@ def sweep_land_refs(repo, d, now_=None, store=None):
         return []
     every = {e["id"]: e for e in waiting_entries(d, open_only=False)}
     try:
-        items = {it["id"]: it for it in (store or open_store()).items("change")}
+        items = {it["id"]: it for it in store.items("change")}
     except Exception as ex:  # the store unreachable: decide nothing this tick
         err(f"land refs: store unreadable ({ex}); no ref deleted")
         return []

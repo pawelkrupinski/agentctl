@@ -1175,7 +1175,7 @@ class Sim:
         for x in A.tick_batch(self.repo, self.d, *on_clock(self.sim_clock)):
             A.wlog(self.d, f"tick {self.tick}: {x}")
         if self.tick % 10 == 0:
-            A.stats_pass(self.sim_clock, self.repo, self.d)
+            A.stats_pass(self.sim_clock, A.open_store(), self.repo, self.d)
         for it in A.open_store().items("change"):  # what held each change, tick by tick (the overlap tests read it)
             hold = (it.get("data") or {}).get("hold")
             if hold and it["state"] in ("queued", "checked"):
@@ -1374,7 +1374,7 @@ class Sim:
                 self.violate("I6", f"change {ch.eid} superseded by nothing newer")
         # 7. STATS: exactly one landing record per decided change, `landed` for each landed one
         for _ in range(3):
-            A.stats_pass(self.sim_clock, self.repo, self.d)
+            A.stats_pass(self.sim_clock, A.open_store(), self.repo, self.d)
         recs = {}
         for r in self.stats:
             if r.get("record") == "agentctl.landing":

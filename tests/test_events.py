@@ -101,7 +101,7 @@ class EventsTest(unittest.TestCase):
                                kinds=None, since_ack=False, timeout=0)
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            A.cmd_inbox(a)
+            A.cmd_inbox(a, A.CurrentStore())
         return buf.getvalue()
 
     def test_w8_names_a_change_that_left_the_queue_silently(self):
