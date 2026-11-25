@@ -6,7 +6,7 @@ mypy-errors	alertroute	30
 mypy-errors	alerts	61
 mypy-errors	ask	29
 mypy-errors	batch	35
-mypy-errors	batchcheck	42
+mypy-errors	batchcheck	38
 mypy-errors	batchitem	7
 mypy-errors	batchpush	34
 mypy-errors	batchrun	26

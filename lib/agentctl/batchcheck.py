@@ -4,7 +4,7 @@
 import contextlib
 import os
 import sys
-from typing import Any
+from typing import Any, Optional
 from agentctl.timefmt import ts
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.clock import Clock
@@ -132,6 +132,171 @@ def batch_drift_split(repo: str, d: str, st: Any, it: dict[str, Any], members: l
     return 1
 
 
+class BatchCheck:
+    """One run of the batch executor on its tree: the check of the assembled tip (an infra failure checked again, a stall
+    held, a pass pushed after its drift check) and, for a failed check, the bisect and what its culprit's judgement does.
+    `it` is the batch's item, read again after each step that may have moved it."""
+
+    def __init__(self, repo: str, bid: str, clock: Clock, st: Any, d: str, tree: str, it: dict[str, Any],
+                 members: list[dict[str, Any]]):
+        self.repo, self.bid, self.clock, self.st, self.d, self.tree = repo, bid, clock, st, d, tree
+        self.it, self.members = it, members
+        data = it["data"]
+        self.base, self.tip = data["base"], data["tip"]
+        self.depth = data.get("depth") or "fast"
+        self.runs = dict(data.get("runs") or {})
+        self.range_base = data.get("range_base")
+
+    def reread(self) -> None:
+        self.it = self.st.item("batch", self.bid)
+
+    def move(self, state: str, data: Any = None, text: Optional[str] = None, severity: Optional[str] = None) -> None:
+        self.it = batch_move(self.st, self.it, state, data, text=text, severity=severity)
+
+    def prechecked(self, members: list[dict[str, Any]], tip: Optional[str], how: str, failed: Any = None) -> int:
+        red_prechecked(self.d, self.st, self.it, members, tip, self.base, how, failed=failed)
+        return 0
+
+    def run(self) -> int:
+        if not self.members:
+            batch_move(self.st, self.it, "assembling", text=f"batch {self.bid}: its changes are gone")
+            return 0
+        if self.it["state"] == "checking":
+            done = self.check()
+            if done is not None:
+                return done
+        return self.bisect_failed()
+
+    def check_once(self) -> tuple[Any, str, Any]:
+        """The batch's check, again while its failure is an infra failure's (AN INFRA FAILURE IS NO BISECT)."""
+        data = self.it["data"]
+        for attempt in range(BATCH_INFRA_RETRIES + 1):
+            ok, out, stalled = batch_check(self.repo, self.d, self.tree, self.base, self.tip, self.clock, self.st,
+                                           data.get("cls") or "check", self.depth, self.runs, range_base=self.range_base)
+            infra = None if ok or stalled else batch_infra_failure(out)
+            if not infra or attempt == BATCH_INFRA_RETRIES:
+                break
+            wlog(self.d, f"batch {self.bid}: {self.tip[:10]} failed on infra ({infra}): checked again, not bisected")
+        return ok, out, stalled
+
+    def check(self) -> Optional[int]:
+        """The check of the tip: its verdict as the run's result, or None for a failure to bisect."""
+        ok, out, stalled = self.check_once()
+        self.reread()
+        if stalled:
+            self.move("held", {"why": "stalled"}, severity="escalate",
+                      text=f"HELD: the batch check of {self.tip[:10]} ({len(self.members)} change(s)) stalled twice on a "
+                           "fresh sbt server; checked again in 30 min")
+            return 0
+        if ok and self.depth == "red":  # pre-checked as one while red: the verdict kept, blocked by the red again
+            return self.prechecked(self.members, self.tip, "its red pre-check passed")
+        if ok:
+            return self.passed()
+        if REDGATE.search(out or ""):
+            batch_move(self.st, self.it, "assembling", text=f"batch {self.bid}: the gate went red")
+            return 0
+        self.move("bisecting", {"failed_out": (out or "")[-20000:]},
+                  text=f"batch {self.bid}: {self.tip[:10]} failed its check; bisecting")
+        return None
+
+    def passed(self) -> int:
+        drift, dout = batch_drift_check(self.repo, self.d, self.tree, self.base, self.tip,
+                                        self.it["data"].get("cls") == "red")
+        self.reread()
+        if drift is False:
+            return batch_drift_split(self.repo, self.d, self.st, self.it, self.members, self.tree, dout)
+        batch_move(self.st, self.it, "pushing", {"runs": self.runs},
+                   text=f"batch {self.bid}: {self.tip[:10]} passed its check" + (" and its drift check" if drift else ""))
+        return 0
+
+    def bisect_failed(self) -> int:
+        data = self.it["data"]
+        culprit, cout = bisect(self.repo, self.d, self.members, self.base, self.tree, self.clock, self.st, self.depth,
+                               self.runs, data.get("failed_out"), range_base=self.range_base,
+                               cls=data.get("cls") or "check")
+        self.reread()
+        if culprit is None and self.depth == "red":  # every prefix passed: no verdict, pre-checked again at the next change
+            return self.prechecked([], None, "its red pre-check failed, then every prefix passed (flaky or infra)",
+                                   failed=self.everyone())
+        if culprit is None:
+            batch_fail(self.st, self.d, self.it, "it failed, then every prefix passed on its own (flaky or infra)",
+                       len(self.members))
+            return 0
+        return self.judge(culprit, cout)
+
+    def everyone(self) -> list[str]:
+        return [self.base] + [e["id"] for e in self.members]
+
+    def own_failure(self, bad: dict[str, Any], cout: str) -> bool:
+        return culprit_own_failure(self.repo, self.d, bad, self.base, cout, self.clock.time())
+
+    def before(self, culprit: int) -> tuple[list[dict[str, Any]], Optional[str]]:
+        """The members before the culprit and the tip they end at."""
+        return self.members[:culprit], self.members[culprit - 1]["tip"] if culprit else None
+
+    def judge(self, culprit: int, cout: str) -> int:
+        bad = self.members[culprit]
+        if self.depth == "red" and not self.own_failure(bad, cout):
+            # failing only as main fails (the red itself, judged as a lone change's check is): no culprit; the prefix
+            # before it pre-checked, the rest checked again at green (the fast check, as before)
+            prefix, tip = self.before(culprit)
+            return self.prechecked(prefix, tip, f"{bad['id']} on fail only where main fails too", failed=self.everyone())
+        regenerated, resolved = bad.get("regenerated"), bad.get("autoresolved")
+        alone = self.not_its_own(bad, cout)
+        if alone:  # not shown to be its own: its own check judges it (a base red, a time cap, an infra failure)
+            self.check_alone(bad, regenerated, resolved)
+        else:
+            # policy: batch-checks-failed
+            queue_verdict(self.st, self.d, bad, "rejected", f"NOT LANDED: the checks failed with your change in the batch "
+                          f"(entry {bad['id']})\n  {tail_of(cout)}", cout.splitlines()[-25:])
+        what = ("checked alone" + (" (its auto-resolution failed the batch)" if alone and resolved else "")) \
+            if alone else "rejected"
+        return self.after_culprit(culprit, bad, what, 0 if alone else 1)
+
+    def not_its_own(self, bad: dict[str, Any], cout: str) -> bool:
+        """Whether a deep batch's culprit is not shown to be at fault. A member whose generated files the batch resolved
+        (GENERATED FILES ARE NO OVERLAP, waiting.py) failing is the resolution's as much as its own: its own check, on
+        main, judges it; and so is one whose source conflict the batch auto-resolved (A SOURCE CONFLICT IS RESOLVED IN
+        THE BATCH): the resolution is the suspect -- named, and the member held behind the change it conflicts with,
+        never rejected."""
+        return self.depth in DEEP_BATCHES and (bool(bad.get("regenerated")) or bool(bad.get("autoresolved"))
+                                               or not self.own_failure(bad, cout))
+
+    def check_alone(self, bad: dict[str, Any], regenerated: Any, resolved: Any) -> None:
+        """A culprit not shown to be at fault: held to its own check, the batch's auto-resolution named when it is the suspect."""
+        bad["batch_alone"] = "resolve" if resolved else "regen" if regenerated else self.bid
+        bad.pop("autoresolved", None)
+        save_entry(self.d, bad)
+        said = (f"batch {self.bid}: {bad['id']}'s prefix fails, but not shown to be by its own fault"
+                + (f" (its {', '.join(regenerated)} resolved in the batch)" if regenerated else "")
+                + (f" -- the batch's AUTO-RESOLUTION of {', '.join(m['file'] for m in resolved)} is the culprit "
+                   f"({'; '.join(h for m in resolved for h in m['hunks'])}): held behind the change it "
+                   "conflicts with, as before" if resolved else "") + ": checked alone")
+        wlog(self.d, said)
+        if resolved:  # its author hears it (the batch says its auto-resolution failed)
+            self.tell_author(bad, said)
+
+    def tell_author(self, bad: dict[str, Any], said: str) -> None:
+        cur = self.st.item("change", bad["id"])
+        if cur and not machine_state("change", cur["state"]).terminal:
+            with contextlib.suppress(StaleVersion):  # said in the log; the hold says the rest
+                self.st.transition("change", bad["id"], cur["state"], cur["version"], event={
+                    "text": said, "audience": {"worktree": bad.get("worktree")}, "severity": "info"})
+
+    def after_culprit(self, culprit: int, bad: dict[str, Any], what: str, result: int) -> int:
+        """What the batch does once its culprit is judged: the prefix before it lands (or is pre-checked), the rest joins the next batch."""
+        prefix, tip = self.before(culprit)
+        if self.depth == "red":  # the prefix before it pre-checked; the rest are pre-checked again at the next tick
+            self.prechecked(prefix, tip, f"{bad['id']} {what}")
+        elif culprit > 0:  # the prefix before it passed its own check: it lands now; the rest join the next batch
+            batch_move(self.st, self.it, "pushing", {"members": [e["id"] for e in prefix], "tip": prefix[-1]["tip"],
+                                                      "runs": self.runs},
+                       text=f"batch {self.bid}: {bad['id']} {what}; the {culprit} change(s) before it land")
+        else:
+            batch_move(self.st, self.it, "assembling", text=f"batch {self.bid}: {bad['id']} {what}")
+        return result
+
+
 def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
     """THE BATCH EXECUTOR (`waiting check-batch <id>`): holding check/batch-<id> and its tree's slot, it checks the
     assembled tip; pass -> pushing (the tick pushes); fail -> bisecting -> a confirmed culprit rejected and the passing
@@ -152,100 +317,7 @@ def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
         if not slot.acquire():
             return 0
         _d, clone, _w = waiting_state(repo)
-        tree = f"{clone}-wt-check-{i}"
-        base, tip, members = it["data"]["base"], it["data"]["tip"], batch_members(d, it)
-        if not members:
-            batch_move(st, it, "assembling", text=f"batch {bid}: its changes are gone")
-            return 0
-        depth, runs = it["data"].get("depth") or "fast", dict(it["data"].get("runs") or {})
-        range_base = it["data"].get("range_base")
-        if it["state"] == "checking":
-            for attempt in range(BATCH_INFRA_RETRIES + 1):  # AN INFRA FAILURE IS NO BISECT (batch_infra_failure)
-                ok, out, stalled = batch_check(repo, d, tree, base, tip, clock, st, it["data"].get("cls") or "check", depth,
-                                               runs, range_base=range_base)
-                infra = None if ok or stalled else batch_infra_failure(out)
-                if not infra or attempt == BATCH_INFRA_RETRIES:
-                    break
-                wlog(d, f"batch {bid}: {tip[:10]} failed on infra ({infra}): checked again, not bisected")
-            it = st.item("batch", bid)
-            if stalled:
-                text = (f"HELD: the batch check of {tip[:10]} ({len(members)} change(s)) stalled twice on a fresh sbt "
-                        "server; checked again in 30 min")
-                batch_move(st, it, "held", {"why": "stalled"}, text=text, severity="escalate")
-                return 0
-            if ok and depth == "red":  # pre-checked as one while red: the verdict kept, blocked by the red again
-                red_prechecked(d, st, it, members, tip, base, "its red pre-check passed")
-                return 0
-            if ok:
-                drift, dout = batch_drift_check(repo, d, tree, base, tip, it["data"].get("cls") == "red")
-                it = st.item("batch", bid)
-                if drift is False:
-                    return batch_drift_split(repo, d, st, it, members, tree, dout)
-                batch_move(st, it, "pushing", {"runs": runs}, text=f"batch {bid}: {tip[:10]} passed its check"
-                                                                  + (" and its drift check" if drift else ""))
-                return 0
-            if REDGATE.search(out or ""):
-                batch_move(st, it, "assembling", text=f"batch {bid}: the gate went red")
-                return 0
-            it = batch_move(st, it, "bisecting", {"failed_out": (out or "")[-20000:]},
-                            text=f"batch {bid}: {tip[:10]} failed its check; bisecting")
-        culprit, cout = bisect(repo, d, members, base, tree, clock, st, depth, runs, it["data"].get("failed_out"),
-                               range_base=range_base, cls=it["data"].get("cls") or "check")
-        it = st.item("batch", bid)
-        if culprit is None and depth == "red":  # every prefix passed: no verdict, pre-checked again at the next change
-            red_prechecked(d, st, it, [], None, base, "its red pre-check failed, then every prefix passed (flaky or "
-                           "infra)", failed=[base] + [e["id"] for e in members])
-            return 0
-        if culprit is None:
-            batch_fail(st, d, it, "it failed, then every prefix passed on its own (flaky or infra)", len(members))
-            return 0
-        bad = members[culprit]
-        if depth == "red" and not culprit_own_failure(repo, d, bad, base, cout, clock.time()):
-            # failing only as main fails (the red itself, judged as a lone change's check is): no culprit; the prefix
-            # before it pre-checked, the rest checked again at green (the fast check, as before)
-            red_prechecked(d, st, it, members[:culprit], members[culprit - 1]["tip"] if culprit else None, base,
-                           f"{bad['id']} on fail only where main fails too", failed=[base] + [e["id"] for e in members])
-            return 0
-        # a member whose generated files the batch resolved (GENERATED FILES ARE NO OVERLAP, waiting.py) failing is
-        # the resolution's as much as its own: its own check, on main, judges it
-        # and one whose source conflict the batch auto-resolved (A SOURCE CONFLICT IS RESOLVED IN THE BATCH): the
-        # resolution is the suspect -- named, and the member held behind the change it conflicts with, never rejected
-        regenerated, resolved = bad.get("regenerated"), bad.get("autoresolved")
-        alone = depth in DEEP_BATCHES and (bool(regenerated) or bool(resolved)
-                                           or not culprit_own_failure(repo, d, bad, base, cout, clock.time()))
-        if alone:  # not shown to be its own: its own check judges it (a base red, a time cap, an infra failure)
-            bad["batch_alone"] = "resolve" if resolved else "regen" if regenerated else bid
-            bad.pop("autoresolved", None)
-            save_entry(d, bad)
-            said = (f"batch {bid}: {bad['id']}'s prefix fails, but not shown to be by its own fault"
-                    + (f" (its {', '.join(regenerated)} resolved in the batch)" if regenerated else "")
-                    + (f" -- the batch's AUTO-RESOLUTION of {', '.join(m['file'] for m in resolved)} is the culprit "
-                       f"({'; '.join(h for m in resolved for h in m['hunks'])}): held behind the change it "
-                       "conflicts with, as before" if resolved else "") + ": checked alone")
-            wlog(d, said)
-            if resolved:  # its author hears it (the batch says its auto-resolution failed)
-                cur = st.item("change", bad["id"])
-                if cur and not machine_state("change", cur["state"]).terminal:
-                    with contextlib.suppress(StaleVersion):  # said in the log; the hold says the rest
-                        st.transition("change", bad["id"], cur["state"], cur["version"], event={
-                            "text": said, "audience": {"worktree": bad.get("worktree")}, "severity": "info"})
-        else:
-            # policy: batch-checks-failed
-            queue_verdict(st, d, bad, "rejected", f"NOT LANDED: the checks failed with your change in the batch (entry "
-                                              f"{bad['id']})\n  {tail_of(cout)}", cout.splitlines()[-25:])
-        what = ("checked alone" + (" (its auto-resolution failed the batch)" if alone and resolved else "")) \
-            if alone else "rejected"
-        if depth == "red":  # the prefix before it pre-checked; the rest are pre-checked again at the next tick
-            red_prechecked(d, st, it, members[:culprit], members[culprit - 1]["tip"] if culprit else None, base,
-                           f"{bad['id']} {what}")
-            return 0 if alone else 1
-        if culprit > 0:  # the prefix before it passed its own check: it lands now; the rest join the next batch
-            prefix = members[:culprit]
-            batch_move(st, it, "pushing", {"members": [e["id"] for e in prefix], "tip": prefix[-1]["tip"], "runs": runs},
-                       text=f"batch {bid}: {bad['id']} {what}; the {culprit} change(s) before it land")
-        else:
-            batch_move(st, it, "assembling", text=f"batch {bid}: {bad['id']} {what}")
-        return 0 if alone else 1
+        return BatchCheck(repo, bid, clock, st, d, f"{clone}-wt-check-{i}", it, batch_members(d, it)).run()
     finally:
         slot.release()
         lease.release()

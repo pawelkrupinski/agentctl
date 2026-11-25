@@ -27,7 +27,6 @@ cognitive	blame_records	35
 cognitive	blame_step	26
 cognitive	blame_withdraw	16
 cognitive	block_invalid	36
-cognitive	check_batch	75
 cognitive	classify_change	33
 cognitive	classify_job	27
 cognitive	close_condition	19
@@ -193,7 +192,6 @@ cyclomatic	blame_step	19
 cyclomatic	blame_withdraw	18
 cyclomatic	block_invalid	30
 cyclomatic	build_view_change	15
-cyclomatic	check_batch	56
 cyclomatic	classify_change	22
 cyclomatic	classify_job	34
 cyclomatic	close_condition	15
@@ -333,7 +331,6 @@ method-lines	_push_batch_item	72
 method-lines	_tick_changes_pass	86
 method-lines	_watch	81
 method-lines	alert_probe	55
-method-lines	check_batch	117
 method-lines	cmd_gov	69
 method-lines	cmd_maintain	56
 method-lines	dry_run	53
