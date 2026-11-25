@@ -54,16 +54,16 @@ def owner_drop(fam, names):
     owner_change_leases(fam, drop)
 
 
-def owner_tell_leases(st, leases, s, wt, me, rec):
+def owner_tell_leases(st, leases, told, bid, wt, me, rec):
     """Each red lease the owner holds carries its worktree, notebook, wrapper pid and session (`red status` shows the
     holder's worktree, never "?"): sent once per lease epoch and session."""
     for n, x in leases.items():
-        key = (x.get("epoch"), rec.get("session"), s.get("bid"))
-        if s["meta"].get(n) == key:
+        key = (x.get("epoch"), rec.get("session"), bid)
+        if told.get(n) == key:
             continue
         st.set_meta(n, x["epoch"], x["secret"], {"worktree": wt, "notebook": rec.get("notebook"), "pid": me,
-                                                  "session": rec.get("session"), "bg_id": s.get("bid")})
-        s["meta"][n] = key
+                                                  "session": rec.get("session"), "bg_id": bid})
+        told[n] = key
 
 
 def owners_status(store, t):

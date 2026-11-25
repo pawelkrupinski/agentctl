@@ -41,7 +41,6 @@ from agentctl.localrecheck import recheck_local
 from agentctl.orphanreap import red_reap_orphans
 from agentctl.redprobe import cmd_red_probe
 from agentctl.fixerlife import red_fixer
-from agentctl.owner import red_owner
 from agentctl.redvault import red_block, red_owner_push, red_quota_waits, red_unblock
 from agentctl.ask import red_owner_reminders
 from agentctl.reddispatch import RED_MODEL, red_migrate, red_renew_holders, repo_dispatch_off_all
@@ -51,6 +50,7 @@ from agentctl.cireport import ci_state_refresh, ci_why
 from agentctl.redhold import red_enforce
 from agentctl.redstatus import red_status
 from agentctl.offerdispatch import red_dispatcher
+from agentctl.ownerwrapper import red_owner
 
 
 # -- the tick's red step (the processor; ci-why never acts)

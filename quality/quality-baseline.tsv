@@ -266,7 +266,6 @@ cognitive	red_merge_rekeyed	17
 cognitive	red_migrate	11
 cognitive	red_obs_of_units	26
 cognitive	red_offer	31
-cognitive	red_owner	153
 cognitive	red_owner_push	12
 cognitive	red_owner_reminders	42
 cognitive	red_quota_waits	24
@@ -674,8 +673,6 @@ cyclomatic	red_merge_rekeyed	28
 cyclomatic	red_never_green	14
 cyclomatic	red_obs_of_units	16
 cyclomatic	red_offer	38
-cyclomatic	red_owner	39
-cyclomatic	red_owner.step	41
 cyclomatic	red_owner_push	16
 cyclomatic	red_owner_reminders	30
 cyclomatic	red_precheck	13
@@ -784,7 +781,6 @@ cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
 cyclomatic	worktree_holding	12
 cyclomatic	write_snapshot	23
-inner-defs	red_owner	5
 inner-defs	status_page_server	8
 inner-defs	store_server	4
 inner-defs	sync_steps	7
@@ -826,8 +822,6 @@ method-lines	red_fix_pending	260
 method-lines	red_fixer	210
 method-lines	red_job_reads	66
 method-lines	red_lease_ended	87
-method-lines	red_owner	240
-method-lines	red_owner.step	102
 method-lines	red_run_retired	51
 method-lines	red_step	157
 method-lines	red_tick	100

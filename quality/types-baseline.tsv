@@ -75,9 +75,10 @@ mypy-errors	orphanreap	30
 mypy-errors	orphans	83
 mypy-errors	outsideflows	23
 mypy-errors	owned	47
-mypy-errors	owner	91
+mypy-errors	owner	24
 mypy-errors	ownerleases	24
 mypy-errors	owners	3
+mypy-errors	ownerwrapper	47
 mypy-errors	park	34
 mypy-errors	patches	4
 mypy-errors	policy	45
@@ -121,7 +122,7 @@ mypy-errors	redretired	63
 mypy-errors	redseen	66
 mypy-errors	redstatus	6
 mypy-errors	redstep	92
-mypy-errors	redtick	105
+mypy-errors	redtick	104
 mypy-errors	reduntracked	45
 mypy-errors	redvault	48
 mypy-errors	redverify	21

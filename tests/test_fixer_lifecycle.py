@@ -28,7 +28,7 @@ def fixer_entries():
 
 class OneLifecycleTest(unittest.TestCase):
     def test_both_wrappers_keep_leases_and_judge_progress_with_the_same_code(self):
-        for f in (A.red_fixer, A.red_owner):
+        for f in (A.red_fixer, A.OwnerWrapper):
             src = inspect.getsource(f)
             self.assertFalse("st.renew(" in src, f"{f.__name__} renews a lease by hand: HeldLease.renew only")
             self.assertFalse("fixer_mark(" in src, f"{f.__name__} judges progress by hand: TurnProgress only")
