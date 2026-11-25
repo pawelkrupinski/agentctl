@@ -70,9 +70,9 @@ def replay_job(r: dict[str, Any]) -> str:
     return "check" if r.get("kind") == "check" or cls == "check" else "job"
 
 
-def gov_replay(rows, cap, at, hold=30 * 60):
-    """{old: [(label, cores)] live at `at` as admitted, new: [...] live at `at` under the cores rule, waiting: [...],
-    old_peak / new_peak: the most cores live at once}."""
+def replay_jobs(rows: list[dict[str, Any]], hold: float) -> list[dict[str, Any]]:
+    """The admissions of the log's rows as jobs: label, cores, arrival, admission and duration (to its end record, else
+    `hold` seconds)."""
     ends = {r["id"]: r["end"] for r in rows if "end" in r and r.get("id")}
     jobs = []
     for r in rows:
@@ -82,35 +82,75 @@ def gov_replay(rows, cap, at, hold=30 * 60):
         dur = ends.get(r.get("id"), start + hold) - start
         jobs.append({"label": r.get("label") or "?", "cores": replay_cores(r), "arrive": start - float(r.get("waited") or 0),
                      "admitted": start, "dur": max(dur, 1.0)})
+    return jobs
 
-    def live(js, t, key):
-        return [j for j in js if j.get(key) is not None and j[key] <= t < j[key] + j["dur"]]
 
-    def peak(js, key):
-        return max((sum(x["cores"] for x in live(js, j[key], key)) for j in js if j.get(key) is not None), default=0.0)
-    # the new rule, event by event: arrivals in order, each admitted once the charged cores leave it room
-    queue, running, t = sorted((dict(j, new=None) for j in jobs), key=lambda j: j["arrive"]), [], None
-    pending = list(queue)
-    events = sorted({j["arrive"] for j in queue})
-    while pending:
-        t = events.pop(0) if events else t
-        running = [j for j in running if j["new"] + j["dur"] > t]
-        for j in [p for p in pending if p["arrive"] <= t]:
-            charged = sum(x["cores"] for x in running)
-            if j["cores"] == 0 or charged == 0 or charged + j["cores"] <= cap:
-                j["new"] = t
-                running.append(j)
-                pending.remove(j)
-            else:
-                break  # oldest first: none overtakes the head
-        nxt = [x["new"] + x["dur"] for x in running] + [p["arrive"] for p in pending if p["arrive"] > t]
-        if pending and not nxt:
-            break
+def live_at(js: list[dict[str, Any]], t: float, key: str) -> list[dict[str, Any]]:
+    """The jobs running at t, from the moment their `key` says."""
+    return [j for j in js if j.get(key) is not None and j[key] <= t < j[key] + j["dur"]]
+
+
+def peak_cores(js: list[dict[str, Any]], key: str) -> float:
+    """The most cores running at once, counted at each job's `key` moment."""
+    return max((sum(x["cores"] for x in live_at(js, j[key], key)) for j in js if j.get(key) is not None), default=0.0)
+
+
+class CoresAdmission:
+    """The new rule, event by event: arrivals in order (oldest first, none overtakes the head), each admitted once the
+    charged cores leave it room. `run` returns every job with its `new` admission time (None where it never got in)."""
+
+    def __init__(self, jobs: list[dict[str, Any]], cap: float) -> None:
+        self.cap = cap
+        self.queue = sorted((dict(j, new=None) for j in jobs), key=lambda j: j["arrive"])
+        self.pending = list(self.queue)
+        self.running: list[dict[str, Any]] = []
+        self.events = sorted({j["arrive"] for j in self.queue})
+        self.t: float | None = None
+
+    def fits(self, j: dict[str, Any]) -> bool:
+        charged = sum(x["cores"] for x in self.running)
+        return bool(j["cores"] == 0 or charged == 0 or charged + j["cores"] <= self.cap)
+
+    def admit_due(self) -> None:
+        """Admit the arrived jobs, oldest first, until one does not fit."""
+        for j in [p for p in self.pending if p["arrive"] <= self.t]:
+            if not self.fits(j):
+                break
+            j["new"] = self.t
+            self.running.append(j)
+            self.pending.remove(j)
+
+    def plan_next_event(self) -> bool:
+        """Add the next moment worth looking at (a job ending, a later arrival); False when a job waits and none is coming."""
+        nxt = [x["new"] + x["dur"] for x in self.running] + [p["arrive"] for p in self.pending if p["arrive"] > self.t]
+        if self.pending and not nxt:
+            return False
         if nxt:
-            events = sorted(set(events) | {min(nxt)})
-    return {"old": [(j["label"], j["cores"]) for j in live(jobs, at, "admitted")],
-            "new": [(j["label"], j["cores"]) for j in live(queue, at, "new")],
-            "waiting": [(j["label"], j["cores"]) for j in queue if j["arrive"] <= at and (j["new"] is None or j["new"] > at)],
-            "old_peak": peak(jobs, "admitted"), "new_peak": peak(queue, "new"),
+            self.events = sorted(set(self.events) | {min(nxt)})
+        return True
+
+    def run(self) -> list[dict[str, Any]]:
+        while self.pending:
+            self.t = self.events.pop(0) if self.events else self.t
+            self.running = [j for j in self.running if j["new"] + j["dur"] > self.t]
+            self.admit_due()
+            if not self.plan_next_event():
+                break
+        return self.queue
+
+
+def labelled(js: list[dict[str, Any]]) -> list[tuple[str, float]]:
+    return [(j["label"], j["cores"]) for j in js]
+
+
+def gov_replay(rows: list[dict[str, Any]], cap: float, at: float, hold: float = 30 * 60) -> dict[str, Any]:
+    """{old: [(label, cores)] live at `at` as admitted, new: [...] live at `at` under the cores rule, waiting: [...],
+    old_peak / new_peak: the most cores live at once}."""
+    jobs = replay_jobs(rows, hold)
+    queue = CoresAdmission(jobs, cap).run()
+    return {"old": labelled(live_at(jobs, at, "admitted")),
+            "new": labelled(live_at(queue, at, "new")),
+            "waiting": labelled([j for j in queue if j["arrive"] <= at and (j["new"] is None or j["new"] > at)]),
+            "old_peak": peak_cores(jobs, "admitted"), "new_peak": peak_cores(queue, "new"),
             "new_wait_p50": pct([j["new"] - j["arrive"] for j in queue if j["new"] is not None], .5) or 0.0,
             "old_wait_p50": pct([j["admitted"] - j["arrive"] for j in jobs], .5) or 0.0}
