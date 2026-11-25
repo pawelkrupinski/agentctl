@@ -10,7 +10,7 @@ import json, os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
-from fake_clock import FakeClock, on_clock  # noqa: E402
+from fake_clock import FakeClock, lagging_clock, on_clock  # noqa: E402
 import test_queue  # noqa: E402 (a module, so the loader runs QueueTest's own tests there only)
 from test_waiting import REPO_HOOK  # noqa: E402
 
@@ -30,6 +30,7 @@ if [ -n "$TEST_INFRA_ONCE" ] && [ ! -e "$TEST_INFRA_ONCE" ]; then : > "$TEST_INF
 class BacklogBatchTest(test_queue.QueueTest):
     def setUp(self):
         super().setUp()
+        self.clock = lagging_clock()  # ticks and checkers on ONE clock, the wall's lag never mixed in (fake_clock.py)
         self.r.write("scripts/hooks/pre-push", AREA_HOOK + REPO_HOOK.format(calls=self.calls).split("\n", 1)[1])
         os.chmod(os.path.join(self.r.path, "scripts/hooks/pre-push"), 0o755)
         self.r.commit("the hook's area plan")
@@ -66,7 +67,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         ei = self.queue("i", "identity/src/main/I.scala")
         ej = self.queue("j", "identity/src/main/J.scala")
         ec = self.queue("c", "scripts/c.sh")
-        did = A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        did = A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [], f"nothing is checked alone: {did}")
         out = self.drive()
         self.assertIn("checking", " ".join(out))
@@ -98,7 +99,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         eb = self.queue("b", "common/src/main/B.scala")
         ea = self.queue("a", "web/src/main/A.scala")
         self.assertIs(A.identity_change(self.r.path, self.entry(eb)), False)
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [], "nothing is checked alone")
         self.drive()
         for eid in (ea, eb):
@@ -118,7 +119,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         ea = self.queue("a", "web/src/main/A.scala")
         wt, _ = self.agent("o", "identity/src/main/Other.scala", "o\n", msg="o: identity/src/main/Other.scala")
         eo = self.queued(wt)[0]
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [], "every one batches")
         self.assertIs(A.identity_change(self.r.path, self.entry(em)), False)
         self.assertIs(A.identity_change(self.r.path, self.entry(en)), True)
@@ -131,7 +132,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "web/src/main/BROKEN.scala")
         ec = self.queue("c", "worker/src/main/C.scala")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [])
         self.drive()
         self.assertEqual(self.entry(ea)["status"], "landed", "the passing prefix lands at once")
@@ -148,14 +149,14 @@ class BacklogBatchTest(test_queue.QueueTest):
     def test_a_culprit_failing_on_infra_is_checked_alone_not_rejected(self):
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "web/src/main/SbtLost.scala")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.drive()
         self.assertEqual(self.entry(ea)["status"], "landed")
         e = self.entry(eb)
         self.assertEqual(e["status"], "queued", "an infra-shaped failure is no verdict on the change")
         self.assertTrue(e["batch_alone"])
         self.assertFalse(e.get("backlog_batch"))
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [eb], "its own check judges it")
 
     def test_a_batch_failing_once_on_infra_is_checked_again_not_bisected(self):
@@ -167,7 +168,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.addCleanup(os.environ.pop, "TEST_INFRA_ONCE", None)
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "worker/src/main/B.scala")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.drive()
         self.assertTrue(os.path.exists(once), "the first check failed on infra")
         self.assertEqual([self.entry(e)["status"] for e in (ea, eb)], ["landed", "landed"])
@@ -181,7 +182,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         ea = self.queue("a", "web/src/main/A.scala", "--no-batch")
         self.assertTrue(self.entry(ea)["no_batch"])
         eb = self.queue("b", "worker/src/main/B.scala")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(sorted(self.started), sorted([ea, eb]), "one batchable change is no backlog")
         self.assertEqual(self.drive(), [])
 
@@ -195,20 +196,20 @@ class BacklogBatchTest(test_queue.QueueTest):
         A.spawn_executor = lambda repo, d_, eid: (self.started.append(eid), held.append(A.tree_slot(A.CurrentStore(A.process_store), d_, 1)),
                                                   held[-1].acquire())
         ei1 = self.queue("i1", "identity/src/main/I1.scala")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [ei1], "the identity change takes the one tree")
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "worker/src/main/B.scala")
         ei2 = self.queue("i2", "identity/src/main/I2.scala", "--no-batch")  # a lone change younger than the backlog
-        self.assertEqual(A.tick_batch(self.r.path, self.d, *on_clock(A.Clock())), [], "no tree free: no batch yet")
+        self.assertEqual(A.tick_batch(self.r.path, self.d, *on_clock(self.clock)), [], "no tree free: no batch yet")
         held.pop().release()  # i1's check ends, its tree free
         A.set_change(A.CurrentStore(A.process_store), self.d, self.entry(ei1), "cancelled", event={"text": "done"})
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertNotIn(ei2, self.started, "the younger lone change waits for the older backlog's batch")
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None
         try:
-            did = A.tick_batch(self.r.path, self.d, *on_clock(A.Clock()))
+            did = A.tick_batch(self.r.path, self.d, *on_clock(self.clock))
         finally:
             A.spawn_batch_executor = saved
         self.assertIn("checking", " ".join(did), "the backlog batch takes the freed tree")
@@ -247,7 +248,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None  # the batch's check runs elsewhere
         try:
-            self.assertIn("checking", " ".join(A.tick_batch(self.r.path, self.d, *on_clock(A.Clock()))))
+            self.assertIn("checking", " ".join(A.tick_batch(self.r.path, self.d, *on_clock(self.clock))))
         finally:
             A.spawn_batch_executor = saved
         self.assertEqual(self.batch()["data"]["depth"], "full")
@@ -257,7 +258,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.assertEqual(self.entry(ef)["fixes"], ["7"])
         A.check_entry(self.r.path, ef, *on_clock(self.clock))
         self.assertEqual(self.entry(ef)["status"], "checked")
-        did = A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        did = A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertNotIn("waits for batch", " ".join(did))
         self.assertEqual(self.entry(ef)["status"], "landed", "the red fix lands alone while the batch checks")
 
@@ -272,6 +273,7 @@ class PushBatchTest(test_queue.QueueTest):
 
     def setUp(self):
         super().setUp()
+        self.clock = lagging_clock()  # ticks and checkers on ONE clock, the wall's lag never mixed in (fake_clock.py)
         self.d = A.waiting_state(self.r.path)[0]
         for name in ("spawn_executor", "spawn_batch_executor"):
             self.addCleanup(setattr, A, name, getattr(A, name))
@@ -299,8 +301,8 @@ class PushBatchTest(test_queue.QueueTest):
         """The processor's ticks (the change tick, then the batch tick) until every change in eids is decided."""
         out = []
         for _ in range(n):
-            out += A.tick_changes(self.r.path, self.d, *on_clock(A.Clock())) + A.close_landed_changes(self.r.path, A.Clock(), A.CurrentStore(A.process_store), self.d) \
-                + A.tick_batch(self.r.path, self.d, *on_clock(A.Clock()))
+            out += A.tick_changes(self.r.path, self.d, *on_clock(self.clock)) + A.close_landed_changes(self.r.path, self.clock, A.CurrentStore(A.process_store), self.d) \
+                + A.tick_batch(self.r.path, self.d, *on_clock(self.clock))
             if all(self.entry(e)["status"] in A.ENTRY_FINAL for e in eids):
                 break
         A.project_events(A.CurrentStore(A.process_store))
@@ -419,7 +421,7 @@ class PushBatchTest(test_queue.QueueTest):
         self.start_head_round(ev)
         self.reds = {"7"}
         ef = self.checked("fix", "web/src/main/Fix.scala", msg="fix: the red\n\nFixes-Red: 7")
-        did = A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        did = A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.entry(ef)["status"], "landed", f"the red fix pushes first, alone: {did}")
         self.assertEqual(self.remote_log()[0], "fix: the red")
         self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["checked", "checked"], "nothing pushed under it")
@@ -469,7 +471,7 @@ class PushBatchTest(test_queue.QueueTest):
         self.assertEqual((it["state"], it["data"]["depth"], it["data"]["members"]), ("checking", "verify", [ea, eb]))
         self.reds = {"7"}
         ef = self.checked("fix", "web/src/main/Fix.scala", msg="fix: the red\n\nFixes-Red: 7")
-        did = A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        did = A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.entry(ef)["status"], "landed", f"the red fix lands alone while the batch verifies: {did}")
         self.assertEqual(self.remote_log()[0], "fix: the red")
         self.assertNotIn(ef, A.current_batch(A.process_store(), self.d)["data"]["members"])
@@ -484,7 +486,7 @@ class PushBatchTest(test_queue.QueueTest):
         bid = A.current_batch(A.process_store(), self.d)["id"]
         ec = self.checked("c", "scripts/c.sh")  # checked on the main the batch verifies on
         ed = self.checked("d", "scripts/d.sh")
-        did = A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        did = A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertIn(f"{ec}: its push waits for batch {bid}", " ".join(did))
         self.assertEqual(self.entry(ec)["status"], "checked", "no push under the batch")
         A.spawn_batch_executor = real
@@ -518,17 +520,17 @@ class PushBatchTest(test_queue.QueueTest):
         eo, _ = self.queued(wo)  # queued first, checked later (held, then a tree)
         ef = self.checked("fix", "infra/bin/backtest-alerts", msg="backtest-alerts: the fix\n\nFixes-Red: 6")
         self.main_moves()
-        did = A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        did = A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual((self.entry(ef)["status"], self.entry(ef)["verify"]), ("queued", True), did)
         A.check_entry(self.r.path, eo, *on_clock(self.clock))
         self.assertEqual(self.entry(eo)["status"], "checked")
-        did = A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        did = A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertIn(f"{eo}: its push waits for {ef}'s combined-tree verification", " ".join(did))
         self.assertEqual(self.entry(eo)["status"], "checked", "no push under the red fix's verification")
         hold = A.process_store().item("change", eo)["data"]["hold"]
         self.assertEqual((hold["kind"], hold["blocker"]), ("verify", ef))
         A.check_entry(self.r.path, ef, *on_clock(self.clock))
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.entry(ef)["status"], "landed", "verified once, then pushed")
         self.assertEqual(self.remote_log()[0], "backtest-alerts: the fix")
 
@@ -546,12 +548,12 @@ class PushBatchTest(test_queue.QueueTest):
         ef = self.checked("fix", "infra/bin/backtest-alerts", msg="backtest-alerts: the fix\n\nFixes-Red: 6")
         wx, _ = self.agent("replay", "infra/bin/backtest-alerts", "replay\n", msg="fix replay: backtest-alerts")
         ex, _ = self.queued(wx)
-        did = A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        did = A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertNotIn(f"{ef}: its push waits", " ".join(did))
         self.assertEqual(self.entry(ef)["status"], "landed", f"the red fix lands while the batch verifies: {did}")
         self.assertEqual(self.remote_log()[0], "backtest-alerts: the fix")
         self.assertNotIn(ef, A.current_batch(A.process_store(), self.d)["data"]["members"])
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.entry(ex)["status"], "rejected", "the overlapping change no longer waits on the fix: it "
                          "conflicts with what landed, so its author rebases now")
         self.assertIn("no longer applies", self.entry(ex)["why"])
@@ -583,7 +585,7 @@ class PushBatchTest(test_queue.QueueTest):
         self.run_queue([ea, eb], n=3)
         bid = A.current_batch(A.process_store(), self.d)["id"]
         ec = self.checked("c", "scripts/c.sh")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         row = next(r for r in A.change_rows(A.process_store()) if r["id"] == ec)
         self.assertEqual(row["state"], "checked")
         self.assertIn(f"its push waits for batch {bid}", row["hold"] or "", "land status names the hold")
@@ -610,7 +612,7 @@ class PushBatchTest(test_queue.QueueTest):
             return "the landing lease is busy"
         A.push_change = pushing
         try:
-            A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+            A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         finally:
             A.push_change = saved
         self.assertEqual(seen, [[]], f"a change whose push runs is held by that push ({ec})")
@@ -669,13 +671,13 @@ class OverlapTest(BacklogBatchTest):
     def test_a_younger_change_that_cannot_be_assembled_with_an_older_one_is_told_at_once_and_not_checked(self):
         eo = self.edit("older", "web/src/main/Ten.scala", 4, "older's line 5", extra="identity/src/main/I.scala")
         ey = self.edit("younger", "web/src/main/Ten.scala", 4, "younger's line 5")
-        did = A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        did = A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [eo], f"the older (an identity change) is checked alone, the younger waits: {did}")
         told = [x for x in self.inbox() if x["kind"] != "QUEUED" and "CONFLICTS" in json.dumps(x)]
         self.assertEqual(len(told), 1, "its author told at its first tick, before any check")
         self.assertIn("web/src/main/Ten.scala", json.dumps(told[0]))
         self.assertEqual(told[0]["cwd"], self.entry(ey)["worktree"])
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(len([x for x in self.inbox() if "CONFLICTS" in json.dumps(x)]), 1, "told once")
         self.assertNotIn(ey, self.started, "never checked while the older is in flight")
 
@@ -683,15 +685,15 @@ class OverlapTest(BacklogBatchTest):
         eo = self.edit("older", "web/src/main/Ten.scala", 0, "older's line 1", extra="identity/src/main/I.scala",
                        alone=True)
         ey = self.edit("younger", "web/src/main/Ten.scala", 9, "younger's line 10")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [eo], "the younger waits for the older it shares a file with")
         self.assertEqual([x for x in self.inbox() if "CONFLICTS" in json.dumps(x)], [], "no conflict to tell")
         A.check_entry(self.r.path, eo, *on_clock(self.clock))
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))  # the older pushed, then the younger's check starts on top of it
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))  # the older pushed, then the younger's check starts on top of it
         self.assertEqual(self.entry(eo)["status"], "landed")
         self.assertEqual(self.started, [eo, ey])
         A.check_entry(self.r.path, ey, *on_clock(self.clock))
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         e = self.entry(ey)
         self.assertEqual(e["status"], "landed", "checked once, on top of the older one: no recheck")
         self.assertFalse(e.get("rounds"), "no second round")
@@ -714,7 +716,7 @@ class OverlapTest(BacklogBatchTest):
         self.r.commit("backtest-alerts: the fix\n\nFixes-Red: 6", at=wf)
         ef = self.queued(wf)[0]
         ey = self.edit("younger", "infra/bin/backtest-alerts", 9, "younger's line 10", extra="docs/y.md")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [ef], "the fix goes; the younger waits for it")
         st = A.process_store()
         self.assertEqual(st.item("change", ef)["data"]["change_kind"]["reds"],
@@ -739,7 +741,7 @@ class OverlapTest(BacklogBatchTest):
         rc, out = self.land(wt, "--no-batch")  # checked alone, as an identity change was before it could batch
         self.assertEqual(rc, 0, out)
         ee = out.split("QUEUED ", 1)[1].split()[0]
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [ea])
         A.tick_changes(self.r.path, self.d, *on_clock(FakeClock(time.time() + 16 * 60)))  # each past its 15-min deadline
         st = A.process_store()
@@ -776,7 +778,7 @@ class OverlapTest(BacklogBatchTest):
         e["status"] = "waiting"  # checked, waiting for the gate to turn green
         A.save_entry(self.d, e)
         ey = self.edit("younger", "web/src/main/Ten.scala", 9, "younger's line 10", extra="identity/src/main/Y.scala")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [ey], "checked now, never held behind a change waiting on the gate")
         self.assertNotEqual(((A.process_store().item("change", ey)["data"] or {}).get("hold") or {}).get("kind"), "overlap")
 
@@ -784,14 +786,14 @@ class OverlapTest(BacklogBatchTest):
         """The simulated 2026-11-19 seed 0: a change queued again after a conflict took its first entry's seq and so
         was "older" than a change it overlaps that was already checking: checked beside it, then rechecked in full."""
         ea = self.edit("a", "web/src/main/Ten.scala", 0, "a's line 1", alone=True)
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [ea])
         A.set_change(A.CurrentStore(A.process_store), self.d, self.entry(ea), "checking")  # its check under way
         eb = self.edit("b", "web/src/main/Ten.scala", 9, "b's line 10")
         e = self.entry(eb)
         e["seq"] = self.entry(ea)["seq"] - 1  # its kept place: older by seq than the change checking now
         A.save_entry(self.d, e)
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertNotIn(eb, self.started, "b waits for the check in flight")
         self.assertEqual(A.process_store().item("change", eb)["data"]["hold"]["blocker"], ea)
 
@@ -799,7 +801,7 @@ class OverlapTest(BacklogBatchTest):
         eo = self.edit("older", "web/src/main/Ten.scala", 0, "older's line 1", extra="identity/src/main/I.scala",
                        alone=True)
         ey = self.edit("younger", "web/src/main/Ten.scala", 9, "younger's line 10", extra="identity/src/main/Y.scala")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         st = A.process_store()
         self.assertEqual(st.item("change", ey)["data"]["hold"]["blocker"], eo)
         A.cancel_submitted(A.CurrentStore(A.process_store), eo, repo=self.r.path)
@@ -829,7 +831,7 @@ class OverlapTest(BacklogBatchTest):
     def test_two_queued_changes_sharing_a_file_that_assemble_go_in_one_backlog_batch(self):
         ea = self.edit("a", "web/src/main/Ten.scala", 0, "a's line 1")
         eb = self.edit("b", "web/src/main/Ten.scala", 9, "b's line 10")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [], "both wait for the backlog batch")
         self.drive()
         self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["landed", "landed"])
