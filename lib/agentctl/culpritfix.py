@@ -11,7 +11,7 @@ from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
 from agentctl.redrecord import red_what
 from agentctl.claudefiles import bg_transcript
-from agentctl.lander import blame_change_name, blame_decision, lander_name
+from agentctl.lander import blame_change_key, blame_change_name, blame_decision, lander_name
 from agentctl.allowedpaths import allowed_path
 from agentctl.inboxentry import inbox_write
 from agentctl.land import spawn_land
@@ -58,7 +58,7 @@ def blame_revert_commit(wt, u, b, g, rec, num):
         git(wt, "reset", "-q", "--hard", f"{remote()}/main", check=False)
         return {**rec, "ok": False, "worktree": wt, "conflict": True,
                 "msg": f"the revert of {blame_change_name(g)} does not apply ({(r.stderr or r.stdout).strip()[:160]})"}
-    name = g.get("change") or g["commits"][0]
+    name = blame_change_key(g)
     msg = (f"Revert {blame_change_name(g)}: {str(g.get('subject') or '')[:60]}\n\n"
            f"agentctl blame: {u['workflow']} #{num} turned red with it; its parent {str(b.get('parent'))[:10]} passes the "
            f"same check, its end fails ({str(b.get('evidence') or '')[:300]}).\nReverted: "
@@ -244,7 +244,7 @@ def lander_revive(store, o_r, repo, off, took, u, b):
         if not wt:
             return lander_fallback(store, o_r, repo, off, took, u, dict(b, revive_failed=why), why)
     rv = b.get("revert") or {}
-    name = g.get("change") or g["commits"][0]
+    name = blame_change_key(g)
     brief = {"mode": "transcript" if l.get("agent") else "resume", "session": sid, "agent": l.get("agent"),
              "transcript": tr, "change": name, "shas": [c[:10] for c in g["commits"]], "subject": g.get("subject"),
              "revert": rv.get("msg"), "reverted": bool(rv.get("ok")), "worktree": wt, "moved_from": moved,

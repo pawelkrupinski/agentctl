@@ -9,7 +9,7 @@ from agentctl.timefmt import ts
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import fixes_red_in_message
 from agentctl.redrecord import RED_TERMINAL, red_what
-from agentctl.lander import blame_change_name
+from agentctl.lander import blame_change_key, blame_change_name
 from agentctl.procs import process_cwds
 from agentctl.inboxentry import inbox_write
 from agentctl.worktrees import worktrees
@@ -37,46 +37,74 @@ from agentctl.statemachines import machine_state
 REVERTS_CHANGE = re.compile(r"^Reverts-Change:\s*(\S+)", re.M)
 
 
-def blame_records(store):
-    """(dead, live) from every red's blame. dead: {change: [{run, why, verdict, worktree, sha}]} -- the reverts blame
-    withdrew or saw refuted ("not the culprit"), or whose red ended without them ("obsolete"); live: {"runs": {change: {run}}, "worktrees": {path}} -- the confirmed blames whose
-    revert stands (a change blamed AGAIN for a newer red is reverted for that red: never refused)."""
-    dead, live = {}, {"runs": {}, "worktrees": set()}
-    try:
-        items = store.items("red")
-    except (Exception, SystemExit):
-        return dead, live
-    for it in items:
+def _dead_entry(run: str, why: str, verdict: str, rv: dict[str, Any]) -> dict[str, Any]:
+    """One dead revert's record: its red's run, why it is dead, blame's verdict, the revert's worktree and sha."""
+    return {"run": run, "why": why, "verdict": verdict, "worktree": rv.get("worktree"), "sha": rv.get("sha")}
+
+
+class BlameLedger:
+    """The reverts the reds' blames leave dead and live, filled one red at a time (`add`): a method per way a blame
+    ends a revert -- withdrawn, refuted, obsolete -- and the confirmed one that stands."""
+
+    def __init__(self) -> None:
+        self.dead: dict[str, list[dict[str, Any]]] = {}
+        self.live: dict[str, Any] = {"runs": {}, "worktrees": set()}
+
+    def bury(self, change: str, entry: dict[str, Any]) -> None:
+        self.dead.setdefault(change, []).append(entry)
+
+    def add(self, it: dict[str, Any]) -> None:
+        """One red's blame: its withdrawn revert, then its culprit's (refuted, obsolete, or standing)."""
         b = (it.get("data") or {}).get("blame") or {}
         run = str((b.get("run") or {}).get("number") or "")
         w = b.get("withdrawn")
         if isinstance(w, dict):
-            rv = w.get("revert") or {}
-            ch = w.get("change") or rv.get("change") or (rv.get("commits") or [None])[0]
-            if ch:
-                dead.setdefault(ch, []).append({"run": run, "why": f"withdrawn: {str(w.get('why') or '?')[:160]}",
-                                                "verdict": f"NOT THE CULPRIT of #{run}",
-                                                "worktree": rv.get("worktree"), "sha": rv.get("sha")})
+            self.withdrawn(w, run)
         g = blame_culprit(b)
-        if not g:
-            continue
-        ch = g.get("change") or g["commits"][0]
+        if g:
+            self.culprit(it, b, blame_change_key(g), run, w)
+
+    def withdrawn(self, w: dict[str, Any], run: str) -> None:
+        rv = w.get("revert") or {}
+        ch = w.get("change") or rv.get("change") or (rv.get("commits") or [None])[0]
+        if ch:
+            self.bury(ch, _dead_entry(run, f"withdrawn: {str(w.get('why') or '?')[:160]}", f"NOT THE CULPRIT of #{run}", rv))
+
+    def culprit(self, it: dict[str, Any], b: dict[str, Any], ch: str, run: str, w: Any) -> None:
         rv = b.get("revert") or {}
         if b.get("state") == "refuted":
-            dead.setdefault(ch, []).append({"run": run, "why": f"refuted: {str(b.get('why') or '?')[:160]}",
-                                            "verdict": f"NOT THE CULPRIT of #{run}",
-                                            "worktree": rv.get("worktree"), "sha": rv.get("sha")})
-        elif b.get("state") == "confirmed" and not w and it.get("state") in RED_TERMINAL:
-            fixed = ((it.get("data") or {}).get("fix") or {}).get("sha") or ""
-            dead.setdefault(ch, []).append({"run": run, "why": f"#{run} is {it['state']}"
-                                            + (f" by {fixed[:10]}" if fixed else "") + " without it",
-                                            "verdict": f"OBSOLETE for #{run}",
-                                            "worktree": rv.get("worktree"), "sha": rv.get("sha")})
+            self.bury(ch, _dead_entry(run, f"refuted: {str(b.get('why') or '?')[:160]}", f"NOT THE CULPRIT of #{run}", rv))
         elif b.get("state") == "confirmed" and not w:
-            live["runs"].setdefault(ch, set()).add(run)
-            if rv.get("worktree"):
-                live["worktrees"].add(os.path.realpath(rv["worktree"]))
-    return dead, live
+            if it.get("state") in RED_TERMINAL:
+                self.obsolete(it, ch, run, rv)
+            else:
+                self.standing(ch, run, rv)
+
+    def obsolete(self, it: dict[str, Any], ch: str, run: str, rv: dict[str, Any]) -> None:
+        """A confirmed blame whose red ended without its revert (cleared or verified by anything else)."""
+        fixed = ((it.get("data") or {}).get("fix") or {}).get("sha") or ""
+        by = f" by {fixed[:10]}" if fixed else ""
+        self.bury(ch, _dead_entry(run, f"#{run} is {it['state']}{by} without it", f"OBSOLETE for #{run}", rv))
+
+    def standing(self, ch: str, run: str, rv: dict[str, Any]) -> None:
+        """A confirmed blame whose red is open: its revert stands for this run."""
+        self.live["runs"].setdefault(ch, set()).add(run)
+        if rv.get("worktree"):
+            self.live["worktrees"].add(os.path.realpath(rv["worktree"]))
+
+
+def blame_records(store):
+    """(dead, live) from every red's blame. dead: {change: [{run, why, verdict, worktree, sha}]} -- the reverts blame
+    withdrew or saw refuted ("not the culprit"), or whose red ended without them ("obsolete"); live: {"runs": {change: {run}}, "worktrees": {path}} -- the confirmed blames whose
+    revert stands (a change blamed AGAIN for a newer red is reverted for that red: never refused)."""
+    ledger = BlameLedger()
+    try:
+        items = store.items("red")
+    except (Exception, SystemExit):
+        return ledger.dead, ledger.live
+    for it in items:
+        ledger.add(it)
+    return ledger.dead, ledger.live
 
 
 def blame_records_quiet(st):
@@ -88,6 +116,31 @@ def blame_records_quiet(st):
     return blame_records(st)
 
 
+def _commit_refusal(c: str, msg: str, dead: dict[str, Any], live: dict[str, Any]) -> str | None:
+    """Why commit c (its message `msg`) must never land: it reverts a change blame marked dead, and no confirmed blame of
+    a newer red reverts that change again under its own Fixes-Red -- or None."""
+    for ch in REVERTS_CHANGE.findall(msg):
+        if ch not in dead or fixes_red_in_message(msg) & live["runs"].get(ch, set()):
+            continue  # not a dead revert, or blamed again for a newer red: that red's revert
+        d = dead[ch][-1]
+        return (f"commit {c[:10]} reverts {ch}, which agentctl's blame marked {d['verdict']} "
+                f"({d['why']}): its revert never lands again")
+    return None
+
+
+def _worktree_refusal(worktree: str, dead: dict[str, Any], live: dict[str, Any]) -> str | None:
+    """Why nothing from `worktree` lands: it is the worktree blame made to revert a change it marked dead, or None."""
+    rw = os.path.realpath(worktree)
+    if rw in live["worktrees"]:
+        return None
+    for ch, ds in dead.items():
+        for d in ds:
+            if d.get("worktree") and os.path.realpath(d["worktree"]) == rw:
+                return (f"{worktree.replace(HOME, '~')} is the worktree blame made to revert {ch} for #{d['run']}, "
+                        f"marked {d['verdict']} ({d['why']}): nothing from it lands")
+    return None
+
+
 def blame_land_refusal(repo, commits, store, worktree=None, records=None):
     """Why these commits (from `worktree`) must never land, or None: a commit carrying `Reverts-Change: <change>` for a
     change blame withdrew or saw refuted (not the culprit) -- unless a confirmed blame of a newer red reverts that change
@@ -97,23 +150,10 @@ def blame_land_refusal(repo, commits, store, worktree=None, records=None):
         return None
     for c in commits or []:
         msg = git(repo, "log", "-1", "--format=%B", c, check=False).stdout if repo else ""
-        for ch in REVERTS_CHANGE.findall(msg):
-            if ch not in dead:
-                continue
-            if fixes_red_in_message(msg) & live["runs"].get(ch, set()):
-                continue  # blamed again for a newer red: that red's revert
-            d = dead[ch][-1]
-            return (f"commit {c[:10]} reverts {ch}, which agentctl's blame marked {d['verdict']} "
-                    f"({d['why']}): its revert never lands again")
-    if worktree:
-        rw = os.path.realpath(worktree)
-        if rw not in live["worktrees"]:
-            for ch, ds in dead.items():
-                for d in ds:
-                    if d.get("worktree") and os.path.realpath(d["worktree"]) == rw:
-                        return (f"{worktree.replace(HOME, '~')} is the worktree blame made to revert {ch} for #{d['run']}, "
-                                f"marked {d['verdict']} ({d['why']}): nothing from it lands")
-    return None
+        refused = _commit_refusal(c, msg, dead, live)
+        if refused:
+            return refused
+    return _worktree_refusal(worktree, dead, live) if worktree else None
 
 
 def blame_only_reverts(repo, wt, change=None):
@@ -203,6 +243,36 @@ def blame_cancel_changes_of(wt, why, st):
     return out
 
 
+def _landed_revert(repo: Any, rv: dict[str, Any], ch: str) -> str | None:
+    """Why the revert of `ch` cannot be withdrawn (it is already on <remote>/main: its red's next run refutes it), or None."""
+    if not (rv.get("ok") and repo and os.path.isdir(repo)):
+        return None
+    git(repo, "fetch", "--quiet", remote(), "main", check=False)
+    on_main = git(repo, "log", f"{remote()}/main", "-n", "400", "--format=%H",
+                  f"--grep=^Reverts-Change: {re.escape(ch)}$", check=False).stdout.split()
+    if on_main:
+        return (f"NOT WITHDRAWN: the revert of {ch} is on {remote()}/main ({on_main[0][:10]}): a landed "
+                "revert is refuted by its red's next run, which relands it")
+    return None
+
+
+def _withdrawn_blame(b: dict[str, Any], ch: str, rv: dict[str, Any], why: str) -> dict[str, Any]:
+    """The blame once withdrawn: undetermined (the normal fixer flow), the dead revert kept under `withdrawn`."""
+    w = {"change": ch, "revert": rv, "revived": b.get("revived"), "why": why, "at": ts()}
+    nb = {k: v for k, v in b.items() if k not in ("culprit", "revert", "revived", "parent", "evidence", "reland_due")}
+    nb.update(state="undetermined", why=f"withdrawn: {why}", withdrawn=w)
+    return nb
+
+
+def _record_withdrawal(store: Any, it: dict[str, Any], nb: dict[str, Any], line: str) -> None:
+    """Write the withdrawn blame to the red: its record only when it is already cleared, else offered to a fixer again."""
+    cur = store.item("red", it["id"]) or it
+    if machine_state("red", cur["state"]).terminal:  # a red already cleared: only its record changes
+        store.update_item("red", cur["id"], cur["version"], {"blame": nb})
+    else:
+        red_offer(store, cur, line, data={"blame": nb}, quiet=True)
+
+
 def blame_withdraw(store, it, why, repo=None):
     """WITHDRAW a red's blame: its culprit was wrongly decided and its revert has not landed. The blame becomes
     undetermined (the normal fixer flow) with the dead revert recorded under `withdrawn` (blame_records reads it: that
@@ -214,27 +284,17 @@ def blame_withdraw(store, it, why, repo=None):
     if not g or b.get("state") not in ("confirmed",):
         return False, f"NOT WITHDRAWN: {red_what(d)} has no confirmed culprit (blame {b.get('state') or 'none'})"
     rv = b.get("revert") or {}
-    ch = g.get("change") or g["commits"][0]
+    ch = blame_change_key(g)
     repo = repo or movies_repo_path()
-    if rv.get("ok") and repo and os.path.isdir(repo):
-        git(repo, "fetch", "--quiet", remote(), "main", check=False)
-        on_main = git(repo, "log", f"{remote()}/main", "-n", "400", "--format=%H",
-                      f"--grep=^Reverts-Change: {re.escape(ch)}$", check=False).stdout.split()
-        if on_main:
-            return False, (f"NOT WITHDRAWN: the revert of {ch} is on {remote()}/main ({on_main[0][:10]}): a landed "
-                           "revert is refuted by its red's next run, which relands it")
-    w = {"change": ch, "revert": rv, "revived": b.get("revived"), "why": why, "at": ts()}
-    nb = {k: v for k, v in b.items() if k not in ("culprit", "revert", "revived", "parent", "evidence", "reland_due")}
-    nb.update(state="undetermined", why=f"withdrawn: {why}", withdrawn=w)
+    landed = _landed_revert(repo, rv, ch)
+    if landed:
+        return False, landed
+    nb = _withdrawn_blame(b, ch, rv, why)
     red_stop_holder(store, d["key"], f"the blame of {ch} was withdrawn: {why}", "blame withdrawn", force=True)
     dropped = blame_drop_revert_worktree(repo, rv.get("worktree"), ch, why, store) if rv.get("worktree") else "no revert worktree"
     line = (f"RED BLAME WITHDRAWN: {red_what(d)}: {blame_change_name(g)} is not the culprit ({why}); its revert never "
             f"lands; {dropped}; the normal fixer flow")
     inbox_write("red", line, [line], [], 0)
     dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
-    cur = store.item("red", it["id"]) or it
-    if machine_state("red", cur["state"]).terminal:  # a red already cleared: only its record changes
-        store.update_item("red", cur["id"], cur["version"], {"blame": nb})
-    else:
-        red_offer(store, cur, line, data={"blame": nb}, quiet=True)
+    _record_withdrawal(store, it, nb, line)
     return True, line

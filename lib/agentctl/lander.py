@@ -337,5 +337,10 @@ def blame_decision(b: dict[str, Any] | None) -> tuple[str | None, str]:
     return "lander", f"{blame_change_name(g)} landed by {lander_name(g['lander'])}"
 
 
+def blame_change_key(g: dict[str, Any]) -> Any:
+    """The change a culprit group names (its `change`, else its first commit), as the blame's records key it."""
+    return g.get("change") or g["commits"][0]
+
+
 def blame_change_name(g: dict[str, Any]) -> str:
     return f"change {g['change']}" if g.get("change") else f"commit {g['commits'][0][:10]}"
