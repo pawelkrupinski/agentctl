@@ -453,6 +453,8 @@ class UsageLimitTest(CrashLoopBase):
         self.assertEqual(A.claude_limit_reset("You've hit your limit · resets 2am (UTC)", t0), t0 + 18 * 3600)
         self.assertEqual(A.claude_limit_reset("You've hit your limit · resets 9:30am (UTC)", t0), t0 + 5400)
         self.assertEqual(A.claude_limit_reset("You've hit your limit", t0), t0 + A.CLAUDE_LIMIT_FALLBACK)
+        live = "You've hit your weekly limit · resets 2am (Europe/Warsaw) · out of usage credits"  # 2026-11-24's words
+        self.assertEqual(A.claude_limit_reset(live, t0), t0 + 17 * 3600)  # 02:00 CET is 01:00Z
         self.assertEqual(A.claude_limit("Prompt is too long · automatic compaction failed: " + LIMIT),
                          LIMIT)
         self.assertIsNone(A.claude_limit("java.lang.OutOfMemoryError: the limit of the heap"))
