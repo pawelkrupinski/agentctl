@@ -7,7 +7,7 @@ import datetime as dt
 import os
 import re
 import time
-from agentctl.core import HOME, env_num, git
+from agentctl.core import HOME, attempt, env_num, git
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.inboxentry import inbox_write
@@ -66,10 +66,7 @@ def park_release_why(m, repo, store, t=None):
     if u.get("kind") != "landed":
         return None
     if u.get("change"):
-        try:
-            end = change_chain_end(store, u["change"])
-        except (Exception, SystemExit):
-            end = None
+        end = attempt(lambda: change_chain_end(store, u["change"]), None, catch=(Exception, SystemExit))
         if end and end["state"] == "landed":
             return f"its blocker {end['id']} landed"
     if u.get("commit"):
@@ -141,10 +138,7 @@ def resolve_blocker(x, repo, store):
     """{change, commit} of `--until-landed x`: a change id (whole or a unique part; its head the commit), else a commit
     of repo. Raises ValueError."""
     st = store
-    try:
-        items = st.items("change")
-    except (Exception, SystemExit):
-        items = []
+    items = attempt(lambda: st.items("change"), [], catch=(Exception, SystemExit))
     its = [i for i in items if i["id"] == x] or [i for i in items if x in i["id"]]
     if len(its) == 1:
         return {"change": its[0]["id"], "commit": (its[0].get("data") or {}).get("head")}

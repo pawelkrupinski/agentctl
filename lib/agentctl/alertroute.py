@@ -5,7 +5,7 @@ import os
 import re
 import time
 from contextlib import suppress
-from agentctl.core import env_num
+from agentctl.core import attempt, env_num
 from agentctl.inboxentry import CONDITION_KINDS, INBOX_COMMANDS, inbox_kind
 from agentctl.redfamilies import red_family
 from agentctl.statemachines import machine_state
@@ -153,10 +153,7 @@ def alert_route(rec, st=None, t=None, red=None, condition=None):
         return ("author" if kind in ALERT_AUTHOR_KINDS | ALERT_FIXER_KINDS | ALERT_RED_KINDS | {"INVARIANT"} else "info"), item
     if kind in ALERT_RED_KINDS:
         if red is None and st is not None and item.startswith("red:"):
-            try:
-                red = st.item("red", item[4:])
-            except Exception:
-                red = None
+            red = attempt(lambda: st.item("red", item[4:]), None, catch=(Exception,))
         return alert_red_audience(rec, red, st, t), item
     if kind in CONDITION_KINDS and kind not in ALERT_OWNER_KINDS:
         opened = (condition or {}).get("opened_at") or rec.get("first_at") or rec.get("at")

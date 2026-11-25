@@ -5,7 +5,7 @@ import os
 import re
 import time
 from contextlib import suppress
-from agentctl.core import env_num, fmt_age, git, host_role, remote
+from agentctl.core import attempt, env_num, fmt_age, git, host_role, remote
 from agentctl.timefmt import day_hhmmz, hhmmz
 from agentctl.policy import policy_blocks
 from agentctl.waitingdir import waiting_entries
@@ -65,10 +65,7 @@ def tick_changes(repo, d, clock, st):
     checking change past its deadline back to queued (infra), a queued one past its deadline escalated, and each
     checked change pushed. Returns what it did."""
     t = clock.time()
-    try:
-        reds = gate_reds(repo)
-    except Exception:
-        reds = set()
+    reds = attempt(lambda: gate_reds(repo), set(), catch=(Exception,))
     facts = queue_facts(reds, st)  # A FIX OF ANY OPEN RED GOES FIRST (above): each change's KIND, recorded on its item
     entries = queued_entries(d)
     kinds = classify_queue(repo, d, entries, facts, t, st)

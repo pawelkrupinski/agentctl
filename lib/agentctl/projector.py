@@ -7,7 +7,7 @@ import os
 import re
 import time
 from contextlib import suppress
-from agentctl.core import env_num, err
+from agentctl.core import attempt, env_num, err
 from agentctl.timefmt import iso_at
 from agentctl.notifyurl import notification_url
 from agentctl.waitingdir import waiting_entries, wlog
@@ -82,10 +82,8 @@ def project_events(store):
                "item_id": ev.get("item_id")}
         if refs.get("alert_item"):  # one item, several audiences (reverts.py: the lander's and the orchestrator's)
             rec["alert_item"] = refs["alert_item"]
-        try:
-            red = st.item("red", ev["item_id"]) if ev.get("item_type") == "red" and ev.get("item_id") else None
-        except Exception:
-            red = None
+        red = attempt(lambda: st.item("red", ev["item_id"]) if ev.get("item_type") == "red" and ev.get("item_id") else None,
+                      None, catch=(Exception,))
         try:
             alert_write(rec, st=st, red=red, d=d)  # THE ALERT MODEL: routed, merged into its item's live alert
             n += 1
@@ -148,10 +146,7 @@ def notify_escalations(store):
     cur = int(st.meta_get("notifier_seq", 0) or 0)
     evs = st.events(after=max(0, cur - NOTIFY_LOOKBACK), limit=5000)
     t = st.clock()
-    try:
-        told = json.loads(st.meta_get("notify_items") or "{}") or {}
-    except ValueError:
-        told = {}
+    told = attempt(lambda: json.loads(st.meta_get("notify_items") or "{}") or {}, {}, catch=(ValueError,))
     items, live, covered = {}, {}, []
     for ev in evs:
         if ev["severity"] != "escalate" or ev.get("notified_at"):
@@ -194,10 +189,7 @@ def notify_escalations(store):
         else:
             done = []
             for k, ev, r in tell:
-                try:
-                    url = notification_url(ev, st)
-                except Exception:
-                    url = None
+                url = attempt(lambda: notification_url(ev, st), None, catch=(Exception,))
                 if not notify(f"agentctl: {ev['kind']}", _escalation_line(ev)[:220], url=url,
                               group=f"agentctl-{ev.get('item_type')}-{ev.get('item_id')}"):
                     break

@@ -5,7 +5,7 @@ import argparse
 from typing import Any
 import os
 import time
-from agentctl.core import HOME, PROTECTED_BRANCHES, cherry_landed, git, remote
+from agentctl.core import HOME, PROTECTED_BRANCHES, attempt, cherry_landed, git, remote
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.procs import process_cwds
@@ -101,10 +101,8 @@ def close_superseded(repo, wt, why):
         return False, f"kept: {wt} is not a linked worktree of {repo}"
     if "locked" in me:
         return False, "kept: locked"
-    try:
-        busy = [p for p, c in process_cwds().items() if c == wt or c.startswith(wt + "/")]
-    except (Exception, SystemExit):
-        busy = []
+    busy = attempt(lambda: [p for p, c in process_cwds().items() if c == wt or c.startswith(wt + "/")], [],
+                   catch=(Exception, SystemExit))
     if busy:
         return False, f"kept: in use by pid {busy[:3]}"
     dirty = git(wt, "status", "--porcelain", "--untracked-files=all", check=False)

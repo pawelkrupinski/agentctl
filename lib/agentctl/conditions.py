@@ -8,7 +8,7 @@ import re
 import time
 from typing import Any, Callable
 from contextlib import suppress
-from agentctl.core import env_num, err, fmt_age, host_role, reds_dir, remote, state_root
+from agentctl.core import attempt, env_num, err, fmt_age, host_role, reds_dir, remote, state_root
 from agentctl.timefmt import iso_at, ts
 from agentctl.statefile import read_record
 from agentctl.gating import mark_gate_dirty
@@ -295,10 +295,8 @@ def recovery_tick(store, now_=None, force=False):
     t = now_ if now_ is not None else time.time()
     out = []
     server = host_role() == "server"
-    try:
-        out += migrate_condition_files(st)
-    except (Exception, SystemExit) as e:
-        err(f"recover: could not migrate the condition files ({str(e)[:160]})")
+    out += attempt(lambda: migrate_condition_files(st), [], catch=(Exception, SystemExit),
+                   what="recover: could not migrate the condition files")
     for it in st.items("condition", ["open"]):
         c = condition_dict(it)
         if probed_here(c) and (force or float(c.get("next_check") or 0) <= t):

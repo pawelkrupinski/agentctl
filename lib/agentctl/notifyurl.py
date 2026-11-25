@@ -6,7 +6,7 @@
 
 import os
 import re
-from agentctl.core import process_cache, state_root
+from agentctl.core import attempt, process_cache, state_root
 from agentctl.forge import gh_json
 from agentctl.repos import red_repo_of
 
@@ -78,10 +78,7 @@ def notification_url(ev, store):
     key = refs.get("key")
     it = None
     if key and store is not None:
-        try:
-            it = store.item("red", key)
-        except Exception:
-            it = None
+        it = attempt(lambda: store.item("red", key), None, catch=(Exception,))
     if it:
         u = red_url(it["data"])
         if u:

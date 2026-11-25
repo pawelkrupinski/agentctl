@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from contextlib import suppress
+from agentctl.core import attempt
 from agentctl.procrunner import process_runner
 from agentctl.core import (
     HOME, branch_of, cherry_landed, env_num, git, git_ok, hashlib_sha1, reds_dir, remote, slug, spawn_detached)
@@ -175,19 +176,11 @@ def orphan_candidates(repo, store, now_=None, dead=None, refused=None, lands=Non
     landing (orphan_refusal) goes to `refused` [(worktree, key, why)]. lands: the pass's land_entries_once reader."""
     t = now_ if now_ is not None else time.time()
     lands = lands or land_entries_once()
-    try:
-        cwds = {os.path.realpath(c) for c in process_cwds().values()}
-    except (Exception, SystemExit):
-        cwds = set()
-    try:
-        landers = {os.path.realpath(w) for w in land_cwds()}
-    except (Exception, SystemExit):
-        landers = set()
+    cwds = attempt(lambda: {os.path.realpath(c) for c in process_cwds().values()}, set(), catch=(Exception, SystemExit))
+    landers = attempt(lambda: {os.path.realpath(w) for w in land_cwds()}, set(), catch=(Exception, SystemExit))
     live = live_lease_worktrees(store)
-    try:
-        sessions = session_worktrees([w.get("worktree") for w in worktrees(repo)], t)
-    except (Exception, SystemExit):
-        sessions = {}
+    sessions = attempt(lambda: session_worktrees([w.get("worktree") for w in worktrees(repo)], t), {},
+                       catch=(Exception, SystemExit))
     records = blame_records(store)
     with suppress(Exception, SystemExit):  # a change in the land queue (queued, checking, waiting) is not orphaned
         d, _c, _w = waiting_state(repo)

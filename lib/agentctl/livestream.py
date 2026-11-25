@@ -7,7 +7,7 @@ import re
 import threading
 import time
 from contextlib import suppress
-from agentctl.core import env_num
+from agentctl.core import attempt, env_num
 from agentctl.statefile import mtime
 from agentctl.live import live_registry, live_state, live_tail_info, live_track
 
@@ -111,10 +111,7 @@ def live_mask(v, key=None):
 def live_entry(line):
     """The entry the page shows for one transcript line (bytes), masked; None for a bookkeeping line."""
     text = line.decode("utf-8", "replace")
-    try:
-        rec = json.loads(text)
-    except ValueError:
-        rec = None
+    rec = attempt(lambda: json.loads(text), None, catch=(ValueError,))
     if not isinstance(rec, dict):
         return {"type": "raw", "text": live_mask_text(text)} if text.strip() else None
     if rec.get("type") in LIVE_HIDDEN:
@@ -156,10 +153,7 @@ class LiveTail:
         """(lines, reset, more): lines = [(end offset, bytes)] or [(end offset, int skipped bytes)] for a line over
         line_max; reset = "truncated"/"rotated"/None; more = a full chunk was read (call again at once)."""
         reset = None
-        try:
-            st = os.stat(self.path)
-        except OSError:
-            st = None
+        st = attempt(lambda: os.stat(self.path), None, catch=(OSError,))
         if self.f is None:
             if st is None:
                 return [], None, False

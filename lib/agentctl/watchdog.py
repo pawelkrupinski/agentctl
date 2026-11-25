@@ -6,7 +6,7 @@ import os
 import re
 import time
 from typing import Any, Dict
-from agentctl.core import env_num, fmt_age, pid_alive, state_root
+from agentctl.core import attempt, env_num, fmt_age, pid_alive, state_root
 from agentctl.statefile import write_json
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import waiting_entries, waiting_state
@@ -46,14 +46,9 @@ def kick_processor() -> str:
     pid is gone, the token goes to the process launchd starts, over the same 0600 socket. In this process's memory
     only, never on disk. A processor that does not answer holds nothing to keep: the plain kick, as before."""
     path = processor_sock()
-    try:
-        held = token_request(path) if os.path.exists(path) else ""
-    except OSError:
-        held = ""
-    try:
-        old_pid = int(open(beat_path("processor")).read().split()[1])
-    except (OSError, ValueError, IndexError):
-        old_pid = None
+    held = attempt(lambda: token_request(path) if os.path.exists(path) else "", "", catch=(OSError,))
+    old_pid = attempt(lambda: int(open(beat_path("processor")).read().split()[1]), None,
+                      catch=(OSError, ValueError, IndexError))
     launchctl("kickstart", "-k", f"gui/{os.getuid()}/{SERVICE_LABEL}")
     if not TOKEN_SHAPE.fullmatch(held):
         return "it held no token"

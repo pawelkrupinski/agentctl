@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from contextlib import suppress
-from agentctl.core import HOME, cherry_landed, env_num, err, git, on_ci_runner, reds_dir, remote, spawn_detached
+from agentctl.core import HOME, attempt, cherry_landed, env_num, err, git, on_ci_runner, reds_dir, remote, spawn_detached
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.store import StoreUnavailable
@@ -99,12 +99,11 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
     if store is not None and lease and took and "epoch" in took:
         # its wrapper, named in the lease from the start: one that dies before its first word is judged at once
         # (red_reap_orphans), its stderr (fixer.log) the why -- never a silent 15-min lapse
-        try:
-            store.set_meta(lease, took["epoch"], took["secret"],
-                           {"pid": p.pid, "host": socket_host(), "worktree": wt,
-                            "wrapper_log": os.path.join(d, "fixer.log")})
-        except Exception as e:  # the wrapper sends its own meta at its first poll
-            err(f"red dispatch: the lease's meta was not written ({str(e)[:160]})")
+        # (the wrapper sends its own meta at its first poll)
+        attempt(lambda: store.set_meta(lease, took["epoch"], took["secret"],
+                                       {"pid": p.pid, "host": socket_host(), "worktree": wt,
+                                        "wrapper_log": os.path.join(d, "fixer.log")}),
+                None, catch=(Exception,), what="red dispatch: the lease's meta was not written")
     line = dispatch_log(u, f"DISPATCHED{' (resumed)' if rec['resume'] else ' (continuing)' if cont else ''} pid {p.pid} "
                            f"in {wt} ({why}); log {rec['log']}")
     inbox_write("red", f"RED DISPATCHED: {u['workflow']} #{num} [{u.get('job')}] -> fixer session "

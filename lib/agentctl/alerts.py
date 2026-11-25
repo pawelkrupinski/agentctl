@@ -6,7 +6,7 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.core import env_num, err, hashlib_sha1
+from agentctl.core import attempt, env_num, err, hashlib_sha1
 from agentctl.statefile import read_record, write_json
 from agentctl.inboxentry import inbox_dir, inbox_entries, inbox_kind
 from agentctl.inbox import WAIT_KINDS_DEFAULT, entry_line
@@ -321,10 +321,8 @@ def reconcile_alerts(store, force=False):
     d = inbox_dir()
     st = store
     t = time.time()
-    try:
-        last = float((read_record(alert_index_path(d)) or {}).get("reconciled_at") or 0)
-    except (TypeError, ValueError):
-        last = 0
+    last = attempt(lambda: float((read_record(alert_index_path(d)) or {}).get("reconciled_at") or 0), 0,
+                   catch=(TypeError, ValueError))
     if not force and t - last < env_num("AGENTCTL_ALERT_RECONCILE", ALERT_RECONCILE_EVERY):
         return []
     out = []

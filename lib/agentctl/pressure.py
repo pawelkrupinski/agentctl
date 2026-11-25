@@ -5,7 +5,7 @@ import os
 import re
 import sys
 import time
-from agentctl.core import env_num, run_cmd
+from agentctl.core import attempt, env_num, run_cmd
 from agentctl.statefile import read_record, write_json
 from agentctl.cpu import cpu_pressure, machine_busy_cores, run_queue
 from agentctl.machine import machine_cores, machine_fixed, read_meminfo
@@ -21,10 +21,8 @@ def gov_busy_cores():
     busy), $AGENTCTL_GOV_PS_PROBE (ps's `pcpu args` rows)."""
     for k in ("AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_LOAD_PROBE"):
         if os.environ.get(k):
-            try:
-                return float(run_cmd(os.environ[k], shell=True).stdout.strip() or 0)
-            except ValueError:
-                return 0.0
+            return attempt(lambda: float(run_cmd(os.environ[k], shell=True).stdout.strip() or 0), 0.0,
+                           catch=(ValueError,))
     probe = os.environ.get("AGENTCTL_GOV_PS_PROBE")
     fixed = machine_fixed() if not probe else None
     if fixed is not None:  # the tests' fixed machine (AGENTCTL_MACHINE): its busy cores, else its load

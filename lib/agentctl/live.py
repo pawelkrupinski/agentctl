@@ -7,7 +7,7 @@ import os
 import re
 import threading
 import time
-from agentctl.core import dispatches_dir, process_cache, reds_dir
+from agentctl.core import attempt, dispatches_dir, process_cache, reds_dir
 from agentctl.statefile import mtime, read_json_file, read_record, tail_bytes
 from agentctl.procs import proc_alive
 from agentctl.claudefiles import bg_transcript, claude_projects_root
@@ -220,10 +220,7 @@ def live_state(e, info, t=None):
         return "failed", "the last answer was an API error"
     alive = None
     if e.get("pid"):
-        try:
-            alive = proc_alive(e["pid"], e.get("process_start"))
-        except (Exception, SystemExit):
-            alive = None
+        alive = attempt(lambda: proc_alive(e["pid"], e.get("process_start")), None, catch=(Exception, SystemExit))
     if alive is False:
         return ("done", "the process ended after its answer") if stop == "end_turn" else \
             ("failed", "the process ended mid-turn")

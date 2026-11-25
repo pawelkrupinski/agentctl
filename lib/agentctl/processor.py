@@ -8,7 +8,7 @@ import signal
 import sys
 from typing import Any, Callable
 from agentctl.clock import Clock
-from agentctl.core import SHORT, _bounded, env_num, err, git, git_ok, host_role, slug
+from agentctl.core import SHORT, _bounded, attempt, env_num, err, git, git_ok, host_role, slug
 from agentctl.statefile import write_json
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import waiting_entries, waiting_state
@@ -54,10 +54,7 @@ def waiting_run(repo: str, clock: Clock, store: Any, once: bool = False, service
     argv = ["waiting", "run", "--repo", repo] + (["--once"] if once else []) + (["--service"] if service else [])
     with contextlib.ExitStack() as stack:
         stack.callback(own.release)
-        try:
-            o_r = slug(repo)
-        except (Exception, SystemExit):
-            o_r = SHORT["movies"]
+        o_r = attempt(lambda: slug(repo), SHORT["movies"], catch=(Exception, SystemExit))
         _IN_PROCESSOR[0] = True
         drop = TokenDrop(d, o_r, clock).open()
         stack.callback(drop.close)

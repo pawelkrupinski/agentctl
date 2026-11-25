@@ -4,7 +4,7 @@
 import argparse
 import os
 import re
-from agentctl.core import cherry_landed, env_num, git, remote
+from agentctl.core import attempt, cherry_landed, env_num, git, remote
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.worktrees import worktrees
 from agentctl.cleanup import FREE_WAIT, close_worktree, free_worktree
@@ -57,10 +57,7 @@ def own_change_item(repo, head, store):
         return x.get("head") == head and os.path.realpath(x.get("worktree") or "") == rp
     mine = [it for it in store.items("change") if ours(it.get("data") or {})]
     known = {it["id"] for it in mine}
-    try:
-        d = waiting_state(repo)[0]
-    except RuntimeError:
-        d = None
+    d = attempt(lambda: waiting_state(repo)[0], None, catch=(RuntimeError,))
     for e in waiting_entries(d, open_only=False) if d else []:
         if e["id"] not in known and ours(e) and e.get("status") in ENTRY_STATE:
             mine.append({"id": e["id"], "state": ENTRY_STATE[e["status"]], "data": e, "entered_at": e.get("seq") or 0})
