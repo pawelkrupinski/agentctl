@@ -15,7 +15,7 @@ from agentctl.storetoken import detached_env
 from agentctl.land import run_watched, tool_env
 from agentctl.queueslots import checker_alive, set_change
 from agentctl.queue import VERIFY_MODE
-from agentctl.generated import order_sensitive, without_derived, without_generated
+from agentctl.generated import generated_entry, order_sensitive, without_derived, without_generated
 from agentctl.conflicts import first_hunk, hunks_resolve, own_commits_conflict, union_safe
 from agentctl.queuerecheck import queued_entries, same_change_source
 from agentctl.redfixes import fixes_of
@@ -98,40 +98,40 @@ def overlap_key(e):
     return e["id"], e.get("head"), len(e.get("commits") or [])
 
 
-def combined_elsewhere(repo: Optional[str], paths: Optional[list[str]], strict: bool) -> Optional[list[str]]:
-    """paths less those combined over the merged tree, never an overlap: every registered generated file, or with
-    strict (a change whose generated files could not be resolved in a batch) the DERIVED ones alone."""
-    return without_derived(repo, paths) if strict else without_generated(repo, paths)
+def held_files(repo: Optional[str], paths: list[str], strict: bool) -> list[str]:
+    """The files of paths (both changes change them) that hold the younger (ONLY A VOIDED CHECK HOLDS): a source; with
+    strict (a change whose generated files could not be resolved in a batch, checked alone) an ORDER-SENSITIVE
+    generated file too. Every other generated file -- a derived one always -- is combined over the merged tree."""
+    return [p for p in paths if not generated_entry(repo, p) or strict and order_sensitive(repo, p)]
+
+
+def conflicting(repo: Optional[str], files: Optional[list[str]], strict: bool) -> Optional[list[str]]:
+    """The files of a textual conflict that are one: no generated file's, or with strict none but a derived file's."""
+    return (without_derived(repo, files) if strict else without_generated(repo, files)) or None
 
 
 def overlap_of(repo, older, younger, strict=False):
     """(the files both change, the files they conflict in or None, the conflicting files the batch resolves), per pair
     of heads (cached in the process); the repo's generated files are neither (GENERATED FILES ARE NO OVERLAP,
-    waiting.py) unless strict (a change whose generated files or source conflict could not be resolved in a batch:
-    held as before; its derived files still none), and with strict every other textual conflict is one."""
+    waiting.py) unless strict (a change whose generated files or source conflict could not be resolved in a batch):
+    then its order-sensitive generated files are shared ones, and every textual conflict but a derived file's is one."""
     key = (*overlap_key(older), *overlap_key(younger), strict)
     if key not in _overlap_known:
         shared = sorted(set(change_paths_of(repo, older) or []) & set(change_paths_of(repo, younger) or []))
-        shared = combined_elsewhere(repo, shared, strict)
-        conflict = pair_conflict(repo, older, younger) if shared else None
-        conflict = combined_elsewhere(repo, conflict, strict) or None
+        shared = held_files(repo, shared, strict)
+        conflict = conflicting(repo, pair_conflict(repo, older, younger), strict) if shared else None
         resolvable = [] if strict or not conflict else pair_resolvable(repo, older, younger, conflict)
         conflict = [f for f in conflict or [] if f not in resolvable] or None
         _overlap_known[key] = (shared, conflict, resolvable)
     return _overlap_known[key]
 
 
-# ONLY A VOIDED CHECK HOLDS (2026-11-25; generated.py). A queued change sharing only generated files with a change
-# queued before it is no overlap (the backlog batch takes both). With that change already IN FLIGHT (checking,
-# checked, pushing: past the batch it could have joined) the younger waits for it only for the files of an entry
-# declared `order_sensitive: true` -- the registry says which, never a default -- and meets the others waiting in the
-# next batch; never behind a `waiting` change, never a red fix, never for a derived file (also not for a change
-# checked alone, strict). Replaces A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT (2026-11-21), whose wait was every
-# generated file's unless its entry said `holds: false`. Tests: tests/test_conflict_holds.py.
-# A DERIVED FILE HOLDS NOTHING (2026-11-23: three shell-to-Python migration lanes each `its check waits for <older>
-# (checking): both change docs/tools.md`): a derived file (`merge: derived`) is the combined tree's, its command run
-# over whatever tree lands; checked now, the younger's push finding main moved under it is a new round that
-# regenerates it (queuediff.py _push_change, regen_owed), never the line merge pushed. Tests: tests/test_derived.py.
+# ONLY A VOIDED CHECK HOLDS (2026-11-25; generated.py). A change sharing only generated files with one queued before
+# it is no overlap (the backlog batch takes both); with that one IN FLIGHT, past the batch they could share, it waits
+# only for an entry declared `order_sensitive: true` -- never a derived file, nor behind a `waiting` change, nor a red
+# fix -- and meets the others in the next batch. Replaces A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT (2026-11-21:
+# every generated file but a `holds: false` one). A DERIVED FILE HOLDS NOTHING (2026-11-23): regenerated over the tree
+# it lands in, its push's new round regenerating it (queuediff.py _push_change). Tests: tests/test_conflict_holds.py.
 IN_FLIGHT = ("checking", "checked", "pushing")
 
 

@@ -15,13 +15,15 @@ from test_derived import CATALOGUE, CLASSES, tool  # noqa: E402
 
 SOURCE = "scripts/ci/ci_timings.py"
 SOURCE_TEXT = "".join(f"line {i}\n" for i in range(1, 11))
+CLASSES_TEXT = "# path\tclass\n" + "".join(f"tools/t{i}.sh\tKEEP\n" for i in range(10))
 
 
 class ConflictHoldTest(test_derived.DerivedTest):
     def setUp(self):
         super().setUp()
         self.r.write(SOURCE, SOURCE_TEXT)
-        self.r.commit("a shared script")
+        self.r.write(CLASSES, CLASSES_TEXT)
+        self.r.commit("a shared script, the migration table's rows")
         self.r.push()
         conf = json.load(open(os.environ["AGENTCTL_RED_REPOS"]))
         conf["repos"][0]["generated"].append({"paths": [CLASSES]})  # a table no entry declares order-sensitive
@@ -30,11 +32,16 @@ class ConflictHoldTest(test_derived.DerivedTest):
         for c in A.PROCESS_CACHES:
             c.clear()
 
-    def lane_of(self, name, tool_name, classes=(), line=None, alone=False):
+    def lane_of(self, name, tool_name, classes=(), line=None, alone=False, row=None):
         """A shell-to-Python lane: a tool added (docs/tools.md regenerated), rows appended to the migration table,
         one line of the shared script rewritten ((index, text)); alone: landed with --no-batch."""
         wt = self.r.worktree(f"wt-{name}", branch=name)
         self.r.write(f"tools/{tool_name}.sh", tool(f"the {tool_name} tool"), at=wt)
+        if row is not None:  # one existing row of the migration table re-classed
+            with open(os.path.join(wt, CLASSES)) as f:
+                rows = f.read().splitlines(True)
+            rows[row + 1] = rows[row + 1].replace("KEEP", "MIGRATE")
+            self.r.write(CLASSES, "".join(rows), at=wt)
         if classes:
             with open(os.path.join(wt, CLASSES)) as f:
                 self.r.write(CLASSES, f.read() + "".join(f"{r}\n" for r in classes), at=wt)
@@ -74,22 +81,25 @@ class ConflictHoldTest(test_derived.DerivedTest):
         self.assertIn("## Tools (4)", self.on_main(CATALOGUE))
         self.assertEqual(self.on_main(CATALOGUE), self.generated_over_main(CATALOGUE, "scripts/catalogue"))
         self.assertEqual(self.on_main(SOURCE).splitlines()[::9], ["reuse's line 1", "bar's line 10"])
-        self.assertEqual(sorted(self.on_main(CLASSES).splitlines()[1:]),
-                         ["tools/i.sh\tMIGRATE", "tools/m.sh\tKEEP", "tools/r.sh\tKEEP"])
+        self.assertEqual(sorted(x for x in self.on_main(CLASSES).splitlines()[1:] if not x.startswith("tools/t")),
+                         ["tools/i.sh\tMIGRATE", "tools/r.sh\tKEEP"])
 
     def test_a_change_checked_alone_sharing_only_the_catalogue_with_a_check_in_flight_is_checked_now(self):
         """py-scalafix (2026-11-25, `level 149`): left out of a batch (batch_alone `regen`), it was judged strictly --
-        every file it shares an overlap, the derived page too -- and held behind py-isolated's check for
-        docs/tools.md alone. A derived file is no overlap even then: regenerated over whatever tree it lands in."""
-        ei = self.lane_of("isolated", "i", alone=True)
+        every file it shares an overlap -- and held behind py-isolated's, then py-mirror-service's check for
+        docs/tools.md and migration-classes.tsv. A derived file is no overlap even then, nor a generated file no entry
+        declares order-sensitive whose rows merge: combined over whatever tree it lands in."""
+        ei = self.lane_of("isolated", "i", alone=True, row=1)
         self.in_flight(ei)
-        es = self.lane_of("scalafix", "s")
+        es = self.lane_of("scalafix", "s", row=8)
         e = self.entry(es)
         e["batch_alone"] = "regen"
         A.save_entry(self.d, e)
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertIn(es, self.started, f"checked now, beside the older: {self.hold_of(es)}")
         self.check_and_push(ei, es)
+        self.assertEqual([x.split("\t")[0] for x in self.on_main(CLASSES).splitlines() if "MIGRATE" in x],
+                         ["tools/t1.sh", "tools/t8.sh"], "both rows re-classed on main")
 
     def test_a_real_conflict_still_holds_naming_the_source_never_the_derived_page(self):
         """Two lanes rewriting one line of the shared script differently cannot be assembled: the younger waits, and

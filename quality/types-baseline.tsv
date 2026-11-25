@@ -84,7 +84,7 @@ mypy-errors	processorlink	17
 mypy-errors	procwatch	2
 mypy-errors	projector	25
 mypy-errors	queue	28
-mypy-errors	queuebatch	63
+mypy-errors	queuebatch	62
 mypy-errors	queueclose	77
 mypy-errors	queuediff	73
 mypy-errors	queueenter	80

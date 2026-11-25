@@ -1917,7 +1917,7 @@ The reconciler then takes it, a step per tick:
   108 checks, mean 5.8, p90 9 (the younger's check, made beside the older, is voided by its landing) -- and leaves
   migration-classes.tsv, docs/tools.md and convergence-paths.txt free. Replaces A GENERATED OVERLAP WAITS FOR A CHECK
   IN FLIGHT (2026-11-21). generated.py `order_sensitive`, `without_derived`; repos.py `generated_order`; queuebatch.py
-  `ordered_overlap`, `combined_elsewhere`, `overlap_hold`; tests: `tests/test_conflict_holds.py` (lanes sharing only
+  `ordered_overlap`, `held_files`, `conflicting`, `overlap_hold`; tests: `tests/test_conflict_holds.py` (lanes sharing only
   undeclared generated files with a check in flight: one batch, one check, one push; py-scalafix checked alone beside
   a check in flight; a real conflict still held, naming the source alone; a source edited apart still held),
   `tests/test_derived.py`, `tests/test_batch_tiers.py`, `tests/test_generated.py` (movies' declarations).

@@ -204,7 +204,6 @@ cognitive	orphan_candidates	41
 cognitive	orphan_duty	101
 cognitive	outside_gate	22
 cognitive	overlap_hold	30
-cognitive	overlap_of	11
 cognitive	own_change_item	13
 cognitive	own_configs	12
 cognitive	own_fixer_record_path	12
@@ -624,7 +623,7 @@ cyclomatic	orphan_why	11
 cyclomatic	out_of_build_reach	17
 cyclomatic	outside_gate	18
 cyclomatic	overlap_hold	23
-cyclomatic	overlap_of	12
+cyclomatic	overlap_of	11
 cyclomatic	own_change_item	17
 cyclomatic	own_fixer_record_path	13
 cyclomatic	own_inbox_entry	13
