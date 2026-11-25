@@ -36,6 +36,7 @@ from agentctl.testtmp import TEST_TMP_MAX_AGE
 
 
 WP_RSS_GB = 4.0
+WP_RSS_BY_NAME = "idea=8"  # comma list of name=GB: the RSS limit of the process of that name, others WP_RSS_GB (IntelliJ's JVM sits at 4-5 GB)
 WP_CPU_PCT = 90.0
 WP_CPU_MIN = 20
 WP_PERSIST_MIN = 30  # minutes the RSS growth must have held before it is a trend
@@ -192,12 +193,24 @@ def _ticket_of(pid: int, ppids: dict[int, int], tickets: list[dict[str, Any]]) -
     return None
 
 
+def wp_rss_gb(name: str) -> float:
+    """The RSS limit in GB of the process called `name`: its `name=GB` entry of AGENTCTL_WP_RSS_BY_NAME, else WP_RSS_GB."""
+    for entry in os.environ.get("AGENTCTL_WP_RSS_BY_NAME", WP_RSS_BY_NAME).split(","):
+        key, _, gb = entry.partition("=")
+        try:
+            if key.strip() == name:
+                return float(gb)
+        except ValueError:
+            continue
+    return WP_RSS_GB
+
+
 def _limits(p: dict[str, Any], ticket: Optional[dict[str, Any]]) -> tuple[float, str, float]:
     """(RSS KB past which process record `p` may not grow, what that limit is, the %CPU it may hold)."""
     gb = 1024 * 1024
     ceiling = p.get("ceiling")
     rss, said = (ceiling[0] * (1 + WP_CEILING_MARGIN) + WP_CEILING_HEADROOM_GB * gb, f"past {ceiling[1]} + margin") \
-        if ceiling else (WP_RSS_GB * gb, f"past {WP_RSS_GB:g} GB")
+        if ceiling else (wp_rss_gb(p["name"]) * gb, f"past {wp_rss_gb(p['name']):g} GB")
     cpu = WP_CPU_PCT
     if ticket:
         charged = float(ticket.get("mem") or 0) * gb

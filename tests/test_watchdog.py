@@ -474,6 +474,15 @@ class RunawayProcessTest(unittest.TestCase):
         self.assertFalse(passes[-1][1])
         self.assertIn("past its guest memory 2.0 GB + margin", passes[-1][2])
 
+    def test_idea_is_held_to_its_own_8_gb_limit_and_others_to_4(self):
+        """2026-11-25: IntelliJ's `idea` JVM sits at 4.1-4.2 GB and WP escalated it; WP_RSS_BY_NAME gives it 8 GB."""
+        idea = lambda a, b: self.run_passes(self.climb(a, b, 60), pid=1246, name="idea", cpu=5.0)  # noqa: E731
+        self.assertTrue(idea(4.0, 5.0)[-1][1], "idea at 5 GB, growing: under its 8 GB")
+        last = idea(8.0, 9.0)[-1]
+        self.assertFalse(last[1], "idea at 9 GB, growing: past 8 GB")
+        self.assertIn("past 8 GB", last[2])
+        self.assertFalse(self.run_passes(self.climb(4.0, 5.0, 60), pid=77, name="other", cpu=5.0)[-1][1])
+
     def test_each_known_kind_reads_its_own_ceiling_and_an_unknown_one_has_none(self):
         self.assertEqual(A.proc_ceiling("java", "java -Xmx512m x", 16.0, self.d), (512 * 1024, "its -Xmx 0.5 GB"))
         self.assertEqual(A.proc_ceiling("mongod", "mongod --wiredTigerCacheSizeGB 3", 16.0, self.d)[0], 3 * 1024 ** 2)

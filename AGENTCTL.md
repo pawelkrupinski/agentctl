@@ -242,7 +242,7 @@ moves it forward; nothing is a detached process that can die with its state in i
   kern.maxfiles (`$AGENTCTL_WF_PCT`; past it, it names the top three holders, and for Rancher Desktop's VM on top the
   `rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'` that releases its virtiofs descriptors: on
   2026-11-20 ~200k of them, one per file a container had seen in ~25 worktrees, overflowed it, ENFILE everywhere), WP no
-  process -- a system daemon too -- holds an RSS past its own limit (4 GB; a ceiling its kind sets itself + 25% + 1 GB, procwatch's
+  process -- a system daemon too -- holds an RSS past its own limit (4 GB, `wp_rss_by_name` in agentctl.toml: `idea` 8 GB; a ceiling its kind sets itself + 25% + 1 GB, procwatch's
   CEILINGS table: a JVM's -Xmx, a mongod's WiredTiger cache -- cacheSizeGB, else 50% of (RAM - 1 GB) --, a Linux VM's
   configured guest memory (Rancher Desktop / lima / colima / Docker Desktop); a live governor ticket's charged memory)
   that has kept growing for 30 min (both halves of its 2 h of 5-min samples grew, 500 MB or 5% in all: one jump, or a
