@@ -2,7 +2,6 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import re
-import time
 from typing import Any, Iterable, Optional, Sequence, cast
 from agentctl.timefmt import iso_at
 

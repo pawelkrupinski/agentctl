@@ -22,7 +22,7 @@ RUN_VIEW_FIELDS = "jobs,headSha,url,number,status,conclusion,workflowName,workfl
 GhJson = dict[str, Any]  # gh's JSON: a run view, a job, a step, an incident
 
 
-def run_failed_jobs(d: Rec) -> list[Rec]:
+def run_failed_jobs(d: GhJson) -> list[GhJson]:
     """The failed jobs of a run view. A completed run's job GitHub left undecided (status in_progress, conclusion null:
     core #767, 2026-11-04) is failed when one of its steps failed."""
     done = d.get("status") == "completed"
@@ -30,7 +30,7 @@ def run_failed_jobs(d: Rec) -> list[Rec]:
             or (done and not j.get("conclusion") and failed_steps(j))]
 
 
-def run_failed_attempt(o_r: str, rid: Any, d: Rec) -> tuple[Rec, Optional[int]]:
+def run_failed_attempt(o_r: str, rid: Any, d: GhJson) -> tuple[GhJson, Optional[int]]:
     """(the run view to explain, its attempt when not the latest). THE FAILED ATTEMPT, NOT THE LATEST (issues
     20261108T070310-133a19, 20261119T024846-892cf2): a rerun replaces the run's jobs with its own -- green, or still
     running -- so the failure that made the red is read from the newest earlier attempt that has one."""
@@ -48,7 +48,7 @@ def run_failed_attempt(o_r: str, rid: Any, d: Rec) -> tuple[Rec, Optional[int]]:
     return d, None
 
 
-def job_annotations(o_r: str, job: Rec) -> list[str]:
+def job_annotations(o_r: str, job: GhJson) -> list[str]:
     """The failure-level check-run annotations of a job (GitHub's own words for a job with no log: `The job was not
     acquired by Runner of type hosted ...`, iOS #526), [] when none or unread."""
     jid = job.get("databaseId")
@@ -68,7 +68,7 @@ def failure_message(a: Any) -> Optional[str]:
     return str(a.get("message") or a.get("title") or "").strip()[:300]
 
 
-def jobs_never_created(wf_jobs: list[Rec], run_jobs: list[Rec]) -> list[str]:
+def jobs_never_created(wf_jobs: list[GhJson], run_jobs: list[GhJson]) -> list[str]:
     """The names of the workflow's jobs (remote.workflow_jobs) the run has no job of (a matrix's or a called
     workflow's jobs start with the job's name; a name built from an expression is matched by what precedes it)."""
     names = [str(j.get("name") or "") for j in run_jobs]
@@ -99,7 +99,7 @@ def github_incidents(since: Any, until: Any) -> list[str]:
     return [f"{i.get('name')} ({i.get('shortlink') or i.get('id')})" for i in incidents if actions_incident_in(i, lo, hi)]
 
 
-def actions_incident_in(i: Rec, lo: dt.datetime, hi: dt.datetime) -> bool:
+def actions_incident_in(i: GhJson, lo: dt.datetime, hi: dt.datetime) -> bool:
     """The incident names Actions (itself or a component) and was open some time in lo..hi; False when unreadable."""
     words = " ".join([str(i.get("name"))] + [str(c.get("name")) for c in i.get("components") or []])
     try:
@@ -110,7 +110,7 @@ def actions_incident_in(i: Rec, lo: dt.datetime, hi: dt.datetime) -> bool:
     return "Actions" in words and start <= hi and (end is None or end >= lo)
 
 
-def never_created_lines(o_r: str, d: Rec) -> tuple[str, str]:
+def never_created_lines(o_r: str, d: GhJson) -> tuple[str, str]:
     """(job label, why) when every job a failed run created passed: GitHub failed the run itself (core #911,
     2026-11-09: promote-image never created during an Actions incident). The jobs the workflow file at the run's
     commit names that the run lacks, and the githubstatus.com Actions incidents of its window."""
@@ -131,13 +131,13 @@ def never_created_lines(o_r: str, d: Rec) -> tuple[str, str]:
     return label, why
 
 
-def explain_run(o_r: str, run: Rec, tail: int, repo: Optional[str] = None) -> tuple[list[str], Any]:
+def explain_run(o_r: str, run: GhJson, tail: int, repo: Optional[str] = None) -> tuple[list[str], Any]:
     """Lines explaining one red run: commit, failed jobs, their log tails, infra vs test."""
     lines, num, _per_job = explain_run_jobs(o_r, run, tail, repo)
     return lines, num
 
 
-def explain_run_jobs(o_r: str, run: Rec, tail: int, repo: Optional[str] = None) -> tuple[list[str], Any, list[Any]]:
+def explain_run_jobs(o_r: str, run: GhJson, tail: int, repo: Optional[str] = None) -> tuple[list[str], Any, list[Any]]:
     """(lines, run number, [(failed job, infra|unclear|test, its first relevant line)])."""
     x = RunExplanation(o_r, run, tail)
     lines = x.header(repo)
@@ -157,7 +157,7 @@ class RunExplanation:
     """One red run read: its failed attempt, its failed log, each failed job explained (the job-log fetches they share
     capped at MAX_JOB_LOG_FETCHES), the kinds they add up to and the run's verdict."""
 
-    def __init__(self, o_r: str, run: Rec, tail: int) -> None:
+    def __init__(self, o_r: str, run: GhJson, tail: int) -> None:
         self.o_r, self.run, self.tail = o_r, run, tail
         self.rid = run["databaseId"]
         self.latest = gh_json(o_r, "run", "view", str(self.rid), "--json", RUN_VIEW_FIELDS)
@@ -212,7 +212,7 @@ class RunExplanation:
                          f"latest) is {self.latest.get('conclusion') or self.latest.get('status')}")
         return lines
 
-    def job(self, j: Rec) -> list[str]:
+    def job(self, j: GhJson) -> list[str]:
         """One failed job's lines, its kind and red key recorded."""
         if j["name"] in self.annotated:
             return self._annotated_job(j)
@@ -222,7 +222,7 @@ class RunExplanation:
                     + ("" if self.no_verdict else " -- no verdict of its own: it follows the other failed jobs")]
         return self._logged_job(j)
 
-    def _annotated_job(self, j: Rec) -> list[str]:
+    def _annotated_job(self, j: GhJson) -> list[str]:
         jl = self.annotated[j["name"]]
         kind, why = classify_job(j, jl, (0, []))
         if kind == "test" and not failed_steps(j):  # a job that ran no step tested nothing
@@ -231,7 +231,7 @@ class RunExplanation:
         self.per_job.append((j["name"], kind, jl[0]))
         return [f"  [{kind}] {j['name']} ({j.get('conclusion')}): {why}"] + [f"      annotation: {l}" for l in jl]
 
-    def _logged_job(self, j: Rec) -> list[str]:
+    def _logged_job(self, j: GhJson) -> list[str]:
         jl, strong = self._hook_verdict(j, self.per.get(j["name"]) or [], j["name"] in self.strong_jobs)
         bad = [st for st in j.get("steps") or [] if st.get("conclusion") in ("failure", "timed_out")]
         setup = bool(bad) and bool(SETUP_STEP.search(bad[0]["name"]))
@@ -245,7 +245,7 @@ class RunExplanation:
     def _can_fetch(self) -> bool:
         return self.fetched < MAX_JOB_LOG_FETCHES
 
-    def _hook_verdict(self, j: Rec, jl: list[str], strong: bool) -> tuple[list[str], bool]:
+    def _hook_verdict(self, j: GhJson, jl: list[str], strong: bool) -> tuple[list[str], bool]:
         """A precommit-check job's hook verdict beats a passing subtest's tail."""
         if self._can_fetch() and "precommit" in str(self.d.get("workflowName", "")).lower().replace("-", ""):
             hl = hook_lines(self.o_r, self.rid, j, self.tail)
@@ -254,7 +254,7 @@ class RunExplanation:
                 return hl, True
         return jl, strong
 
-    def _whole_log(self, j: Rec, jl: list[str], strong: bool, setup: bool) -> tuple[list[str], Optional[str]]:
+    def _whole_log(self, j: GhJson, jl: list[str], strong: bool, setup: bool) -> tuple[list[str], Optional[str]]:
         """No STRONG line in the step's slice (a shifted slice, or only weak words): the job's own `::error`
         annotations, in its whole log, say what failed. (lines, a note when that log went unread)."""
         if strong or setup or not self._can_fetch():
@@ -269,14 +269,14 @@ class RunExplanation:
                     f"{self.unread[-1][:160]}; read again next time)")
         return choose_job_lines(jl, strong, whole, bool(ann and ann[0])), note
 
-    def _annotations_when_silent(self, j: Rec, jl: list[str], setup: bool) -> list[str]:
+    def _annotations_when_silent(self, j: GhJson, jl: list[str], setup: bool) -> list[str]:
         """No log line at all (0 steps, no runner): GitHub's annotations."""
         if jl or setup or self.unread or not self._can_fetch():
             return jl
         self.fetched += 1
         return job_annotations(self.o_r, j)
 
-    def _classified(self, j: Rec, jl: list[str], setup: bool) -> tuple[str, str, list[str]]:
+    def _classified(self, j: GhJson, jl: list[str], setup: bool) -> tuple[str, str, list[str]]:
         name = j["name"]
         kind, why = classify_job(j, jl, self.raws.get(name, (0, [])),
                                  name in self.timed or any(STEP_TIMED_OUT in l for l in jl))
@@ -295,7 +295,7 @@ class RunExplanation:
                     "alone"), note or f"      ({cut})"
         return why, note
 
-    def _job_report(self, j: Rec, kind: str, why: str, jl: list[str], bad: list[Rec], note: Optional[str]) -> list[str]:
+    def _job_report(self, j: GhJson, kind: str, why: str, jl: list[str], bad: list[GhJson], note: Optional[str]) -> list[str]:
         # a job with no error line is known by its failing STEP (a red is its failing test or step, never its job name)
         key_line, drift_note = drift_key(self.o_r, j, jl[0] if jl else "")
         self.per_job.append((j["name"], kind, key_line or (jl[0] if jl else (f"step failed: {bad[0]['name']}" if bad else ""))))
