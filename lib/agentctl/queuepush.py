@@ -109,7 +109,7 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
     return did
 
 
-def said_once(e, key, line, did):
+def said_once(e: Any, key: Any, line: Any, did: Any) -> Any:
     """Say `line` (append it to did) once per entry and key: the hold it names is recorded each tick, said once."""
     if not _behind_said.get((e["id"], key)):
         _behind_said[(e["id"], key)] = True
@@ -120,12 +120,12 @@ class ChangePass:
     """One pass of tick_changes (`push` or `check`), a method per stage of one entry's walk. A stage that decides the
     entry's tick returns True (the entry goes no further); the lines it says go to `did`."""
 
-    def __init__(self, repo, d, st, clock, t, facts, kinds, phase, todo, held, pheld, batch_seq, stacks):
+    def __init__(self, repo: Any, d: Any, st: Any, clock: Any, t: Any, facts: Any, kinds: Any, phase: Any, todo: Any, held: Any, pheld: Any, batch_seq: Any, stacks: Any) -> None:
         self.repo, self.d, self.st, self.clock, self.t, self.facts, self.kinds = repo, d, st, clock, t, facts, kinds
         self.statuses = ("checked", "pushing") if phase == "push" else ("queued", "checking")
         self.todo, self.held, self.pheld, self.batch_seq, self.stacks = todo, held, pheld, batch_seq, stacks
 
-    def entry(self, e):
+    def entry(self, e: Any) -> Any:
         """The lines entry e's tick says."""
         if e.get("backlog_batch"):  # a backlog batch's member: the batch checks and pushes it (backlog_reconcile)
             return []
@@ -146,14 +146,14 @@ class ChangePass:
         self.check(e, it, state, fix, did)
         return did
 
-    def checked(self, e, fix):
+    def checked(self, e: Any, fix: Any) -> Any:
         """A checked entry: its push, unless it waits for its retry."""
         if e.get("retry_after", 0) > self.t:
             note_hold(self.st, e, "retry", f"its push is retried at {hhmmz(e['retry_after'])}", self.t)
             return []
         return _push_checked(self.repo, self.d, self.st, self.clock, self.t, e, fix, self.todo, self.pheld, self.kinds)
 
-    def check(self, e, it, state, fix, did):
+    def check(self, e: Any, it: Any, state: Any, fix: Any, did: Any) -> Any:
         """A queued or checking entry: lapsed, held, or its executor started."""
         alive = checker_alive(self.st, e["id"])
         if self.lapsed(e, it, state, alive, did) or self.queued_hold(e, state, alive, fix, did):
@@ -162,7 +162,7 @@ class ChangePass:
             return
         self.start(e, fix, did)
 
-    def lapsed(self, e, it, state, alive, did):
+    def lapsed(self, e: Any, it: Any, state: Any, alive: Any, did: Any) -> Any:
         """Checking past its deadline with no live checker: back to the queue (infra)."""
         if state == "checking" and not alive and self.t > it["deadline"]:
             requeue_infra(self.st, self.d, e, "its check passed its deadline with no live checker", self.t)
@@ -170,7 +170,7 @@ class ChangePass:
             return True
         return False
 
-    def queued_hold(self, e, state, alive, fix, did):
+    def queued_hold(self, e: Any, state: Any, alive: Any, fix: Any, did: Any) -> Any:
         """A queued entry: its deadline lapsed, rejected where it no longer applies on main, held for a parent or an
         overlapping older change."""
         if state != "queued":
@@ -188,14 +188,14 @@ class ChangePass:
         did += lines
         return bool(waits)
 
-    def reject_stale(self, e, gone):
+    def reject_stale(self, e: Any, gone: Any) -> Any:
         # policy: no-longer-applies
         queue_verdict(self.st, self.d, e, "rejected", f"NOT LANDED: the change no longer applies on {remote()}/main "
                       f"{gone[0][:10]} (main moved since QUEUED{conflict_cause(self.repo, e.get('base'), gone[0], gone[1])}"
                       f"): rebase onto {remote()}/main and land again (it keeps its place in the queue)",
                       conflict_files=conflict_paths(gone[1]), decided_on=gone[0])
 
-    def retrying(self, e, alive):
+    def retrying(self, e: Any, alive: Any) -> Any:
         """A regeneration hold overdue, a live checker, or a retry still to come: nothing to start."""
         if e.get("regen_hold") and regen_hold_overdue(self.st, self.d, e, self.t):
             return True
@@ -205,7 +205,7 @@ class ChangePass:
             return True
         return False
 
-    def batch_hold(self, e, fix, did):
+    def batch_hold(self, e: Any, fix: Any, did: Any) -> Any:
         """The next free check tree is a batch's: the assembling or pushing batch, or the push or backlog batch to come."""
         st, t = self.st, self.t
         first = None if fix else batch_goes_first(st, self.d, ("assembling", "pushing"))
@@ -221,7 +221,7 @@ class ChangePass:
                 return True
         return False
 
-    def start(self, e, fix, did):
+    def start(self, e: Any, fix: Any, did: Any) -> Any:
         """Its executor started, if a check tree is free (and not the last one, kept for an older batch)."""
         st = self.st
         slot = check_tree_slot(st, self.repo, self.d, fix=fix)

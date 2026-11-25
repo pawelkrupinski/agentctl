@@ -119,7 +119,7 @@ def stats_pass(clock, store, repo=None, d=None, url=None, out=None):
 class StatsPass:
     """One pass of stats_pass: what is due, each due item's records built (a method per kind) and sent."""
 
-    def __init__(self, clock, st, repo, d, url, out):
+    def __init__(self, clock: Any, st: Any, repo: Any, d: Any, url: Any, out: Any) -> None:
         self.clock, self.st, self.repo, self.url, self.out = clock, st, repo, url, out
         self.t = clock.time()
         self.since = _num(st.meta_get("stats_since"))
@@ -128,12 +128,13 @@ class StatsPass:
             st.meta_set("stats_since", self.since)
         self.deadline = clock.monotonic() + env_num("AGENTCTL_STATS_PASS_BOUND", STATS_PASS_BOUND)
         self.entries = {e["id"]: e for e in waiting_entries(d, open_only=False)} if d else {}
-        self.waits, self.by_sha = None, {}
-        self.changes = []
+        self.waits: Any = None
+        self.by_sha: dict[Any, Any] = {}
+        self.changes: list[Any] = []
         self.builders = {"landing": self.landing, "landing_watch": self.watch, "red": self.red,
                          "condition": self.condition}
 
-    def due(self):
+    def due(self) -> Any:
         """[(marker name, id, item)], oldest first: the exits settled and the watches, reds and conditions closed."""
         st, t = self.st, self.t
         settle = env_num("AGENTCTL_STATS_SETTLE", STATS_SETTLE)
@@ -146,7 +147,7 @@ class StatsPass:
                     if it["entered_at"] <= t - 60 and not stats_sent(st, name, it["id"])]
         return sorted(due, key=lambda x: x[2]["entered_at"])
 
-    def run(self):
+    def run(self) -> Any:
         """How many records were sent, the gate runs after the due items while the pass has time left."""
         due = self.due()
         cap = int(env_num("AGENTCTL_STATS_PER_PASS", STATS_PER_PASS))
@@ -155,7 +156,7 @@ class StatsPass:
             sent += gate_runs_pass(self.st, self.url, self.t, self.since, cap - sent, self.out)
         return sent
 
-    def send_due(self, due, cap):
+    def send_due(self, due: Any, cap: Any) -> Any:
         """The due items' records sent, up to cap and the pass's deadline, none after one that could not be."""
         self.by_sha = {(c["data"] or {}).get("landed_sha"): c["id"] for c in self.changes
                        if (c["data"] or {}).get("landed_sha")}
@@ -169,7 +170,7 @@ class StatsPass:
             sent += len(recs)
         return sent
 
-    def send(self, name, iid, recs):
+    def send(self, name: Any, iid: Any, recs: Any) -> Any:
         """Whether the records were posted (and marked sent); a refusal waits for the next pass."""
         try:
             stats_post(self.url, recs)
@@ -180,7 +181,7 @@ class StatsPass:
         stats_echo(recs, self.out)
         return True
 
-    def landing(self, iid, it):
+    def landing(self, iid: Any, it: Any) -> Any:
         evs = item_events(self.st, "change", iid)
         e = self.entries.get(iid) or {}
         start = _num((it["data"] or {}).get("submitted_at")) or it["entered_at"]
@@ -191,10 +192,10 @@ class StatsPass:
             return None
         return landing_records(it, evs, e, runs, change_paths(self.repo, e, it["data"] or {}), self.since)
 
-    def watch(self, iid, it):
+    def watch(self, iid: Any, it: Any) -> Any:
         return [watch_record(it, self.by_sha.get(iid), self.since)]
 
-    def red(self, iid, it):
+    def red(self, iid: Any, it: Any) -> Any:
         if self.waits is None:
             self.waits = change_waits(self.st, self.changes, self.t)
         evs = item_events(self.st, "red", iid)
@@ -202,7 +203,7 @@ class StatsPass:
         od = owner_decision_record(it, evs, self.since)
         return recs + [od] if od else recs
 
-    def condition(self, iid, it):
+    def condition(self, iid: Any, it: Any) -> Any:
         return [condition_record(it, item_events(self.st, "condition", iid), self.since)]
 
 
