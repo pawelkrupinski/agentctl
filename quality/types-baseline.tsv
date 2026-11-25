@@ -40,7 +40,7 @@ mypy-errors	fixerenv	3
 mypy-errors	fixerland	30
 mypy-errors	fixerlife	57
 mypy-errors	fixersession	38
-mypy-errors	forge	70
+mypy-errors	forge	68
 mypy-errors	gatesummary	4
 mypy-errors	gating	33
 mypy-errors	generated	38
@@ -93,7 +93,7 @@ mypy-errors	queuebatch	62
 mypy-errors	queuecheck	39
 mypy-errors	queueclose	37
 mypy-errors	queuediff	73
-mypy-errors	queueenter	80
+mypy-errors	queueenter	79
 mypy-errors	queuepush	100
 mypy-errors	queuerecheck	46
 mypy-errors	queueslots	25
