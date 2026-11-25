@@ -23,6 +23,7 @@ from agentctl.redhold import W1_HARD_FACTOR, change_progress, inv_wr, red_unheld
 from agentctl.queueclose import change_rows, close_landed_changes
 from agentctl.statemachines import change_exits_unannounced
 from agentctl.clock import Clock
+from agentctl.selfci import inv_wa
 
 
 # ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)
@@ -342,7 +343,7 @@ def inv_wf(clock, st, reading=False, lsof_out=None):
 
 # EVERY INVARIANT IS CHECKED AS fn(clock, st): the watchdog's clock and store, from cli (the composition root)
 INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "WR": inv_wr, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7,
-              "W8": inv_w8, "WM": inv_wm, "WN": inv_wn, "WF": inv_wf,
+              "W8": inv_w8, "WA": inv_wa, "WM": inv_wm, "WN": inv_wn, "WF": inv_wf,
               "WP": lambda clock, st: inv_wp(now_=clock.time()), "WT": lambda clock, st: inv_wt(now_=clock.time())}
 
 

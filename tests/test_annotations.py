@@ -12,45 +12,59 @@ LIB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 
 
 def unbound_annotation_names(src):
     """The names a module's eagerly-evaluated annotations (module-level and class-level defs, their parameters and
-    returns, class-body variable annotations) read that the module never binds and builtins lack, with their lines."""
+    returns, variable annotations) read BEFORE the module binds them (2026-11-25: ciwhy's `list[Run]` sat above
+    `Run = dict[...]`; a name under `if TYPE_CHECKING:` is no runtime binding), builtins aside, with their lines."""
     import builtins
     tree = ast.parse(src)
-    bound = set(dir(builtins))
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            bound |= {(a.asname or a.name).split(".")[0] for a in node.names}
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            bound.add(node.name)
-        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-            bound.add(node.id)
     if any(isinstance(n, ast.ImportFrom) and n.module == "__future__" and any(a.name == "annotations" for a in n.names)
            for n in tree.body):
         return []
-    anns = []
+    out = []
 
-    def scope(body):
+    def check(ann, bound):
+        if ann is None or isinstance(ann, ast.Constant):  # a string annotation is never evaluated at def time
+            return
+        out.extend((n.id, n.lineno) for n in ast.walk(ann)
+                   if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load) and n.id not in bound)
+
+    def bind(node, bound):
+        for n in ast.walk(node):
+            if isinstance(n, (ast.Import, ast.ImportFrom)):
+                bound |= {(a.asname or a.name).split(".")[0] for a in n.names}
+            elif isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store):
+                bound.add(n.id)
+
+    def is_type_checking(test):
+        return (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or \
+            (isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING")
+
+    def run(body, bound):
         for node in body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 a = node.args
                 for arg in a.posonlyargs + a.args + a.kwonlyargs + [a.vararg, a.kwarg]:
-                    if arg is not None and arg.annotation is not None:
-                        anns.append(arg.annotation)
-                if node.returns is not None:
-                    anns.append(node.returns)
+                    if arg is not None:
+                        check(arg.annotation, bound)
+                check(node.returns, bound)
+                bound.add(node.name)
             elif isinstance(node, ast.ClassDef):
-                anns.extend(n.annotation for n in node.body if isinstance(n, ast.AnnAssign))
-                scope(node.body)
-            elif isinstance(node, (ast.If, ast.Try)):
-                scope(node.body + node.orelse + [h for x in getattr(node, "handlers", []) for h in x.body])
+                run(node.body, set(bound))
+                bound.add(node.name)
+            elif isinstance(node, ast.AnnAssign):
+                check(node.annotation, bound)
+                bind(node, bound)
+            elif isinstance(node, ast.If):
+                if not is_type_checking(node.test):
+                    run(node.body, bound)
+                run(node.orelse, bound)
+            elif isinstance(node, ast.Try):
+                run(node.body + node.orelse + node.finalbody, bound)
+                for h in node.handlers:
+                    run(h.body, bound)
+            else:
+                bind(node, bound)
 
-    scope(tree.body)
-    out = []
-    for ann in anns:
-        if isinstance(ann, ast.Constant):  # a string annotation is never evaluated at def time
-            continue
-        for n in ast.walk(ann):
-            if isinstance(n, ast.Name) and n.id not in bound:
-                out.append((n.id, n.lineno))
+    run(tree.body, set(dir(builtins)))
     return out
 
 
@@ -66,6 +80,14 @@ class AnnotationsTest(unittest.TestCase):
     def test_the_reader_sees_the_2026_11_23_shape(self):
         src = "import os\nfrom typing import Optional\ndef f(store: Any, x: 'Later') -> Optional[int]:\n    pass\n"
         self.assertEqual(unbound_annotation_names(src), [("Any", 3)])
+
+    def test_the_reader_sees_a_name_bound_below_its_use_and_one_bound_only_for_the_type_checker(self):
+        late = "def f(r: list[Run]) -> None:\n    pass\nRun = dict[str, int]\n"
+        self.assertEqual(unbound_annotation_names(late), [("Run", 1)])
+        typing_only = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from x import T\ndef f(r: T) -> None:\n    pass\n"
+        self.assertEqual(unbound_annotation_names(typing_only), [("T", 4)])
+        fine = "Run = dict[str, int]\nclass C:\n    def f(self, r: list[Run]) -> None:\n        pass\n"
+        self.assertEqual(unbound_annotation_names(fine), [])
 
 
 SERVER_PYTHON = "3.13"   # ci-runner's interpreter (`ssh ci-runner python3 --version`, 2026-11-25: 3.13.17)

@@ -207,6 +207,9 @@ def run_no_verdict(o_r, r):
     return nv
 
 
+Run = dict[str, Any]  # a workflow run as gh lists it (RUN_FIELDS)
+
+
 def newest_decided(runs: list[Run], no_verdict: Callable[[Run], bool]) -> tuple[Run | None, Run | None]:
     """(the newest decided run of `runs` (newest first) that has a verdict, the newest decided run with none). A run
     for which no_verdict(run) holds is an incomplete one: it says nothing, and the search goes on past it."""
@@ -245,9 +248,6 @@ def gate_runs(o_r, flows=None):
         _gate_lists[name], _gate_no_verdict[name] = runs, nov
         out.append((name, decided, newer, red_streak(runs, skip=nv)))
     return out
-
-
-Run = dict[str, Any]  # a workflow run as gh lists it (RUN_FIELDS)
 
 
 def is_decided(r: Run) -> bool:
