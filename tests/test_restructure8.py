@@ -1,7 +1,7 @@
 """RESTRUCTURE ROUND 8: each function split into named stages keeps its behaviour. The digests (fixtures/
 restructure8-digests.json, recorded from the code BEFORE the split with `R4_RECORD=1`) cover thousands of seeded cases
 each, collaborators faked (golden_cases.py): every call, its order and the result. The clock is the case's own."""
-import builtins, contextlib, glob as glob_module, io, os, shutil, sys, tempfile, types, unittest
+import builtins, contextlib, glob as glob_module, inspect, io, os, shutil, sys, tempfile, types, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -116,15 +116,16 @@ class RedDispatchTest(unittest.TestCase):
                 ("spawn_fixer", lambda rng, *a: types.SimpleNamespace(pid=rng.randint(100, 999))),
                 ("socket_host", lambda rng: "host1"),
                 ("inbox_write", lambda rng, *a, **k: None),
-                ("fixer_label", lambda rng, rec: f"label-{rec.get('run')}")):
+                ("fixer_label", lambda rng, rec: f"label-{rec.get('run')}"), ("err", lambda rng, m: None)):
             case.fake(name, gen)
         resume = maybe(r, {"worktree": r.choice(TREES), "session": r.choice([None, "s0"]), "note": r.choice([None, "n"]),
                            "launch_cwd": r.choice([None, "/l"])}, 0.35)
         took = r.choice([None, {"epoch": 3, "secret": "sec"}, {"secret": "sec2"}])
         extra = r.choice([(), ({"name": "n1", "epoch": 1, "secret": "s1"},), ({"name": "n1", "epoch": 1, "secret": "s1"}, {"name": "n2", "epoch": 2, "secret": "s2"})])
         store = maybe(r, Probe(case, "store", set_meta=lambda rng, *a: raising(rng, 0.2, None)), 0.7)
-        return ("o/r", "/repo", a_red(r), r.choice(["by hand", "auto"]), resume, r.choice([None, "high"]),
+        args = ("o/r", "/repo", a_red(r), r.choice(["by hand", "auto"]), resume, r.choice([None, "high"]),
                 r.choice([None, "L"]), took, extra, store)
+        return args[:r.choice([3, 10, 10, 10])]  # the first three: every default
 
     def test_red_dispatch(self):
         check(self, "red_dispatch", self.build, lambda A: A.red_dispatch)
@@ -168,7 +169,8 @@ class FixersLandWatchTest(unittest.TestCase):
         case.fake("write_json", lambda rng, p, st: None)
         case.fake("ts", lambda rng: "T")
         case.patch(os, "unlink", lambda rng, p: raising(rng, 0.3, None, OSError))
-        return (maybe(r, NOW + r.choice([0, 1, 30, 61, 4000]), 0.7), r.random() < 0.3)
+        args = (maybe(r, NOW + r.choice([0, 1, 30, 61, 4000]), 0.7), r.random() < 0.3)
+        return args[:r.choice([0, 1, 2, 2, 2])]  # none: both defaults
 
     def test_fixers_land_watch(self):
         check(self, "fixers_land_watch", self.build, lambda A: A.fixers_land_watch, 4000)
@@ -249,6 +251,7 @@ class SuccessorStateTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
         trees_exist(case)
+        case.patch(os.path, "isdir", lambda rng, p: rng.random() < 0.5)
         case.fake("change_landed", lambda rng, repo, head: rng.choice([(None, None), (True, "s" * 12), (True, None), (False, None)]))
         states = ["queued", "checking", "checked", "pushing", "landed", "rejected", "superseded", "cancelled", "waiting"]
 
@@ -256,12 +259,14 @@ class SuccessorStateTest(unittest.TestCase):
             return maybe(rng, {"id": rng.choice([cid, cid, "c9"]), "state": rng.choice(states),
                                "data": {"superseded_by": rng.choice([None, "c2", "c3", cid])}}, 0.8)
 
+        m_tree = r.choice(PATHS)
+
         def items(rng, typ, only=None):
             return [{"id": f"c{i}", "state": rng.choice(states) if not only else only[0], "entered_at": rng.choice([None, 50, 150, 250]),
-                     "data": {"worktree": rng.choice(PATHS + [None, ""])}} for i in range(rng.randint(0, 3))]
+                     "data": {"worktree": rng.choice(PATHS + [m_tree, m_tree, None, ""])}} for i in range(rng.randint(0, 3))]
         store = Probe(case, "store", item=item, items=lambda rng, typ, only=None: raising(rng, 0.05, items(rng, typ, only)))
-        m = {"by": r.choice(["ci-5", "ci-6"]), "at": r.choice([None, 100, 200.0])}
-        for key, gen in (("change", lambda: r.choice(["c1", "c2"])), ("worktree", lambda: r.choice(PATHS)), ("head", lambda: "h" * 40)):
+        m = {"by": r.choice(["ci-5", "ci-6"]), "at": r.choice([None, 0, 1, 100, 200.0])}
+        for key, gen in (("change", lambda: r.choice(["c1", "c2"])), ("worktree", lambda: m_tree), ("head", lambda: "h" * 40)):
             if r.random() < 0.5:
                 m[key] = gen()
         return (m, "/repo", store)
@@ -275,7 +280,7 @@ class CloseSupersededTest(unittest.TestCase):
         r = case.rng
         trees_exist(case)
         trees = [{"worktree": "/root", "branch": "refs/heads/main"}]
-        for p in PATHS[:3]:
+        for p in PATHS[:3] + ["/h/w/e"]:
             if r.random() < 0.85:
                 t = {"worktree": p, "branch": "refs/heads/" + r.choice(["feat", "main", "other"])}
                 if r.random() < 0.1:
@@ -284,7 +289,7 @@ class CloseSupersededTest(unittest.TestCase):
                     del t["branch"]
                 trees.append(t)
         case.fake("worktrees", lambda rng, repo: raising(rng, 0.03, trees if rng.random() < 0.9 else trees[:1]))
-        case.fake("process_cwds", lambda rng: raising(rng, 0.05, {p: rng.choice(["/w/a", "/w/b/x", "/z", "/root"]) for p in rng.sample(range(10), rng.randint(0, 3))},
+        case.fake("process_cwds", lambda rng: raising(rng, 0.05, {p: rng.choice(["/w/a", "/w/b/x", "/z", "/root"]) for p in rng.sample(range(10), rng.randint(0, 6))},
                                                       SystemExit))
 
         def git_(rng, repo, *a, **k):
@@ -294,10 +299,10 @@ class CloseSupersededTest(unittest.TestCase):
                 return proc(rng, rng.choice([0, 0, 1]), "", "refused " * 40)
             if "update-ref" in a:
                 return proc(rng, rng.choice([0, 1]))
-            return "headsha\n"
+            return "h" * 40 + "\n"
         case.fake("git", git_)
         case.fake("log_deletion", lambda rng, *a: None)
-        return ("/repo", r.choice(["/w/a", "/w/b", "/w/c", "/root", "/w/gone"]), r.choice(["by x", "y"]))
+        return ("/repo", r.choice(["/w/a", "/w/b", "/w/c", "/root", "/w/gone", "/h/w/e"]), r.choice(["by x", "y"]))
 
     def test_close_superseded(self):
         check(self, "close_superseded", self.build, lambda A: A.close_superseded, 6000)
@@ -317,7 +322,7 @@ class CmdSupersedeTest(unittest.TestCase):
 
         def git_(rng, repo, *a, **k):
             if "--show-toplevel" in a:
-                return proc(rng, 0, rng.choice(["/w/a\n", "/w/b\n", "", "/w/gone\n"]))
+                return proc(rng, 0, rng.choice(["/w/a\n", "/w/b\n", "/h/w/e\n", "", "/w/gone\n"]))
             return rng.choice(["/w/a/.git\n", "/w/bare\n"])
         case.fake("git", git_)
 
@@ -329,7 +334,7 @@ class CmdSupersedeTest(unittest.TestCase):
                 raise SystemExit("agentctl: NoToken")
             return (rng.choice(["ci-5", "c1"]), rng.choice([None, "c1"]), rng.choice([None, "/w/a", "/w/c"]), rng.choice([None, "h1"]))
         case.fake("resolve_successor", resolve)
-        a = types.SimpleNamespace(worktree=r.choice([None, "/w/a", "/w/b", "/w/c", "/w/gone"]), all=r.random() < 0.4,
+        a = types.SimpleNamespace(worktree=r.choice([None, "/w/a", "/w/b", "/w/c", "/w/gone", "/h/w/e"]), all=r.random() < 0.4,
                                   undo=r.random() < 0.25, by=r.choice([None, "ci-5", "c1"]))
         holder = {"case": case}
         return (a, "store"), holder
@@ -408,8 +413,10 @@ class LiveStreamTest(unittest.TestCase):
         for key in ("kind", "label"):
             if r.random() < 0.6:
                 e[key] = key.upper()
-        return (e, r.choice([0, 0, 120]), Named(case, "write", write), Named(case, "closed", closed),
-                r.choice([None, 0.25, 2]), r.choice([5, 15]), r.choice([4, 30, 3000]))
+        default = inspect.signature(A.live_stream).parameters["closed"].default
+        unbounded = r.random() < 0.15  # the default `closed`: only max_secs ends it
+        return (e, r.choice([0, 0, 120]), Named(case, "write", write), default if unbounded else Named(case, "closed", closed),
+                r.choice([None, 0.25, 2]), r.choice([5, 15]), r.choice([4, 30] if unbounded else [4, 30, 3000]))
 
     def test_live_stream(self):
         check(self, "live_stream", self.build, lambda A: A.live_stream, 3000)
@@ -516,7 +523,7 @@ class DryRunTest(unittest.TestCase):
         args = ("/repo", "/repo/scripts/hooks/pre-push", "h" * 40, "/log", "before the lock", Probe(case, "clock"), Probe(case, "store"),
                 r.choice(["--range", "--checks-only"]), r.choice([False, 0, 1, 2, 3]), r.choice(["check", "red"]), r.choice([None, "a"]),
                 r.choice([None, "m1", "m2"]))
-        return args, holder
+        return args[:r.choice([7, 7, 12, 12, 12])], holder  # the first seven: every default
 
     def test_dry_run(self):
         def run(A):
