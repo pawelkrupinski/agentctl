@@ -332,5 +332,62 @@ class RedFixesTest(unittest.TestCase):
         check(self, A, "red_run_on_way", build, lambda A: A.red_run_on_way, 3000)
 
 
+class ConflictsTest(unittest.TestCase):
+    def test_hunks_resolve(self):
+        import types
+        hunk = ["<<<<<<< ours\n", "x\n", "||||||| base\n", "y\n", "=======\n", "z\n", ">>>>>>> theirs\n"]
+        odd = ["<<<<<<< stray\n", "=======\n", "||||||| base\n", ">>>>>>> theirs\n", "last"]
+
+        def diff3(rng):
+            lines = []
+            for _ in range(rng.randint(0, 4)):
+                lines += rng.choice([["a\n"], ["b\n"], hunk, hunk, hunk[:3] + hunk[4:], hunk[:5] + ["=======\n"] + hunk[5:], [rng.choice(odd)]])
+            return "".join(lines)
+
+        def build(case):
+            r = case.rng
+            case.fake("merge_diff3", lambda rng, base, ours, theirs: types.SimpleNamespace(
+                returncode=rng.choice([0, 1, 1, 1, 2, -1, 200]), stdout=diff3(rng)))
+            case.fake("hunk_take", lambda rng, o, b, t: maybe(rng, ([f"took{rng.randint(0, 2)}\n"] * rng.randint(0, 2), "what"), 0.8))
+            return ("base", r.choice(["ours\n", "ours", ""]), "theirs")
+        check(self, A, "hunks_resolve", build, lambda A: A.hunks_resolve, 5000)
+
+    def test_pick_commits(self):
+        import types
+
+        def git(rng, wt, *args, check=True, **k):
+            word = next((a for a in args if a in ("rev-parse", "cherry-pick", "reset", "commit", "diff")), "x")
+            out = f"sha{rng.randint(0, 2)}" if word == "rev-parse" else ""
+            if check:
+                return out
+            return types.SimpleNamespace(returncode=rng.choice([0, 0, 1]) if word != "reset" else 0, stdout=out, stderr=rng.choice(["boom", ""]))
+
+        def build(case):
+            r = case.rng
+            case.fake("git", git)
+            case.fake("upstream_patch_ids", lambda rng, wt, c, start: {f"p{i}": f"v{i}" for i in range(2) if rng.random() < 0.5})
+            case.fake("patch_id", lambda rng, wt, c: maybe(rng, f"p{rng.randint(0, 2)}", 0.7))
+            case.fake("deliberate_empty", lambda rng, wt, c: rng.random() < 0.2)
+            case.fake("conflict_resolve", lambda rng, wt, regen, notes, regenerated, provisional, mine: (
+                notes.extend([(["g1"], "why")] * rng.randint(0, 1)), mine.extend([{"file": "f", "hunks": ["h"]}] * rng.randint(0, 1)) if mine is not None else 0,
+                rng.random() < 0.6)[2])
+            case.fake("snapshots_both_changed", lambda rng, wt, c, before: set(rng.sample(["s1", "s2"], rng.randint(0, 2))))
+            case.fake("regenerate", lambda rng, wt, files, regenerated, provisional, sides=None: maybe(rng, "failed", 0.3))
+            case.fake("unmerged", lambda rng, wt: rng.sample(["f1", "f2", "g1"], rng.randint(0, 3)))
+            case.fake("equivalent_on", lambda rng, wt, c, before: maybe(rng, "eq", 0.4))
+            case.fake("is_empty_commit", lambda rng, wt, ref: rng.random() < 0.3)
+            commits = [f"c{i}" for i in range(r.randint(0, 3))]
+            dropped, resolved = r.choice([None, []]), r.choice([None, []])
+            regen = r.choice([True, True, False])
+            return ("wt", commits, dropped, regen, r.choice([None, []]), r.choice([None, []]), resolved)
+
+        def call(A):
+            def run(*args):
+                out = A.pick_commits(*args)
+                return out, args[2], args[4], args[5], args[6]
+            return run
+        check(self, A, "pick_commits", build, call, 5000)
+
+
 if __name__ == "__main__":
     unittest.main()

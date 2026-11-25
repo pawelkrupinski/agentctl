@@ -62,45 +62,67 @@ def merge_diff3(base: str, ours: str, theirs: str) -> "subprocess.CompletedProce
     return merge_file(*texts, "--diff3", "-L", "ours", "-L", "base", "-L", "theirs")
 
 
+class DiffHunks:
+    """A diff3 merge read line by line: the text outside the conflicts, and each conflicting hunk taken (hunk_take)."""
+
+    def __init__(self) -> None:
+        self.out: list[str] = []
+        self.how: list[str] = []
+        self.region: Any = None
+        self.part: Any = None
+        self.lineno = 0
+
+    def add(self, line: str) -> bool:
+        """False when the merge cannot be resolved (a marker out of place, a hunk nothing takes)."""
+        bare = line.rstrip("\n")
+        return self.outside(line, bare) if self.region is None else self.inside(line, bare)
+
+    def outside(self, line: str, bare: str) -> bool:
+        if bare == "<<<<<<< ours":
+            self.region, self.part = {"o": [], "b": [], "t": []}, "o"
+            return True
+        if bare in ("||||||| base", "=======", ">>>>>>> theirs"):
+            return False
+        self.out.append(line)
+        self.lineno += 1
+        return True
+
+    def inside(self, line: str, bare: str) -> bool:
+        if bare == "||||||| base" and self.part == "o":
+            self.part = "b"
+        elif bare == "=======" and self.part == "b":
+            self.part = "t"
+        elif bare == ">>>>>>> theirs" and self.part == "t":
+            return self.close()
+        elif bare.startswith(("<<<<<<< ", "||||||| ", "=======", ">>>>>>> ")):
+            return False  # a marker out of place: a file holding marker-like lines of its own
+        else:
+            self.region[self.part].append(line)
+        return True
+
+    def close(self) -> bool:
+        took = hunk_take(self.region["o"], self.region["b"], self.region["t"])
+        if took is None:
+            return False
+        lines, what = took
+        self.how.append(f"line {self.lineno + 1}: {what}")
+        self.out.extend(lines)
+        self.lineno += len(lines)
+        self.region = None
+        return True
+
+
 def hunks_resolve(base, ours, theirs):
     """(merged text, [what each hunk took]) of a source conflict whose every conflicting hunk resolves (A SOURCE
     CONFLICT IS RESOLVED ...), or None."""
     r = merge_diff3(base, ours, theirs)
     if r.returncode < 0 or r.returncode > 127:
         return None
-    out, how, region, part, lineno = [], [], None, None, 0
-    for line in r.stdout.splitlines(True):
-        bare = line.rstrip("\n")
-        if region is None:
-            if bare == "<<<<<<< ours":
-                region, part = {"o": [], "b": [], "t": []}, "o"
-                continue
-            if bare in ("||||||| base", "=======", ">>>>>>> theirs"):
-                return None
-            out.append(line)
-            lineno += 1
-            continue
-        if bare == "||||||| base" and part == "o":
-            part = "b"
-        elif bare == "=======" and part == "b":
-            part = "t"
-        elif bare == ">>>>>>> theirs" and part == "t":
-            took = hunk_take(region["o"], region["b"], region["t"])
-            if took is None:
-                return None
-            lines, what = took
-            how.append(f"line {lineno + 1}: {what}")
-            out.extend(lines)
-            lineno += len(lines)
-            region = None
-        elif bare.startswith(("<<<<<<< ", "||||||| ", "=======", ">>>>>>> ")):
-            return None  # a marker out of place: a file holding marker-like lines of its own
-        else:
-            region[part].append(line)
-    if region is not None:
+    walk = DiffHunks()
+    if not all(walk.add(line) for line in r.stdout.splitlines(True)) or walk.region is not None:
         return None
-    text = "".join(out)
-    return (text if ours.endswith("\n") or not ours else text.rstrip("\n")), how
+    text = "".join(walk.out)
+    return (text if ours.endswith("\n") or not ours else text.rstrip("\n")), walk.how
 
 
 def conflict_file_versions(repo: Any, older: Any, younger: Any, f: str) -> list[Any]:
@@ -224,6 +246,101 @@ def pick(wt, commits, dropped=None, regen=True, regenerated=None, provisional=No
         return pick_commits(wt, commits, dropped, regen, regenerated, provisional, resolved)
 
 
+class Pick:
+    """pick_commits' walk over the commits: one at a time, a method per outcome of a pick."""
+
+    def __init__(self, wt: Any, regen: Any, dropped: Any, regenerated: Any, provisional: Any, resolved: Any) -> None:
+        self.wt, self.regen, self.dropped, self.regenerated, self.provisional = wt, regen, dropped, regenerated, provisional
+        self.resolved = resolved
+        self.start = git(wt, "rev-parse", "HEAD").strip()
+        self.on_head: Any = {}
+
+    def run(self, commits: Any) -> Any:
+        """None, or the conflicting files (HEAD back where it started)."""
+        if commits:
+            self.on_head = upstream_patch_ids(self.wt, commits[0], self.start)
+        for c in commits:
+            failed = self.one(c)
+            if failed is not None:
+                return failed
+        return None
+
+    def drop(self, c: Any, via: Any) -> None:
+        if self.dropped is not None:
+            self.dropped.append((c, via))
+
+    def one(self, c: Any) -> Any:
+        """The conflicting files of picking commit c, None when it was picked or dropped."""
+        wt = self.wt
+        before = git(wt, "rev-parse", "HEAD").strip()
+        via = self.on_head.get(patch_id(wt, c) or "")
+        if via and not deliberate_empty(wt, c):
+            self.drop(c, via)
+            return None
+        notes: list[Any] = []
+        mine: Any = [] if self.resolved is not None else None
+        r = self.cherry_pick(c, notes, mine)
+        if r.returncode != 0:
+            return self.conflicted(c, before, r, notes)
+        failed = self.snapshots(c, before) if self.regen else None  # only what a command here regenerates (regen_runs)
+        if failed:
+            return failed
+        if mine:
+            self.annotate(c, mine)
+        self.drop_if_empty(c, before)
+        return None
+
+    def cherry_pick(self, c: Any, notes: Any, mine: Any) -> Any:
+        """The cherry-pick of c, its conflicts resolved where they can be (conflict_resolve) and the pick continued."""
+        wt = self.wt
+        r = git(wt, *NO_SIGN, "cherry-pick", "--allow-empty", "--keep-redundant-commits", c, check=False)
+        if r.returncode != 0 and conflict_resolve(wt, self.regen, notes, self.regenerated, self.provisional, mine):
+            r = git(wt, *NO_SIGN, "-c", "core.editor=true", "cherry-pick", "--continue", check=False)
+        return r
+
+    def drop_if_empty(self, c: Any, before: Any) -> None:
+        """A commit empty once picked (its change already there) dropped, HEAD back, unless it was meant empty."""
+        wt = self.wt
+        if is_empty_commit(wt, "HEAD") and not deliberate_empty(wt, c):
+            git(wt, "reset", "--hard", "-q", before)
+            if self.dropped is not None:
+                self.dropped.append((c, equivalent_on(wt, c, before)))
+
+    def snapshots(self, c: Any, before: Any) -> Any:
+        """A SNAPSHOT both sides changed, regenerated though git merged it cleanly (SNAPSHOTS ARE REGENERATED, NEVER
+        MERGED), the commit amended with it; the failure to name, with HEAD back, when it cannot be."""
+        wt = self.wt
+        sides = snapshots_both_changed(wt, c, before)
+        why = regenerate(wt, sorted(sides), self.regenerated, self.provisional, sides=sides) if sides else None
+        if why:
+            git(wt, "reset", "--hard", "-q", self.start)
+            return [f"{', '.join(sorted(sides))} (generated: {why})"]
+        if sides and git(wt, "diff", "--cached", "--quiet", check=False).returncode != 0:
+            git(wt, *NO_SIGN, "commit", "-q", "--amend", "--no-edit", "--allow-empty", check=False)
+        return None
+
+    def annotate(self, c: Any, mine: Any) -> None:
+        """The commit's source conflicts resolved: named by an `Auto-Resolved:` trailer, recorded in `resolved`."""
+        trailers = [x for m in mine for x in ("--trailer", f"Auto-Resolved: {m['file']}: {'; '.join(m['hunks'])}")]
+        git(self.wt, *NO_SIGN, "commit", "-q", "--amend", "--no-edit", "--allow-empty", *trailers, check=False)
+        self.resolved.extend({"commit": c, **m} for m in mine)
+
+    def conflicted(self, c: Any, before: Any, r: Any, notes: Any) -> Any:
+        """A pick that failed: None when its patch is already there (dropped), else the conflicting files, HEAD back."""
+        wt = self.wt
+        files = unmerged(wt)
+        git(wt, "cherry-pick", "--abort", check=False)
+        via = equivalent_on(wt, c, before) if files else None
+        if via:  # its patch is already there, and a later change to the same lines conflicts with it again
+            git(wt, "reset", "--hard", "-q", before)
+            self.drop(c, via)
+            return None
+        git(wt, "reset", "--hard", "-q", self.start)
+        noted = {f for gen, _why in notes for f in gen}
+        return ([f for f in files if f not in noted] + [f"{', '.join(gen)} (generated: {why})" for gen, why in notes]
+                if files else [r.stderr.strip()[:200]])
+
+
 def pick_commits(wt, commits, dropped=None, regen=True, regenerated=None, provisional=None, resolved=None):
     """Cherry-pick commits onto wt's HEAD, one at a time: None, or the conflicting files (the pick aborted, HEAD back
     where it was). A commit already in HEAD's history (patch-equivalent), or empty once picked, is DROPPED, never kept
@@ -240,49 +357,7 @@ def pick_commits(wt, commits, dropped=None, regen=True, regenerated=None, provis
     each appended as {commit, file, hunks} and named on the picked commit by an `Auto-Resolved:` trailer. With regen,
     a SNAPSHOT both sides changed is regenerated even when git merged it cleanly (SNAPSHOTS ARE REGENERATED, NEVER
     MERGED), the commit amended with it."""
-    start = git(wt, "rev-parse", "HEAD").strip()
-    on_head = upstream_patch_ids(wt, commits[0], start) if commits else {}
-    for c in commits:
-        before = git(wt, "rev-parse", "HEAD").strip()
-        via = on_head.get(patch_id(wt, c) or "")
-        if via and not deliberate_empty(wt, c):
-            if dropped is not None:
-                dropped.append((c, via))
-            continue
-        r = git(wt, *NO_SIGN, "cherry-pick", "--allow-empty", "--keep-redundant-commits", c, check=False)
-        notes, mine = [], [] if resolved is not None else None
-        if r.returncode != 0 and conflict_resolve(wt, regen, notes, regenerated, provisional, mine):
-            r = git(wt, *NO_SIGN, "-c", "core.editor=true", "cherry-pick", "--continue", check=False)
-        if r.returncode == 0 and regen:  # only what a command here regenerates (regen_runs); else git's merge stands
-            sides = snapshots_both_changed(wt, c, before)
-            why = regenerate(wt, sorted(sides), regenerated, provisional, sides=sides) if sides else None
-            if why:
-                git(wt, "reset", "--hard", "-q", start)
-                return [f"{', '.join(sorted(sides))} (generated: {why})"]
-            if sides and git(wt, "diff", "--cached", "--quiet", check=False).returncode != 0:
-                git(wt, *NO_SIGN, "commit", "-q", "--amend", "--no-edit", "--allow-empty", check=False)
-        if r.returncode == 0 and mine:
-            trailers = [x for m in mine for x in ("--trailer", f"Auto-Resolved: {m['file']}: {'; '.join(m['hunks'])}")]
-            git(wt, *NO_SIGN, "commit", "-q", "--amend", "--no-edit", "--allow-empty", *trailers, check=False)
-            resolved.extend({"commit": c, **m} for m in mine)
-        if r.returncode != 0:
-            files = unmerged(wt)
-            git(wt, "cherry-pick", "--abort", check=False)
-            via = equivalent_on(wt, c, before) if files else None
-            if via:  # its patch is already there, and a later change to the same lines conflicts with it again
-                git(wt, "reset", "--hard", "-q", before)
-                if dropped is not None:
-                    dropped.append((c, via))
-                continue
-            git(wt, "reset", "--hard", "-q", start)
-            noted = {f for gen, _why in notes for f in gen}
-            return ([f for f in files if f not in noted] + [f"{', '.join(gen)} (generated: {why})" for gen, why in notes]
-                    if files else [r.stderr.strip()[:200]])
-        if is_empty_commit(wt, "HEAD") and not deliberate_empty(wt, c):
-            git(wt, "reset", "--hard", "-q", before)
-            if dropped is not None:
-                dropped.append((c, equivalent_on(wt, c, before)))
-    return None
+    return Pick(wt, regen, dropped, regenerated, provisional, resolved).run(commits)
 
 
 # A BOUNCE NAMES WHAT CAUSED IT (2026-11-19: lane F2b's `no longer applies on origin/main 2cfa0ee95e` named neither
