@@ -338,3 +338,5 @@ def fixes_of(repo, commits, store):
     for c in commits:
         out |= commit_fixes(repo, c, store)  # only those that count: touching what the red's job reads (fix_check)
     return out
+
+

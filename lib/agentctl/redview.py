@@ -4,25 +4,25 @@
 import json
 import time
 from typing import Any
-from agentctl.core import HOME, env_num, state_root
 from agentctl.timefmt import hhmmz, ts
 from agentctl.statefile import read_record
+from agentctl.core import HOME, env_num, state_root
+from agentctl.cistate import snapshot_gate_reds
+from agentctl.dispatchblock import short_flow
 from agentctl.redrecord import RED_RECURRING, red_active, red_lease, red_names
 from agentctl.leases import lease_meta, red_block_of
 from agentctl.redfixread import FIX_OPEN
 from agentctl.redfixes import red_refuted
-from agentctl.cistate import snapshot_gate_reds
 from agentctl.owners import owner_record_path
 from agentctl.redask import red_ask, red_decision
 from agentctl.red import RED_FIX_GIVEUP
 from agentctl.redmove import red_settled_runs
+from agentctl.culpritfix import blame_status
 from agentctl.runsigs import run_names
-from agentctl.dispatchblock import short_flow
 from agentctl.redseen import red_obs_of_units
 from agentctl.ask import red_decided_view, trim_words
-from agentctl.redpending import RED_WAITS_ON
 from agentctl.reddispatch import RED_HELD_IDLE, REPO_DISPATCH_OFF, red_owned_progress_at, repo_dispatch_off_all
-from agentctl.culpritfix import blame_status
+from agentctl.redwaits import RED_WAITS_ON
 
 
 # -- how a red reads (ci-why, the status line, `red status`): its state, holder or offer, deadline. Never NOBODY.

@@ -20,7 +20,7 @@ from agentctl.redcrash import (
 from agentctl.fixerlife import GAVE_UP_DECIDE, GAVE_UP_FIXED
 from agentctl.redvault import red_vault_block, vault_ask_ns, vault_ask_unfounded
 from agentctl.ask import DECISION_FAILED, red_decision_failed
-from agentctl.redpending import RED_WAITS_ON, red_wait_cycle
+from agentctl.redwaits import RED_WAITS_ON, red_wait_cycle
 
 
 def red_lift_block(store, it, block, why):

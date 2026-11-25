@@ -134,9 +134,7 @@ cognitive	red_failed_steps	14
 cognitive	red_family	16
 cognitive	red_fix_candidates	48
 cognitive	red_fix_facts	36
-cognitive	red_fix_follow	19
 cognitive	red_fix_held	35
-cognitive	red_fix_pending	213
 cognitive	red_flake_check	15
 cognitive	red_job_reads	69
 cognitive	red_job_retired	19
@@ -151,7 +149,6 @@ cognitive	red_run_on_way	19
 cognitive	red_run_retired	36
 cognitive	red_spawn	28
 cognitive	red_unheld	19
-cognitive	red_waits_on_step	21
 cognitive	refresh_pinned_recording	16
 cognitive	regen_hold_overdue	22
 cognitive	regenerate	53
@@ -195,7 +192,7 @@ copies	blame|blamerecords	2
 copies	cireport|redtick	2
 copies	clones|serverclone	2
 copies	redcrash	2
-copies	redpending	7
+copies	redpending	2
 copies	store	2
 cyclomatic	LiveTail.poll	13
 cyclomatic	RemoteStore._call_once	16
@@ -343,9 +340,7 @@ cyclomatic	red_failed_steps	22
 cyclomatic	red_family	23
 cyclomatic	red_fix_candidates	43
 cyclomatic	red_fix_facts	40
-cyclomatic	red_fix_follow	16
 cyclomatic	red_fix_held	38
-cyclomatic	red_fix_pending	174
 cyclomatic	red_flake_check	17
 cyclomatic	red_job_reads	22
 cyclomatic	red_job_reads.scan	32
@@ -363,7 +358,6 @@ cyclomatic	red_run_on_way	21
 cyclomatic	red_run_retired	45
 cyclomatic	red_spawn	25
 cyclomatic	red_unheld	15
-cyclomatic	red_waits_on_step	23
 cyclomatic	refresh_pinned_recording	18
 cyclomatic	regen_hold_overdue	21
 cyclomatic	regenerate	31
@@ -417,7 +411,6 @@ method-lines	live_stream	51
 method-lines	pick_commits	59
 method-lines	red_claim	62
 method-lines	red_dispatch	59
-method-lines	red_fix_pending	260
 method-lines	red_job_reads	66
 method-lines	red_run_retired	51
 method-lines	regenerate	63

@@ -8,7 +8,7 @@ import subprocess
 import sys
 import time
 from typing import Any
-from agentctl.core import env_num, fmt_age, git, reds_dir, remote, spawn_detached
+from agentctl.core import env_num, fmt_age, git, reds_dir, spawn_detached
 from agentctl.statefile import read_record
 from agentctl.procs import proc_alive, process_start
 from agentctl.selfcode import TOOL_PATH
@@ -255,3 +255,13 @@ def blame_probe_stop(p):
             pass
 
 
+def blame_refuted(repo: Any, b: Any, sha: Any) -> Any:
+    """The landed fix `sha` that a run refuted is this red's revert (its `Reverts-Change:` trailer): the culprit was
+    wrong. The blame, marked refuted with the reland due -- the laptop's dispatcher relands it (blame_reland)."""
+    if (b or {}).get("state") != "confirmed" or not (b.get("revert") or {}).get("ok") or not sha:
+        return None
+    body = git(repo, "log", "-1", "--format=%B", sha, check=False).stdout if repo else ""
+    if "Reverts-Change:" not in body:
+        return None
+    return dict(b, state="refuted", why=f"its revert {sha[:10]} did not clear the red: the culprit was wrong",
+                revert=dict(b["revert"], landed=sha), reland_due=sha)

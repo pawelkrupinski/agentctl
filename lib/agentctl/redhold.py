@@ -23,10 +23,11 @@ from agentctl.red import red_fix_giveup
 from agentctl.redmove import red_put_offer
 from agentctl.redopen import red_offer
 from agentctl.redverify import red_fix_since, red_fix_unverifiable
-from agentctl.queuebatch import change_hold_stuck
-from agentctl.redpending import RED_FIX_REQUEUE_GRACE, RED_WAITS_ON
 from agentctl.reddispatch import repo_dispatch_off
 from agentctl.redlease import red_lease_ended
+from agentctl.queuebatch import change_hold_stuck
+from agentctl.redwaits import RED_WAITS_ON
+from agentctl.redfollow import RED_FIX_REQUEUE_GRACE
 
 
 WR_MAX = 40 * 60        # a red fix still unlanded this long after it was queued ($AGENTCTL_WR_MAX; a CI-tier check ~17 min)

@@ -10,18 +10,18 @@ from agentctl.redretired import red_retired
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_lease, red_what
 from agentctl.leases import block_lease, lease_meta, red_block_of
-from agentctl.redfixes import red_run_on_way
+from agentctl.redfixes import red_fix_of, red_run_on_way
 from agentctl.redask import red_decision
 from agentctl.redmove import red_close, red_fix_proven, red_keep_holder, red_move, red_put_offer, red_stop_holder
 from agentctl.redseen import red_gone, red_gone_why
 from agentctl.redopen import red_callable_evidence, red_diagnosis_step, red_offer
 from agentctl.redverify import red_flake_check, red_main_verify
 from agentctl.redcrash import red_old_run, red_resolve_old
-from agentctl.blame import blame_step
-from agentctl.redpending import red_fix_current, red_fix_pending
 from agentctl.reddispatch import repo_dispatch_off
 from agentctl.redworkflow import red_workflow_named
+from agentctl.blame import blame_step
 from agentctl.redlease import red_lease_ended, red_lift_block
+from agentctl.redpending import red_fix_pending
 
 
 class RedStep:
@@ -37,7 +37,10 @@ class RedStep:
         self.row = store.get(red_lease(self.key))
         self.live = lease_is_live(self.row, t)
         self.gone = obs is not None and red_gone(it, obs, snap)
-        self.it, self.fix = red_linked_kept(store, it, self.row, red_fix_current(store, it, facts), self.live)
+        # THE fix on its way for this red: red_fix_of's, corrected by the store (red_fix_fresh). Each candidate is judged in
+        # turn: one the red refuted or set aside never hides the next (2026-11-11, Verify scrape recording #23: a stale
+        # `waiting` entry came back as the refuted 547709c1e2 every tick, offered 593 times, no fixer ever offered the red)
+        self.it, self.fix = red_linked_kept(store, it, self.row, red_fix_of(it, facts, store), self.live)
         self.block = red_block_of(self.it, store)
         self.acts = []
 
