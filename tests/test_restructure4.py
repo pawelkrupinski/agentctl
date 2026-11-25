@@ -105,5 +105,86 @@ class StatsPassTest(unittest.TestCase):
         check(self, A, "stats_pass", self.build, lambda A: A.stats_pass)
 
 
+NAMES = ["build", "test", "test (a, b)", "test (c)", "deploy / test", "x / build (a)", "lint", "test (a, ...", "Build ${{ x }}", "gone job"]
+
+
+def job_text(rng, key):
+    """A workflow job's block, the way fix_workflow_jobs hands it over, with every section optional."""
+    lines = [f"  {key}:"]
+    if rng.random() < 0.7:
+        lines.append(f"    name: {rng.choice(['build', 'test', 'Test ${{ matrix.os }}', repr('quoted'), 'lint # c'])}")
+    if rng.random() < 0.6:
+        lines += ["    strategy:", "      matrix:" + rng.choice(["", " ${{ fromJson(x) }}"])]
+        for _ in range(rng.randint(0, 3)):
+            lines.append(rng.choice(["        os: [a, b]", "        os: c", "        - a", "        include:", "          - os: d",
+                                     "        k: ${{ x }}", "        v: |", "        # note", "        x: [a, , b]"]))
+    if rng.random() < 0.7:
+        lines.append("    steps:")
+        for _ in range(rng.randint(0, 3)):
+            lines += rng.choice([["      - name: s1", "        if: inputs.x"], ["      - run: y", "        name: s2", "        if: matrix.os == 'a'"],
+                                 ["      - uses: z"], ["      - name: s3", "        run: |", "          if: no"],
+                                 ["      -   name: s4", "          if: github.event.inputs.q"]])
+    if rng.random() < 0.15:
+        lines = [f"  {key}:", "    # only a comment"]
+    return "\n".join(lines)
+
+
+def workflow_text(rng):
+    if rng.random() < 0.1:
+        return rng.choice(["", "name: x\non: push\n", "jobs:\n"])
+    return "name: w\non: push\njobs:\n" + "\n".join(job_text(rng, k) for k in rng.sample(["build", "test", "deploy", "lint"], rng.randint(1, 3)))
+
+
+class RedRetiredTest(unittest.TestCase):
+    def test_retire_jobs_of(self):
+        check(self, A, "retire_jobs_of", lambda case: (workflow_text(case.rng),), lambda A: A.retire_jobs_of, 4000)
+
+    def jobs_of(self, rng):
+        return A.retire_jobs_of(workflow_text(rng))
+
+    def test_red_job_retired(self):
+        def build(case):
+            r = case.rng
+            cur = self.jobs_of(r) or {"x": {"name": None, "matrix": None, "steps": []}}
+            old = r.choice([None, self.jobs_of(r), cur])
+            if old and r.random() < 0.4:  # the job as it was: its steps now fewer, its names the run's
+                cur = {k: {**j, "steps": j["steps"][:r.randint(0, 1)]} for k, j in old.items()}
+            steps = r.choice([None, [{"name": "s1", "conclusion": "success"}], [{"name": "s2", "conclusion": "failure"}], [{"name": r.choice(["s1", "s2", "s3", "s4"]), "conclusion": r.choice(["success", "failure", "skipped"])}
+                                     for _ in range(r.randint(0, 3))]])
+            return (r.choice(NAMES + ["build", "test", "lint"]), cur, old, steps)
+        check(self, A, "red_job_retired", build, lambda A: A.red_job_retired, 4000)
+
+    def test_red_run_retired(self):
+        def build(case):
+            r = case.rng
+            A._retire_cache.clear()
+            date = lambda: f"2026-11-{r.randint(1, 25):02d}T10:00:00Z"  # noqa: E731
+            texts = [workflow_text(r) for _ in range(2)]
+            for name, gen in (
+                    ("retire_main", lambda rng, o_r: raising(rng, 0.05, ("a" * 12, date()))),
+                    ("retire_flows", lambda rng, o_r, sha: raising(rng, 0.03, {
+                        "W": (rng.choice([".github/workflows/w.yml", ".github/workflows/v.yml"]), texts[0]),
+                        "V": (".github/workflows/v.yml", rng.choice([texts[1], "name: v\non:\n  workflow_call:\njobs:\n  a:\n    steps: []"]))})),
+                    ("retire_run", lambda rng, o_r, rid: {"path": rng.choice([".github/workflows/w.yml@main", ".github/workflows/v.yml", "dynamic/x", ""]),
+                                                          "created_at": date(), "head_sha": rng.choice(["h", "a" * 12, None])}),
+                    ("retire_newest", lambda rng, o_r, path: maybe(rng, {"created_at": date(), "head_sha": rng.choice(["h", "a" * 12])}, 0.7)),
+                    ("retire_file", lambda rng, o_r, sha, path: maybe(rng, rng.choice(texts), 0.8)),
+                    ("retire_jobs", lambda rng, o_r, rid: [{"name": rng.choice(NAMES), "conclusion": rng.choice(["failure", "success", "timed_out"]),
+                                                            "steps": [{"name": "s1", "conclusion": "failure"}]} for _ in range(rng.randint(0, 3))]),
+                    ("env_num", lambda rng, name, default: rng.choice([1, 14, 100]))):
+                case.fake(name, gen)
+            run = r.choice([{}, {"databaseId": 7, "headSha": "h", "number": 3}, {"id": 8}, None])
+            return (r.choice(["o/r", "p/q"]), r.choice(["W", "V", "Z", None]), run,
+                    r.choice([None, [], ["build"], ["test (a, b)", "?"], ["gone job", None]]), 1_795_000_000 + r.randint(0, 40) + r.choice([0, 86400 * 30]))
+
+        def wrapped(A):
+            def call(*args):
+                out = A.red_run_retired(*args)
+                why = A._retire_cache.get(("why", args[0]))
+                return out, why and why[1], ("fail", args[0]) in A._retire_cache
+            return call
+        check(self, A, "red_run_retired", build, wrapped, 4000)
+
+
 if __name__ == "__main__":
     unittest.main()

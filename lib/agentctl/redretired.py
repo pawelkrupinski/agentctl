@@ -108,61 +108,83 @@ def _yaml_scalar(v):
     return v[1:-1] if len(v) >= 2 and v[0] == v[-1] and v[0] in "'\"" else v
 
 
+class JobBody:
+    """One job's block of a workflow file read line by line: its name, its matrix (None | "dynamic" | set of its
+    values) and its steps, the section a line belongs to kept between lines."""
+
+    def __init__(self, lines):
+        self.ind = len(lines[0]) - len(lines[0].lstrip())
+        self.name, self.matrix, self.steps, self.sect = None, None, [], None
+        self.cur, self.step_ind = None, None
+
+    def read(self, line):
+        li, s = len(line) - len(line.lstrip()), line.strip()
+        if li == self.ind:
+            self.section(s)
+        elif self.sect == "strategy":
+            self.strategy(s)
+        elif self.sect == "steps":
+            self.step(s, li)
+
+    def section(self, s):
+        m = re.match(r"^([\w-]+):\s*(.*)$", s)
+        self.sect = m.group(1) if m else None
+        if self.sect == "name":
+            self.name = _yaml_scalar(m.group(2))
+
+    def strategy(self, s):
+        m = re.match(r"^matrix:\s*(.*)$", s)
+        if m:
+            self.matrix = "dynamic" if "${{" in m.group(1) else set()
+        elif isinstance(self.matrix, set):
+            self.matrix_value(s)
+
+    def matrix_value(self, s):
+        if "${{" in s:
+            self.matrix = "dynamic"
+            return
+        m = re.match(r"^(?:-\s+)?[\w.-]+:\s*(.+)$", s) or re.match(r"^-\s+(.+)$", s)
+        if not m:
+            return
+        v = m.group(1).strip()
+        if v.startswith("[") and v.endswith("]"):
+            self.matrix |= {_yaml_scalar(x) for x in v[1:-1].split(",") if x.strip()}
+        elif v not in ("|", ">"):
+            self.matrix.add(_yaml_scalar(v))
+
+    def step(self, s, li):
+        m = re.match(r"^-\s*(.*)$", s)
+        if m and (self.step_ind is None or li == self.step_ind):
+            self.step_ind = li
+            self.cur = {"name": None, "if": None}
+            self.steps.append(self.cur)
+            s, li = m.group(1), li + 2
+        if self.cur is not None and li == self.step_ind + 2:
+            m = re.match(r"^(name|if):\s*(.+)$", s)
+            if m:
+                self.cur[m.group(1)] = _yaml_scalar(m.group(2))
+
+    def summary(self):
+        return {"name": self.name, "matrix": self.matrix, "steps": [(st["name"], st["if"]) for st in self.steps]}
+
+
+def _job_summary(body):
+    lines = [l for l in body.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+    if not lines:
+        return {"name": None, "matrix": None, "steps": []}
+    job = JobBody(lines)
+    for l in lines:
+        job.read(l)
+    return job.summary()
+
+
 def retire_jobs_of(text):
     """{job key: {name, matrix (None | "dynamic" | set of its values), steps [(name, if)]}} of a workflow file, by
     indentation (no YAML parser here); None when it cannot be read (no `jobs:`, no job)."""
     jobs = fix_workflow_jobs(text or "")
     if not jobs:
         return None
-    out = {}
-    for key, (body, _nm) in jobs.items():
-        lines = [l for l in body.splitlines() if l.strip() and not l.lstrip().startswith("#")]
-        if not lines:
-            out[key] = {"name": None, "matrix": None, "steps": []}
-            continue
-        ind = len(lines[0]) - len(lines[0].lstrip())
-        name, matrix, steps, sect = None, None, [], None
-        cur = None
-        step_ind = None
-        for l in lines:
-            li = len(l) - len(l.lstrip())
-            s = l.strip()
-            if li == ind:
-                m = re.match(r"^([\w-]+):\s*(.*)$", s)
-                sect = m.group(1) if m else None
-                if sect == "name":
-                    name = _yaml_scalar(m.group(2))
-                continue
-            if sect == "strategy":
-                m = re.match(r"^matrix:\s*(.*)$", s)
-                if m:
-                    matrix = "dynamic" if "${{" in m.group(1) else set()
-                    continue
-                if isinstance(matrix, set):
-                    if "${{" in s:
-                        matrix = "dynamic"
-                        continue
-                    m = re.match(r"^(?:-\s+)?[\w.-]+:\s*(.+)$", s) or re.match(r"^-\s+(.+)$", s)
-                    if m:
-                        v = m.group(1).strip()
-                        if v.startswith("[") and v.endswith("]"):
-                            matrix |= {_yaml_scalar(x) for x in v[1:-1].split(",") if x.strip()}
-                        elif v not in ("|", ">"):
-                            matrix.add(_yaml_scalar(v))
-            elif sect == "steps":
-                m = re.match(r"^-\s*(.*)$", s)
-                if m and (step_ind is None or li == step_ind):
-                    step_ind = li
-                    cur = {"name": None, "if": None}
-                    steps.append(cur)
-                    s = m.group(1)
-                    li = li + 2
-                if cur is not None and li == step_ind + 2:
-                    m = re.match(r"^(name|if):\s*(.+)$", s)
-                    if m:
-                        cur[m.group(1)] = _yaml_scalar(m.group(2))
-        out[key] = {"name": name, "matrix": matrix, "steps": [(st["name"], st["if"]) for st in steps]}
-    return out
+    return {key: _job_summary(body) for key, (body, _nm) in jobs.items()}
 
 
 def _tmpl_re(tmpl):
@@ -228,6 +250,25 @@ def _step_branch_gone(key, cur, old, steps):
     return None
 
 
+def _current_key(name, head, cur, old):
+    """The key of the current job that is the job `name` of the run: the one that produced it at the run's commit,
+    else the one named head, else None."""
+    k = next((ok for ok, oj in (old or {}).items() if _job_has(oj, ok, name)), None)
+    if k in cur:
+        return k
+    return next((ck for ck, cj in cur.items() if head in (ck, re.sub(r" \(.*$", "", cj["name"] or ""))), None)
+
+
+def _matrix_now(cj, key):
+    """The row values the current job cj offers, None when they cannot be known (a dynamic matrix, a templated name)."""
+    if cj["matrix"] == "dynamic":
+        return None
+    if isinstance(cj["matrix"], set):
+        return cj["matrix"]
+    tmpl = cj["name"] or key
+    return None if "${{" in tmpl else set(_row_of(tmpl)[1] or [])
+
+
 def red_job_retired(name, cur, old, steps=None):
     """Why the job `name` (a run's) is gone from the current workflow `cur`, else None. old: the workflow at the run's
     commit (None when unread). A caller's `x / y` job is judged by its own job x."""
@@ -236,30 +277,85 @@ def red_job_retired(name, cur, old, steps=None):
         if _job_has(j, key, name):
             return _step_branch_gone(key, cur, old, steps)
     head, vals = _row_of(name)
-    k = next((ok for ok, oj in (old or {}).items() if _job_has(oj, ok, name)), None)
-    k = k if k in cur else next((ck for ck, cj in cur.items() if head in (ck, re.sub(r" \(.*$", "", cj["name"] or ""))), None)
+    k = _current_key(name, head, cur, old)
     if k is None:
         return f"job `{name}` is gone from the workflow"
     old_row = (old[k]["matrix"] is not None) if old and k in old else vals is not None
     if not old_row or not vals:
         return None  # renamed in place
-    cj = cur[k]
-    if cj["matrix"] == "dynamic":
-        return None
-    if isinstance(cj["matrix"], set):
-        now = cj["matrix"]
-    else:
-        tmpl = cj["name"] or k
-        if "${{" in tmpl:
-            return None
-        now = set(_row_of(tmpl)[1] or [])
-    if set(vals) & now:
+    now = _matrix_now(cur[k], k)
+    if now is None or set(vals) & now:
         return None
     return f"its matrix row ({', '.join(vals)}) of job {k} is gone"
 
 
 def _retire_fail(o_r):
     _retire_cache[("fail", o_r)] = (time.time(), True)
+
+
+class RetiredRun:
+    """Why a red run's check is retired, a method per stage: its workflow gone or stale, then its failing jobs gone."""
+
+    def __init__(self, o_r, workflow, run, rid, jobs, now):
+        self.o_r, self.workflow, self.run, self.rid, self.jobs, self.now = o_r, workflow, run, rid, jobs, now
+
+    def why(self):
+        o_r = self.o_r
+        self.sha, self.main_date = retire_main(o_r)
+        flows = retire_flows(o_r, self.sha)
+        self.r = retire_run(o_r, self.rid)
+        path = str(self.r.get("path") or "").split("@", 1)[0]
+        if not path.startswith(".github/workflows/"):
+            return None  # a forge-made workflow (Dependabot's `dynamic/...`): no file of ours retires it
+        cur = flows.get(self.workflow) or next(((p, t) for p, t in flows.values() if path and p == path), None)
+        if not cur:
+            return f"check retired at {self.sha[:10]}: workflow {self.workflow} is gone from main"
+        cpath, ctext = cur
+        return self.stale(cpath, ctext) or self.jobs_gone(ctext, path or cpath)
+
+    def stale(self, cpath, ctext):
+        """"stale: ..." when the workflow made no run on main for RED_STALE_DAYS while main moved, else None."""
+        t = self.now if self.now is not None else time.time()
+        if workflow_triggers(ctext) == {"workflow_call"}:
+            return None
+        newest = retire_newest(self.o_r, cpath) or self.r
+        at = newest.get("created_at") or self.r.get("created_at")
+        days = env_num("AGENTCTL_RED_STALE_DAYS", RED_STALE_DAYS)
+        if at and self.main_date and t - parse_time(at).timestamp() > days * 86400 \
+                and parse_time(self.main_date) > parse_time(at) and newest.get("head_sha") != self.sha:
+            return f"stale: no run of {self.workflow} on main since {at[:10]} (main moved to {self.sha[:10]})"
+        return None
+
+    def jobs_gone(self, ctext, path):
+        """"check retired at <sha>: ..." when every failing job is gone from the workflow, else None."""
+        cjobs = retire_jobs_of(ctext)
+        if not cjobs:
+            return None  # unparseable: the red stays
+        head = self.r.get("head_sha") or (self.run or {}).get("headSha")
+        otext = retire_file(self.o_r, head, path) if head else None
+        ojobs = retire_jobs_of(otext) if otext else None
+        api_jobs = retire_jobs(self.o_r, self.rid)
+        names = self.failing_names(api_jobs)
+        whys = self.whys(names, cjobs, ojobs, api_jobs) if names else None
+        return f"check retired at {self.sha[:10]}: " + "; ".join(whys) if whys else None
+
+    def failing_names(self, api_jobs):
+        """The failing jobs' names: the caller's, else the run's failed jobs."""
+        return [j for j in (self.jobs or []) if j and j != "?"] or \
+            [j.get("name") for j in api_jobs if j.get("conclusion") in ("failure", "timed_out")]
+
+    @staticmethod
+    def whys(names, cjobs, ojobs, api_jobs):
+        """Each failing job's reason (distinct, in order); None when one of them is not retired."""
+        whys = []
+        for n in names:
+            steps = next((j.get("steps") for j in api_jobs if j.get("name") == n), None)
+            w = red_job_retired(n, cjobs, ojobs, steps)
+            if not w:
+                return None
+            if w not in whys:
+                whys.append(w)
+        return whys
 
 
 def red_run_retired(o_r, workflow, run, jobs=None, now=None):
@@ -271,44 +367,7 @@ def red_run_retired(o_r, workflow, run, jobs=None, now=None):
     if _retire_cache.get(("fail", o_r)) and time.time() - _retire_cache[("fail", o_r)][0] < RETIRE_FAIL_TTL:
         return None
     try:
-        sha, main_date = retire_main(o_r)
-        flows = retire_flows(o_r, sha)
-        r = retire_run(o_r, rid)
-        path = str(r.get("path") or "").split("@", 1)[0]
-        if not path.startswith(".github/workflows/"):
-            return None  # a forge-made workflow (Dependabot's `dynamic/...`): no file of ours retires it
-        cur = flows.get(workflow) or next(((p, t) for p, t in flows.values() if path and p == path), None)
-        if not cur:
-            return f"check retired at {sha[:10]}: workflow {workflow} is gone from main"
-        cpath, ctext = cur
-        t = now if now is not None else time.time()
-        if workflow_triggers(ctext) != {"workflow_call"}:
-            newest = retire_newest(o_r, cpath) or r
-            at = newest.get("created_at") or r.get("created_at")
-            days = env_num("AGENTCTL_RED_STALE_DAYS", RED_STALE_DAYS)
-            if at and main_date and t - parse_time(at).timestamp() > days * 86400 \
-                    and parse_time(main_date) > parse_time(at) and newest.get("head_sha") != sha:
-                return f"stale: no run of {workflow} on main since {at[:10]} (main moved to {sha[:10]})"
-        cjobs = retire_jobs_of(ctext)
-        if not cjobs:
-            return None  # unparseable: the red stays
-        head = r.get("head_sha") or (run or {}).get("headSha")
-        otext = retire_file(o_r, head, path or cpath) if head else None
-        ojobs = retire_jobs_of(otext) if otext else None
-        api_jobs = retire_jobs(o_r, rid)
-        names = [j for j in (jobs or []) if j and j != "?"] or \
-            [j.get("name") for j in api_jobs if j.get("conclusion") in ("failure", "timed_out")]
-        if not names:
-            return None
-        whys = []
-        for n in names:
-            steps = next((j.get("steps") for j in api_jobs if j.get("name") == n), None)
-            w = red_job_retired(n, cjobs, ojobs, steps)
-            if not w:
-                return None
-            if w not in whys:
-                whys.append(w)
-        return f"check retired at {sha[:10]}: " + "; ".join(whys)
+        return RetiredRun(o_r, workflow, run, rid, jobs, now).why()
     except (Exception, SystemExit) as e:
         _retire_fail(o_r)  # silent (the status line and ci-why call this): the red stays, the reason kept for a look
         _retire_cache[("why", o_r)] = (time.time(), f"{workflow} #{(run or {}).get('number')}: {str(e)[:200]}")
