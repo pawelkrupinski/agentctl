@@ -10,7 +10,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.redworkflows import verify_dispatchable
 from agentctl.ancestry import contains_local
 from agentctl.redrecord import RED_RECURRING, lease_is_live, red_lease, red_what
-from agentctl.redfixread import FIX_OPEN, fix_reaches_red
+from agentctl.redfixread import FIX_OPEN
 from agentctl.fixchange import red_change, red_fix_fresh
 from agentctl.redfixes import (
     red_entry_status, red_fix_is_set_aside, red_fix_of, red_fix_on_main, red_main_equivalent, red_refuted,
@@ -25,9 +25,10 @@ from agentctl.rundispatch import red_verify_dispatch
 from agentctl.redopen import red_offer
 from agentctl.redverify import red_fix_since, red_fix_unverifiable, red_verify_await, red_verify_scheduled
 from agentctl.ask import red_decision_failed
+from agentctl.blame import blame_refuted
 from agentctl.redwaits import RED_WAITS_ON, red_waits_on_step
 from agentctl.redfollow import red_fix_follow, red_fix_requeue_wait
-from agentctl.blame import blame_refuted
+from agentctl.redfixcheck import fix_reaches_red
 
 
 class FixPending:

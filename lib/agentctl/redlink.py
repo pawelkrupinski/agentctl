@@ -5,8 +5,9 @@ import re
 from typing import Any
 from agentctl.core import git, process_cache, remote
 from agentctl.redfixread import (
-    FIX_REPO_PATH, fix_changed, fix_job_steps, fix_show, fix_show_many, fix_step_failed, fix_tree_files,
-    red_failed_steps, red_failing_jobs, red_workflow_file)
+    FIX_REPO_PATH, fix_job_steps, fix_show, fix_show_many, fix_step_failed, fix_tree_files, red_failed_steps,
+    red_failing_jobs, red_workflow_file)
+from agentctl.redfixcheck import fix_changed
 
 # A CHANGE IS AN OUTSIDE RED'S FIX BY WHAT IT CHANGES OF THE FAILING STEP (the owner, 2026-11-22: Alert backtest #21,
 # 5254bffda9d2.4). The rule before (20261106T102105-327f4c) linked any untrailered change editing the red's workflow

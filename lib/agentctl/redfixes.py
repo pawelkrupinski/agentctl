@@ -5,18 +5,18 @@ import re
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.core import attempt, cherry_landed, git, git_ok, process_cache, remote
 from agentctl.timefmt import parse_time, ts
+from agentctl.core import attempt, cherry_landed, git, git_ok, process_cache, remote
 from agentctl.forge import gh_json
 from agentctl.trailers import trailer_values
 from agentctl.waitingdir import waiting_entries, waiting_state
-from agentctl.redrecord import red_names
 from agentctl.clones import fetch_main
-from agentctl.redfixread import (
-    FIX_OPEN, RED_MAIN_REFETCH, fix_check, fix_reaches_red, landed_fix_commits, red_unrelated)
 from agentctl.patches import equivalent_on, patch_id
+from agentctl.redrecord import red_names
+from agentctl.redfixread import FIX_OPEN, RED_MAIN_REFETCH, red_unrelated
 from agentctl.fixchange import fixes_named, red_fix_fresh
 from agentctl.redlink import red_change_link
+from agentctl.redfixcheck import fix_check, fix_reaches_red, landed_fix_commits
 
 
 def commit_fixes(repo, sha, store):
