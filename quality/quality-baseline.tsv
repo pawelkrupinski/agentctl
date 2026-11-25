@@ -10,8 +10,6 @@ cognitive	_gh_api_once	19
 cognitive	_watch_group	28
 cognitive	adjust_cap	24
 cognitive	alert_item	30
-cognitive	alert_probe	42
-cognitive	alert_probe_cleared	45
 cognitive	alert_route	20
 cognitive	apply_entry	20
 cognitive	assemble	24
@@ -149,8 +147,6 @@ cyclomatic	_gh_api_once	18
 cyclomatic	_watch_group	21
 cyclomatic	adjust_cap	36
 cyclomatic	alert_item	27
-cyclomatic	alert_probe	33
-cyclomatic	alert_probe_cleared	37
 cyclomatic	alert_route	21
 cyclomatic	apply_entry	31
 cyclomatic	assemble	15
@@ -276,7 +272,6 @@ cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
 cyclomatic	write_snapshot	23
 inner-defs	sync_steps	7
-method-lines	alert_probe	55
 method-lines	dry_run	53
 method-lines	jvm_reap	57
 method-lines	live_registry_read	53
