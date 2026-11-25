@@ -7,6 +7,7 @@ import re
 import shlex
 import subprocess
 import time
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, SHORT, _tokens, env_num, git, pid_alive, state_root
 from agentctl.statefile import mtime, read_record, write_json
@@ -192,13 +193,55 @@ def bg_ended(ent):
 # (`agentctl wait`, backgrounded before it ended its turn, as agents are told) is at work, and each beat of that wait is
 # progress (bg_wait_mark), so its lease never lapses under it.
 BG_IDLE_GRACE = 60   # s a waiting session with no pending task of its own and no verdict stays quiet: its turn ended
-BG_TASK_STARTED = re.compile(r'"backgroundTaskId": ?"([\w-]+)"|Command running in background with ID: ([\w-]+)')
+# a backgrounded shell, or a backgrounded subagent (2026-11-25, Alert backtest #28: an owner waiting on its own agent)
+BG_TASK_STARTED = re.compile(r'"backgroundTaskId": ?"([\w-]+)"|Command running in background with ID: ([\w-]+)'
+                             r'|"status": ?"async_launched", ?"agentId": ?"([\w-]+)"')
 BG_TASK_REPORTED = re.compile(r"<task-id>([\w-]+)</task-id>")  # a notification: a user entry or one absorbed mid-turn
 BG_TASK_STOPPED = re.compile(r'"(?:task_id|shell_id)": ?"([\w-]+)"')  # TaskStop / KillShell: stopped by the session
-_BG_TURN_CACHE = {}
+_BG_TURN_CACHE: dict[str, tuple[tuple[int, float], dict[str, Any]]] = {}
 
 
-def bg_turn(path):
+def user_texts(c: object) -> list[str]:
+    """A user entry's text blocks (its content a string, or a list of blocks)."""
+    blocks = [{"type": "text", "text": c}] if isinstance(c, str) else c if isinstance(c, list) else []
+    return [str(b.get("text")) for b in blocks if isinstance(b, dict) and b.get("type") == "text"]
+
+
+def user_input(e: dict[str, Any], c: object) -> str | None:
+    """A user entry's input: "prompt" (a new turn), "notification" (a task's, new input of the same turn), or None --
+    no text, or claude's own `isMeta` note (a system-reminder): no input."""
+    if e.get("isMeta") and "<task-notification>" not in str(c):
+        return None
+    texts = user_texts(c)
+    if not texts:
+        return None
+    return "notification" if all("<task-notification>" in t for t in texts) else "prompt"
+
+
+def answer_text(c: object) -> str:
+    """An assistant entry's text blocks, joined ('' for none)."""
+    if not isinstance(c, list):
+        return ""
+    t = "\n".join(b.get("text") or "" for b in c if isinstance(b, dict) and b.get("type") == "text")
+    return t if t.strip() else ""
+
+
+def turn_entry(e: object) -> tuple[str | None, str]:
+    """What one transcript entry is to the turn: ("prompt" | "notification", "") -- input --, ("answer", text),
+    ("closed", "") -- claude's `turn_duration` --, or (None, "") for anything else."""
+    if not isinstance(e, dict):
+        return None, ""
+    m = e.get("message")
+    c = m.get("content") if isinstance(m, dict) else None
+    if e.get("type") == "user":
+        return user_input(e, c), ""
+    if e.get("type") == "assistant":
+        t = answer_text(c)
+        return ("answer" if t else None), t
+    return ("closed" if e.get("type") == "system" and e.get("subtype") == "turn_duration" else None), ""
+
+
+def bg_turn(path: str | None) -> dict[str, Any]:
     """What the transcript says of the session's current turn: {"final": its last answer since the latest input (a
     prompt or a task notification), "pending": its background tasks started since its prompt and neither reported
     nor stopped, "closed": claude recorded the turn's end (a `turn_duration` entry) after that answer, with no input
@@ -211,30 +254,23 @@ def bg_turn(path):
     hit = _BG_TURN_CACHE.get(path)
     if hit and hit[0] == sig:
         return hit[1]
-    final, started, reported, closed = "", [], set(), False
+    final, reported, closed = "", set(), False
+    started: list[str] = []
     try:
         with open(path, errors="replace") as f:
             for line in f:
                 try:
-                    e = json.loads(line)
+                    kind, t = turn_entry(json.loads(line))
                 except ValueError:
                     continue
-                m = e.get("message") if isinstance(e, dict) else None
-                c = m.get("content") if isinstance(m, dict) else None
-                if isinstance(e, dict) and e.get("type") == "user":
-                    blocks = [{"type": "text", "text": c}] if isinstance(c, str) else c if isinstance(c, list) else []
-                    for b in blocks:
-                        if isinstance(b, dict) and b.get("type") == "text":
-                            final, closed = "", False  # new input: the turn's answer is what comes after it
-                            if "<task-notification>" not in str(b.get("text")):  # a prompt: a new turn (a resume
-                                started = []                                      # is a new process: no older task)
-                elif isinstance(e, dict) and e.get("type") == "assistant" and isinstance(c, list):
-                    t = "\n".join(b.get("text") or "" for b in c if isinstance(b, dict) and b.get("type") == "text")
-                    if t.strip():
-                        final, closed = t, False
-                elif isinstance(e, dict) and e.get("type") == "system" and e.get("subtype") == "turn_duration":
+                if kind in ("prompt", "notification"):  # new input: the turn's answer is what comes after it
+                    final, closed = "", False
+                    started = [] if kind == "prompt" else started  # a new turn (a resume is a new process: no older task)
+                elif kind == "answer":
+                    final, closed = t, False
+                elif kind == "closed":
                     closed = bool(final)
-                started += [x or y for x, y in BG_TASK_STARTED.findall(line)]
+                started += ["".join(g) for g in BG_TASK_STARTED.findall(line)]
                 reported.update(BG_TASK_REPORTED.findall(line) + BG_TASK_STOPPED.findall(line))
     except OSError:
         return empty
@@ -261,8 +297,8 @@ def bg_turn_over(ent, path, now=None):
     no background task of its own pending for BG_IDLE_GRACE."""
     if bg_ended(ent):
         return True
-    if not ent:
-        return False
+    if not ent or not (path and os.path.exists(path)):  # no transcript yet: still starting (a resume compacting its
+        return False  # history writes none for minutes), judged by its stall budget, never "quiet" since mtime 0
     turn = bg_turn(path)
     if not (bg_waiting(ent) or turn["closed"]):
         return False
@@ -337,16 +373,19 @@ def bg_resumable(session):
 
 
 def bg_failure(bid):
-    """Why claude says a background session failed (its job's `detail`, ~/.claude/jobs/<id>/state.json: e.g. `source
-    session ... not found`), '' when it did not fail or says nothing: a crash's verdict carries the actual error."""
+    """Why claude says a background session failed or is blocked (its job's `detail`, ~/.claude/jobs/<id>/state.json:
+    e.g. `source session ... not found`, `Prompt is too long · automatic compaction failed: You've hit your weekly
+    limit ...`), '' when it did not or says nothing more than its state: a crash's verdict carries the actual error,
+    and a limit named there makes the launch LIMITED (redstep.red_end_outcome)."""
     try:
         with open(os.path.join(claude_jobs_root(), str(bid or "")[:8], "state.json")) as f:
             job = json.load(f)
     except (OSError, ValueError):
         return ""
-    if not isinstance(job, dict) or job.get("state") not in ("failed", "error"):
+    if not isinstance(job, dict) or job.get("state") not in ("failed", "error", "blocked"):
         return ""
-    return " ".join(str(job.get("detail") or "").split())[:300]
+    detail = " ".join(str(job.get("detail") or "").split())[:300]
+    return "" if detail == job["state"] else detail
 
 
 def bg_final_text(path):

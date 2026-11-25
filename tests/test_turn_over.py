@@ -77,6 +77,58 @@ class TurnTest(unittest.TestCase):
                         "no verdict, nothing pending, quiet: ended with no verdict")
         self.assertEqual(A.bg_wait_mark(live, self.path, 100, 10), "")
 
+    def test_a_meta_entry_is_no_prompt_and_a_subagent_is_a_pending_task(self):
+        # 2026-11-25 04:04Z, Alert backtest #28 (outside-gate owner session 3b1ecbbd): the session ended its turn
+        # "waiting for the beacon agent and the mutation-test timing", two shells of its own running. Claude wrote a
+        # system-reminder user entry (isMeta) before a task notification; read as a new prompt, it emptied the pending
+        # tasks, and the wrapper ended the turn as "no verdict" -- a crash for the breaker -- while it was at work.
+        live = {"state": "working", "pid": os.getpid()}
+        meta = entry("user", "<system-reminder>\n<tools-used-before-summary>Monitor</tools-used-before-summary>\n"
+                     "</system-reminder>", isMeta=True)
+        agent = entry("user", [{"type": "tool_result", "tool_use_id": "u2",
+                                "content": [{"type": "text", "text": "Async agent launched successfully.\nagentId: a9f"}]}],
+                      toolUseResult={"isAsync": True, "status": "async_launched", "agentId": "a9f"})
+        closed = json.dumps({"type": "system", "subtype": "turn_duration"}) + "\n"
+        self.write(text("user", "go"), bg_started("b1"), agent, text("assistant", "waiting on both"), closed)
+        self.assertEqual(A.bg_turn(self.path)["pending"], ["b1", "a9f"], "a backgrounded subagent is its own task")
+        self.write(text("user", "go"), bg_started("b1"), agent, text("assistant", "waiting"), closed, meta,
+                   notified("a9f"), text("assistant", "That's interim: still waiting on b1"), closed)
+        turn = A.bg_turn(self.path)
+        self.assertEqual(turn["pending"], ["b1"], "the meta entry before a notification starts no turn")
+        self.assertFalse(A.bg_turn_over(live, self.path, now=time.time() + 3600), "waiting on its own shell: at work")
+        self.write(text("user", "go"), text("assistant", "x\nGAVE UP: cannot reproduce"), meta, closed)
+        self.assertEqual(A.fixer_verdict(A.bg_turn(self.path)["final"]), "GAVE UP: cannot reproduce",
+                         "a meta entry after the answer never hides its verdict")
+
+    def test_a_session_that_wrote_no_transcript_yet_has_not_ended_its_turn(self):
+        # 2026-11-25 02:59Z, Alert backtest #28 (outside-gate owner session 82fecbea): a resume of a ~985k-token
+        # session, its row `blocked` with a live process while claude had not yet written its transcript. With no
+        # transcript the quiet read from mtime 0, so the wrapper ended the turn at its first look ("ended with no
+        # LANDED / GAVE UP line (session 82fecbea: blocked)") and stopped it: a crash for the breaker.
+        live = {"state": "blocked", "pid": os.getpid()}
+        missing = os.path.join(self.tmp.name, "none.jsonl")
+        for path in (None, missing):
+            self.assertFalse(A.bg_turn_over(live, path, now=time.time() + 3600), "starting: its stall budget judges it")
+        self.assertTrue(A.bg_turn_over({"state": "done"}, None), "a row that says it ended still ends it")
+
+    def test_a_blocked_sessions_ending_carries_claudes_reason(self):
+        # 2026-11-24 13:57Z, Alert backtest #26 (sessions fa0ec19f, 66835cfd): `blocked` on "Prompt is too long ·
+        # automatic compaction failed: You've hit your weekly limit", recorded as a bare "(session ...: blocked)"
+        jobs = os.path.join(self.tmp.name, "jobs")
+        os.makedirs(os.path.join(jobs, "fa0ec19f"))
+        os.environ["AGENTCTL_CLAUDE_JOBS"] = jobs
+        self.addCleanup(os.environ.pop, "AGENTCTL_CLAUDE_JOBS", None)
+        why = ("Prompt is too long · automatic compaction failed: You've hit your weekly limit · resets 2am "
+               "(Europe/Warsaw) · out of usage credits")
+        with open(os.path.join(jobs, "fa0ec19f", "state.json"), "w") as f:
+            json.dump({"state": "blocked", "detail": why}, f)
+        self.assertEqual(A.bg_failure("fa0ec19f"), why)
+        self.assertTrue(A.claude_limit(f"ended with no LANDED / GAVE UP line (session fa0ec19f: blocked: "
+                                       f"{A.bg_failure('fa0ec19f')})"), "so the red's history reads it LIMITED")
+        with open(os.path.join(jobs, "fa0ec19f", "state.json"), "w") as f:
+            json.dump({"state": "blocked", "detail": "blocked"}, f)
+        self.assertEqual(A.bg_failure("fa0ec19f"), "", "a bare state is no reason")
+
 
 class LingerMixin:
     """The fake session's process lives on after its turn (claude's spare); killed at the test's end."""

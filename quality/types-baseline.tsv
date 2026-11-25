@@ -35,7 +35,7 @@ mypy-errors	explorer	16
 mypy-errors	fixer	16
 mypy-errors	fixerenv	3
 mypy-errors	fixerland	30
-mypy-errors	fixerlife	62
+mypy-errors	fixerlife	61
 mypy-errors	fixersession	38
 mypy-errors	forge	70
 mypy-errors	gatesummary	4
@@ -73,7 +73,7 @@ mypy-errors	orphanreap	30
 mypy-errors	orphans	83
 mypy-errors	outsideflows	23
 mypy-errors	owned	47
-mypy-errors	owner	93
+mypy-errors	owner	91
 mypy-errors	ownerleases	24
 mypy-errors	owners	3
 mypy-errors	park	34

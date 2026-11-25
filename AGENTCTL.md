@@ -1026,6 +1026,11 @@ agent must be assigned to it".
   has ended it when its answer carries a verdict, or -- nothing of its own pending -- after
   `$AGENTCTL_BG_IDLE_GRACE` (60 s) of quiet; one waiting on its own backgrounded task (`agentctl wait`) is at work, and
   its lease is renewed by the wait.
+  A backgrounded subagent is such a task too, claude's own `isMeta` notes (a system-reminder) are no input, and a
+  session with no transcript yet (a resume compacting its history) is still starting, judged by its stall budget
+  (2026-11-25, Alert backtest #28: three owner turns ended "no verdict" while at work or starting). A blocked or
+  failed session's ending carries claude's own detail (`blocked: Prompt is too long ... weekly limit`), so a spent
+  limit reads LIMITED.
 - **OWNER-ONLY CATEGORIES (ask.py `OWNER_ONLY`, 2026-11-19: "could any of these decision things could've been handled
   automatically? fix structurally").** Only what no agent can do reaches the owner, and every ask names its category:
   `vault` (Touch ID), `tty-trust` (a prompt needing his terminal), `money-credentials`, `irreversible`,

@@ -42,7 +42,7 @@ cognitive	batch_check	19
 cognitive	batch_step	122
 cognitive	bg_final_text	13
 cognitive	bg_spent	16
-cognitive	bg_turn	44
+cognitive	bg_turn	14
 cognitive	bisect	14
 cognitive	blame_cancel_changes_of	12
 cognitive	blame_drop_revert_worktree	13
@@ -448,7 +448,7 @@ cyclomatic	batch_check	17
 cyclomatic	batch_step	82
 cyclomatic	bg_final_text	11
 cyclomatic	bg_spent	15
-cyclomatic	bg_turn	32
+cyclomatic	bg_turn	14
 cyclomatic	blame_drop_revert_worktree	17
 cyclomatic	blame_finish	12
 cyclomatic	blame_hint	14
