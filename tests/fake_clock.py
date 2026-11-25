@@ -38,3 +38,17 @@ def on_clock(clock):
     the clock and a store reading its time (`A.tick_changes(repo, d, *on_clock(FakeClock(t)))`)."""
     from agentctl.store import CurrentStore
     return clock, CurrentStore(clock.time)
+
+
+# A LOADED RUN'S LAG (2026-11-23, a pre-push suite at load 290): a FakeClock() reads "now" once, when the fixture made it,
+# and the wall runs on; a test 5+ minutes into its run on a loaded laptop compares what the queue stamped on its fake
+# clock with the wall's time -- a batch's 300-s `pushing` deadline read as passed, a 300-s infra backoff as over -- and
+# fails only under load. A test that drives the queue starts its clock LOADED_RUN_LAG s behind the wall, so mixing the
+# two clocks fails at once, on any machine.
+LOADED_RUN_LAG = 400  # s: past the queue's 300-s windows (a pushing batch's deadline, the first infra backoff)
+
+
+def lagging_clock():
+    """A FakeClock LOADED_RUN_LAG s behind the wall, as a slow test's frozen clock reads late in its run."""
+    import time
+    return FakeClock(time.time() - LOADED_RUN_LAG)

@@ -124,6 +124,12 @@ class NoEmptyQueueTest(QueueTest):
         self.assertEqual((es[self.key(e1)]["status"], es["9"]["status"]), ("superseded", "queued"))
 
 
+def final_verdicts(test, wt):
+    """wt's final inbox verdicts, oldest first: land's WAITING line is a progress note (final=False), stamped by the
+    inbox on the wall's time while the ticks' verdicts carry the test's clock -- never ordered against them."""
+    return [x for x in test.inbox() if x["cwd"] == wt and x.get("final", True)]
+
+
 class NoEmptyWaitingTest(QueueTest):
     def test_a_waiting_entry_whose_change_reached_main_is_landed_not_pushed_again(self):
         self.reds = {"7"}
@@ -143,7 +149,7 @@ class NoEmptyWaitingTest(QueueTest):
         self.assertEqual(es["2"]["status"], "landed")
         self.assertEqual(self.remote_log()[:2], ["b: two", "a: one, by hand"])
         self.assertEqual(empty_commits_on_main(self), [])
-        self.assertIn(f"already on main via {via}", [x for x in self.inbox() if x["cwd"] == wa][-1]["verdict"])
+        self.assertIn(f"already on main via {via}", final_verdicts(self, wa)[-1]["verdict"])
         self.assertEqual([x for x in self.inbox() if x["kind"] == "NOT_LANDED"], [])
 
     def test_a_waiting_change_landed_by_hand_while_red_is_landed_without_a_batch(self):
@@ -157,7 +163,7 @@ class NoEmptyWaitingTest(QueueTest):
         sh(self.r.path, "git", "fetch", "-q", "origin")
         self.drive()  # still red
         self.assertEqual(self.entries()["1"]["status"], "landed")
-        self.assertIn("already on main", [x for x in self.inbox() if x["cwd"] == wa][-1]["verdict"])
+        self.assertIn("already on main", final_verdicts(self, wa)[-1]["verdict"])
 
     def test_joining_again_supersedes_the_older_waiting_entry(self):
         self.reds = {"7"}

@@ -7,7 +7,7 @@ import contextlib, io, json, os, re, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, StallSamples, sh  # noqa: E402
-from fake_clock import FakeClock, on_clock  # noqa: E402
+from fake_clock import FakeClock, lagging_clock, on_clock  # noqa: E402
 from test_waiting import REPO_HOOK, WaitingTest, assert_queued_line_names_no_verdict  # noqa: E402
 
 PLAN_HOOK = """#!/bin/sh
@@ -75,10 +75,10 @@ class QueueTest(WaitingTest):
         d, _c, _w = A.waiting_state(self.r.path)
         for _ in range(rounds):
             e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
-            if e["status"] in ("queued", "checking") and not e.get("retry_after", 0) > time.time():
+            if e["status"] in ("queued", "checking") and not e.get("retry_after", 0) > self.clock.time():
                 A.check_entry(self.r.path, eid, *on_clock(self.clock))
             elif e["status"] == "checked":
-                A.push_change(self.r.path, d, e, *on_clock(A.Clock()))
+                A.push_change(self.r.path, d, e, *on_clock(self.clock))
             else:
                 break
         A.project_events(A.CurrentStore())  # the processor's projector: the events become the inbox entries
@@ -117,7 +117,7 @@ class QueueTest(WaitingTest):
             saved = A.spawn_executor
             A.spawn_executor = lambda repo, d_, eid: started.append(eid)
             try:
-                return A.tick_changes(self.r.path, d, *on_clock(A.Clock())), started
+                return A.tick_changes(self.r.path, d, *on_clock(self.clock)), started
             finally:
                 A.spawn_executor = saved
         d, _c, _w = A.waiting_state(self.r.path)
@@ -129,7 +129,7 @@ class QueueTest(WaitingTest):
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None  # its executor runs elsewhere
         try:
-            self.assertIn("checking", A.tick_batch(self.r.path, d, *on_clock(A.Clock()))[0])
+            self.assertIn("checking", A.tick_batch(self.r.path, d, *on_clock(self.clock))[0])
         finally:
             A.spawn_batch_executor = saved
         wb, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: solo")
@@ -172,7 +172,7 @@ class QueueTest(WaitingTest):
             saved = A.spawn_executor
             A.spawn_executor = lambda repo, d_, eid: started.append(eid)
             try:
-                return A.tick_changes(self.r.path, d, *on_clock(A.Clock())), started
+                return A.tick_changes(self.r.path, d, *on_clock(self.clock)), started
             finally:
                 A.spawn_executor = saved
         d, _c, _w = A.waiting_state(self.r.path)
@@ -244,7 +244,7 @@ class QueueTest(WaitingTest):
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None
         try:
-            self.assertIn("checking", A.tick_batch(self.r.path, d, *on_clock(A.Clock()))[0])
+            self.assertIn("checking", A.tick_batch(self.r.path, d, *on_clock(self.clock))[0])
         finally:
             A.spawn_batch_executor = saved
         self.assertEqual(self.batch()["data"]["members"], ids, "the batch's members are the changes, each once")
@@ -443,7 +443,7 @@ class QueueTest(WaitingTest):
         d, _c, _w = A.waiting_state(self.r.path)
         self.moves_once(("worker/src/main/W.scala", "w\n"))
         A.check_entry(self.r.path, eid, *on_clock(self.clock))  # the full check, main moving under it
-        A.push_change(self.r.path, d, A.read_record(os.path.join(d, "entries", f"{eid}.json")), *on_clock(A.Clock()))
+        A.push_change(self.r.path, d, A.read_record(os.path.join(d, "entries", f"{eid}.json")), *on_clock(self.clock))
         e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
         self.assertEqual((e["status"], e.get("verify")), ("queued", True), "no overlap yet: queued to be verified")
         other, _ = self.agent("t", "docs/notes.md", "".join(f"line {i}\n" for i in range(11)) + "theirs\n")
@@ -852,11 +852,11 @@ class QueueTest(WaitingTest):
         self.assertEqual(e["infra_reason"], "its checks stalled")
         # ITS PLACE KEPT (2026-11-17, ref-srp-54ebae: a 13-s stall's 5-min backoff let younger changes take every check
         # tree, and it queued another 15+ min): the stalled change is due at once, first by age for the freed tree
-        self.assertLessEqual(e.get("retry_after", 0), time.time())
+        self.assertLessEqual(e.get("retry_after", 0), self.clock.time())
         for _ in range(A.STALL_KEEP_PLACE):  # stalling on and on: backed off like any infra cause
             self.check(eid, rounds=1)
         e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
-        self.assertGreater(e["retry_after"], time.time() + 60)
+        self.assertGreater(e["retry_after"], self.clock.time() + 60)
 
     def fake_github(self, status, head, ref="check/e1"):
         calls = []
@@ -958,6 +958,9 @@ class QueueTest(WaitingTest):
         self.assertEqual(set(lanes), {"red"}, "and so is each check of its bisect")
 
     def test_a_check_the_laptop_failed_is_queued_again_not_rejected(self):
+        # 2026-11-23 ('queued', 2) under load: check() read the infra backoff the executor stamped on this test's clock
+        # against the wall's time, and a test 5+ min into a loaded run checked the change again at once
+        self.clock = lagging_clock()
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)
         real = A.run_entry_checks
@@ -967,7 +970,7 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.check(eid), 0)
         e = self.entries()[eid.rsplit("-", 1)[-1]]
         self.assertEqual((e["status"], e["infra_retries"]), ("queued", 1))
-        self.assertGreater(e["retry_after"], time.time())
+        self.assertGreater(e["retry_after"], self.clock.time())
         self.assertEqual([x for x in self.inbox() if x["kind"] == "NOT_LANDED"], [])
         d, _c, _w = A.waiting_state(self.r.path)
         for _ in range(A.QUEUE_INFRA_RETRIES):
@@ -1403,7 +1406,7 @@ class RemotePickupTest(QueueTest):
         saved = A.spawn_executor
         A.spawn_executor = lambda repo, d_, eid: started.append(eid)
         try:
-            return A.tick_changes(self.r.path, d, *on_clock(A.Clock())), started
+            return A.tick_changes(self.r.path, d, *on_clock(self.clock)), started
         finally:
             A.spawn_executor = saved
 

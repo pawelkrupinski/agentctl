@@ -7,7 +7,7 @@ import json, os, stat, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, StallSamples, sh  # noqa: E402
-from fake_clock import FakeClock, on_clock  # noqa: E402
+from fake_clock import FakeClock, lagging_clock, on_clock  # noqa: E402
 
 REPO_HOOK = """#!/bin/sh
 # supports --checks-only (the checks without the red gate) and --fast-only (compile and the fast tests)
@@ -95,14 +95,16 @@ class WaitingTest(Base):
         return {e["id"].rsplit("-", 1)[-1]: e for e in A.waiting_entries(d, open_only=False)}
 
     def drive(self, n=10):
-        """The batch to rest, as the processor's ticks drive it, its executors run in-process (step 8)."""
+        """The batch to rest, as the processor's ticks drive it, its executors run in-process (step 8). ONE CLOCK: the
+        ticks and the executors read the test's (a tick on the wall's beside an executor on the fake one read a 300-s
+        deadline the executor stamped as passed once the test was 5 min into a loaded run)."""
         d, _c, _w = A.waiting_state(self.r.path)
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: A.check_batch(repo, bid, *on_clock(self.clock))
         out = []
         try:
             for _ in range(n):
-                did = A.close_landed_changes(self.r.path, A.Clock(), d) + A.tick_batch(self.r.path, d, *on_clock(A.Clock()))  # the server's order
+                did = A.close_landed_changes(self.r.path, self.clock, d) + A.tick_batch(self.r.path, d, *on_clock(self.clock))  # the server's order
                 out += did
                 if not did or did == ["held"]:
                     break
@@ -340,6 +342,7 @@ class WaitingTest(Base):
         """2026-10-30: two flips changes sat `waiting` at green with nothing said anywhere. Waiting at green while no
         batch checks, bisects, pushes or is held is counted per tick; past the limit a STALLED condition opens, and
         the same count clears it once the batch moves."""
+        self.clock = lagging_clock()  # ticks and the batch executor on ONE clock: never the wall beside it (fake_clock.py)
         os.environ["AGENTCTL_WAITING_GREEN_TICKS"] = "3"
         self.addCleanup(os.environ.pop, "AGENTCTL_WAITING_GREEN_TICKS", None)
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
@@ -350,9 +353,9 @@ class WaitingTest(Base):
         A.check_tree_slot = lambda repo, d_: None  # every check tree busy: the batch cannot be assembled
         try:
             for _ in range(2):
-                A.tick_batch(self.r.path, d, *on_clock(A.Clock()))
+                A.tick_batch(self.r.path, d, *on_clock(self.clock))
             self.assertEqual([c for c in A.open_conditions(A.CurrentStore()) if c["key"].startswith("waiting-green")], [])
-            A.tick_batch(self.r.path, d, *on_clock(A.Clock()))
+            A.tick_batch(self.r.path, d, *on_clock(self.clock))
             conds = [c for c in A.open_conditions(A.CurrentStore()) if c["key"].startswith("waiting-green")]
             self.assertEqual(len(conds), 1)
             self.assertIn("waiting while the gate is green for 3 ticks", conds[0]["text"])
@@ -373,13 +376,13 @@ class WaitingTest(Base):
         self.land(wa)
         d, _c, _w = A.waiting_state(self.r.path)
         for _ in range(4):  # red: waiting is right
-            A.tick_batch(self.r.path, d, *on_clock(A.Clock()))
+            A.tick_batch(self.r.path, d, *on_clock(self.clock))
         self.reds = set()
         saved = A.spawn_batch_executor
         A.spawn_batch_executor = lambda repo, d_, bid: None  # its executor runs elsewhere: the batch stays checking
         try:
             for _ in range(4):
-                A.tick_batch(self.r.path, d, *on_clock(A.Clock()))
+                A.tick_batch(self.r.path, d, *on_clock(self.clock))
         finally:
             A.spawn_batch_executor = saved
         self.assertEqual(self.batch()["state"], "checking")
@@ -406,7 +409,7 @@ class WaitingTest(Base):
         saved = A.gate_reds
         A.gate_reds = lambda repo: self.fail("an empty batch reads no gate")
         try:
-            self.assertEqual(A.tick_batch(self.r.path, d, *on_clock(A.Clock())), [])
+            self.assertEqual(A.tick_batch(self.r.path, d, *on_clock(self.clock)), [])
         finally:
             A.gate_reds = saved
 
@@ -444,7 +447,7 @@ class WaitingTest(Base):
         self.assertFalse(os.path.exists(os.path.join(d, "PAUSED")), "no local file: the store holds it")
         [h] = A.open_store().items("hold", ["held"])
         self.assertEqual(h["data"]["why"], "infra deploy")
-        self.assertAlmostEqual(h["deadline"] - time.time(), 30 * 60, delta=60)
+        self.assertAlmostEqual(h["deadline"] - self.clock.time(), 30 * 60, delta=60)  # land's clock
         self.assertEqual(self.drive(), ["held"])
         A.write_snapshot(d, A.CurrentStore())
         line = A.status_line()
@@ -455,7 +458,7 @@ class WaitingTest(Base):
         self.run_tool("land", "hold", "--for", "60", cwd=self.r.path)
         self.assertEqual(len(A.open_store().items("hold", ["held"])), 1)
         # past its deadline: the next reader expires it, with an event; the tick moves the batch again
-        later = time.time() + 61 * 60
+        later = self.clock.time() + 61 * 60
         self.assertIsNone(A.land_hold(A.open_store(), later))
         self.assertEqual(A.open_store().items("hold", ["held"]), [])
         self.assertTrue([e for e in A.open_store().events() if e["kind"] == "hold.expired"])
