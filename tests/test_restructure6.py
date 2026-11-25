@@ -281,7 +281,8 @@ FRAGMENTS = ["rm -rf /run/github-runner/b-1/core/docker", "rm /a/b/c/d", "rm -rf
              "sudo rm -rf /var/lib/x/y/z", "nice -n 5 rm /q/r/s", "docker system prune -af", "docker rm c1", "podman rmi x", "kubectl delete pod x", "kubectl delete pods -A",
              "kubectl delete ns y --all", "find /a/b/c -delete", "find /a -name x", "git clean -fdx", "git reset --hard", "git status", "if [ -d /a/b/c ]; then",
              "test -d /a/b/c", "pgrep -f x >/dev/null", "echo hi", "mongo --eval db.dropDatabase()", "psql -c 'DROP TABLE x'", "TRUNCATE TABLE y", "Runner.Worker",
-             "rm -rf /actions-runner/x/_work/y/z", "ls", "fi", "docker ps", "while true", "kubectl get pods", "rm -rf '/a/b/c'", "exec rm /q/w/e", "rm -rf ${V}", "rm -rf `x`/a/b"]
+             "rm -rf /actions-runner/x/_work/y/z", "ls", "fi", "docker ps", "while true", "kubectl get pods", "rm -rf '/a/b/c'", "exec rm /q/w/e", "rm -rf ${V}", "rm -rf `x`/a/b",
+             "rm -rf $V", "rm -rf $V/", "rm -rf ..", "rm -", "rm -rf $HOME/a", "rm -rf $(cat x)/a/b/c", "rm -rf -- /a/b/c/d", "rm -rf ~/x", "find / -name x -delete --with-a-very-long-argument-list one two three four five six seven eight"]
 JOINERS = [" && ", " || ", "; ", " | ", "\n", " ; do ", " then ", " else "]
 
 
@@ -336,7 +337,7 @@ class RedBlockTest(unittest.TestCase):
                     meta["probe"] = {"kind": r.choice(["p1", "p3", None]), "args": {"a": 1}}
                 rows.append({"name": f"block/b{i}", "epoch": i, "secret": "s", "meta": meta})
             st = Probe(case, "store", list=lambda rng, prefix: rows)
-            return (st, 100.0)
+            return (st, r.choice([100.0, 100.0, 30.0, 60.5]))
         check(self, "red_renew_blocks", build, lambda A: A.red_renew_blocks, 8000)
 
 
