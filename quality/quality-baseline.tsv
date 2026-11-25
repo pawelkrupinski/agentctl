@@ -10,7 +10,6 @@ cognitive	StoreAPI.handle	19
 cognitive	StoreAPI.route	14
 cognitive	WatchClaim.look	13
 cognitive	_await_entry	35
-cognitive	_check_entry	100
 cognitive	_end_group	13
 cognitive	_gh_api_once	21
 cognitive	_main_index	12
@@ -52,7 +51,6 @@ cognitive	blame_status	13
 cognitive	blame_step	26
 cognitive	blame_withdraw	16
 cognitive	block_invalid	36
-cognitive	branch_state	32
 cognitive	build_view	70
 cognitive	change_exit_event	14
 cognitive	change_exits_unannounced	12
@@ -73,7 +71,6 @@ cognitive	close_superseded	17
 cognitive	close_worktree	20
 cognitive	cmd_checks	12
 cognitive	cmd_ci_why	14
-cognitive	cmd_cleanup	96
 cognitive	cmd_config	21
 cognitive	cmd_env	35
 cognitive	cmd_gov	56
@@ -82,20 +79,16 @@ cognitive	cmd_land	15
 cognitive	cmd_laptop	15
 cognitive	cmd_lease	17
 cognitive	cmd_maintain	36
-cognitive	cmd_orphans	96
 cognitive	cmd_park	14
 cognitive	cmd_prepush	21
 cognitive	cmd_recover	15
-cognitive	cmd_red	70
 cognitive	cmd_revert	11
 cognitive	cmd_state	12
 cognitive	cmd_supersede	22
 cognitive	cmd_wait	18
-cognitive	cmd_watchdog	26
 cognitive	coherent_edit	11
 cognitive	condition_record	13
 cognitive	config_knobs	25
-cognitive	config_load	25
 cognitive	conflict_cause	11
 cognitive	conflict_resolve	17
 cognitive	content_twin	11
@@ -141,7 +134,6 @@ cognitive	gov_replay	27
 cognitive	gov_tickets	11
 cognitive	hold_for_overlap	21
 cognitive	holder_work	14
-cognitive	hook_selection	12
 cognitive	hunk_take	11
 cognitive	hunks_resolve	26
 cognitive	identity_change	12
@@ -155,7 +147,6 @@ cognitive	jvm_reap	43
 cognitive	jvm_scan	24
 cognitive	kick_processor	11
 cognitive	land_calls	19
-cognitive	land_hold	13
 cognitive	land_status_entry	25
 cognitive	land_until_done	28
 cognitive	lander_index	17
@@ -279,14 +270,12 @@ cognitive	red_run_on_way	19
 cognitive	red_run_retired	36
 cognitive	red_spawn	28
 cognitive	red_step	106
-cognitive	red_tick	53
 cognitive	red_tick_others	13
 cognitive	red_unblock	16
 cognitive	red_unheld	19
 cognitive	red_units	16
 cognitive	red_url	12
 cognitive	red_vault_decide	15
-cognitive	red_verify_run_on_way	11
 cognitive	red_view_of_units	24
 cognitive	red_view_state	84
 cognitive	red_wait_cycle	12
@@ -297,7 +286,6 @@ cognitive	regenerate	53
 cognitive	release_local_leftovers	15
 cognitive	relevant_lines	16
 cognitive	relink_worktrees	14
-cognitive	remote_check_lines	24
 cognitive	remote_progress	12
 cognitive	remote_run_listed	13
 cognitive	render_red_status	52
@@ -327,7 +315,6 @@ cognitive	session_activity	15
 cognitive	session_transcripts	11
 cognitive	session_worktrees	26
 cognitive	set_change	16
-cognitive	settle_branch_reds	31
 cognitive	sleep_intervals	12
 cognitive	snap_reds	16
 cognitive	spotlight_exclude	23
@@ -340,7 +327,6 @@ cognitive	status_head	16
 cognitive	status_header	21
 cognitive	status_page_server	47
 cognitive	status_page_start	15
-cognitive	status_sources	24
 cognitive	status_transcript_last	15
 cognitive	status_worktree	15
 cognitive	status_worktree_read	12
@@ -384,7 +370,6 @@ copies	buildview	2
 copies	cireport|redtick	2
 copies	clones|serverclone	2
 copies	fixerland|orphans	2
-copies	queueclose	2
 copies	redcrash	2
 copies	redcrash|redstep	2
 copies	redpending	7
@@ -397,7 +382,6 @@ cyclomatic	Store.transition	32
 cyclomatic	StoreAPI.handle	26
 cyclomatic	StoreAPI.route	14
 cyclomatic	_await_entry	20
-cyclomatic	_check_entry	81
 cyclomatic	_gh_api_once	19
 cyclomatic	_push_batch_item	33
 cyclomatic	_push_change	62
@@ -443,7 +427,6 @@ cyclomatic	blame_step	19
 cyclomatic	blame_unproven	15
 cyclomatic	blame_withdraw	18
 cyclomatic	block_invalid	30
-cyclomatic	branch_state	34
 cyclomatic	build_view	35
 cyclomatic	build_view_change	15
 cyclomatic	change_exit_event	16
@@ -465,7 +448,6 @@ cyclomatic	close_superseded	23
 cyclomatic	close_worktree	25
 cyclomatic	cmd_checks	17
 cyclomatic	cmd_ci_why	11
-cyclomatic	cmd_cleanup	45
 cyclomatic	cmd_config	15
 cyclomatic	cmd_env	27
 cyclomatic	cmd_gov	49
@@ -475,19 +457,15 @@ cyclomatic	cmd_land_precheck	15
 cyclomatic	cmd_laptop	12
 cyclomatic	cmd_lease	20
 cyclomatic	cmd_maintain	29
-cyclomatic	cmd_orphans	78
 cyclomatic	cmd_park	13
 cyclomatic	cmd_prepush	12
 cyclomatic	cmd_recover	16
-cyclomatic	cmd_red	47
 cyclomatic	cmd_state	11
 cyclomatic	cmd_supersede	18
 cyclomatic	cmd_wait	12
-cyclomatic	cmd_watchdog	22
 cyclomatic	coherent_edit	12
 cyclomatic	condition_record	22
 cyclomatic	config_knobs	14
-cyclomatic	config_load	18
 cyclomatic	conflict_bounced	13
 cyclomatic	conflict_hunks	12
 cyclomatic	conflict_resolve	21
@@ -537,7 +515,6 @@ cyclomatic	group_cpu_seconds	16
 cyclomatic	hold_for_overlap	14
 cyclomatic	holder_work	16
 cyclomatic	hook_lines	11
-cyclomatic	hook_selection	13
 cyclomatic	hunk_take	13
 cyclomatic	hunks_resolve	18
 cyclomatic	identity_change	14
@@ -688,7 +665,6 @@ cyclomatic	red_run_retired	45
 cyclomatic	red_spawn	25
 cyclomatic	red_step	76
 cyclomatic	red_stop_holder	12
-cyclomatic	red_tick	40
 cyclomatic	red_tick_others	11
 cyclomatic	red_unblock	14
 cyclomatic	red_unheld	15
@@ -706,7 +682,6 @@ cyclomatic	regen_hold_overdue	22
 cyclomatic	regenerate	31
 cyclomatic	release_local_leftovers	11
 cyclomatic	relevant_lines	13
-cyclomatic	remote_check_lines	16
 cyclomatic	remote_ghost	13
 cyclomatic	remote_progress	11
 cyclomatic	render_red_status	43
@@ -735,7 +710,6 @@ cyclomatic	scala_statements	12
 cyclomatic	server_steps	11
 cyclomatic	session_worktrees	19
 cyclomatic	set_change	18
-cyclomatic	settle_branch_reds	20
 cyclomatic	snap_reds	11
 cyclomatic	snapshots_both_changed	12
 cyclomatic	spotlight_exclude	16
@@ -748,7 +722,6 @@ cyclomatic	status_head	13
 cyclomatic	status_header	24
 cyclomatic	status_page_start	11
 cyclomatic	status_reds	15
-cyclomatic	status_sources	14
 cyclomatic	status_transcript_last	13
 cyclomatic	status_worktree	17
 cyclomatic	status_worktree_read	15
@@ -784,7 +757,6 @@ cyclomatic	write_snapshot	23
 inner-defs	status_page_server	8
 inner-defs	store_server	4
 inner-defs	sync_steps	7
-method-lines	_check_entry	149
 method-lines	_push_batch_item	72
 method-lines	_push_change	132
 method-lines	_tick_changes_pass	86
@@ -794,11 +766,8 @@ method-lines	alert_write	59
 method-lines	build_view	65
 method-lines	check_batch	119
 method-lines	ci_why	182
-method-lines	cmd_cleanup	94
 method-lines	cmd_gov	91
 method-lines	cmd_maintain	56
-method-lines	cmd_orphans	123
-method-lines	cmd_red	90
 method-lines	dry_run	53
 method-lines	expire_cache	60
 method-lines	explain_run_jobs	119
@@ -824,7 +793,6 @@ method-lines	red_job_reads	66
 method-lines	red_lease_ended	87
 method-lines	red_run_retired	51
 method-lines	red_step	157
-method-lines	red_tick	100
 method-lines	red_view_state	85
 method-lines	regenerate	63
 method-lines	retire_jobs_of	55
