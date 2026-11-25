@@ -131,14 +131,18 @@ def output_file_shared(stream):
         return "its output file"
 
 
-def cmd_land(a, clock, store):
-    if getattr(a, "lcmd", None):  # land status | hold | release | cancel <id>: the queue (design §14.5)
-        if a.lcmd == "cancel" and not a.entry:
-            print("usage: agentctl land cancel <id>")
-            return 2
-        w = argparse.Namespace(wcmd=LAND_SUBCOMMANDS[a.lcmd], repo=a.repo, entry=a.entry, renamed=True,
-                               hold_for=getattr(a, "hold_for", None), hold_why=getattr(a, "hold_why", None))
-        return queue_command(w, store)
+def land_queue_subcommand(a: Any, store: Any) -> Any:
+    """`land status | hold | release | cancel <id>`: the queue (design §14.5)."""
+    if a.lcmd == "cancel" and not a.entry:
+        print("usage: agentctl land cancel <id>")
+        return 2
+    w = argparse.Namespace(wcmd=LAND_SUBCOMMANDS[a.lcmd], repo=a.repo, entry=a.entry, renamed=True,
+                           hold_for=getattr(a, "hold_for", None), hold_why=getattr(a, "hold_why", None))
+    return queue_command(w, store)
+
+
+def land_start_refusal(a: Any) -> Any:
+    """The exit code of a land that must not start (its verdict printed), or None."""
     shared = (getattr(a, "until_done", False) or getattr(a, "follow", False)) and output_file_shared(sys.stdout)
     if shared:
         err(f"land did not start: another running land writes its output file {shared}, so their verdicts would mix "
@@ -153,12 +157,26 @@ def cmd_land(a, clock, store):
         print(f"NOT LANDED: --repo {a.repo} is no directory: land's --repo is the checkout (worktree) to land, a path; "
               "run land from inside your worktree, or pass its path")
         return 2
-    repo = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
+    return None
+
+
+def land_owner_only(repo: Any) -> Any:
+    """Whether `repo` is owner-only (red-repos.json) and this is a fixer: its push there is a deploy, the owner's."""
     try:
         owner_only = red_owner_only(slug(repo))
     except (Exception, SystemExit):
         owner_only = False
-    if owner_only and in_fixer():  # red-repos.json owner-only: a fixer's push there is a deploy, and the owner's
+    return owner_only and in_fixer()
+
+
+def cmd_land(a, clock, store):
+    if getattr(a, "lcmd", None):
+        return land_queue_subcommand(a, store)
+    refused = land_start_refusal(a)
+    if refused is not None:
+        return refused
+    repo = git(a.repo or os.getcwd(), "rev-parse", "--show-toplevel").strip()
+    if land_owner_only(repo):
         print(f"NOT LANDED: {slug(repo)} is owner-only (red-repos.json): a red fixer never lands or pushes there. File "
               "your prepared branch with `~/bin/agentctl red owner-push <run> --note \"<what; which units restart>\"` and "
               "end with `BLOCKED ON OWNER: <its one-liner>`.")

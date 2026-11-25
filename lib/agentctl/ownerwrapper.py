@@ -11,8 +11,7 @@ from agentctl.statefile import read_record, write_json
 from agentctl.claudefiles import bg_transcript, fixer_verdict
 from agentctl.procs import process_start
 from agentctl.inboxentry import inbox_write
-from agentctl.fixersession import (
-    BG_POLL, RED_STALL, bg_failure, bg_session, bg_start, bg_stop, bg_turn, bg_turn_over, store_reauth)
+from agentctl.fixersession import BG_POLL, RED_STALL, bg_failure, bg_session, bg_start, bg_stop, bg_turn, bg_turn_over
 from agentctl.inbox import INBOX_TAIL
 from agentctl.dispatchblock import claude_cli, interactive_mode
 from agentctl.store import StoreAuthFailed, StoreUnavailable
@@ -24,7 +23,7 @@ from agentctl.redclaim import bind_fixer_session
 from agentctl.redcrash import keep_awake, verdict_cut
 from agentctl.ownerleases import owner_drop, owner_hand, owner_holder, owner_leases, owner_tell_leases
 from agentctl.sessionroll import owner_rollover, owner_turn_line, session_seen
-from agentctl.fixerlife import HeldLease, TurnProgress
+from agentctl.fixerlife import HeldLease, TurnProgress, store_failure_stop
 from agentctl.owner import owner_meta, owner_resume_target, owner_take_heartbeat, owner_turn_prompt
 
 
@@ -297,13 +296,8 @@ class OwnerWrapper:
                 return lost
             self._renew_red_leases(now)
             self.beat = now
-        except StoreAuthFailed as e:  # never "asked again" forever: a fresh store token once, else the owner ends
-            if not store_reauth():
-                return f"store auth failed: {e}"
-            self.env["AGENTCTL_STORE_TOKEN"] = os.environ["AGENTCTL_STORE_TOKEN"]
-            print(f"{ts()} the store refused the token ({e}): a fresh store token taken", flush=True)
-        except StoreUnavailable as e:
-            print(f"{ts()} the store did not answer ({e}): asked again at the next beat", flush=True)
+        except (StoreAuthFailed, StoreUnavailable) as e:
+            return store_failure_stop(e, self.env, "beat") or GO_ON
         return GO_ON
 
     def _judge_progress(self, now: Any) -> Any:

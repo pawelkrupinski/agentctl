@@ -289,61 +289,75 @@ class Store(OfferTable):
         """THE way an item changes state: compare-and-set on its version (StaleVersion on a miss), never out of a
         terminal state (TerminalState), its deadline from MACHINES, its data merged, and its event written in the same
         transaction (kind `<type>.<to>` unless given; deduped). A self-transition (an escalation) bumps the version, keeps
-        entered_at and re-deadlines; deadline_s overrides the state's deadline (e.g. a gate red's shorter offer), and
-        level its level (a quiet self-move that takes back an escalation the item never owed). Returns the new version."""
-        spec, level_ = machine_state(typ, to), level
+        entered_at and re-deadlines; deadline_s overrides the state's deadline, level its level. Returns the new version."""
+        spec = machine_state(typ, to)
         c = self.db()
         try:
             c.execute("BEGIN IMMEDIATE")
             cur = self._item(c, typ, iid)
-            if not cur or cur["version"] != expect_version:
+            try:
+                self._check_move(typ, iid, cur, to, expect_version)
+            except Exception as refusal:
                 c.execute("ROLLBACK")
-                raise StaleVersion(f"{typ} {iid}: version {cur and cur['version']}, expected {expect_version}")
-            if machine_state(typ, cur["state"]).terminal and to != cur["state"]:
-                c.execute("ROLLBACK")
-                raise TerminalState(f"{typ} {iid} is {cur['state']}: terminal")
-            if to != cur["state"] and to not in machine_state(typ, cur["state"]).exits:
-                # THE TABLE IS THE LAW (2026-11-20): a move MACHINES does not list is refused, and recorded (one
-                # `<type>.illegal` event per item and move) so the path that tried it is found, never silently taken
-                c.execute("ROLLBACK")
-                self._record_illegal(typ, iid, cur["state"], to, (event or {}).get("text"))
-                raise IllegalTransition(f"{typ} {iid}: {cur['state']} -> {to} is no move of machine {typ!r} "
-                                        f"(its exits: {', '.join(machine_state(typ, cur['state']).exits) or 'none'})")
-            now_ = self.clock()
-            same = to == cur["state"]
-            # a self-transition whose event says severity `info` re-deadlines without escalating (a red's culprit decided:
-            # blame.py), never a level up
-            quiet = same and (event or {}).get("severity") == "info"
-            level = cur["level"] + 1 if same and spec.escalate and not quiet else (cur["level"] if same else 0)
-            level = level if level_ is None else int(level_)
+                if isinstance(refusal, IllegalTransition):  # recorded once the write lock is back
+                    self._record_illegal(typ, iid, cur["state"], to, (event or {}).get("text"))
+                raise
+            now_, same = self.clock(), to == cur["state"]
+            level = self._level_after(cur, spec, to, event, level)
             merged = {**cur["data"], **(data or {})}
             c.execute("UPDATE items SET state=?, version=?, entered_at=?, deadline=?, level=?, data=? WHERE type=? AND id=?",
                       (to, cur["version"] + 1, now_ if not same else cur["entered_at"],
                        now_ + (spec.deadline if deadline_s is None else float(deadline_s)), level,
                        json.dumps(merged), typ, iid))
-            ev = dict(event or {})
-            if typ == "change" and spec.terminal and not same:
-                ev = change_exit_event(iid, to, merged, ev)
-            c.execute("INSERT OR IGNORE INTO events (at, kind, item_type, item_id, from_state, to_state, severity, "
-                      "audience, text, refs, dedupe) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                      (now_, ev.get("kind") or f"{typ}.{to}", typ, iid, cur["state"], to,
-                       ev.get("severity") or ("escalate" if same and spec.escalate else "info"),
-                       json.dumps(ev.get("audience") or {}), ev.get("text") or "", json.dumps(ev.get("refs") or {}),
-                       ev.get("dedupe") or f"{typ}:{iid}:{to}:{cur['version'] + 1}"))
+            self._insert_move_event(c, now_, typ, iid, cur, to, spec, merged, event)
             c.execute("COMMIT")
             return cur["version"] + 1
         finally:
             c.close()
 
+    @staticmethod
+    def _check_move(typ: Any, iid: Any, cur: Any, to: Any, expect_version: Any) -> Any:
+        """Raise StaleVersion / TerminalState / IllegalTransition unless the item at `cur` may move to `to`."""
+        if not cur or cur["version"] != expect_version:
+            raise StaleVersion(f"{typ} {iid}: version {cur and cur['version']}, expected {expect_version}")
+        if machine_state(typ, cur["state"]).terminal and to != cur["state"]:
+            raise TerminalState(f"{typ} {iid} is {cur['state']}: terminal")
+        if to != cur["state"] and to not in machine_state(typ, cur["state"]).exits:
+            # THE TABLE IS THE LAW (2026-11-20): a move MACHINES does not list is refused and recorded (transition)
+            raise IllegalTransition(f"{typ} {iid}: {cur['state']} -> {to} is no move of machine {typ!r} "
+                                    f"(its exits: {', '.join(machine_state(typ, cur['state']).exits) or 'none'})")
+
+    @staticmethod
+    def _level_after(cur: Any, spec: Any, to: Any, event: Any, level: Any) -> Any:
+        """The level after the move: a self-transition escalates (not on severity `info`: blame.py), any other resets it."""
+        up = 1 if spec.escalate and (event or {}).get("severity") != "info" else 0
+        return int(level) if level is not None else cur["level"] + up if to == cur["state"] else 0
+
+    @staticmethod
+    def _insert_event(c: Any, at: Any, kind: Any, typ: Any, iid: Any, frm: Any, to: Any, severity: Any, audience: Any, text: Any, refs: Any, dedupe: Any) -> Any:
+        """One row of the event feed (INSERT OR IGNORE: a repeated dedupe key says nothing twice)."""
+        c.execute("INSERT OR IGNORE INTO events (at, kind, item_type, item_id, from_state, to_state, severity, "
+                  "audience, text, refs, dedupe) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                  (at, kind, typ, iid, frm, to, severity, json.dumps(audience), text, json.dumps(refs), dedupe))
+
+    def _insert_move_event(self, c: Any, now_: Any, typ: Any, iid: Any, cur: Any, to: Any, spec: Any, merged: Any, event: Any) -> Any:
+        """The event a move writes: the caller's (a change's exit event completed when it ends), deduped per version."""
+        same, ev = to == cur["state"], dict(event or {})
+        if typ == "change" and spec.terminal and not same:
+            ev = change_exit_event(iid, to, merged, ev)
+        ev = {"kind": f"{typ}.{to}", "severity": "escalate" if same and spec.escalate else "info",
+              "dedupe": f"{typ}:{iid}:{to}:{cur['version'] + 1}", "audience": {}, "text": "", "refs": {},
+              **{k: v for k, v in ev.items() if v}}
+        self._insert_event(c, now_, ev["kind"], typ, iid, cur["state"], to, ev["severity"], ev["audience"], ev["text"],
+                           ev["refs"], ev["dedupe"])
+
     def _record_illegal(self, typ, iid, frm, to, why):
         c = self.db()
         try:
-            c.execute("INSERT OR IGNORE INTO events (at, kind, item_type, item_id, from_state, to_state, severity, "
-                      "audience, text, refs, dedupe) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                      (self.clock(), f"{typ}.illegal", typ, iid, frm, to, "info", "{}",
-                       f"REFUSED {typ} {iid}: {frm} -> {to} is no move of its machine"
-                       + (f" (it would have said: {str(why)[:200]})" if why else ""), "{}",
-                       f"{typ}:{iid}:illegal:{frm}:{to}"))
+            said = f" (it would have said: {str(why)[:200]})" if why else ""
+            self._insert_event(c, self.clock(), f"{typ}.illegal", typ, iid, frm, to, "info", {},
+                               f"REFUSED {typ} {iid}: {frm} -> {to} is no move of its machine{said}", {},
+                               f"{typ}:{iid}:illegal:{frm}:{to}")
         except Exception:
             pass  # the refusal stands whether or not it is recorded
         finally:
@@ -425,13 +439,11 @@ class Store(OfferTable):
             c.execute("BEGIN IMMEDIATE")
             for r in c.execute("SELECT * FROM leases WHERE expires_at < ?", (cut,)).fetchall():
                 meta = json.loads(r["meta"] or "{}")
-                c.execute("INSERT OR IGNORE INTO events (at, kind, item_type, item_id, severity, audience, text, refs, "
-                          "dedupe) VALUES (?,?,?,?,?,?,?,?,?)",
-                          (self.clock(), "lease.archived", "lease", r["name"], "info", "{}",
-                           f"{r['name']} epoch {r['epoch']}: {meta.get('outcome') or 'lapsed'}",
-                           json.dumps({"holder": r["holder"], "epoch": r["epoch"], "acquired_at": r["acquired_at"],
-                                       "free_since": r["expires_at"], "item": r["item"], "meta": meta}),
-                           f"lease:{r['name']}:{r['epoch']}:archived"))
+                self._insert_event(c, self.clock(), "lease.archived", "lease", r["name"], None, None, "info", {},
+                                   f"{r['name']} epoch {r['epoch']}: {meta.get('outcome') or 'lapsed'}",
+                                   {"holder": r["holder"], "epoch": r["epoch"], "acquired_at": r["acquired_at"],
+                                    "free_since": r["expires_at"], "item": r["item"], "meta": meta},
+                                   f"lease:{r['name']}:{r['epoch']}:archived")
                 c.execute("DELETE FROM leases WHERE name=? AND epoch=?", (r["name"], r["epoch"]))
                 n += 1
             c.execute("COMMIT")

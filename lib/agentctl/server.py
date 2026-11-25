@@ -3,6 +3,7 @@
 
 import datetime as dt
 import fcntl
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import re
@@ -254,6 +255,36 @@ class StoreAPI:
     def handle(self, method, path, headers, body=b""):
         u = urllib.parse.urlsplit(path)
         q = {k: v[-1] for k, v in urllib.parse.parse_qs(u.query).items()}
+        refused = self._unauthorized(method, u.path, headers)
+        if refused:
+            return refused
+        try:
+            return self._dispatch(method, u.path, q, headers, body)
+        except Exception as e:
+            return self.error_answer(method, u.path, e)
+
+    def _dispatch(self, method: Any, path: Any, q: Any, headers: Any, body: Any) -> Any:
+        role = next((v for k, v in headers.items() if k.lower() == "x-agentctl-role"), None)
+        self._note_contact(path, headers, role)
+        args = json.loads(body) if body else {}
+        standby = laptop_role_refusal(self.store, path, args, role)
+        if standby:
+            return self._json(409, {"error": "Standby", "message": standby})
+        return self.route(method, path, q, args)
+
+    def error_answer(self, method: Any, path: Any, e: Any) -> Any:
+        """The answer to an error out of a request: 409 a store refusal, 404 a name unknown, 400 a bad request, any
+        other a 500 with its traceback in the journal, never a dropped connection."""
+        if isinstance(e, tuple(store_errors().values())):
+            return self._json(409, {"error": type(e).__name__, "message": str(e)})
+        if isinstance(e, KeyError):
+            return self._json(404, {"error": "NotFound", "message": str(e)})
+        if isinstance(e, (ValueError, TypeError)):
+            return self._json(400, {"error": "BadRequest", "message": str(e)})
+        return self.internal_error(method, path, e)
+
+    def _unauthorized(self, method: Any, path: Any, headers: Any) -> Any:
+        """The 401 / 503 / 403 answer to a request whose token is missing, unchecked or not allowed (None: allowed)."""
         auth = headers.get("Authorization") or headers.get("authorization") or ""
         m = re.match(r"(?i)(?:token|bearer)\s+(\S+)$", auth.strip())
         if not m:
@@ -263,35 +294,23 @@ class StoreAPI:
             who = self.login(m.group(1))
         except Exception as e:
             return self._json(503, {"error": "Unavailable", "message": f"the token could not be checked: {e}"})
-        if who not in self.allow and not (who in self.metrics and method == "GET" and u.path == "/metrics"):
-            return self._json(403, {"error": "Forbidden", "message": f"{who or 'this token'} may not call {u.path}"})
-        try:
-            mach = next((v for k, v in headers.items() if k.lower() == "x-agentctl-machine"), None)
-            role = next((v for k, v in headers.items() if k.lower() == "x-agentctl-role"), None)
-            # its leases' clocks run again (Store.contact) -- only for the machine that holds the laptop role: a
-            # pre-role machine's calls kept "laptop" in contact while the holder slept (laptop_role_speaks)
-            if mach and u.path.startswith("/v1/store/") and not (mach.strip() == "laptop"
-                                                                 and laptop_role_speaks(self.store, role)):
-                gap = self.store.contact(mach.strip())
-                if gap:
-                    sys.stderr.write(f"agentctl-store: {mach.strip()} back after its silence: its leases paused "
-                                     f"{int(gap)} s\n")
-            if body:
-                args = json.loads(body)
-            else:
-                args = {}
-            refused = laptop_role_refusal(self.store, u.path, args, role)
-            if refused:
-                return self._json(409, {"error": "Standby", "message": refused})
-            return self.route(method, u.path, q, args)
-        except tuple(store_errors().values()) as e:
-            return self._json(409, {"error": type(e).__name__, "message": str(e)})
-        except KeyError as e:
-            return self._json(404, {"error": "NotFound", "message": str(e)})
-        except (ValueError, TypeError) as e:
-            return self._json(400, {"error": "BadRequest", "message": str(e)})
-        except Exception as e:  # ANY OTHER ERROR IS A 500 WITH ITS TRACEBACK IN THE JOURNAL, never a dropped connection
-            return self.internal_error(method, u.path, e)
+        if who not in self.allow and not (who in self.metrics and method == "GET" and path == "/metrics"):
+            return self._json(403, {"error": "Forbidden", "message": f"{who or 'this token'} may not call {path}"})
+        return None
+
+    def _note_contact(self, path: Any, headers: Any, role: Any) -> Any:
+        """A store call from a machine: its leases' clocks run again (Store.contact) -- only for the machine that holds
+        the laptop role: a pre-role machine's calls kept "laptop" in contact while the holder slept
+        (laptop_role_speaks)."""
+        mach = next((v for k, v in headers.items() if k.lower() == "x-agentctl-machine"), None)
+        if not mach or not path.startswith("/v1/store/"):
+            return
+        if mach.strip() == "laptop" and laptop_role_speaks(self.store, role):
+            return
+        gap = self.store.contact(mach.strip())
+        if gap:
+            sys.stderr.write(f"agentctl-store: {mach.strip()} back after its silence: its leases paused "
+                             f"{int(gap)} s\n")
 
     def internal_error(self, method, path, e):
         """2026-10-29 cutover: `git` missing from the store unit's PATH raised FileNotFoundError out of POST /v1/changes,
@@ -308,61 +327,72 @@ class StoreAPI:
             return 200, "text/plain; version=0.0.4", metrics_text(st).encode()
         if method == "GET" and p == "/v1/state":
             return self._json(200, state_read())
-        if method == "POST" and p == "/v1/changes":
+        if method == "POST":
+            return self._route_post(p, b)
+        raise KeyError(f"{method} {p}")
+
+    def _route_post(self, p: Any, b: Any) -> Any:
+        st = self.store
+        if p == "/v1/changes":
             return self._json(200, submit_change(st, b, self.repo))
-        if method == "POST" and re.fullmatch(r"/v1/changes/[^/]+:(cancel|abandon)", p):
+        if re.fullmatch(r"/v1/changes/[^/]+:(cancel|abandon)", p):
             eid, how = urllib.parse.unquote(p[len("/v1/changes/"):]).rsplit(":", 1)
             return self._json(200, cancel_submitted(st, eid, how, self.repo))
-        if method == "POST" and p == "/v1/tick":
+        if p == "/v1/tick":
             with open(state_root("tick.nudge"), "a"):
                 os.utime(state_root("tick.nudge"))
             return self._json(200, {"result": "ok"})
-        if method == "POST" and p.startswith("/v1/store/"):
+        if p.startswith("/v1/store/"):
             m = p[len("/v1/store/"):]
             if m not in STORE_RPC:
                 raise KeyError(m)
             return self._json(200, {"result": getattr(st, m)(*b.get("args", []), **b.get("kwargs", {}))})
-        raise KeyError(f"{method} {p}")
+        raise KeyError(f"POST {p}")
+
+
+class StoreRequestHandler(BaseHTTPRequestHandler):
+    """One HTTP request of the store's API; `api` (a StoreAPI) is set on the subclass store_server makes."""
+    protocol_version = "HTTP/1.1"
+    api: Any = None
+
+    def _answer(self, method: Any) -> Any:
+        """(code, content type, body) of the request: no token is answered before any body is read, a body over
+        STORE_BODY_MAX unread (413)."""
+        n = int(self.headers.get("Content-Length") or 0)
+        if not (self.headers.get("Authorization") or "").strip():
+            self.close_connection = True
+            return self.api.handle(method, self.path, dict(self.headers), b"")
+        if n > STORE_BODY_MAX:
+            self.close_connection = True
+            return self.api._json(413, {"error": "TooLarge", "message": f"a body over {STORE_BODY_MAX} bytes"})
+        body = self.rfile.read(n) if n else b""
+        return self.api.handle(method, self.path, dict(self.headers), body)
+
+    def _go(self, method: Any) -> Any:
+        try:
+            code, ctype, out = self._answer(method)
+        except Exception as e:  # the last resort (handle() answers its own errors): a 500, never a dropped connection
+            code, ctype, out = self.api.internal_error(method, self.path, e)
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(out)))
+        self.end_headers()
+        self.wfile.write(out)
+
+    def do_GET(self) -> Any:
+        self._go("GET")
+
+    def do_POST(self) -> Any:
+        self._go("POST")
+
+    def log_message(self, fmt: Any, *args: Any) -> Any:  # the journal gets one line per non-2xx answer only
+        if args and str(args[1] if len(args) > 1 else "").startswith(("4", "5")):
+            sys.stderr.write("agentctl-store: %s\n" % (fmt % args))
 
 
 def store_server(api, host, port):
     """A ThreadingHTTPServer serving api (returns it; serve_forever() is the caller's)."""
-    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-
-    class Handler(BaseHTTPRequestHandler):
-        protocol_version = "HTTP/1.1"
-
-        def _go(self, method):
-            try:
-                n = int(self.headers.get("Content-Length") or 0)
-                if not (self.headers.get("Authorization") or "").strip():  # no token: answered before any body is read
-                    code, ctype, out = api.handle(method, self.path, dict(self.headers), b"")
-                    self.close_connection = True
-                elif n > STORE_BODY_MAX:
-                    code, ctype, out = api._json(413, {"error": "TooLarge", "message": f"a body over {STORE_BODY_MAX} bytes"})
-                    self.close_connection = True
-                else:
-                    body = self.rfile.read(n) if n else b""
-                    code, ctype, out = api.handle(method, self.path, dict(self.headers), body)
-            except Exception as e:  # the last resort (handle() answers its own errors): a 500, never a dropped connection
-                code, ctype, out = api.internal_error(method, self.path, e)
-            self.send_response(code)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(out)))
-            self.end_headers()
-            self.wfile.write(out)
-
-        def do_GET(self):
-            self._go("GET")
-
-        def do_POST(self):
-            self._go("POST")
-
-        def log_message(self, fmt, *args):  # the journal gets one line per non-2xx answer only
-            if args and str(args[1] if len(args) > 1 else "").startswith(("4", "5")):
-                sys.stderr.write("agentctl-store: %s\n" % (fmt % args))
-
-    srv = ThreadingHTTPServer((host, port), Handler)
+    srv = ThreadingHTTPServer((host, port), type("Handler", (StoreRequestHandler,), {"api": api}))
     srv.daemon_threads = True
     return srv
 

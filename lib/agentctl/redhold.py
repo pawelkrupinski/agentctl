@@ -3,8 +3,10 @@
 
 import re
 import time
+from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.core import SHORT, env_num, fmt_age
 from agentctl.repos import red_repo_of
+from agentctl.ciwhy import ci_state_load
 from agentctl.policy import HOLDS
 from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_active, red_lease, red_what
 from agentctl.leases import red_block_of
@@ -15,14 +17,12 @@ from agentctl.redfixes import red_fix_of
 from agentctl.changekind import HOLD_SHOWN, change_hold_visible, classify_change, kind_text, queue_facts
 from agentctl.red import red_fix_giveup
 from agentctl.redmove import red_put_offer
-from agentctl.ciwhy import ci_state_load
 from agentctl.redopen import red_offer
 from agentctl.redverify import red_fix_since, red_fix_unverifiable
-from agentctl.redpending import RED_FIX_REQUEUE_GRACE, RED_WAITS_ON
 from agentctl.queuebatch import change_hold_stuck
+from agentctl.redpending import RED_FIX_REQUEUE_GRACE, RED_WAITS_ON
 from agentctl.reddispatch import repo_dispatch_off
-from agentctl.redstep import red_lease_ended
-from agentctl.statemachines import StaleVersion, machine_state
+from agentctl.redlease import red_lease_ended
 
 
 WR_MAX = 40 * 60        # a red fix still unlanded this long after it was queued ($AGENTCTL_WR_MAX; a CI-tier check ~17 min)

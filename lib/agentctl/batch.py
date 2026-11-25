@@ -154,24 +154,33 @@ def batch_progress_path(d: str) -> str:
     return os.path.join(d, "batch-progress.json")
 
 
+def batch_stalled_why(seen: Any) -> Any:
+    """Why the waiting changes are not moving: their batch's state, or that none was formed."""
+    it, last = seen.get("batch"), (f" ({seen['last']})" if seen.get("last") else "")
+    return f"batch {it['id']} is {it['state']}{last}" if it else f"no batch was formed{last}"
+
+
+def batch_stalled(seen: Any) -> Any:
+    """Changes wait, the gate is green, nothing holds them and no batch is moving."""
+    it = seen.get("batch")
+    return (bool(seen.get("waiting")) and seen.get("reds") is not None and not seen["reds"] and not seen.get("held")
+            and not (it and it["state"] in BATCH_MOVING))
+
+
 def note_batch_progress(d, seen, t, st):
     """Count this tick: stalled (changes wait, gate green, no hold, no batch moving) or not. Returns the count."""
-    waiting, it = seen.get("waiting") or [], seen.get("batch")
-    stalled = (bool(waiting) and seen.get("reds") is not None and not seen["reds"] and not seen.get("held")
-               and not (it and it["state"] in BATCH_MOVING))
+    waiting = seen.get("waiting") or []
     p = batch_progress_path(d)
     rec = read_json_file(p)
-    if not stalled:
+    if not batch_stalled(seen):
         if rec.get("ticks"):
             write_json_file(p, {"ticks": 0, "at": t})
         return 0
     n = int(rec.get("ticks") or 0) + 1
     since = float(rec.get("since") or t) if rec.get("ticks") else t
-    why = (f"batch {it['id']} is {it['state']}" + (f" ({seen['last']})" if seen.get("last") else "")) if it else \
-        "no batch was formed" + (f" ({seen['last']})" if seen.get("last") else "")
+    why = batch_stalled_why(seen)
     write_json_file(p, {"ticks": n, "at": t, "since": since, "why": why, "waiting": [e["id"] for e in waiting]})
-    limit = env_num("AGENTCTL_WAITING_GREEN_TICKS", WAITING_GREEN_TICKS)
-    if n >= limit:
+    if n >= env_num("AGENTCTL_WAITING_GREEN_TICKS", WAITING_GREEN_TICKS):
         ids = ", ".join(e["id"] for e in waiting)
         open_condition("STALLED", f"STALLED: {len(waiting)} change(s) waiting while the gate is green for {n} ticks "
                                   f"({fmt_age(t - since)}): {why}; waiting: {ids}",

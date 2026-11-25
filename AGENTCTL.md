@@ -3097,10 +3097,10 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `gov_budget_gb` | `AGENTCTL_GOV_BUDGET_GB` | `round(0.6 * ram_gb(` | - |
 | `gov_cpu_factor` | `AGENTCTL_GOV_CPU_FACTOR` | `1.0` | charged cores (or the load) + a job's own may reach this x the cores |
 | `gov_dir` | `AGENTCTL_GOV_DIR` | - | - |
-| `gov_evict_settle` | `AGENTCTL_GOV_EVICT_SETTLE` | `3` | the freed memory shows in vm_stat |
+| `gov_evict_settle` | `AGENTCTL_GOV_EVICT_SETTLE` | `3` | - |
 | `gov_free_need_gb` | `AGENTCTL_GOV_FREE_NEED_GB` | `2.5` | free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later |
 | `gov_idle_max` | `AGENTCTL_GOV_IDLE_MAX` | `30.0` | s a waiter behind the head waits at most between two reads of the queue |
-| `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | a waiter behind the head backs off from here to GOV_IDLE_MAX |
+| `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | a waiter behind the head backs off to GOV_IDLE_MAX |
 | `gov_ps_probe` | `AGENTCTL_GOV_PS_PROBE` | - | - |
 | `gov_reserve_gb` | `AGENTCTL_GOV_RESERVE_GB` | `1.0` | - |
 | `gov_resume` | `AGENTCTL_GOV_RESUME` | `0.8` | x the cores: under it, admitting again |

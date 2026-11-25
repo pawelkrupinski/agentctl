@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import time
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, pid_alive, process_cache, run_cmd
 from agentctl.timefmt import ts
@@ -307,6 +308,91 @@ class GovTimeout(RuntimeError):
 GOV_ADMIT_MAX = 2 * 3600  # a check waits this long for the governor at most ($AGENTCTL_GOV_ADMIT_MAX)
 
 
+class GovWait:
+    """One unit of work waiting its turn at the governor: the loop that polls until it is the head and fits."""
+
+    def __init__(self, cls, mem: Any, cores: Any, label: Any, kind: Any, me: Any, report: Any, force: Any=False, wait: Any=True, max_wait: Any=None) -> None:
+        self.cls, self.mem, self.cores, self.label, self.kind = cls, mem, cores, label, kind
+        self.me, self.report, self.force, self.wait, self.max_wait = me, report, force, wait, max_wait
+        self.t0 = time.time()
+        self.said, self.report_at, self.waited_on = False, 0.0, None
+        self.idle = env_num("AGENTCTL_GOV_POLL", GOV_POLL)  # a waiter behind the head backs off to GOV_IDLE_MAX
+
+    def verdict(self, tickets: Any, waiters: Any, head: Any) -> Any:
+        """(fits, why not, held on memory) for the waiter in this poll."""
+        if self.force:
+            return True, None, False
+        if not head:
+            w = waiters[0] if waiters else {}
+            return False, f"behind {w.get('class')} work ({w.get('label') or '?'}, pid {w.get('pid')})", False
+        return gov_fits(self.cls, self.mem, tickets, gov_machine(), self.kind, self.cores)
+
+    def check_timeout(self, why: Any) -> Any:
+        if self.max_wait is not None and time.time() - self.t0 > self.max_wait:
+            raise GovTimeout(f"the governor did not admit {self.cls} work ({self.label}) in "
+                             f"{int(self.max_wait // 60)} min: {why}")
+
+    def keep_leases(self) -> Any:
+        try:  # a check waiting its turn holds its leases (bounded by max_wait and their max hold), never loses them
+            lock_beat(f"gov-wait:{self.label}:{int(time.time() // 60)}")
+        except LeaseLost as ex:
+            raise GovTimeout(f"{ex} while waiting for the governor") from None
+
+    def maybe_report(self, why: Any, tickets: Any) -> Any:
+        if time.monotonic() < self.report_at:
+            return
+        self.report(f"{'still ' if self.said else ''}waiting for the governor ({self.cls}, {self.mem:g} GB, "
+                    f"{self.cores:g} cores, {self.label}): {why}; {len(tickets)} admitted, "
+                    f"{gov_committed(tickets):.0f}/{gov_budget():.0f} GB, {gov_charged(tickets):g} cores charged")
+        self.said, self.report_at = True, time.monotonic() + GOV_REPORT
+
+    def pause(self, head: Any, mark: Any) -> Any:
+        if head:  # the head reads the machine every poll: memory and load free up with no event
+            self.idle = env_num("AGENTCTL_GOV_POLL", GOV_POLL)
+            time.sleep(self.idle)
+        else:
+            gov_wait_change(mark, self.idle)
+            self.idle = min(self.idle * 2, env_num("AGENTCTL_GOV_IDLE_MAX", GOV_IDLE_MAX))
+
+    def evicted(self, head: Any, on_mem: Any, why: Any) -> Any:
+        """The head, held on memory, freed some by evicting idle work (the freed memory shows in vm_stat)."""
+        if head and on_mem and self.cls != "measure" and gov_evict(f"{self.cls} {self.label} ({why})"):
+            time.sleep(env_num("AGENTCTL_GOV_EVICT_SETTLE", 3))
+            return True
+        return False
+
+    def run(self) -> Any:
+        """True once it may start (self.waited_on: the last hold, for the record); False for a --try that may not."""
+        while True:
+            mark = gov_change_mark()
+            tickets = gov_tickets()
+            waiters = gov_waiters()
+            head = bool(waiters) and os.path.abspath(waiters[0]["path"]) == os.path.abspath(self.me)
+            ok, why, on_mem = self.verdict(tickets, waiters, head)
+            if ok:
+                return True
+            self.waited_on = why  # `why` is None once it fits
+            if self.evicted(head, on_mem, why):
+                continue
+            if not self.wait:
+                return False
+            self.check_timeout(why)
+            self.keep_leases()
+            self.maybe_report(why, tickets)
+            self.pause(head, mark)
+
+
+def gov_take_ticket(d: Any, t0: Any, ticket: Any, fd: Any) -> Any:
+    """(ticket path, the open lock file or None): the admitted work's exclusive lock, on the inherited `fd` or a file."""
+    path = ticket or os.path.join(d, f"t-{t0:.6f}-{os.getpid()}.lock")
+    if fd is not None:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return path, None
+    f = open(path, "a+")
+    fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return path, f
+
+
 def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=True, force=False, pid=None, cwd=None,
               report=None, max_wait=None, cores=None, job=None):
     """Admit one unit of work: a GovTicket once it may start (None for a --try that may not). With `fd`, the lock is
@@ -316,77 +402,43 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
     mem = GOV_MEM_GB.get(cls, 5.0) if mem is None else float(mem)
     cores = gov_job_cores(job, cls, kind) if cores is None else float(cores)
     d = gov_dir()
-    t0 = time.time()
-    me = os.path.join(d, f"w-{t0:.6f}-{os.getpid()}.json")
+    waiter = GovWait(cls, mem, cores, label, kind, None, report or err, force, wait, max_wait)
+    t0 = waiter.t0
+    waiter.me = me = os.path.join(d, f"w-{t0:.6f}-{os.getpid()}.json")
     write_json(me, {"class": cls, "mem": mem, "cores": cores, "job": job, "label": label, "kind": kind,
                     "pid": os.getpid(), "at": t0, "start": process_start(os.getpid())})
-    said, report_at, why, waited_on = False, 0.0, None, None
-    report = report or err
-    idle = env_num("AGENTCTL_GOV_POLL", GOV_POLL)  # a waiter behind the head backs off from here to GOV_IDLE_MAX
     try:
-        while True:
-            mark = gov_change_mark()
-            tickets = gov_tickets()
-            waiters = gov_waiters()
-            head = waiters and os.path.abspath(waiters[0]["path"]) == os.path.abspath(me)
-            if force:
-                ok, why, on_mem = True, None, False
-            elif not head:
-                w = waiters[0] if waiters else {}
-                ok, on_mem = False, False
-                why = f"behind {w.get('class')} work ({w.get('label') or '?'}, pid {w.get('pid')})"
-            else:
-                ok, why, on_mem = gov_fits(cls, mem, tickets, gov_machine(), kind, cores)
-            if ok:
-                break
-            waited_on = why  # the last hold, for the record: `why` is None once it fits
-            if head and on_mem and cls != "measure" and gov_evict(f"{cls} {label} ({why})"):
-                time.sleep(env_num("AGENTCTL_GOV_EVICT_SETTLE", 3))  # the freed memory shows in vm_stat
-                continue
-            if not wait:
-                return None
-            if max_wait is not None and time.time() - t0 > max_wait:
-                raise GovTimeout(f"the governor did not admit {cls} work ({label}) in {int(max_wait // 60)} min: {why}")
-            try:  # a check waiting its turn holds its leases (bounded by max_wait and their max hold), never loses them
-                lock_beat(f"gov-wait:{label}:{int(time.time() // 60)}")
-            except LeaseLost as ex:
-                raise GovTimeout(f"{ex} while waiting for the governor") from None
-            if time.monotonic() >= report_at:
-                report(f"{'still ' if said else ''}waiting for the governor ({cls}, {mem:g} GB, {cores:g} cores, {label}): "
-                       f"{why}; {len(tickets)} admitted, {gov_committed(tickets):.0f}/{gov_budget():.0f} GB, "
-                       f"{gov_charged(tickets):g} cores charged")
-                said, report_at = True, time.monotonic() + GOV_REPORT
-            if head:  # the head reads the machine every poll: memory and load free up with no event
-                idle = env_num("AGENTCTL_GOV_POLL", GOV_POLL)
-                time.sleep(idle)
-            else:
-                gov_wait_change(mark, idle)
-                idle = min(idle * 2, env_num("AGENTCTL_GOV_IDLE_MAX", GOV_IDLE_MAX))
+        if not waiter.run():
+            return None
         # THE TICKET BEFORE THE WAITER GOES: the next head never looks between the two and misses this admission
-        path = ticket or os.path.join(d, f"t-{t0:.6f}-{os.getpid()}.lock")
-        f = None
-        if fd is not None:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        else:
-            f = open(path, "a+")
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        path, f = gov_take_ticket(d, t0, ticket, fd)
         waited = round(time.time() - t0, 1)
         rec = {"class": cls, "mem": mem, "cores": cores, "job": job, "label": label, "kind": kind,
                "pid": pid or os.getpid(), "cwd": cwd or os.getcwd(), "at": time.time(), "since": ts(), "waited": waited,
-               "waited_on": waited_on if waited >= 1 else None, "id": os.path.basename(path)}
-        write_json(path[:-5] + ".json", rec)
-        with open(os.path.join(d, "admits.jsonl"), "a") as af:
-            af.write(json.dumps({k: rec[k] for k in ("class", "mem", "cores", "job", "label", "kind", "at", "waited",
-                                                     "waited_on", "id")}) + "\n")
-        if said:
-            report(f"admitted by the governor after {int(waited)} s ({cls}, {mem:g} GB, {cores:g} cores, {label})")
+               "waited_on": waiter.waited_on if waited >= 1 else None, "id": os.path.basename(path)}
+        gov_admit_write(d, path, rec)
+        if waiter.said:
+            waiter.report(f"admitted by the governor after {int(waited)} s ({cls}, {mem:g} GB, {cores:g} cores, {label})")
         return GovTicket(path, rec, f)
     finally:
-        try:
-            os.unlink(me)
-        except OSError:
-            pass
-        gov_bump()  # the next waiter is the head now: it looks at once
+        gov_admit_cleanup(me)
+
+
+def gov_admit_write(d: Any, path: Any, rec: Any) -> Any:
+    """The admission's record beside its ticket, and one line of the admits log."""
+    write_json(path[:-5] + ".json", rec)
+    with open(os.path.join(d, "admits.jsonl"), "a") as af:
+        af.write(json.dumps({k: rec[k] for k in ("class", "mem", "cores", "job", "label", "kind", "at", "waited",
+                                                 "waited_on", "id")}) + "\n")
+
+
+def gov_admit_cleanup(waiter_file: Any) -> Any:
+    """The waiter's file goes; the next waiter is the head now: it looks at once."""
+    try:
+        os.unlink(waiter_file)
+    except OSError:
+        pass
+    gov_bump()
 
 
 def cmd_suite(a):

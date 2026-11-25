@@ -373,24 +373,37 @@ def queue_full(o_r, number, q):
     return "queued: " + "; ".join(says)
 
 
+def run_in_lists(n: Any) -> Any:
+    """(workflow, run) of a known run of main a number or id names, else None."""
+    known = [(name, r) for lists in (_gate_lists, _outside_lists) for name, runs in lists.items() for r in runs]
+    for key in ("number", "databaseId"):  # a run NUMBER first (the repo's convention), an id only failing that
+        found = next(((name, r) for name, r in known if str(r.get(key)) == n), None)
+        if found:
+            return found
+    return None
+
+
+def run_listed_or_viewed(o_r: Any, n: Any) -> Any:
+    """The run on main a number or id names: from the newest 200, else by its id, else viewed."""
+    # listing: a number not in the newest 200 falls back to its run id (run_id_of_number), then says unknown
+    runs = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)
+    r = next((r for r in runs if str(r.get("number")) == n), None)
+    if r is None:
+        rid = run_id_of_number(o_r, n) if n.isdigit() else None
+        r = next((r for r in runs if str(r.get("databaseId")) == str(rid or n)), None)
+        if r is None:
+            r = gh_json(o_r, "run", "view", str(rid or n), "--json", RUN_FIELDS)
+    return r
+
+
 def resolve_run(o_r, n):
     """(workflow, run) of the run on main a number or id names, else (None, None)."""
     n = str(n).lstrip("#")
-    for key in ("number", "databaseId"):  # a run NUMBER first (the repo's convention), an id only failing that
-        for lists in (_gate_lists, _outside_lists):
-            for name, runs in lists.items():
-                for r in runs:
-                    if str(r.get(key)) == n:
-                        return name, r
+    known = run_in_lists(n)
+    if known:
+        return known
     try:
-        # listing: a number not in the newest 200 falls back to its run id (run_id_of_number), then says unknown
-        runs = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)
-        r = next((r for r in runs if str(r.get("number")) == n), None)
-        if r is None:
-            rid = run_id_of_number(o_r, n) if n.isdigit() else None
-            r = next((r for r in runs if str(r.get("databaseId")) == str(rid or n)), None)
-            if r is None:
-                r = gh_json(o_r, "run", "view", str(rid or n), "--json", RUN_FIELDS)
+        r = run_listed_or_viewed(o_r, n)
         return r.get("workflowName"), r
     except (Exception, SystemExit) as e:
         err(f"red: could not look up run {n} ({str(e)[:120]}): claimed by its number only")

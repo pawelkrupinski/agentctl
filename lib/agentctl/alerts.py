@@ -151,11 +151,8 @@ def alert_index(d):
 
 
 # ---------------------------------------------------------------- the write path
-def alert_write(rec, st, red=None, condition=None, d=None):
-    """THE ONE WAY AN ENTRY ENTERS THE INBOX: routed (audience, item), merged into its item's live alert when there is
-    one, closing what its verdict closes. Returns the id of the entry that carries it (the live one when merged)."""
-    d = d or inbox_dir()
-    os.makedirs(d, exist_ok=True)
+def alert_routed(rec: Any, st: Any, red: Any, condition: Any) -> Any:
+    """rec with its audience, item and counters set (routed unless it names both), its tier when a red is given."""
     t = rec.get("at") or time.time()
     if not rec.get("audience") or not rec.get("item"):
         aud, item = alert_route(rec, st=st, t=t, red=red, condition=condition)
@@ -166,50 +163,89 @@ def alert_write(rec, st, red=None, condition=None, d=None):
     rec.setdefault("surfaced", 1)
     if red is not None:
         rec.setdefault("tier", alert_tier(rec, red))
+    return rec
+
+
+def alert_merge_ask(d: Any, idx: Any, rec: Any, t: Any) -> Any:
+    """ONE ENTRY PER ASK: the same question under another item (a red's next spell) merges into the live one."""
+    ask = alert_ask_digest(rec)
+    if not ask:
+        return
+    prior = (idx.get("asks") or {}).get(ask)
+    if prior and prior != rec["item"] and alert_prior_open(d, idx, prior, t):
+        rec["item"] = prior
+    idx.setdefault("asks", {})[ask] = rec["item"]
+    idx["asks"] = {k: v for k, v in idx["asks"].items() if v in (idx.get("items") or {}) or k == ask}
+
+
+def alert_prior_open(d: Any, idx: Any, item: Any, t: Any) -> Any:
+    """Whether the item has a live alert nobody has acknowledged."""
+    return alert_live(d, idx, item, t) is not None and not alert_acked(d, idx["items"][item])
+
+
+def alert_fold(live: Any, rec: Any) -> Any:
+    """rec's newest verdict, tail and level folded into the item's live alert: one more count, the last verdicts and
+    merged ids kept. The merged entry's change keeps its name on it (2026-11-17 `…-ref-scrapers-2a9c4e`: its NOT
+    LANDED merged into an earlier change's alert, and `agentctl inbox <its id>` found nothing)."""
+    live.update({k: rec[k] for k in ("verdict", "kind", "tail", "exit", "audience", "time", "at") if k in rec})
+    if rec.get("tier"):
+        live["tier"] = rec["tier"]
+    live["count"] = int(live.get("count") or 1) + 1
+    live["verdicts"] = ((live.get("verdicts") or []) + [rec.get("verdict")])[-10:]
+    live["merged"] = ((live.get("merged") or []) + [rec["id"]])[-50:]
+    entries = live.get("entries") or []
+    if rec.get("entry") and rec["entry"] not in [live.get("entry")] + entries:
+        live["entries"] = (entries + [rec["entry"]])[-50:]
+
+
+def alert_merge_into(d: Any, live: Any, rec: Any) -> Any:
+    """Fold rec into the item's live alert; the owner's alert is surfaced again (its count) at a new level. Returns the
+    live alert's id."""
+    surface = rec["audience"] == "owner" and (live.get("audience") != "owner"
+                                              or (rec.get("tier") and rec.get("tier") != live.get("tier")))
+    alert_fold(live, rec)
+    if surface:
+        live["surfaced"] = int(live.get("surfaced") or 1) + 1
+    write_json(os.path.join(d, live["id"] + ".json"), live)
+    if alert_acked(d, live["id"]) and (surface or rec["audience"] == "author"):
+        alert_unack(d, live["id"])  # shown again: the owner's at a new level; an author's every new verdict
+    return live["id"]
+
+
+def alert_write(rec, st, red=None, condition=None, d=None):
+    """THE ONE WAY AN ENTRY ENTERS THE INBOX: routed (audience, item), merged into its item's live alert when there is
+    one, closing what its verdict closes. Returns the id of the entry that carries it (the live one when merged)."""
+    d = d or inbox_dir()
+    os.makedirs(d, exist_ok=True)
+    t = rec.get("at") or time.time()
+    alert_routed(rec, st, red, condition)
     with alert_lock(d):
         idx = alert_index(d)
         if rec["id"] in (idx.get("seen") or []):
             return (idx.get("items") or {}).get(rec["item"]) or rec["id"]
-        ask = alert_ask_digest(rec)
-        if ask:  # ONE ENTRY PER ASK: the same question under another item (a red's next spell) merges into the live one
-            prior = (idx.get("asks") or {}).get(ask)
-            if prior and prior != rec["item"] and alert_live(d, idx, prior, t) is not None \
-                    and not alert_acked(d, idx["items"][prior]):
-                rec["item"] = prior
-            idx.setdefault("asks", {})[ask] = rec["item"]
-            idx["asks"] = {k: v for k, v in idx["asks"].items() if v in (idx.get("items") or {}) or k == ask}
+        alert_merge_ask(d, idx, rec, t)
         kind = alert_kind_of(rec)
-        for family in ALERT_CLOSES.get(kind, ()):
-            alert_close_family(d, idx, rec, family, f"{kind}: {str(rec.get('verdict'))[:120]}")
+        alert_close_families(d, idx, rec, kind)
         alone = rec["audience"] == "info" or kind in ALERT_AUTHOR_VERDICT_KINDS  # never merged, never a live alert
-        live = alert_live(d, idx, rec["item"], t) if not alone else None
-        if live:
-            surface = (rec["audience"] == "owner" and live.get("audience") != "owner") or \
-                (rec["audience"] == "owner" and rec.get("tier") and rec.get("tier") != live.get("tier"))
-            live.update({k: rec[k] for k in ("verdict", "kind", "tail", "exit", "audience", "time", "at") if k in rec})
-            if rec.get("tier"):
-                live["tier"] = rec["tier"]
-            live["count"] = int(live.get("count") or 1) + 1
-            live["verdicts"] = ((live.get("verdicts") or []) + [rec.get("verdict")])[-10:]
-            live["merged"] = ((live.get("merged") or []) + [rec["id"]])[-50:]
-            # the merged entry's change keeps its name on the live alert (2026-11-17 `…-ref-scrapers-2a9c4e`: its NOT
-            # LANDED merged into an earlier change's alert, and `agentctl inbox <its id>` found nothing)
-            if rec.get("entry") and rec["entry"] not in ([live.get("entry")] + (live.get("entries") or [])):
-                live["entries"] = ((live.get("entries") or []) + [rec["entry"]])[-50:]
-            if surface:
-                live["surfaced"] = int(live.get("surfaced") or 1) + 1
-            write_json(os.path.join(d, live["id"] + ".json"), live)
-            if alert_acked(d, live["id"]) and (surface or rec["audience"] == "author"):
-                alert_unack(d, live["id"])  # shown again: the owner's at a new level; an author's every new verdict
-            idx.setdefault("seen", []).append(rec["id"])
-            alert_index_save(d, idx)
-            return live["id"]
-        write_json(os.path.join(d, rec["id"] + ".json"), rec)
-        if not alone:
-            idx.setdefault("items", {})[rec["item"]] = rec["id"]
+        live = None if alone else alert_live(d, idx, rec["item"], t)
+        carried = alert_merge_into(d, live, rec) if live else alert_file_new(d, idx, rec, alone)
         idx.setdefault("seen", []).append(rec["id"])
         alert_index_save(d, idx)
-        return rec["id"]
+        return carried
+
+
+def alert_close_families(d: Any, idx: Any, rec: Any, kind: Any) -> Any:
+    """Close the alerts this kind of verdict closes (ALERT_CLOSES)."""
+    for family in ALERT_CLOSES.get(kind, ()):
+        alert_close_family(d, idx, rec, family, f"{kind}: {str(rec.get('verdict'))[:120]}")
+
+
+def alert_file_new(d: Any, idx: Any, rec: Any, alone: Any) -> Any:
+    """A new inbox entry: its file, and the item's live alert unless it stands alone. Returns its id."""
+    write_json(os.path.join(d, rec["id"] + ".json"), rec)
+    if not alone:
+        idx.setdefault("items", {})[rec["item"]] = rec["id"]
+    return rec["id"]
 
 
 # THE SAME ASK, DELIVERED ONCE (the owner, 2026-11-19: one ask arrived as several unread entries). An owner question is

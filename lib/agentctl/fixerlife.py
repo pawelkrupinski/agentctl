@@ -6,6 +6,7 @@ import os
 import re
 import signal
 import time
+from typing import Any
 from agentctl.core import env_num, fmt_age
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -126,6 +127,20 @@ class TurnProgress:
         return mark, False, now - self.at > self.stall
 
 
+def store_failure_stop(e: Any, env: Any, again: Any) -> Any:
+    """A store call failed in a poll. A refused token is never "asked again" forever: a fresh one once (put in `env`
+    too), else the end -- the stop reason. A store that does not answer decides nothing: asked again at the next
+    `again`. None: go on."""
+    if not isinstance(e, StoreAuthFailed):
+        print(f"{ts()} the store did not answer ({e}): asked again at the next {again}", flush=True)
+        return None
+    if not store_reauth():
+        return f"store auth failed: {e}"
+    env["AGENTCTL_STORE_TOKEN"] = os.environ["AGENTCTL_STORE_TOKEN"]
+    print(f"{ts()} the store refused the token ({e}): a fresh store token taken", flush=True)
+    return None
+
+
 def lease_stop_line(kind, why, what="red's"):
     """The wrapper's stop reason for a lease no longer its own (HeldLease)."""
     if kind == "done":
@@ -143,216 +158,287 @@ def fixer_quiet(verdict):
     return v.startswith("ENDED: ") or bool(GAVE_UP_FIXED.match(v) or GAVE_UP_DECIDE.match(v))
 
 
+class RedFixerWrapper:
+    """The dispatched fixer's wrapper (detached), one run: its leases taken and kept as an owner's are (HeldLease), its
+    background claude session started and judged poll by poll, its verdict from the session's final answer."""
+
+    def __init__(self, a: Any, st: Any) -> None:
+        self.a, self.st = a, st
+        self.rec = read_record(a.record)
+        self.num, self.wt = self.rec["run"], self.rec["worktree"]
+        self.verdict, self.meta_due, self.bid, self.env = None, False, None, {}
+        self.poll = env_num("AGENTCTL_BG_POLL", BG_POLL)
+        self.every = env_num("AGENTCTL_RED_RENEW", RED_RENEW_EVERY)
+        self.cli = claude_cli()
+        self.label = fixer_label(self.rec)
+        self.t0 = self.last_renew = time.time()
+        self.missing, self.unclaimed_told = 0, False
+
+    def leases(self) -> Any:
+        return [h.triple() for h in self.held]
+
+    def save(self) -> Any:
+        write_json(self.a.record, self.rec)
+
+    def take_leases(self) -> Any:
+        """Its leases (an orphan's fixer, with no offer, takes one of its own). False: another fixer is on the red."""
+        rec = self.rec
+        name, epoch = rec.get("lease"), rec.get("epoch")
+        secret = os.environ.pop("AGENTCTL_LEASE_SECRET", None)
+        secrets = json.loads(os.environ.pop("AGENTCTL_LEASE_SECRETS", None) or "{}")
+        extra = [(x["name"], x["epoch"], secrets.get(x["name"])) for x in rec.get("extra_leases") or []]
+        if not name:
+            name = red_lease(f"orphan-{os.path.basename(self.wt)}")
+            took = self.st.acquire(name, f"laptop:fixer:red-fixer-{self.num}", RED_FIXER_TTL, RED_FIXER_MAX,
+                                   progress="start", meta={"kind": "fixer", "worktree": self.wt, "gate": False})
+            if "held" in took:
+                rec.update(pid=os.getpid(), ended=ts(), rc=0, verdict=f"DUPLICATE: {took['held']['holder']} is on it")
+                self.save()
+                print(f"RED FIXER {rec['workflow']} #{self.num}: DUPLICATE")
+                return False
+            epoch, secret = took["epoch"], took["secret"]
+        # ONE FIXER LIFECYCLE: its leases kept as an owner's are (HeldLease: a lapse taken again, a red that ended is no
+        # failure); the holder is the dispatcher's, read from the lease's own epoch
+        self.own = HeldLease(name, epoch, secret, rec.get("holder"), RED_FIXER_TTL)
+        self.held = [self.own] + [HeldLease(n_, e_, s_, rec.get("holder"), RED_FIXER_TTL) for n_, e_, s_ in extra]
+        return True
+
+    def register(self) -> Any:
+        """Its record and lease meta say who runs it (the meta is sent at the polls when the store did not answer)."""
+        rec, own = self.rec, self.own
+        session, me = rec.get("session"), os.getpid()  # session: known once `claude agents` lists it (--bg picks its id)
+        self.meta = {"worktree": self.wt, "session": session, "pid": me, "log": rec["log"], "host": socket_host(),
+                     "wrapper_log": os.path.join(os.path.dirname(os.path.abspath(self.a.record)), "fixer.log")}
+        try:
+            row = self.st.get(own.name)
+            if row and row["epoch"] == own.epoch and row["secret"] == own.secret:
+                own.holder = own.holder or row.get("holder") or None
+                for h in self.held:
+                    h.holder = h.holder or own.holder
+                rec["holder"] = own.holder
+                self.st.note(*own.triple(), f"dispatched: {rec.get('why')}")
+                self.meta_due = not fixer_meta_sent(self.st, self.leases(), self.meta)
+        except StoreUnavailable as e:  # its lease unread: the meta is sent at the polls below
+            print(f"{ts()} the store did not answer ({e}): the leases' meta is sent again", flush=True)
+            self.meta_due = True
+        rec.update(pid=me, process_start=process_start(me), session=session, lease=own.name, epoch=own.epoch)
+        self.save()
+
+    def command(self) -> Any:
+        """The `claude --bg` argv and the environment it starts in."""
+        rec = self.rec
+        u = {"workflow": rec["workflow"], "job": rec.get("job"), "jobs": rec.get("jobs"), "kind": rec.get("kind") or "test",
+             "line": rec.get("line"), "flake": rec.get("flake"), "diagnosis": rec.get("diagnosis"),
+             "orphan": rec.get("orphan"), "refuted": rec.get("refuted"), "predicts": rec.get("predicts"),
+             "prior_work": rec.get("prior_work"), "run": {"number": self.num, "databaseId": rec.get("run_id")},
+             "repo": rec.get("repo"), "blame_note": rec.get("blame_note"), "lander": rec.get("lander"),
+             "decision": rec.get("decision"), "record": self.a.record}
+        prompt = fixer_prompt(u, self.wt, sync_brief(), fixer_rollover(self.st, rec))  # its resumed session past its context: fresh
+        argv = [self.cli, "--bg", prompt, "--permission-mode", interactive_mode(), "--permission-prompts", "none",
+                "-n", self.label, "--disallowedTools", "Bash(git push:*)", "Bash(*--no-verify*)", "Bash(*PREPUSH_SKIP*)"]
+        if red_owner_only(red_repo_of(rec)):  # an owner-only repo's fixer: no landing, no push, no deploy (red_owner_rules)
+            argv += list(OWNER_ONLY_DENIED)
+        if rec.get("resume") and rec.get("resumed_from"):
+            argv += ["--resume", rec["resumed_from"]]
+        if rec.get("effort"):  # a deep investigation
+            argv += ["--effort", rec["effort"]]
+        # NO FIXER IDENTITY IN THE SESSION'S ENVIRONMENT: `claude --bg` may start the claude daemon with it, and every
+        # later background session -- other fixers', the owner's -- inherits the daemon's (2026-10-29: the daemon spawned
+        # by #2473 fixer-5's wrapper named them all 'red-fixer-2473'). The prompt names the record; the session binds to it.
+        env = {k: v for k, v in os.environ.items() if k not in FIXER_IDENTITY_ENV and k != "AGENTCTL_DETACHED"}  # an agent
+        return argv, env
+
+    def start(self) -> Any:
+        """Start the session and watch it; self.verdict says why when it did not start or was stopped."""
+        rec = self.rec
+        argv, self.env = self.command()
+        if rec.get("session"):
+            bind_fixer_session(rec["session"], self.a.record)
+        self.t0 = self.last_renew = time.time()
+        launch = rec.get("launch_cwd") if rec.get("launch_cwd") and os.path.isdir(rec["launch_cwd"]) else self.wt
+        bid, why = bg_start(argv, launch, self.env)  # a revived lander: in its session's own cwd, where `--resume` finds it
+        if not bid:
+            self.verdict = f"NOT STARTED: `claude --bg` {why}"
+            if rec.get("lander"):  # said, never looped: the red's next dispatch is a fresh fixer (red_lease_ended)
+                line = (f"LAUNCH FAILED: {why[:400]} (reviving the lander of {rec['lander'].get('change')}, "
+                        f"{rec['workflow']} #{self.num})")
+                inbox_write("red fixer", line, [line], [], 1, cwd=self.wt)
+            return
+        self.bid = bid
+        rec.update(bg_id=bid, label=self.label)
+        self.save()
+        self.watch()
+        bg_stop(self.cli, bid)  # done or stopped: the session ends (`claude agents --all` keeps it, `claude attach` reopens it)
+
+    def cancelled(self, signum: Any, _frame: Any) -> Any:  # the wrapper is stopped: its session goes with it
+        bg_stop(self.cli, self.bid)
+        for n_, e_, s_ in self.leases():
+            try:
+                self.st.release(n_, e_, s_, outcome="STOPPED: the fixer's wrapper was stopped")
+            except StoreUnavailable:  # it lapses by its TTL instead
+                pass
+        os._exit(143)
+
+    def watch(self) -> Any:
+        for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            signal.signal(sg, self.cancelled)
+        self.stall = env_num("AGENTCTL_RED_STALL", RED_STALL)
+        self.prog = TurnProgress(self.stall, time.time())
+        try:
+            while self.verdict is None and self.step():
+                pass
+        except Exception as ex:  # never a dead wrapper with a live session and its leases held
+            self.verdict = f"STOPPED: the fixer's wrapper failed ({type(ex).__name__}: {str(ex)[:200]})"
+
+    def step(self) -> Any:
+        """One poll: False when the session's turn is over (or it is gone from the list), else True with self.verdict
+        set when the wrapper must stop it."""
+        time.sleep(self.poll)
+        ent = bg_session(self.cli, self.bid)
+        self.adopt_transcript(ent)
+        self.missing = self.missing + 1 if ent is None else 0
+        if bg_turn_over(ent, self.rec.get("transcript")) or self.missing >= 3:  # finished its turn (done, stopped,
+            return False  # blocked; or waiting with its verdict said, bg_turn_over), or gone from the list
+        self.verdict = self.unclaimed_stop(ent) or self.limit_stop() or self.lease_stop(ent)
+        return True
+
+    def adopt_transcript(self, ent: Any) -> Any:
+        """The session's id and transcript, once `claude agents` lists them: the record, the binding and the meta."""
+        rec = self.rec
+        if not (ent and ent.get("sessionId") and not rec.get("transcript")):
+            return
+        rec.update(session=ent["sessionId"], transcript=bg_transcript(ent["sessionId"]))
+        self.save()
+        bind_fixer_session(rec["session"], self.a.record)
+        if rec["transcript"]:
+            rec["log"] = rec["transcript"]
+        self.meta.update(session=rec["session"], log=rec["log"], bg_id=self.bid)
+        self.meta_due = not fixer_meta_sent(self.st, self.leases(), self.meta)
+        self.save()
+
+    def unclaimed_stop(self, ent: Any) -> Any:
+        """NEVER CLAIMED (2026-10-31): a session that in claim_within neither started its transcript nor ran its first
+        `red claim` never got going -- ended with what `claude agents` says of it, never a silent "never got going".
+        One that works but never ran `red claim` is said once, on its lease and the inbox."""
+        rec, claim_within = self.rec, env_num("AGENTCTL_FIXER_CLAIM_WITHIN", FIXER_CLAIM_WITHIN)
+        if time.time() - self.t0 <= claim_within or (read_record(self.a.record) or {}).get("note"):
+            return None
+        if not rec.get("transcript"):
+            return (f"NOT STARTED: session {self.bid} never claimed in {fmt_age(claim_within)} (`claude agents`: "
+                    f"{bg_row_brief(ent)})")
+        if not self.unclaimed_told:
+            self.unclaimed_told = True
+            tail = " | ".join(l.strip() for l in bg_final_text(rec.get("transcript")).splitlines()[-3:] if l.strip())
+            line = (f"RED FIXER {rec['workflow']} #{self.num}: session {self.bid} has not claimed in "
+                    f"{fmt_age(claim_within)} (`claude agents`: {bg_row_brief(ent)}); its last words: {tail[:300]}")
+            inbox_write("red fixer", line, [line], [], 1, cwd=self.wt)
+            try:
+                self.st.note(*self.own.triple(), line[:300])
+            except StoreUnavailable:
+                pass
+        return None
+
+    def limit_stop(self) -> Any:
+        """TIMED OUT past the wall time, or STOPPED by the worktree's RED-STOP.md."""
+        wall = env_num("AGENTCTL_RED_FIXER_WALL", RED_FIXER_WALL)
+        if time.time() - self.t0 > wall:
+            return f"TIMED OUT after {int(wall // 60)} min (maximum wall time)"
+        stop_file = os.path.join(self.wt, "RED-STOP.md")
+        return "STOPPED: " + open(stop_file).readline().strip() if os.path.exists(stop_file) else None
+
+    def lease_stop(self, ent: Any) -> Any:
+        """Why the leases say stop, else None. A store that does not answer decides nothing: it is asked again at the
+        next poll, and a lease that lapsed meanwhile reads as lost once it answers. 2026-10-29, #2517: `POST
+        /v1/store/get: Connection reset by peer` (ci-runner's store, through the tunnel) ended the wrapper a minute in;
+        nothing renewed its lease, and a second fixer was dispatched onto the red its session was still working on."""
+        rec, own = self.rec, self.own
+        try:
+            if self.meta_due:
+                self.meta_due = not fixer_meta_sent(self.st, self.leases(), self.meta)
+            gone = own.check(self.st)  # revoked (the red cleared, a release, its own block): stop at once;
+            stop = lease_stop_line(*gone) if gone else self.renew_due(ent)  # lapsed: taken again, going on
+            if own.epoch != rec.get("epoch"):  # taken again after a lapse: the record names its epoch
+                rec["epoch"] = own.epoch
+                self.save()
+            return stop
+        except (StoreAuthFailed, StoreUnavailable) as e:
+            return store_failure_stop(e, self.env, "poll")
+
+    def renew_due(self, ent: Any) -> Any:
+        """Each beat, when due: judge the session's progress (PROOF OF WORK: a living wrapper is not one) and renew the
+        leases by it -- the run's other reds with the first. Why it must stop, else None."""
+        if time.time() - self.last_renew < self.every:
+            return None
+        rec = self.rec
+        note = (read_record(self.a.record) or {}).get("note")
+        mark, _moved, stalled = self.prog.judge(rec["log"], rec.get("bg_id"), self.wt, ent, rec.get("transcript"),
+                                                time.time(), self.every)
+        stop = f"STALLED: no progress (transcript, worktree) for {fmt_age(self.stall)}" if stalled else None
+        if not stop:
+            beat = f"{mark} beat {int(time.time())}"
+            for h in self.held[1:]:
+                h.renew(self.st, beat, note=note)
+            gone = self.own.renew(self.st, beat, note=note)
+            stop = lease_stop_line(*gone) if gone else None
+        self.last_renew = time.time()
+        return stop
+
+    def release_lease(self, lease: Any, verdict: Any, tail: Any) -> Any:
+        """Release one lease with the verdict: a store that does not answer is asked again, a poll apart."""
+        n_, e_, s_ = lease
+        for left in range(RED_RELEASE_ASKS, 0, -1):
+            try:
+                self.st.release(n_, e_, s_, outcome=verdict_cut(verdict), notes="\n".join(tail[-8:]))
+                return
+            except StoreAuthFailed as e:  # refused, not unanswered: the laptop's tick revokes it (red_reap_orphans)
+                print(f"{ts()} could not release {n_} ({e}): the tick revokes it", flush=True)
+                return
+            except StoreUnavailable as e:  # never answered: the lease lapses by its TTL, and the red is offered again
+                print(f"{ts()} could not release {n_} ({e}){'' if left > 1 else ': it lapses by its TTL'}", flush=True)
+                time.sleep(self.poll)
+
+    def session_verdict(self, text: Any) -> Any:
+        """The wrapper's verdict if it stopped the session, else the session's own final line, else why it has none."""
+        failure = bg_failure(self.rec.get("bg_id"))  # claude's own word on a failed session: the crash's actual error
+        return self.verdict or fixer_verdict(text) or (
+            "ended with no LANDED / GAVE UP line"
+            + (f" (session {self.rec['bg_id']}: failed: {failure})" if failure else ""))
+
+    def finish(self) -> Any:
+        """The verdict (the session's final answer), told to the inbox, the leases released with it; the exit code."""
+        rec = self.rec
+        if not rec.get("transcript") and rec.get("session"):
+            rec["transcript"] = bg_transcript(rec["session"])
+        text = bg_turn(rec.get("transcript"))["final"]  # THIS turn's: a resumed session's transcript holds earlier ones
+        verdict = self.session_verdict(text)
+        line = f"RED FIXER {rec['workflow']} #{self.num}: {verdict[:300]}"
+        tail = [l[:300] for l in text.splitlines()[-INBOX_TAIL:]]
+        if not fixer_quiet(verdict):  # the red ended under it, already fixed, or the owner's decision: the reconciler's
+            inbox_write("red fixer", line, [line], tail, 0 if verdict.startswith("LANDED") else 1, cwd=self.wt)
+        if self.meta_due:  # never sent while the session ran: before the release, so a resume finds its session
+            fixer_meta_sent(self.st, self.leases(), self.meta)
+        for lease in self.leases():
+            self.release_lease(lease, verdict, tail)
+        rc = 0 if verdict.startswith("LANDED") else 1
+        rec.update(ended=ts(), rc=rc, verdict=verdict)
+        self.save()
+        if not rec.get("orphan"):  # an orphan's tree is its author's, never litter
+            mark_internal(self.wt)  # its fixer ended: the tree is agentctl's litter now, never a fixer or owner
+        print(line)
+        return rc
+
+
 def red_fixer(a, st):
     """The dispatched fixer's wrapper (detached): start its background claude session under the red's lease, renew the
     lease by its progress every RED_RENEW_EVERY s, `claude stop` it when the lease is lost (RED-STOP.md), release the
     lease with the verdict from the session's final answer."""
-    rec = read_record(a.record)
+    wrapper = RedFixerWrapper(a, st)
     keep_awake()  # the laptop must not idle-sleep past the lease's TTL while the fixer holds it (host_slept)
-    num, wt = rec["run"], rec["worktree"]
-    session = rec.get("session")  # known once `claude agents` lists the session (--bg picks its id)
-    me = os.getpid()
-    who = f"red-fixer-{num}"
-    name, epoch = rec.get("lease"), rec.get("epoch")
-    secret = os.environ.pop("AGENTCTL_LEASE_SECRET", None)
-    extra = [(x["name"], x["epoch"], json.loads(os.environ.get("AGENTCTL_LEASE_SECRETS") or "{}").get(x["name"]))
-             for x in rec.get("extra_leases") or []]
-    os.environ.pop("AGENTCTL_LEASE_SECRETS", None)
-    if not name:  # an orphan's fixer (no offer): it takes a lease of its own
-        name = red_lease(f"orphan-{os.path.basename(wt)}")
-        took = st.acquire(name, f"laptop:fixer:{who}", RED_FIXER_TTL, RED_FIXER_MAX, progress="start",
-                          meta={"kind": "fixer", "worktree": wt, "gate": False})
-        if "held" in took:
-            rec.update(pid=me, ended=ts(), rc=0, verdict=f"DUPLICATE: {took['held']['holder']} is on it")
-            write_json(a.record, rec)
-            print(f"RED FIXER {rec['workflow']} #{num}: DUPLICATE")
-            return 0
-        epoch, secret = took["epoch"], took["secret"]
-    # ONE FIXER LIFECYCLE: its leases kept as an owner's are (HeldLease: a lapse taken again, a red that ended is no
-    # failure); the holder is the dispatcher's, read from the lease's own epoch
-    own = HeldLease(name, epoch, secret, rec.get("holder"), RED_FIXER_TTL)
-    held_ = [own] + [HeldLease(n_, e_, s_, rec.get("holder"), RED_FIXER_TTL) for n_, e_, s_ in extra]
-
-    def leases():
-        return [h.triple() for h in held_]
-    meta, meta_due = {"worktree": wt, "session": session, "pid": me, "log": rec["log"], "host": socket_host(),
-                      "wrapper_log": os.path.join(os.path.dirname(os.path.abspath(a.record)), "fixer.log")}, False
-    try:
-        row = st.get(name)
-        if row and row["epoch"] == epoch and row["secret"] == secret:
-            own.holder = own.holder or row.get("holder") or None
-            for h in held_:
-                h.holder = h.holder or own.holder
-            rec["holder"] = own.holder
-            st.note(name, epoch, secret, f"dispatched: {rec.get('why')}")
-            meta_due = not fixer_meta_sent(st, leases(), meta)
-    except StoreUnavailable as e:  # its lease unread: the meta is sent at the polls below
-        print(f"{ts()} the store did not answer ({e}): the leases' meta is sent again", flush=True)
-        meta_due = True
-    rec.update(pid=me, process_start=process_start(me), session=session, lease=name, epoch=epoch)
-    write_json(a.record, rec)
-    u = {"workflow": rec["workflow"], "job": rec.get("job"), "jobs": rec.get("jobs"), "kind": rec.get("kind") or "test",
-         "line": rec.get("line"), "flake": rec.get("flake"), "diagnosis": rec.get("diagnosis"), "orphan": rec.get("orphan"),
-         "refuted": rec.get("refuted"), "predicts": rec.get("predicts"), "prior_work": rec.get("prior_work"),
-         "run": {"number": num, "databaseId": rec.get("run_id")}, "repo": rec.get("repo"),
-         "blame_note": rec.get("blame_note"), "lander": rec.get("lander"), "decision": rec.get("decision")}
-    u["record"] = a.record
-    prompt = fixer_prompt(u, wt, sync_brief(), fixer_rollover(st, rec))  # its resumed session past its context: fresh
-    cli = claude_cli()
-    label = fixer_label(rec)
-    argv = [cli, "--bg", prompt, "--permission-mode", interactive_mode(), "--permission-prompts", "none", "-n", label,
-            "--disallowedTools", "Bash(git push:*)", "Bash(*--no-verify*)", "Bash(*PREPUSH_SKIP*)"]
-    if red_owner_only(red_repo_of(rec)):  # an owner-only repo's fixer: no landing, no push, no deploy (red_owner_rules)
-        argv += list(OWNER_ONLY_DENIED)
-    if rec.get("resume") and rec.get("resumed_from"):
-        argv += ["--resume", rec["resumed_from"]]
-    if rec.get("effort"):  # a deep investigation
-        argv += ["--effort", rec["effort"]]
-    # NO FIXER IDENTITY IN THE SESSION'S ENVIRONMENT: `claude --bg` may start the claude daemon with it, and every
-    # later background session -- other fixers', the owner's -- inherits the daemon's (2026-10-29: the daemon spawned by
-    # #2473 fixer-5's wrapper named them all 'red-fixer-2473'). The prompt names the record; the session binds to it.
-    env = {k: v for k, v in os.environ.items() if k not in FIXER_IDENTITY_ENV and k != "AGENTCTL_DETACHED"}  # an agent
-    if rec.get("session"):
-        bind_fixer_session(rec["session"], a.record)
-    wall = env_num("AGENTCTL_RED_FIXER_WALL", RED_FIXER_WALL)
-    every = env_num("AGENTCTL_RED_RENEW", RED_RENEW_EVERY)
-    poll = env_num("AGENTCTL_BG_POLL", BG_POLL)
-    t0, verdict, last_renew = time.time(), None, time.time()
-    launch = rec.get("launch_cwd") if rec.get("launch_cwd") and os.path.isdir(rec["launch_cwd"]) else wt
-    bid, why = bg_start(argv, launch, env)  # a revived lander: in its session's own cwd, where `--resume` finds it
-    if not bid:
-        verdict = f"NOT STARTED: `claude --bg` {why}"
-        if rec.get("lander"):  # said, never looped: the red's next dispatch is a fresh fixer (red_lease_ended)
-            line = f"LAUNCH FAILED: {why[:400]} (reviving the lander of {rec['lander'].get('change')}, {rec['workflow']} #{num})"
-            inbox_write("red fixer", line, [line], [], 1, cwd=wt)
-    else:
-        rec.update(bg_id=bid, label=label)
-        write_json(a.record, rec)
-
-        def cancelled(signum, _frame):  # the wrapper is stopped: its session goes with it
-            bg_stop(cli, bid)
-            for n_, e_, s_ in leases():
-                try:
-                    st.release(n_, e_, s_, outcome="STOPPED: the fixer's wrapper was stopped")
-                except StoreUnavailable:  # it lapses by its TTL instead
-                    pass
-            os._exit(143)
-        for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
-            signal.signal(sg, cancelled)
-        missing, unclaimed_told = 0, False
-        stall = env_num("AGENTCTL_RED_STALL", RED_STALL)
-        prog = TurnProgress(stall, time.time())
-        claim_within = env_num("AGENTCTL_FIXER_CLAIM_WITHIN", FIXER_CLAIM_WITHIN)
-        try:
-            while verdict is None:
-                time.sleep(poll)
-                ent = bg_session(cli, bid)
-                if ent and ent.get("sessionId") and not rec.get("transcript"):
-                    rec.update(session=ent["sessionId"], transcript=bg_transcript(ent["sessionId"]))
-                    write_json(a.record, rec)
-                    bind_fixer_session(rec["session"], a.record)
-                    if rec["transcript"]:
-                        rec["log"] = rec["transcript"]
-                    meta.update(session=rec["session"], log=rec["log"], bg_id=bid)
-                    meta_due = not fixer_meta_sent(st, leases(), meta)
-                    write_json(a.record, rec)
-                missing = missing + 1 if ent is None else 0
-                if bg_turn_over(ent, rec.get("transcript")) or missing >= 3:  # finished its turn (done, stopped,
-                    # blocked; or waiting with its verdict said, bg_turn_over), or gone from the list
-                    break
-                stop = None
-                late = time.time() - t0 > claim_within
-                if late and not rec.get("transcript") and not (read_record(a.record) or {}).get("note"):
-                    # NEVER CLAIMED (2026-10-31): a session that in claim_within neither started its transcript nor ran
-                    # its first `red claim` never got going -- ended with what `claude agents` says of it, never a
-                    # silent "never got going"
-                    stop = (f"NOT STARTED: session {bid} never claimed in {fmt_age(claim_within)} (`claude agents`: "
-                            f"{bg_row_brief(ent)})")
-                elif late and not unclaimed_told and not (read_record(a.record) or {}).get("note"):
-                    unclaimed_told = True  # it works but never ran `red claim`: said once, on its lease and the inbox
-                    tail = " | ".join(l.strip() for l in bg_final_text(rec.get("transcript")).splitlines()[-3:] if l.strip())
-                    line = (f"RED FIXER {rec['workflow']} #{num}: session {bid} has not claimed in "
-                            f"{fmt_age(claim_within)} (`claude agents`: {bg_row_brief(ent)}); its last words: {tail[:300]}")
-                    inbox_write("red fixer", line, [line], [], 1, cwd=wt)
-                    try:
-                        st.note(*own.triple(), line[:300])
-                    except StoreUnavailable:
-                        pass
-                if stop:
-                    pass
-                elif time.time() - t0 > wall:
-                    stop = f"TIMED OUT after {int(wall // 60)} min (maximum wall time)"
-                elif os.path.exists(os.path.join(wt, "RED-STOP.md")):
-                    stop = "STOPPED: " + open(os.path.join(wt, "RED-STOP.md")).readline().strip()
-                else:
-                    # A store that does not answer decides nothing: it is asked again at the next poll, and a lease that
-                    # lapsed meanwhile reads as lost once it answers. 2026-10-29, #2517: `POST /v1/store/get: Connection
-                    # reset by peer` (ci-runner's store, through the tunnel) ended the wrapper a minute in; nothing renewed
-                    # its lease, and a second fixer was dispatched onto the red its session was still working on.
-                    try:
-                        if meta_due:
-                            meta_due = not fixer_meta_sent(st, leases(), meta)
-                        gone_ = own.check(st)  # revoked (the red cleared, a release, its own block): stop at once;
-                        if gone_:              # lapsed (asleep, the store out of reach): taken again, going on
-                            stop = lease_stop_line(*gone_)
-                        elif time.time() - last_renew >= every:
-                            note = (read_record(a.record) or {}).get("note")
-                            mark, _moved, stalled = prog.judge(rec["log"], rec.get("bg_id"), wt, ent,
-                                                               rec.get("transcript"), time.time(), every)
-                            if stalled:  # PROOF OF WORK: a living wrapper is not one
-                                stop = f"STALLED: no progress (transcript, worktree) for {fmt_age(stall)}"
-                            beat = f"{mark} beat {int(time.time())}"
-                            for h in held_[1:] if not stop else ():  # the run's other reds: renewed with it
-                                h.renew(st, beat, note=note)
-                            gone_ = None if stop else own.renew(st, beat, note=note)
-                            if gone_:
-                                stop = lease_stop_line(*gone_)
-                            last_renew = time.time()
-                        if own.epoch != rec.get("epoch"):  # taken again after a lapse: the record names its epoch
-                            rec["epoch"] = own.epoch
-                            write_json(a.record, rec)
-                    except StoreAuthFailed as e:  # never "asked again" forever: a fresh token once, else the end
-                        if store_reauth():
-                            env["AGENTCTL_STORE_TOKEN"] = os.environ["AGENTCTL_STORE_TOKEN"]
-                            print(f"{ts()} the store refused the token ({e}): a fresh store token taken", flush=True)
-                        else:
-                            stop = f"store auth failed: {e}"
-                    except StoreUnavailable as e:
-                        print(f"{ts()} the store did not answer ({e}): asked again at the next poll", flush=True)
-                if stop:
-                    verdict = stop
-        except Exception as ex:  # never a dead wrapper with a live session and its leases held
-            verdict = f"STOPPED: the fixer's wrapper failed ({type(ex).__name__}: {str(ex)[:200]})"
-        bg_stop(cli, bid)  # done or stopped: the session ends (`claude agents --all` keeps it, `claude attach` reopens it)
-    if not rec.get("transcript") and rec.get("session"):
-        rec["transcript"] = bg_transcript(rec["session"])
-    text = bg_turn(rec.get("transcript"))["final"]  # THIS turn's: a resumed session's transcript holds earlier ones
-    failure = bg_failure(rec.get("bg_id"))  # claude's own word on a failed session: the crash's actual error
-    verdict = verdict or fixer_verdict(text) or ("ended with no LANDED / GAVE UP line"
-                                                 + (f" (session {rec['bg_id']}: failed: {failure})" if failure else ""))
-    line = f"RED FIXER {rec['workflow']} #{num}: {verdict[:300]}"
-    tail = [l[:300] for l in text.splitlines()[-INBOX_TAIL:]]
-    if not fixer_quiet(verdict):  # the red ended under it, already fixed, or the owner's decision: the reconciler's
-        inbox_write("red fixer", line, [line], tail, 0 if verdict.startswith("LANDED") else 1, cwd=wt)
-    if meta_due:  # never sent while the session ran: before the release, so a resume finds its session
-        fixer_meta_sent(st, leases(), meta)
-    for n_, e_, s_ in leases():
-        for left in range(RED_RELEASE_ASKS, 0, -1):  # a store that does not answer is asked again, a poll apart
-            try:
-                st.release(n_, e_, s_, outcome=verdict_cut(verdict), notes="\n".join(tail[-8:]))
-                break
-            except StoreAuthFailed as e:  # refused, not unanswered: the laptop's tick revokes it (red_reap_orphans)
-                print(f"{ts()} could not release {n_} ({e}): the tick revokes it", flush=True)
-                break
-            except StoreUnavailable as e:  # never answered: the lease lapses by its TTL, and the red is offered again
-                print(f"{ts()} could not release {n_} ({e}){'' if left > 1 else ': it lapses by its TTL'}", flush=True)
-                time.sleep(poll)
-    rec.update(ended=ts(), rc=0 if verdict.startswith("LANDED") else 1, verdict=verdict)
-    write_json(a.record, rec)
-    if not rec.get("orphan"):  # an orphan's tree is its author's, never litter
-        mark_internal(wt)  # its fixer ended: the tree is agentctl's litter now, never a fixer or owner
-    print(line)
-    return 0 if verdict.startswith("LANDED") else 1
+    if not wrapper.take_leases():
+        return 0
+    wrapper.register()
+    wrapper.start()
+    return wrapper.finish()
 
 
 # AN ATTEMPT IS A FIXER THAT TRIED AND FAILED TO FIX (2026-11-04: RED ESCALATE 261 and FIXER FAILED 204 in a week; #728

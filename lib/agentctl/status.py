@@ -5,7 +5,6 @@ import argparse
 from typing import Any, Dict
 import json
 import os
-import re
 import threading
 import time
 from agentctl.core import HOME, SHORT, env_num, process_cache, reds_dir, slug
@@ -15,20 +14,20 @@ from agentctl.forge import RED_CONCLUSIONS, forge_run_url
 from agentctl.owned import default_repo
 from agentctl.redfamilies import red_family
 from agentctl.cistate import state_read
-from agentctl.gatesummary import GATE_LINE, GATE_SUMMARY_MAX_AGE
+from agentctl.gatesummary import GATE_LINE
 from agentctl.dispatchblock import cached_dispatch_blocker
 from agentctl.store import Store
 from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.leases import lease_meta
 from agentctl.reverts import REVERT_OPEN, revert_brief, revert_line
 from agentctl.conditions import open_conditions
-from agentctl.queue import hold_row, hold_text, land_hold
+from agentctl.queue import hold_row, land_hold
 from agentctl.issues import status_issues
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.owners import owner_record_path
 from agentctl.remotestore import RemoteStore, store_url
 from agentctl.tunnel import tunnel_ports, tunnel_state_path
-from agentctl.storestate import NETWORK_SHOWN_FOR, STORE_UNREACHABLE_AFTER, port_open, remote_status_state
+from agentctl.storestate import STORE_UNREACHABLE_AFTER, port_open, remote_status_state
 from agentctl.recordingpins import pins_status
 from agentctl.reduntracked import red_untracked_list
 from agentctl.redvault import block_verdict_note
@@ -41,6 +40,7 @@ from agentctl.redview import red_view
 from agentctl.cireport import ci_why
 from agentctl.recovery import escalated_now
 from agentctl.ownerleases import owners_status
+from agentctl.statusline import render_status_line, status_gate_text
 
 
 STATUS_SOURCE_BOUND = 8         # s a source may take ($AGENTCTL_STATUS_BOUND); the agents' source twice that
@@ -119,32 +119,36 @@ def status_answers(threads: Any, out: Any, keep: Any) -> Any:
     return res, {"stale": stale, "took": took}
 
 
-# ---- ONE STATUS MODEL (docs/simplification-2026-10.md item 4): status_data() is THE assembled status (what /api/status
-# returns); `status --line`, `status`, `red status`, `ci-why --summary --cached` and the page render from it (or from
-# the sections they need: status_data(only=...)). No second formatter reads state.json or the store for itself.
-def status_gate_text(d, t, o_r=None, unreachable=False):
-    """THE gate text, from the published summary in state.json d: the line itself while fresh; stale or missing, what
-    it last said marked with its age -- `gate ?` when ci-runner's store does not answer (no verdict), `gate NETWORK`
-    on a lossy uplink, else `gate UNREAD`. o_r: only that repository's line counts."""
-    sm = d.get("summary") or {}
-    try:
-        epoch = int(sm["at"])
-    except (KeyError, TypeError, ValueError):
-        epoch = None
-    line = sm.get("line") if epoch and GATE_LINE.match(sm.get("line") or "") and (not o_r or sm.get("repo") == o_r) else None
-    age = t - epoch if epoch else None
-    if line and -5 <= age <= GATE_SUMMARY_MAX_AGE:
-        return line
-    net = d.get("network") or {}
-    lossy = net.get("at") and t - float(net["at"]) < NETWORK_SHOWN_FOR
-    asof = time.strftime("%H:%M", time.localtime(epoch)) if epoch else "never"
-    rest = line[5:] if line else None
-    if unreachable:
-        return f"gate ? (as of {asof}: {rest})" if rest else "gate ?"
-    if lossy:
-        return (f"gate NETWORK (lossy uplink: {int(float(net.get('loss') or 0) * 100)}% loss"
-                + (f"; as of {asof}: {rest})" if rest else ")"))
-    return f"gate UNREAD (as of {asof}: {rest or 'no fresh published gate'})"
+def status_gate_rows(ci: Any) -> Any:
+    """The gate's rows for the page: each workflow's decided run and the newer one in flight."""
+    rows = []
+    for g in ci.get("gate") or []:
+        dec, new = g.get("decided") or {}, g.get("newer") or {}
+        rows.append({"name": g.get("name"), "number": dec.get("number"), "conclusion": dec.get("conclusion"),
+                     "url": status_run_url(ci.get("repo"), dec.get("number"), dec), "title": dec.get("displayTitle"),
+                     "newer": new.get("number"), "newer_status": new.get("status"),
+                     "newer_url": status_run_url(ci.get("repo"), new.get("number"), new), "since": g.get("since"),
+                     "count": g.get("count")})
+    return rows
+
+
+def status_tick_and_store(d: Any, url: Any, t: Any) -> Any:
+    """The reconciler's tick and the store's reachability, as the header's fields."""
+    tick = d.get("tick_at")
+    fetched = float(d.get("fetched_at") or 0) if url else None
+    return {"tick_at": tick, "tick_age": t - float(tick) if tick else None, "fetched_at": d.get("fetched_at"),
+            "store_url": url, "store_unreachable": bool(url) and t - fetched > STORE_UNREACHABLE_AFTER,
+            "store_error": d.get("store_error")}
+
+
+def status_state_fields(d: Any) -> Any:
+    """The header's fields read straight from state.json: the published summary, the code, the queue, the open items."""
+    summary = d.get("summary") or {}
+    return {"summary": summary.get("line"), "summary_at": summary.get("at"), "summary_repo": summary.get("repo"),
+            "code": d.get("version"), "rev": d.get("rev"), "network": d.get("network"),
+            "waiting": d.get("waiting") or [], "queued": d.get("queued") or [], "hold": d.get("hold"),
+            "items": {k: d.get(k) or [] for k in ("changes", "batch", "reds", "conditions")},
+            "reverts": d.get("reverts") or []}
 
 
 def status_header(t, d=None, probes=True):
@@ -155,28 +159,11 @@ def status_header(t, d=None, probes=True):
     if d is None:
         d = remote_status_state(url, t) if url else state_read()
     ci = d.get("ci") or {}
-    gate = []
-    for g in ci.get("gate") or []:
-        dec, new = g.get("decided") or {}, g.get("newer") or {}
-        gate.append({"name": g.get("name"), "number": dec.get("number"), "conclusion": dec.get("conclusion"),
-                     "url": status_run_url(ci.get("repo"), dec.get("number"), dec), "title": dec.get("displayTitle"),
-                     "newer": new.get("number"), "newer_status": new.get("status"),
-                     "newer_url": status_run_url(ci.get("repo"), new.get("number"), new), "since": g.get("since"),
-                     "count": g.get("count")})
-    tick = d.get("tick_at")
-    fetched = float(d.get("fetched_at") or 0) if url else None
-    unreachable = bool(url) and t - fetched > STORE_UNREACHABLE_AFTER
+    gate = status_gate_rows(ci)
+    store = status_tick_and_store(d, url, t)
     h = {"gate": gate, "gate_red": any(x["conclusion"] in RED_CONCLUSIONS for x in gate),
-         "gate_text": status_gate_text(d, t, unreachable=unreachable),
-         "summary": (d.get("summary") or {}).get("line"), "summary_at": (d.get("summary") or {}).get("at"),
-         "summary_repo": (d.get("summary") or {}).get("repo"),
-         "ci_at": ci.get("at"), "repo": ci.get("repo") or SHORT["movies"],
-         "tick_at": tick, "tick_age": t - float(tick) if tick else None, "fetched_at": d.get("fetched_at"),
-         "store_url": url, "store_unreachable": unreachable, "store_error": d.get("store_error"),
-         "code": d.get("version"), "rev": d.get("rev"), "network": d.get("network"), "waiting": d.get("waiting") or [],
-         "queued": d.get("queued") or [], "hold": d.get("hold"),
-         "items": {k: d.get(k) or [] for k in ("changes", "batch", "reds", "conditions")},
-         "reverts": d.get("reverts") or [],
+         "gate_text": status_gate_text(d, t, unreachable=store["store_unreachable"]),
+         "ci_at": ci.get("at"), "repo": ci.get("repo") or SHORT["movies"], **store, **status_state_fields(d),
          "pins": pins_status(now_=t)}
     if probes:
         tunnel = read_json_file(tunnel_state_path())
@@ -184,31 +171,6 @@ def status_header(t, d=None, probes=True):
         h["store_port"] = port_open(tunnel_ports()[0][0], timeout=1.0)
     h["line"] = render_status_line(h, t)
     return h
-
-
-def render_status_line(h, t):
-    """The status line: the gate text, the waiting and checking changes; `RECONCILER STALLED since HH:MM` when the
-    tick is over 2 min old, `STORE UNREACHABLE since HH:MM` when ci-runner's store has not answered for a minute."""
-    short = lambda wts: ", ".join(re.sub(r"^.*-wt-", "", os.path.basename(w or "")) for w in wts)
-    hm = lambda x: time.strftime('%H:%M', time.localtime(float(x)))
-    parts, tick, url = [h["gate_text"]], h["tick_at"], h["store_url"]
-    if h["store_unreachable"]:  # no verdict on ci-runner's reconciler: its store did not answer (never STALLED)
-        se = h.get("store_error") or {}
-        parts.insert(0, f"STORE UNREACHABLE since {hm(float(h.get('fetched_at') or 0) or se.get('since') or t)} ({url}"
-                        + (f": {se['why'][:80]}" if se.get("why") else "") + ")"
-                        + (f"; ci-runner ticked at {hm(tick)}" if tick else ""))
-    elif not tick or t - float(tick) > 120:
-        parts.insert(0, (f"RECONCILER STALLED since {hm(tick)}" if tick else "RECONCILER not running")
-                     + (" (ci-runner)" if url else ""))
-    hold = h.get("hold")
-    if hold and float(hold.get("until") or 0) > t:  # the store's land hold (expired ones lift at the next tick)
-        parts.append("LAND " + hold_text(hold))
-    if h.get("reverts"):  # a reverted change its lander has not taken back up (reverts.py)
-        parts.append(f"REVERTED unacked: {len(h['reverts'])}")
-    waiting, queued = h["waiting"], h["queued"]
-    parts.append(f"waiting: {len(waiting)}" + (f" — {short(waiting)}" if waiting else "")
-                 + (f" · checking: {len(queued)} — {short(queued)}" if queued else ""))
-    return " · ".join(parts)
 
 
 def status_line(now_=None):
@@ -251,6 +213,23 @@ def render_status(h, t):
     return "\n".join(out)
 
 
+def family_holder_row(st: Any, f: Any, t: Any, active: Any, leases: Any) -> Any:
+    """The live lease holding a family: its primary one, else an owner's (or any other) on one of its open reds."""
+    row = red_family_holder(st, f, t, active=active)
+    if row:
+        return row
+    return next((r for r in leases if (active.get(r["name"].split("/", 1)[1]) or {}).get("data")
+                 and red_family(active[r["name"].split("/", 1)[1]]["data"]) == f), None)
+
+
+def family_holder_worktree(row: Any, f: Any) -> Any:
+    """The holder's worktree: its lease's, an owner's ONE worktree from its record."""
+    wt = lease_meta(row).get("worktree")
+    if not wt and lease_meta(row).get("kind") in ("owned", "owner"):
+        wt = (read_record(owner_record_path(lease_meta(row).get("family") or f)) or {}).get("worktree")
+    return wt
+
+
 def status_families(st, t):
     """Each family with open reds: how many, and its ONE fixer (the live primary lease), if any."""
     active = red_active(st)
@@ -263,16 +242,10 @@ def status_families(st, t):
     leases = [r for r in st.list("red/") if lease_is_live(r, t)]
     cache = {}
     for f in sorted(fams):
-        row = red_family_holder(st, f, t, active=active)
-        if not row:  # an owner's (or any other) live lease on a red of the family is its holder too
-            row = next((r for r in leases if (active.get(r["name"].split("/", 1)[1]) or {}).get("data")
-                        and red_family(active[r["name"].split("/", 1)[1]]["data"]) == f), None)
+        row = family_holder_row(st, f, t, active, leases)
         work, why = holder_work(row, t, cache) if row else (None, None)
-        wt = lease_meta(row).get("worktree") if row else None
-        if row and not wt and lease_meta(row).get("kind") in ("owned", "owner"):  # an owner's: its ONE worktree
-            wt = (read_record(owner_record_path(lease_meta(row).get("family") or f)) or {}).get("worktree")
-        out.append({"family": f, "open": fams[f], "holder": row["holder"] if row else None, "worktree": wt,
-                    "at_work": work, "work": why})
+        out.append({"family": f, "open": fams[f], "holder": row["holder"] if row else None,
+                    "worktree": family_holder_worktree(row, f) if row else None, "at_work": work, "work": why})
     return out
 
 

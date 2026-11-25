@@ -267,38 +267,46 @@ def branch_red_line(e):
     return line
 
 
+def branch_red_unrouted(e: Any, t: Any) -> Any:
+    """Whether this branch entry's red run is still to be routed. A run on a deleted branch is dropped silently (its
+    owner finished with it); an orphan closed itself (settle_branch_reds), routed if it reopens; a run past the route
+    window is recorded unrouted."""
+    r = e["run"]
+    if not e.get("red") or not e.get("alive") or os.path.exists(routed_path(r["databaseId"])) or e.get("orphan"):
+        return False
+    try:
+        done = dt.datetime.fromisoformat(str(r.get("updatedAt")).replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        done = t
+    if t - done > BRANCH_ROUTE_MAX_AGE and not e.get("reopened"):
+        write_json(routed_path(r["databaseId"]), {"at": ts(), "routed": False, "why": "older than the route window"})
+        return False
+    return True
+
+
+def route_branch_red(o_r: Any, e: Any) -> Any:
+    """Write the inbox entry of one failed branch run, ci-why's first error lines under it, its signatures saved."""
+    r = e["run"]
+    try:
+        lines, _num, per_job = explain_run_jobs(o_r, dict(r, workflowName=e["workflow"]), 4)
+        save_run_sigs(o_r, r, e["workflow"], per_job)
+    except (Exception, SystemExit) as ex:
+        lines, per_job = [f"  (could not read the run: {str(ex)[:160]})"], []
+    kinds = {p[1] for p in per_job} - {"incomplete"}
+    rec = {"at": ts(), "routed": True, "infra": bool(kinds) and kinds <= {"infra"},
+           "blocks_promoting": e.get("newer_recording") if "test" in kinds else None}
+    write_json(routed_path(r["databaseId"]), rec)
+    line = branch_red_line(e)
+    tail = [l for l in lines if l.startswith("      ") or l.startswith("  [")][:INBOX_TAIL] or lines[:INBOX_TAIL]
+    inbox_write("branch", line, [line], tail, 1, cwd=(e.get("owner") or {}).get("worktree"))
+    return line
+
+
 def route_branch_reds(o_r, snap, now_=None):
     """ONE inbox entry per failed branch run (BRANCH RED) whose branch still exists, with ci-why's first error lines;
     signatures saved, so a PREDICTS MAIN RED run is a red unit. Returns the lines written."""
     t = now_ if now_ is not None else time.time()
-    written = []
-    for e in (snap or {}).get("branches") or []:
-        r = e["run"]
-        if not e.get("red") or not e.get("alive") or os.path.exists(routed_path(r["databaseId"])):
-            continue  # a run on a deleted branch is dropped silently: its owner finished with it
-        if e.get("orphan"):
-            continue  # nobody to tell: it closed itself (settle_branch_reds); routed if it reopens
-        try:
-            done = dt.datetime.fromisoformat(str(r.get("updatedAt")).replace("Z", "+00:00")).timestamp()
-        except ValueError:
-            done = t
-        if t - done > BRANCH_ROUTE_MAX_AGE and not e.get("reopened"):
-            write_json(routed_path(r["databaseId"]), {"at": ts(), "routed": False, "why": "older than the route window"})
-            continue
-        try:
-            lines, _num, per_job = explain_run_jobs(o_r, dict(r, workflowName=e["workflow"]), 4)
-            save_run_sigs(o_r, r, e["workflow"], per_job)
-        except (Exception, SystemExit) as ex:
-            lines, per_job = [f"  (could not read the run: {str(ex)[:160]})"], []
-        kinds = {p[1] for p in per_job} - {"incomplete"}
-        rec = {"at": ts(), "routed": True, "infra": bool(kinds) and kinds <= {"infra"},
-               "blocks_promoting": e.get("newer_recording") if "test" in kinds else None}
-        write_json(routed_path(r["databaseId"]), rec)
-        line = branch_red_line(e)
-        tail = [l for l in lines if l.startswith("      ") or l.startswith("  [")][:INBOX_TAIL] or lines[:INBOX_TAIL]
-        inbox_write("branch", line, [line], tail, 1, cwd=(e.get("owner") or {}).get("worktree"))
-        written.append(line)
-    return written
+    return [route_branch_red(o_r, e) for e in (snap or {}).get("branches") or [] if branch_red_unrouted(e, t)]
 
 
 def branch_lines(snap):
