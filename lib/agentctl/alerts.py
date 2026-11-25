@@ -109,11 +109,9 @@ def alert_live(d, idx, item, t=None):
     return e
 
 
-def alert_migrate(d):
-    """THE SWITCH-OVER: every unread entry routed and stamped (audience, item); one item's older unread alerts folded
-    into its newest (acked, counted in it). Returns the new index."""
-    idx = {"v": ALERT_INDEX_VERSION, "items": {}, "seen": [], "migrated_at": time.time()}
-    groups = {}
+def _unread_by_item(d: Any) -> Any:
+    """{item: [its unread entries]}, each routed and stamped (audience, item, counters); an `info` entry written as it is."""
+    groups: dict[Any, list[Any]] = {}
     for e in inbox_entries():
         if e["read"]:
             continue
@@ -127,19 +125,30 @@ def alert_migrate(d):
             write_json(os.path.join(d, e["id"] + ".json"), e)
             continue
         groups.setdefault(item, []).append(e)
-    folded = 0
+    return groups
+
+
+def _fold_item(d: Any, es: Any) -> Any:
+    """An item's unread entries folded into the newest (the older ones acked, counted in it), written; that entry."""
+    es.sort(key=lambda e: (e.get("at") or 0, e["id"]))
+    live = es[-1]
+    if len(es) > 1:
+        live.update(count=sum(int(e.get("count") or 1) for e in es), first_at=es[0].get("first_at") or es[0].get("at"),
+                    folded=[e["id"] for e in es[:-1]][-50:])
+        for e in es[:-1]:
+            alert_ack(d, e["id"])
+    write_json(os.path.join(d, live["id"] + ".json"), live)
+    return live
+
+
+def alert_migrate(d):
+    """THE SWITCH-OVER: every unread entry routed and stamped (audience, item); one item's older unread alerts folded
+    into its newest (acked, counted in it). Returns the new index."""
+    idx = {"v": ALERT_INDEX_VERSION, "items": {}, "seen": [], "migrated_at": time.time()}
+    groups = _unread_by_item(d)
     for item, es in groups.items():
-        es.sort(key=lambda e: (e.get("at") or 0, e["id"]))
-        live = es[-1]
-        if len(es) > 1:
-            live.update(count=sum(int(e.get("count") or 1) for e in es), first_at=es[0].get("first_at") or es[0].get("at"),
-                        folded=[e["id"] for e in es[:-1]][-50:])
-            for e in es[:-1]:
-                alert_ack(d, e["id"])
-                folded += 1
-        write_json(os.path.join(d, live["id"] + ".json"), live)
-        idx["items"][item] = live["id"]
-    idx["folded"] = folded
+        idx["items"][item] = _fold_item(d, es)["id"]
+    idx["folded"] = sum(len(es) - 1 for es in groups.values())
     alert_index_save(d, idx)
     return idx
 

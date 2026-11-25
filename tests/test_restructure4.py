@@ -389,5 +389,56 @@ class ConflictsTest(unittest.TestCase):
         check(self, A, "pick_commits", build, call, 5000)
 
 
+class SmallOnesTest(unittest.TestCase):
+    def test_own_inbox_entry(self):
+        def build(case):
+            r = case.rng
+            paths = ["/w/a", "/w/a/sub", "/w/ab", "/w", "rel/x", "", None, "/"]
+            e = {k: v for k, v in (("owner", r.choice([None, "s1", "s2", "x@/w/a", "x@rel", "y@/w/a/sub", "z@"])), ("agent", r.choice([None, "n1", "n2"])),
+                                   ("cwd", r.choice(paths))) if r.random() < 0.8}
+            who = r.choice([None, ("s1", "/w/a", "n1"), (None, "/w/a", None), ("s9", None, "n9"), (None, "/w/a/", "n2"), (None, None, None)])
+            case.fake("caller_identity", lambda rng: (rng.choice([None, "s2"]), rng.choice([None, "/w/a"]), rng.choice([None, "n2"])))
+            return (e, who)
+        check(self, A, "own_inbox_entry", build, lambda A: A.own_inbox_entry, 4000)
+
+    def test_alert_migrate(self):
+        import types
+
+        def build(case):
+            r = case.rng
+            case.put("time", types.SimpleNamespace(time=lambda: NOW))
+            entries = [{"id": f"a{i}", "read": r.random() < 0.3, "at": r.choice([None, 1, 2, 3]), "audience": r.choice([None, "x", "info"]),
+                        "item": r.choice([None, "i1", "i2"]), "count": r.choice([None, 2]), "surfaced": r.choice([None, 0]), "first_at": r.choice([None, 1])}
+                       for i in range(r.randint(0, 6))]
+            case.fake("inbox_entries", lambda rng: entries)
+            case.fake("alert_route", lambda rng, e: (rng.choice(["a", "info"]), rng.choice(["i1", "i2", "i3"])))
+            case.fake("write_json", lambda rng, path, rec: None)
+            case.fake("alert_ack", lambda rng, d, eid: None)
+            case.fake("alert_index_save", lambda rng, d, idx: None)
+            return ("dir",)
+        check(self, A, "alert_migrate", build, lambda A: A.alert_migrate, 3000)
+
+    def test_watch_look(self):
+        def build(case):
+            r = case.rng
+            case.fake("env_num", lambda rng, name, default: rng.choice([10, 100]))
+            case.fake("main_runs", lambda rng, o_r, wfile: [wfile])
+            run = lambda rng: maybe(rng, {"databaseId": rng.randint(1, 3), "status": rng.choice(["completed", "queued"]),  # noqa: E731
+                                          "updatedAt": "t", "conclusion": rng.choice(["success", "failure"])}, 0.7)
+            case.fake("pick_main_run", lambda rng, repo, sha, runs: run(rng))
+            case.fake("pick_convergence_run", lambda rng, repo, sha, runs, pushed_at, o_r: run(rng))
+            case.fake("is_cancelled", lambda rng, run: rng.random() < 0.2)
+            flows = {k: (k.upper(), f"{k}.yml") for k in r.sample(["main", "conv", "drift"], r.randint(0, 3))}
+            done = {k: (None, None) for k in flows if r.random() < 0.25}
+            on_run = case.recorded("on_run", lambda rng, *a: None) if r.random() < 0.7 else None
+            return ("repo", "sha", "o/r", flows, done, 0, r.choice([5, 50, 500]), 200, on_run)
+
+        def call(A):
+            def run(*args):
+                return A.watch_look(*args), args[4]
+            return run
+        check(self, A, "watch_look", build, call, 4000)
+
+
 if __name__ == "__main__":
     unittest.main()

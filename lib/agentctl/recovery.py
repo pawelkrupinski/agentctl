@@ -311,20 +311,21 @@ def caller_identity():
     return os.environ.get("CLAUDE_CODE_SESSION_ID") or None, top, agent_name()
 
 
+def _inside_worktree(e: Any, top: str) -> bool:
+    """Inbox entry e names a path (its cwd, its owner's `@<path>`) inside the worktree `top`."""
+    for p in (e.get("cwd"), str(e.get("owner") or "").partition("@")[2]):
+        if p and os.path.isabs(p):
+            p = os.path.realpath(p)
+            if p == top or p.startswith(top.rstrip("/") + "/"):
+                return True
+    return False
+
+
 def own_inbox_entry(e, who=None):
     """Whether inbox entry e is the caller's: its session's, from inside its worktree, or its agent name's."""
     session, top, name = who or caller_identity()
-    if session and e.get("owner") == session:
-        return True
-    if name and e.get("agent") == name:
-        return True
-    if top:
-        for p in (e.get("cwd"), str(e.get("owner") or "").partition("@")[2]):
-            if p and os.path.isabs(p):
-                p = os.path.realpath(p)
-                if p == top or p.startswith(top.rstrip("/") + "/"):
-                    return True
-    return False
+    return bool(session and e.get("owner") == session) or bool(name and e.get("agent") == name) \
+        or bool(top and _inside_worktree(e, top))
 
 
 def token_unavailable_note(ns: str, why: str, store: Any) -> None:

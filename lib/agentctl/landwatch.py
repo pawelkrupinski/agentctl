@@ -115,6 +115,23 @@ def watch_outcome(it):
     return (it.get("data") or {}).get("outcome") or it["state"]
 
 
+def _pick_run(repo: Any, sha: Any, o_r: Any, kind: Any, wfile: Any, pushed_at: Any) -> Any:
+    """The run of flow `kind` (its workflow file wfile) that contains sha, or None."""
+    runs = main_runs(o_r, wfile)
+    return pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at, o_r)
+
+
+def _unstarted(kind: Any, now_: Any, since: Any, conv_start: Any) -> Any:
+    """A convergence (not main) that has not started CONV_START s after `since`."""
+    return kind != "main" and now_ - float(since) >= conv_start
+
+
+def _decide(done: Any, kind: Any, run: Any) -> Any:
+    """A completed (not cancelled) run decides its flow: (run, green?)."""
+    if run.get("status") == "completed" and not is_cancelled(run):
+        done[kind] = (run, run.get("conclusion") == "success")
+
+
 def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None):
     """ONE look at the runs that contain sha (the tick's watch item and `land --follow`'s own watch alike): each
     undecided flow's run is picked; a completed (not cancelled) one goes into `done` as (run, green?), a convergence
@@ -125,17 +142,14 @@ def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None)
     for kind, (name, wfile) in flows.items():
         if kind in done:
             continue
-        runs = main_runs(o_r, wfile)
-        run = pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at, o_r)
-        if run is None:
-            if kind != "main" and now_ - float(since) >= conv_start:
-                done[kind] = (None, None)
-                if on_run:
-                    on_run(kind, None)
-            continue
-        seen[kind] = (run.get("databaseId"), run.get("status"), run.get("updatedAt"))
-        if run.get("status") == "completed" and not is_cancelled(run):
-            done[kind] = (run, run.get("conclusion") == "success")
+        run = _pick_run(repo, sha, o_r, kind, wfile, pushed_at)
+        if run is not None:
+            seen[kind] = (run.get("databaseId"), run.get("status"), run.get("updatedAt"))
+            _decide(done, kind, run)
+        elif _unstarted(kind, now_, since, conv_start):
+            done[kind] = (None, None)
+        else:
+            continue  # nothing to follow yet
         if on_run:
             on_run(kind, run)
     return seen
