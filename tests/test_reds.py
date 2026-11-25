@@ -14,6 +14,7 @@ import json, os, signal, subprocess, sys, time, types, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 from test_red import RedBase, run, FAIL_LINE, MOVIES  # noqa: E402
 
 OTHER_LINE = "[info] - BarSpec should baz *** FAILED ***"
@@ -192,7 +193,8 @@ class ClaimTest(RedsBase):
         wt = self.r.worktree("repo-wt-fixer", branch="fixer")
         os.environ["AGENTCTL_AGENT_NAME"] = "fixer-agent"
         try:
-            rc, out = self.tool("red", "claim", "20", "--note", "FooSpec's clock", "--repo", "movies", cwd=wt)
+            rc, out = self.tool("red", "claim", "20", "--note", "FooSpec's clock", "--repo", "movies", cwd=wt,
+                                clock=FakeClock(self.t[0]))  # the lease is stamped on the ticks' clock
         finally:
             os.environ.pop("AGENTCTL_AGENT_NAME")
         self.assertEqual(rc, 0, out)
@@ -220,7 +222,8 @@ class ClaimTest(RedsBase):
         try:
             self.assertEqual(self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)[0], 0)
             self.tick()
-            rc, out = self.tool("red", "release", "20", "--repo", "movies", cwd=wt)
+            rc, out = self.tool("red", "release", "20", "--repo", "movies", cwd=wt,
+                                clock=FakeClock(self.t[0]))  # the lease is stamped on the ticks' clock
         finally:
             os.environ.pop("AGENTCTL_AGENT_NAME")
         self.assertEqual(rc, 0, out)

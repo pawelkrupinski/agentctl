@@ -85,11 +85,10 @@ class TimeoutAndClockTest(unittest.TestCase):
         self.assertEqual((res.failures, res.errors), ([], []))
         self.assertIs(type(A.process_runner()), A.ProcessRunner)  # a forgotten restore never reaches the next test
 
-    def test_agentctls_time_is_the_stdlibs_a_test_hands_it_a_clock(self):
-        """THE CLOCK IS PASSED IN: no proxy stands between agentctl and the time module any more, so a test cannot fake
-        agentctl's time behind its back -- what reads the time takes a Clock (tests/fake_clock.py FakeClock)."""
-        self.assertIs(A.time, time)
-
+    def test_agentctls_sleep_is_the_stdlibs_and_its_clock_reads_are_the_test_clocks(self):
+        """THE CLOCK IS PASSED IN: a test cannot fake agentctl's time behind its back (the sleep is the stdlib's, never
+        patched); what agentctl reads from the module's `time` is the default test clock (DefaultClockTest)."""
+        self.assertIs(A.time.sleep, time.sleep)
 
     def test_a_clock_main_wired_ends_with_the_test(self):
         """agentctl CI red since e4d02a4 (2026-11-25): main(clock=FakeClock) wires the inbox's clock (cli's
@@ -97,15 +96,15 @@ class TimeoutAndClockTest(unittest.TestCase):
         inbox entries with the previous test's standing clock, behind the wall; test_orphans' infra-retry test read its
         `crashed: StoreUnavailable` verdict as older than its submit and escalated an UNLANDED ORPHAN -- on CI's
         4-worker order, never in the laptop's. Every test starts from the import-time wiring: the wall's clock."""
-        from fake_clock import lagging_clock
+        from fake_clock import FakeClock
 
         def body(self):
             with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
-                A.main(["ci-why", "--help"], clock=lagging_clock())  # wires, then argparse exits
+                A.main(["ci-why", "--help"], clock=FakeClock(harness._REAL_TIME["time"]() - 1000))  # wires, then argparse exits
         res = self.outcome(body)
         self.assertEqual((res.failures, res.errors), ([], []))
         stamped = A._inbox_times[0]()
-        self.assertLess(abs(stamped - time.time()), 60, "the inbox still reads the finished test's clock")
+        self.assertLess(abs(stamped - harness.default_clock().time()), 60, "the inbox still reads the finished test's clock")
 
     def test_an_agentctl_function_left_faked_fails_the_test_and_is_undone(self):
         """2026-11-18: RecoveryTest (test_red_crash_loop) faked ci_state_load twice in one test and its tearDown put
@@ -134,3 +133,34 @@ class TimeoutAndClockTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DefaultClockTest(unittest.TestCase):
+    """A code path falling back to the default clock reads the TEST's clock, never the wall (the flake family of 81d50c0,
+    3fdf8a8 and 5490672: a test stamped on a frozen FakeClock while the code read the wall, failing only in a slow run)."""
+
+    def wall(self):
+        return harness._REAL_TIME["time"]()
+
+    def test_a_default_clock_reads_the_lagging_test_clock(self):
+        lag = self.wall() - A.Clock().time()
+        self.assertAlmostEqual(lag, harness.TEST_CLOCK_LAG, delta=5)
+        self.assertAlmostEqual(self.wall() - A.Clock().monotonic(), harness.TEST_CLOCK_LAG, delta=5)
+
+    def test_an_agentctl_modules_direct_wall_read_is_counted(self):
+        """The guard: `time.time()` read straight in an agentctl module (not through a Clock) is the wall by design
+        (file mtimes live on it) and is counted in harness.WALL_READS, so the family's remaining readers stay visible."""
+        import agentctl.core as core
+        before = len(harness.WALL_READS)
+        self.assertAlmostEqual(core.time.time(), self.wall(), delta=5)
+        self.assertEqual(len(harness.WALL_READS), before + 1)
+
+    def test_the_default_clock_moves_only_when_slept_on(self):
+        before = A.Clock().time()
+        A.Clock().sleep(30)
+        self.assertEqual(A.Clock().time(), before + 30)
+
+    def test_each_test_starts_on_a_fresh_default_clock(self):
+        A.Clock().sleep(1000)
+        harness._reset_process_state()
+        self.assertAlmostEqual(self.wall() - A.Clock().time(), harness.TEST_CLOCK_LAG, delta=5)

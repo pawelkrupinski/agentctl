@@ -115,14 +115,14 @@ class RedBase(unittest.TestCase):
                                      "conclusion": "failure", "workflowName": "Main"})
         self.put(f"run-{rid}.log", f"{job}\tRun tests\t2026-10-27T08:00:00Z {line}\n" if kind != "infra" else "")
 
-    def tool(self, *argv, cwd=None):
+    def tool(self, *argv, cwd=None, clock=None):
         out = io.StringIO()
         old = os.getcwd()
         try:
             if cwd:
                 os.chdir(cwd)
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-                rc = A.main(list(argv))
+                rc = A.main(list(argv), clock=clock)
         finally:
             os.chdir(old)
         return rc, out.getvalue()

@@ -15,6 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 from test_owner import OwnerBase, FAM  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 from test_phase2 import Phase2Base  # noqa: E402
 
 
@@ -278,7 +279,7 @@ class LostHeartbeatVerdictTest(OwnerBase):
             os.chdir(kw["cwd"])
             try:
                 with contextlib.redirect_stdout(kw["stdout"]):
-                    A.main(argv[2:])
+                    A.main(argv[2:], clock=FakeClock())
             except SystemExit:
                 pass
             finally:

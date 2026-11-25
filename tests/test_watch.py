@@ -400,7 +400,7 @@ class WatchItemTest(unittest.TestCase):
         os.makedirs(wt)
         A.start_watch(A.CurrentStore(A.process_store), "/repo", "a" * 40, time.time(), worktree=wt, close=wt, session="s1")
         A.watch_eval = lambda *a: None
-        self.assertEqual(A.tick_watches(*on_clock(A.Clock())), [])
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock())), [])
         self.assertEqual(A.process_store().item("watch", "a" * 40)["state"], "watching")
         A.watch_eval = lambda *a: ("ok", "WATCH OK: Main #5 green, convergence #6 green (aaaaaaaaaa)", [])
         self.assertEqual(A.tick_watches(*on_clock(FakeClock(time.time() + 120))), [f"watch {'a' * 10}: ok"])
@@ -414,7 +414,7 @@ class WatchItemTest(unittest.TestCase):
                       follower={"followed_by": "laptop:1", "followed_until": time.time() + 600})
         looked = []
         A.watch_eval = lambda *a: looked.append(1) or ("ok", "WATCH OK", [])
-        self.assertEqual(A.tick_watches(*on_clock(A.Clock())), [])
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock())), [])
         self.assertEqual(looked, [])
         self.assertEqual(A.tick_watches(*on_clock(FakeClock(time.time() + 4 * 3600))), [f"watch {'c' * 10}: unknown"],
                          "a lapsed follower's watch is the tick's again")
@@ -427,12 +427,12 @@ class WatchItemTest(unittest.TestCase):
                       follower={"followed_by": "laptop:4242", "followed_until": time.time() - 1})
         looked = []
         A.watch_eval = lambda repo, *a: looked.append(repo) or ("ok", "WATCH OK: Main #5 green (dddddddddd)", [])
-        self.assertEqual(A.tick_watches(*on_clock(A.Clock())), [f"watch {'d' * 10}: ok"])
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock())), [f"watch {'d' * 10}: ok"])
         self.assertEqual(looked, [self.here], "looked at in this host's clone, never the laptop's path")
         self.assertEqual(self.closed, [], "the laptop's worktree is not this host's to close")
         A.start_watch(A.CurrentStore(A.process_store), self.here, "e" * 40, time.time(), worktree=self.here)  # made here: its own path, as it is
         A.watch_eval = lambda repo, *a: looked.append(repo) or None
-        A.tick_watches(*on_clock(A.Clock()))
+        A.tick_watches(*on_clock(FakeClock()))
         self.assertEqual(looked[-1], self.here)
 
     def test_a_watch_of_a_repo_this_host_has_no_clone_of_waits_for_its_deadline(self):
@@ -441,7 +441,7 @@ class WatchItemTest(unittest.TestCase):
         A.start_watch(A.CurrentStore(A.process_store), "/elsewhere", "f" * 40, time.time(), worktree="/w", o_r="someone/else")
         looked = []
         A.watch_eval = lambda *a: looked.append(a) or ("ok", "WATCH OK", [])
-        self.assertEqual(A.tick_watches(*on_clock(A.Clock())), [])
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock())), [])
         self.assertEqual(looked, [], "no clone here: nothing looked at")
         self.assertEqual(A.process_store().item("watch", "f" * 40)["state"], "watching")
 

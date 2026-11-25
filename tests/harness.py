@@ -106,11 +106,60 @@ def _stdlib_patched():
     return bad
 
 
+# --- the process-wide default clock ----------------------------------------------------------------------------------
+# 2026-11-25, the third flake of one family (81d50c0, 3fdf8a8, 5490672): a test stamped deadlines with a frozen FakeClock
+# while a code path read the wall (`Clock()`, `time.time()`), so it failed only when the run was slow. Now no code under
+# test can read the wall: the real Clock's methods and every agentctl module's `time.time` / `time.monotonic`
+# answer from ONE test clock, a FakeClock that starts TEST_CLOCK_LAG s behind the wall ($AGENTCTL_TEST_CLOCK_LAG:
+# the stress run's knob; a slow run's frozen clock reads late, so mixing the test's clock with the default one fails at
+# once on any machine). A test that stamps with its own clock and reads the default one sees them 400 s apart.
+TEST_CLOCK_LAG = float(os.environ.get("AGENTCTL_TEST_CLOCK_LAG") or 400)
+_REAL_TIME = {n: getattr(time, n) for n in ("time", "monotonic", "sleep")}
+DEFAULT_CLOCK = []  # [the current test's default FakeClock]
+WALL_READS = []  # every `time.time()` an agentctl module read straight off the wall: counted, per process
+
+
+def default_clock():
+    """The process-wide default clock of the running test (a fresh lagging FakeClock per test)."""
+    return DEFAULT_CLOCK[0]
+
+
+class _TestTime(types.ModuleType):
+    """What an agentctl module's `time` is under test: the default test clock's time and monotonic, the stdlib's
+    everything else (a real sleep: a wait on a subprocess or thread must really wait)."""
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def time(self):
+        WALL_READS.append("time")
+        return _REAL_TIME["time"]()
+
+    def monotonic(self):
+        return _REAL_TIME["monotonic"]()
+
+
+_TEST_TIME = _TestTime("time")
+
+
+def _install_default_clock():
+    from fake_clock import FakeClock
+    from agentctl.clock import Clock
+    DEFAULT_CLOCK[:] = [FakeClock(_REAL_TIME["time"]() - TEST_CLOCK_LAG)]
+    Clock.time = lambda self: default_clock().time()
+    Clock.monotonic = lambda self: default_clock().monotonic()
+    Clock.sleep = lambda self, secs: default_clock().sleep(secs)
+    for mod in _agentctl_modules():
+        if mod.__dict__.get("time") in (time, _TEST_TIME) and mod.__name__ != "agentctl.clock":
+            mod.time = _TEST_TIME
+
+
 def _reset_process_state():
     """agentctl's process-wide state a test may leave set (a processor run marks the process as the processor; a
     token read caches the token; the registered caches; a wired FakeRunner; main's wiring of a test's clock): every test
-    starts as a fresh, non-processor process with no cached token, empty caches, the real process runner and the
-    import-time wiring (the wall's clock, the process's store)."""
+    starts as a fresh, non-processor process with no cached token, empty caches, the real process runner, a fresh
+    default clock (above) and the import-time wiring (the default clock, the process's store)."""
+    _install_default_clock()
     for mod in _agentctl_modules():
         for name in ("_IN_PROCESSOR", "_NO_VAULT"):
             flag = mod.__dict__.get(name)

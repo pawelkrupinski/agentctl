@@ -6,12 +6,17 @@ import contextlib, io, json, os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 from test_red import RedBase  # noqa: E402
 
 
 class OrphanTest(RedBase):
     def setUp(self):
         super().setUp()
+        # the inbox's verdicts and the store's reads on ONE clock (the wall's reading at the start: the test stamps worktree
+        # and session times from the wall); the default test clock lags it by design
+        self.clock = FakeClock()
+        A.wire_collaborators(self.clock, A.CurrentStore(A.process_store, self.clock.time))
         os.environ["AGENTCTL_ORPHAN_IDLE"] = "0"
         self.saved_o = A.process_cwds, A.reland_worktree
         A.process_cwds = lambda: {}
