@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import time
+from typing import Any
 from contextlib import suppress
 from agentctl.core import HOME, attempt, cherry_landed, env_num, err, git, on_ci_runner, reds_dir, remote, spawn_detached
 from agentctl.timefmt import ts
@@ -85,17 +86,12 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
            "launch_cwd": (resume or {}).get("launch_cwd")}
     if red_is_other(o_r):
         rec["repo"] = o_r
-    write_json(rec_path, rec)
     env = fixer_env(o_r, num)
     if took:
         env["AGENTCTL_LEASE_SECRET"] = took["secret"]
     if extra:
         env["AGENTCTL_LEASE_SECRETS"] = json.dumps({x["name"]: x["secret"] for x in extra})
-    with open(os.path.join(d, "fixer.log"), "a") as logf:
-        p = spawn_detached([sys.executable, TOOL_PATH, "red", "fixer", "--repo", repo, "--record", rec_path],
-                           stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt, env=env)
-    rec.update(pid=p.pid, process_start=process_start(p.pid))
-    write_json(rec_path, rec)
+    p = spawn_fixer(repo, d, rec_path, rec, wt, env)
     if store is not None and lease and took and "epoch" in took:
         # its wrapper, named in the lease from the start: one that dies before its first word is judged at once
         # (red_reap_orphans), its stderr (fixer.log) the why -- never a silent 15-min lapse
@@ -109,6 +105,18 @@ def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=No
     inbox_write("red", f"RED DISPATCHED: {u['workflow']} #{num} [{u.get('job')}] -> fixer session "
                        f"'{fixer_label({**rec, 'run': num})}' (`claude agents`) in {wt.replace(HOME, '~')} ({why})", [], [], 0, cwd=wt)
     return True, line
+
+
+def spawn_fixer(repo: str, d: str, rec_path: str, rec: dict[str, Any], wt: str, env: dict[str, str]) -> Any:
+    """A background `red fixer` in wt for the record at rec_path (written before and, with its pid, after), its
+    stderr and stdout appended to d/fixer.log. The process."""
+    write_json(rec_path, rec)
+    with open(os.path.join(d, "fixer.log"), "a") as logf:
+        p = spawn_detached([sys.executable, TOOL_PATH, "red", "fixer", "--repo", repo, "--record", rec_path],
+                           stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=wt, env=env)
+    rec.update(pid=p.pid, process_start=process_start(p.pid))
+    write_json(rec_path, rec)
+    return p
 
 
 def unlanded_commits(wt):

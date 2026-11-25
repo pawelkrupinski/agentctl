@@ -128,8 +128,6 @@ cognitive	note_precheck	18
 cognitive	notify_escalations	64
 cognitive	open_condition	20
 cognitive	orphan_branches	27
-cognitive	orphan_candidates	37
-cognitive	orphan_duty	101
 cognitive	outside_gate	22
 cognitive	overlap_hold	30
 cognitive	own_change_item	12
@@ -147,7 +145,6 @@ cognitive	plan_worktrees	33
 cognitive	pressure_reading	23
 cognitive	previous_fixer_tree	14
 cognitive	probe_checks	13
-cognitive	probe_orphan_landed	12
 cognitive	probe_red_newer_verdict	12
 cognitive	project_changes	14
 cognitive	project_events	25
@@ -255,7 +252,6 @@ copies	blame|blamerecords	2
 copies	buildview	2
 copies	cireport|redtick	2
 copies	clones|serverclone	2
-copies	fixerland|orphans	2
 copies	redcrash	2
 copies	redpending	7
 copies	store	2
@@ -392,8 +388,6 @@ cyclomatic	note_precheck	11
 cyclomatic	notify_escalations	47
 cyclomatic	open_condition	22
 cyclomatic	orphan_branches	20
-cyclomatic	orphan_candidates	32
-cyclomatic	orphan_duty	53
 cyclomatic	out_of_build_reach	17
 cyclomatic	outside_gate	18
 cyclomatic	overlap_hold	23
@@ -412,7 +406,6 @@ cyclomatic	plan_worktrees	23
 cyclomatic	pressure_reading	18
 cyclomatic	previous_fixer_tree	23
 cyclomatic	probe_checks	14
-cyclomatic	probe_orphan_landed	12
 cyclomatic	probe_red_newer_verdict	13
 cyclomatic	project_changes	11
 cyclomatic	project_events	21
@@ -530,11 +523,10 @@ method-lines	jvm_reap	57
 method-lines	live_registry_read	53
 method-lines	live_stream	51
 method-lines	notify_escalations	85
-method-lines	orphan_duty	113
 method-lines	pick_commits	59
 method-lines	read_build	54
 method-lines	red_claim	62
-method-lines	red_dispatch	64
+method-lines	red_dispatch	59
 method-lines	red_fix_pending	260
 method-lines	red_job_reads	66
 method-lines	red_lease_ended	87

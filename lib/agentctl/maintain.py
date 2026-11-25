@@ -12,19 +12,19 @@ import sys
 import time
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.core import REPOS, env_num, fmt_age, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
+from agentctl.core import REPOS, env_num, fmt_age, state_root
 from agentctl.allowedpaths import allowed_path
 from agentctl.inboxentry import inbox_write
 from agentctl.maint import MAINTAIN_SWEEP_HOUR, cmd_orphans, spotlight_exclude
-from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
 from agentctl.notifier import notify
-from agentctl.upkeep import rotate_logs
 from agentctl.launchd import launch_agents_dir
-from agentctl.orphans import orphan_duty
 from agentctl.beats import beat_age, write_beat
 from agentctl.dispatchblock import shutil_which
+from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
+from agentctl.upkeep import rotate_logs
+from agentctl.orphanpass import orphan_duty
 
 
 IOS_SWEEP_TIMEOUT = 120  # seconds: one `scripts/ios-simulators sweep` (it calls xcrun simctl, which can hang)

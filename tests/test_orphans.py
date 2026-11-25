@@ -420,6 +420,42 @@ class OrphanTest(RedBase):
         self.assertIn("never ran `agentctl land`", c["text"])
         self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), [])
 
+    def test_a_dry_run_lists_each_orphan_and_neither_submits_nor_records_it(self):
+        self.worktree_commit("repo-wt-dry", "dry: nobody landed it")
+        did = A.orphan_duty(A.CurrentStore(A.process_store), self.r.path, dry_run=True)
+        self.assertEqual(did, ["orphan repo-wt-dry: 1 commit(s); last verdict: never landed"])
+        self.assertEqual(self.relands, [])
+        self.assertFalse(os.path.exists(A.recovery_dir("orphans.json")))
+        self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), ["orphan repo-wt-dry: submit (never landed)"])
+
+    def test_an_infra_failed_submit_waits_out_its_backoff_before_it_is_tried_again(self):
+        wt, _sha = self.worktree_commit("repo-wt-backoff", "backoff")
+        self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), ["orphan repo-wt-backoff: submit (never landed)"])
+        A.inbox_write("land", "crashed: StoreUnavailable: POST /v1/store/items: timed out", [], [], 1, cwd=wt, reply=True)
+        self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), [], "inside ORPHAN_INFRA_BACKOFF's first wait")
+        self.assertEqual(self.relands, [wt])
+        self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
+
+    def test_a_submit_the_reland_itself_refused_is_its_verdict(self):
+        wt, _sha = self.worktree_commit("repo-wt-refused", "refused")
+        A.reland_worktree = lambda c, a, st: self.relands.append(a["worktree"]) or "not landed again: its tree is gone"
+        self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), ["orphan repo-wt-refused: submit (never landed)"])
+        self.assertEqual(self.inbox("ORPHAN_SUBMITTED"), [], "a refused submit queued nothing: no alert")
+        self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), ["orphan repo-wt-refused: escalated UNLANDED ORPHAN"])
+        [c] = A.open_conditions(A.CurrentStore(A.process_store))
+        self.assertIn("not landed again: its tree is gone", c["text"])
+
+    def test_a_real_failure_waits_for_a_free_fixer_slot(self):
+        wt, _sha = self.worktree_commit("repo-wt-slot", "slot")
+        os.environ["AGENTCTL_ORPHAN_FIXERS"] = "0"
+        self.addCleanup(os.environ.pop, "AGENTCTL_ORPHAN_FIXERS", None)
+        self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), ["orphan repo-wt-slot: submit (never landed)"])
+        rej = "NOT LANDED: the pre-push checks failed (on ci-runner)"
+        A.inbox_write("land", rej, [], [], 1, cwd=wt)
+        self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path),
+                         [f"orphan repo-wt-slot: a fixer waits for a free slot ({rej[:80]})"])
+        self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [], "waiting for a fixer, not escalated")
+
     def test_a_held_commit_is_never_submitted(self):
         wt = self.r.worktree("repo-wt-held", branch="held")
         self.r.write("gate.txt", "on\n", at=wt)

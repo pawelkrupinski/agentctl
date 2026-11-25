@@ -68,13 +68,14 @@ mypy-errors	live	46
 mypy-errors	livestream	43
 mypy-errors	localrecheck	33
 mypy-errors	maint	35
-mypy-errors	maintain	21
+mypy-errors	maintain	20
 mypy-errors	netwatch	20
 mypy-errors	notifier	26
 mypy-errors	notifyurl	14
 mypy-errors	offerdispatch	19
+mypy-errors	orphanpass	7
 mypy-errors	orphanreap	30
-mypy-errors	orphans	83
+mypy-errors	orphans	17
 mypy-errors	outsideflows	23
 mypy-errors	owned	47
 mypy-errors	owner	24
