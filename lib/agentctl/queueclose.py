@@ -183,6 +183,12 @@ def migrate_local_queue(repo, store):
     return did
 
 
+def _entry_created(i: dict[str, Any]) -> float:
+    """When the change's own queue entry was created (a change item from before `entry_created_at`: its queue age)."""
+    data = i.get("data") or {}
+    return float(data.get("entry_created_at") or data.get("submitted_at") or i.get("entered_at") or 0)
+
+
 def _change_row(i: dict[str, Any]) -> dict[str, Any]:
     """One open change item as its row of `change_rows`."""
     data = i.get("data") or {}
@@ -192,7 +198,7 @@ def _change_row(i: dict[str, Any]) -> dict[str, Any]:
             "kind": kind_text(data.get("change_kind")) or None,
             "resolved": data.get("autoresolved") if i["state"] == "checking" else None,
             "since": float(data.get("submitted_at") or i.get("entered_at") or 0),
-            "created": float(data.get("entry_created_at") or data.get("submitted_at") or i.get("entered_at") or 0)}
+            "created": _entry_created(i)}
 
 
 def change_rows(store: Any) -> list[dict[str, Any]]:

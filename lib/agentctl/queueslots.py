@@ -119,7 +119,7 @@ def change_item_fields(e):
             **({"entry_created_at": created} if created else {})}
 
 
-def entry_created_at(e):
+def entry_created_at(e: dict[str, Any]) -> float | None:
     """When this very entry was created (epoch), whatever place and queue age it inherited; None when it does not read."""
     try:
         return parse_time(e["created"]).timestamp() if e.get("created") else None
@@ -127,7 +127,7 @@ def entry_created_at(e):
         return None
 
 
-def entry_queued_since(e):
+def entry_queued_since(e: dict[str, Any]) -> float | None:
     """When the change was first queued (epoch): `queued_since` (carried over a re-queue that kept its place), else
     its `created`; None when neither reads."""
     if e.get("queued_since"):

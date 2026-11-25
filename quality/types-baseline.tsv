@@ -43,7 +43,7 @@ mypy-errors	fixersession	38
 mypy-errors	forge	51
 mypy-errors	gatesummary	4
 mypy-errors	gating	31
-mypy-errors	generated	22
+mypy-errors	generated	21
 mypy-errors	generatedregen	14
 mypy-errors	ghapp	34
 mypy-errors	gov	42
@@ -100,7 +100,7 @@ mypy-errors	queueenter	77
 mypy-errors	queuefailure	5
 mypy-errors	queuepush	69
 mypy-errors	queuerecheck	45
-mypy-errors	queueslots	25
+mypy-errors	queueslots	23
 mypy-errors	queuesubmit	36
 mypy-errors	queueuntil	12
 mypy-errors	recordingpins	23
@@ -114,7 +114,7 @@ mypy-errors	redcommands	13
 mypy-errors	redcrash	48
 mypy-errors	reddispatch	34
 mypy-errors	redearly	8
-mypy-errors	redfamilies	10
+mypy-errors	redfamilies	9
 mypy-errors	redfixcheck	18
 mypy-errors	redfixes	38
 mypy-errors	redfixread	8
@@ -128,8 +128,8 @@ mypy-errors	redpending	36
 mypy-errors	redprobe	23
 mypy-errors	redquota	9
 mypy-errors	redrecord	4
-mypy-errors	redreplay	17
-mypy-errors	redrepos	11
+mypy-errors	redreplay	16
+mypy-errors	redrepos	8
 mypy-errors	redretired	49
 mypy-errors	redseen	50
 mypy-errors	redstatus	5
@@ -144,12 +144,12 @@ mypy-errors	redworkflow	4
 mypy-errors	remote	45
 mypy-errors	remotejobs	18
 mypy-errors	remotestore	26
-mypy-errors	repos	29
+mypy-errors	repos	26
 mypy-errors	reverts	46
 mypy-errors	rundispatch	10
 mypy-errors	runexplain	17
 mypy-errors	runsigs	14
-mypy-errors	server	61
+mypy-errors	server	60
 mypy-errors	serverclone	36
 mypy-errors	serversteps	27
 mypy-errors	sessionpaths	14

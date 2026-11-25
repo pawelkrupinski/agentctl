@@ -78,7 +78,7 @@ def red_repos_parse(raw):
         out.append({"repo": repo, "gate": [tuple(g) for g in gate], "family": x.get("family"), "push": push,
                     "clone": os.path.expanduser(clone) if clone else None,
                     "generated": generated_parse(repo, x.get("generated")), "red_workflows": keeps,
-                    "signed": signed, "note": x.get("note") or None})
+                    "signed": signed, "note": x.get("note")})
     if len({c["repo"] for c in out}) != len(out):
         raise ValueError("a repo is listed twice")
     if not any(c["repo"] == RED_PRIMARY for c in out):
@@ -173,7 +173,7 @@ def red_repos():
     return repos
 
 
-def red_repo_conf(o_r):
+def red_repo_conf(o_r: str) -> Optional[Dict[str, Any]]:
     return next((c for c in red_repos() if c["repo"] == o_r), None)
 
 
