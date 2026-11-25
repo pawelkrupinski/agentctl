@@ -1734,8 +1734,7 @@ class BackgroundSessionTest(RedsBase):
             self.assertTrue(self.wait(lambda: rec().get("transcript")))
             [s] = self.sessions()
             self.assertEqual((s["name"], s["state"]), ("red fixer #20 · main test (rest)", "working"))
-            # the record names the session before the wrapper's next renewal sends the meta to the lease (adopt_transcript
-            # sets meta_due; AGENTCTL_RED_RENEW apart), so wait for the lease to carry it: 2026-11-25 run 45702726773 read None
+            # the wrapper sends the lease its meta before the record names the session (the test just below)
             self.assertTrue(self.wait(lambda: A.lease_meta(self.st.get(name)).get("session") == s["sessionId"]))  # a resume goes back to it
             argv = json.load(open(os.path.join(os.environ["FAKE_CLAUDE_OUT"], f"{s['id']}.json")))["argv"]
             self.assertNotIn("-p", argv)
@@ -1752,6 +1751,29 @@ class BackgroundSessionTest(RedsBase):
         finally:
             os.environ.update(FAKE_CLAUDE_SLEEP="0")
             os.environ.pop("AGENTCTL_RED_RENEW", None)
+
+    def test_the_record_never_names_the_session_before_its_lease_carries_it(self):
+        # 2026-11-25 run 45702726773: a reader that saw the record's session found the lease's meta session None, the
+        # meta going out at the wrapper's next step. The wrapper sends the meta first: at the moment the lease takes it,
+        # the record on disk does not name the session yet; and once the record does, the lease carries it.
+        path = os.path.join(self.tmp.name, "fixer.json")
+        A.write_json(path, {"run": 20, "workflow": "Main", "worktree": self.tmp.name, "log": "l", "kind": "test"})
+        seen = []
+
+        class Spy:
+            def set_meta(spy, name, epoch, secret, meta):
+                seen.append((A.read_record(path).get("session"), meta.get("session")))
+
+        w = A.RedFixerWrapper(types.SimpleNamespace(record=path), Spy())
+        w.held, w.meta, w.bid = [types.SimpleNamespace(triple=lambda: ("n", 1, "s"))], {}, "b"
+        saved = A.bg_transcript
+        A.bg_transcript = lambda sid: "/t.jsonl"
+        try:
+            w.adopt_transcript({"sessionId": "sess-1"})
+        finally:
+            A.bg_transcript = saved
+        self.assertEqual(seen, [(None, "sess-1")])  # the lease took it while the record still named nothing
+        self.assertEqual((A.read_record(path)["session"], w.meta_due), ("sess-1", False))
 
     def test_the_verdict_is_the_sessions_final_answer_and_the_session_is_left_listed(self):
         os.environ["FAKE_CLAUDE_RESULT"] = "GAVE UP: cannot reproduce"

@@ -316,14 +316,16 @@ class RedFixerWrapper:
         rec = self.rec
         if not (ent and ent.get("sessionId") and not rec.get("transcript")):
             return
-        rec.update(session=ent["sessionId"], transcript=bg_transcript(ent["sessionId"]))
-        self.save()
-        bind_fixer_session(rec["session"], self.a.record)
-        if rec["transcript"]:
-            rec["log"] = rec["transcript"]
-        self.meta.update(session=rec["session"], log=rec["log"], bg_id=self.bid)
+        session, transcript = ent["sessionId"], bg_transcript(ent["sessionId"])
+        # the lease's meta first, the record after: a record that names the session means the lease carries it too
+        # (2026-11-25 run 45702726773: a reader of the record found the lease's session None)
+        self.meta.update(session=session, log=transcript or rec["log"], bg_id=self.bid)
         self.meta_due = not fixer_meta_sent(self.st, self.leases(), self.meta)
+        rec.update(session=session, transcript=transcript)
+        if transcript:
+            rec["log"] = transcript
         self.save()
+        bind_fixer_session(session, self.a.record)
 
     def unclaimed_stop(self, ent: Any) -> Any:
         """NEVER CLAIMED (2026-10-31): a session that in claim_within neither started its transcript nor ran its first
