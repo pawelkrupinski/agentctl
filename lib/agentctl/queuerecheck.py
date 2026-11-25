@@ -57,6 +57,46 @@ def out_of_build_reach(tree, tip, paths):
     return r.returncode == 1  # 0: the build names one of them (it may read it); else unreadable
 
 
+def _build_view_moves(tree: Any, tip: Any, full_tip: Any, change_paths: Any, builds: Any, new: Any) -> Any:
+    """How the build file's change moves the check the change passed, when its selection does not: a script, workflow or
+    test reading the build file by name (production code names it in comments only), else the build's view moving -- unless
+    the change is out of the build's reach."""
+    named = named_reader(tree, tip, builds, [p for p in change_paths if "/src/main/" not in p])
+    if named:
+        return f"{named[1]} names {named[0]}"
+    return None if out_of_build_reach(tree, tip, change_paths) else build_view_change(tree, full_tip, tip, change_paths, new)
+
+
+def _build_file_reason(tree: Any, tip: Any, full_tip: Any, change_paths: Any, build: Any) -> str | None:
+    """Why the build files main changed (`build`) force the change to be checked fully again -- they move what the change's
+    paths select, or what the build file's view of them is -- or None."""
+    builds = [p for p in build if BUILD_VIEW_PATHS.match(p)]
+    new = selection_at(tree, tip, tip, change_paths) if builds else None
+    moves = selection_change(tree, full_tip, tip, change_paths, new=new)
+    if not moves and builds:
+        moves = _build_view_moves(tree, tip, full_tip, change_paths, builds, new)
+    return f"they change {(builds or build)[0]}, and {moves}" if moves else None
+
+
+def _both_touch(tree: Any, landed_paths: Any, change_paths: Any) -> str | None:
+    """The files both sides changed (a regenerated one aside: the ratchet judges it), in words, or None."""
+    same = without_generated(tree, sorted(set(landed_paths) & set(change_paths)))
+    if not same:
+        return None
+    return f"both touch {same[0]}" + (f" (+{len(same) - 1} more)" if len(same) > 1 else "")
+
+
+def _deleted_read(tree: Any, base: Any, moved: Any, tip: Any, landed_paths: Any, change_paths: Any) -> str | None:
+    """A file one side deletes that the other side's files still name, in words, or None."""
+    sides = ((range_paths(tree, base, moved, deleted=True), change_paths, "they delete"),
+             (range_paths(tree, moved, tip, deleted=True), landed_paths, "it deletes"))
+    for deleted, readers, whose in sides:
+        hit = named_reader(tree, tip, deleted, readers)
+        if hit:
+            return f"{whose} {hit[0]}, which {hit[1]} names"
+    return None
+
+
 def recheck_reason(tree, base, moved, tip, change_paths, full_tip=None):
     """(commits main moved by, why the change must be FULLY checked again or None) -- THE RULE (queue.py), of what landed in
     base..moved against the change's paths (moved..tip, the rebased change; tree checked out at tip). full_tip: the tip
@@ -67,27 +107,8 @@ def recheck_reason(tree, base, moved, tip, change_paths, full_tip=None):
     other = [p for p in build if p not in SELECTION_PATHS and not BUILD_VIEW_PATHS.match(p)]
     if other:
         return n, f"they change {other[0]}"
-    if build:
-        builds = [p for p in build if BUILD_VIEW_PATHS.match(p)]
-        new = selection_at(tree, tip, tip, change_paths) if builds else None
-        moves = selection_change(tree, full_tip, tip, change_paths, new=new)
-        if not moves and builds:
-            # a script, workflow or test reading the build file by name (production code names it in comments only)
-            named = named_reader(tree, tip, builds, [p for p in change_paths if "/src/main/" not in p])
-            moves = f"{named[1]} names {named[0]}" if named else \
-                (None if out_of_build_reach(tree, tip, change_paths) else
-                 build_view_change(tree, full_tip, tip, change_paths, new))
-        if moves:
-            return n, f"they change {(builds or build)[0]}, and {moves}"
-    same = without_generated(tree, sorted(set(landed_paths) & set(change_paths)))  # regenerated: the ratchet judges
-    if same:
-        return n, f"both touch {same[0]}" + (f" (+{len(same) - 1} more)" if len(same) > 1 else "")
-    for deleted, readers, whose in ((range_paths(tree, base, moved, deleted=True), change_paths, "they delete"),
-                                    (range_paths(tree, moved, tip, deleted=True), landed_paths, "it deletes")):
-        hit = named_reader(tree, tip, deleted, readers)
-        if hit:
-            return n, f"{whose} {hit[0]}, which {hit[1]} names"
-    return n, None
+    why = _build_file_reason(tree, tip, full_tip, change_paths, build) if build else None
+    return n, why or _both_touch(tree, landed_paths, change_paths) or _deleted_read(tree, base, moved, tip, landed_paths, change_paths)
 
 
 # MINIMAL RECHECKS (the owner, 2026-11-20: "batch those as well ... so that rechecks are kept to a minimum"; that
@@ -201,6 +222,65 @@ def check_reads(hook, tree, mode, paths, standing, per_file):
     return set(out)
 
 
+def _reads_main(mode: str, both: Any) -> str | None:
+    """`both`, the checks both sides select by mode, in words (at most three named), or None when there are none."""
+    both = sorted(both)
+    if not both:
+        return None
+    return (f"its {mode.lstrip('-')} reads what main changed: {', '.join(both[:3])}"
+            + (f" (+{len(both) - 3} more)" if len(both) > 3 else ""))
+
+
+class OverlapRead:
+    """What the two sides' checks read, mode by mode (read_overlap's rounds): a method per kind of read -- the hook's own
+    plans (`read_plans`), the compile plan, and the checks of any other mode."""
+
+    def __init__(self, hook: Any, tree: Any, modes: Any, change_paths: Any, landed_paths: Any) -> None:
+        self.hook, self.tree, self.modes = hook, tree, modes
+        self.change_paths, self.landed_paths = change_paths, landed_paths
+        self.standing: set[str] = set()
+        self.per_file: frozenset[str] = frozenset()
+        self.per_file_mode = False
+
+    def read_plans(self) -> str | None:
+        """The standing lint rows, the checks that judge each file alone, and whether the hook names per-file lints; why
+        the lint plan cannot be read, or None."""
+        modes = self.modes
+        if "--lint-plan" in modes:
+            standing = hook_query(self.hook, self.tree, "--lint-plan", [])
+            if standing is None:
+                return "its lint plan cannot be read"
+            self.standing = set(standing)
+        # a hook that cannot say what its whole-tree ratchets read: its `sbt` check is one check both sides may share
+        self.per_file = PER_FILE_CHECKS | ({"sbt"} if all(m in modes for m in WHOLE_TREE_MODES) else set()) \
+            | ({SCRIPT_TESTS_CHECK} if SCRIPT_TEST_MODE in modes else set())
+        self.per_file_mode = PER_FILE_MODE in hook_text_modes(self.hook)
+        return None
+
+    def overlap(self, mode: str) -> str | None:
+        """Why the change's checks of this mode must run again, or None."""
+        return self.compile_overlap() if mode == "--compile-plan" else self.check_overlap(mode)
+
+    def compile_overlap(self) -> str | None:
+        both = compile_meets(self.hook, self.tree, self.change_paths, self.landed_paths)
+        if both is None:
+            return "its compile-plan cannot be read"
+        return _reads_main("--compile-plan", both)
+
+    def check_overlap(self, mode: str) -> str | None:
+        mine = check_reads(self.hook, self.tree, mode, self.change_paths, self.standing, self.per_file)
+        theirs = check_reads(self.hook, self.tree, mode, self.landed_paths, self.standing, self.per_file) if mine else set()
+        if mine is None or theirs is None:
+            return f"its {mode.lstrip('-')} cannot be read"
+        both = mine & theirs
+        if mode == "--lint-plan" and both and self.per_file_mode:
+            alone = [hook_query(self.hook, self.tree, PER_FILE_MODE, ps) for ps in (self.change_paths, self.landed_paths)]
+            if None in alone:
+                return f"its {PER_FILE_MODE.lstrip('-')} cannot be read"
+            both -= set(alone[0]) & set(alone[1])  # PER-FILE LINTS: judged alone, a spec meets both sides only by a shared file or its code
+        return _reads_main(mode, both)
+
+
 def read_overlap(tree, landed_paths, change_paths):
     """Why the change's checks must run again over what main changed meanwhile (landed_paths): a check both sides'
     paths select, in words -- or None when none is (its verdict is kept). MINIMAL RECHECKS, above; tree is checked out
@@ -211,41 +291,14 @@ def read_overlap(tree, landed_paths, change_paths):
         return "the hook has no plan saying what its checks read"
     if not landed_paths or not change_paths:
         return None
-    standing = set()
-    if "--lint-plan" in modes:
-        standing = hook_query(hook, tree, "--lint-plan", [])
-        if standing is None:
-            return "its lint plan cannot be read"
-        standing = set(standing)
-    # a hook that cannot say what its whole-tree ratchets read: its `sbt` check is one check both sides may share
-    per_file = PER_FILE_CHECKS | ({"sbt"} if all(m in modes for m in WHOLE_TREE_MODES) else set()) \
-        | ({SCRIPT_TESTS_CHECK} if SCRIPT_TEST_MODE in modes else set())
-    per_file_mode = PER_FILE_MODE in hook_text_modes(hook)
+    reading = OverlapRead(hook, tree, modes, change_paths, landed_paths)
+    unreadable = reading.read_plans()
+    if unreadable:
+        return unreadable
     for mode in modes:
-        if mode == "--compile-plan":
-            both = compile_meets(hook, tree, change_paths, landed_paths)
-            if both is None:
-                return "its compile-plan cannot be read"
-            if both:
-                return (f"its compile-plan reads what main changed: {', '.join(sorted(both)[:3])}"
-                        + (f" (+{len(both) - 3} more)" if len(both) > 3 else ""))
-            continue
-        mine = check_reads(hook, tree, mode, change_paths, standing, per_file)
-        theirs = check_reads(hook, tree, mode, landed_paths, standing, per_file) if mine else set()
-        if mine is None or theirs is None:
-            return f"its {mode.lstrip('-')} cannot be read"
-        both = mine & theirs
-        if mode == "--lint-plan" and both and per_file_mode:
-            # PER-FILE LINTS: a spec judging each file alone meets both sides only through a file both change (THE
-            # RULE's full round) or its own code; one both sides select by what it reads alone is no overlap
-            alone = [hook_query(hook, tree, PER_FILE_MODE, ps) for ps in (change_paths, landed_paths)]
-            if None in alone:
-                return f"its {PER_FILE_MODE.lstrip('-')} cannot be read"
-            both -= set(alone[0]) & set(alone[1])
-        both = sorted(both)
-        if both:
-            return (f"its {mode.lstrip('-')} reads what main changed: {', '.join(both[:3])}"
-                    + (f" (+{len(both) - 3} more)" if len(both) > 3 else ""))
+        why = reading.overlap(mode)
+        if why:
+            return why
     return None
 
 
