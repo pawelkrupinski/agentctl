@@ -82,10 +82,15 @@ class AmFixerTest(NoFixerBase):
 
 class PreCommitHookTest(unittest.TestCase):
     def setUp(self):
-        self.repo = tempfile.mkdtemp()
-        subprocess.run(["git", "init", "-q", self.repo], check=True)
-        subprocess.run(["git", "-C", self.repo, "config", "core.hooksPath", os.path.dirname(os.path.abspath(HOOK))],
-                       check=True)
+        # commits are made in a linked worktree: the hook refuses any commit in the main checkout
+        main = tempfile.mkdtemp()
+        self.repo = os.path.join(main, "wt")
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+               "GIT_COMMITTER_EMAIL": "t@t"}
+        for args in (["init", "-q", main], ["-C", main, "commit", "-q", "--allow-empty", "-m", "base"],
+                     ["-C", main, "worktree", "add", "-q", "-b", "x", self.repo],
+                     ["-C", main, "config", "core.hooksPath", os.path.dirname(os.path.abspath(HOOK))]):
+            subprocess.run(["git", *args], check=True, env=env)
 
     def commit(self, tool, **env):
         e = {k: v for k, v in os.environ.items() if k not in FIXER_ENV}
