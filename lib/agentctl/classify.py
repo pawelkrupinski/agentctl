@@ -360,40 +360,81 @@ def _test_line(lines: list[str]) -> bool:
     return any(RUNNER_FAILED.search(l) for l in lines)
 
 
-def classify_job(job, lines, raw=(0, []), timed_out=False):
+def classify_job(job: Any, lines: Any, raw: Any = (0, []), timed_out: Any = False) -> Any:
     """('infra'|'unclear'|'test', why) for one failed job, from its steps, relevant log lines and raw (count, tail).
     timed_out: a step of it ran past its own timeout-minutes -- the row's work outgrew its bound, a code/config red
     (`TIMEOUT`), never infra: a rerun meets the same bound."""
-    bad = [s for s in job.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
-    step = bad[0]["name"] if bad else None
-    if timed_out and not _test_line(lines):
-        return "test", (f"TIMEOUT: step '{step}' ran past its timeout-minutes" if step else "TIMEOUT: a step ran past its timeout-minutes") + \
+    return JobVerdict(job, lines, raw, timed_out).verdict()
+
+
+class JobVerdict:
+    """The verdict on one failed job: the first of the rules below that holds, in the order of the module's header --
+    the failing step's role first, then what its log says, a test failure when nothing else does."""
+
+    def __init__(self, job: Any, lines: Any, raw: Any, timed_out: Any) -> None:
+        bad = [s for s in job.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
+        self.step = bad[0]["name"] if bad else None
+        self.lines, self.raw, self.timed_out = lines, raw, timed_out
+        self.test_line = _test_line(lines)
+
+    def verdict(self) -> Any:
+        for rule in (self.timeout, self.credentials, self.setup, self.empty_log, self.unknown, self.key_refused, self.infra_line,
+                     self.unclear):
+            found = rule()
+            if found:
+                return found
+        return "test", f"failed step '{self.step}'" if self.step else "test failure"
+
+    def timeout(self) -> Any:
+        if not self.timed_out or self.test_line:
+            return None
+        return "test", (f"TIMEOUT: step '{self.step}' ran past its timeout-minutes" if self.step else "TIMEOUT: a step ran past its timeout-minutes") + \
             " (bounded-step.sh reaped what it left): its work outgrew its bound -- shorten the work or let it stop itself, never rerun"
-    if step and CREDENTIAL_STEP.search(step):
-        said = next((l for l in lines if "##[error]" in l or "::error" in l), "")
-        return "infra", (f"KEY REFUSED, step '{step}' could not mint the run's credentials (credentials or an external "
+
+    def credentials(self) -> Any:
+        if not (self.step and CREDENTIAL_STEP.search(self.step)):
+            return None
+        said = next((l for l in self.lines if "##[error]" in l or "::error" in l), "")
+        return "infra", (f"KEY REFUSED, step '{self.step}' could not mint the run's credentials (credentials or an external "
                          f"account's scope: the owner's, not a code red)" + (f": {said.strip()[:160]}" if said else ""))
-    if step and SETUP_STEP.search(step):
-        return "infra", f"failed in setup step '{step}' (often a `needs:` cascade or runner/setup trouble)"
-    if not raw[0] and not lines:
-        return "infra", "0-length log" + (f" (step '{step}')" if step else "")
-    unknown = next((l for l in lines if UNKNOWN_LOG.search(l)), None)
-    if unknown and not _test_line(lines):
-        return "infra", f"UNKNOWN, an outside dependency unreachable (not a code red): {unknown.strip()[:160]}"
-    refused = next((l for l in lines if KEY_REFUSED_LOG.search(l)), None)
-    if refused and not _test_line(lines):
+
+    def setup(self) -> Any:
+        if self.step and SETUP_STEP.search(self.step):
+            return "infra", f"failed in setup step '{self.step}' (often a `needs:` cascade or runner/setup trouble)"
+        return None
+
+    def empty_log(self) -> Any:
+        if not self.raw[0] and not self.lines:
+            return "infra", "0-length log" + (f" (step '{self.step}')" if self.step else "")
+        return None
+
+    def unknown(self) -> Any:
+        unknown = next((l for l in self.lines if UNKNOWN_LOG.search(l)), None)
+        if unknown and not self.test_line:
+            return "infra", f"UNKNOWN, an outside dependency unreachable (not a code red): {unknown.strip()[:160]}"
+        return None
+
+    def key_refused(self) -> Any:
+        refused = next((l for l in self.lines if KEY_REFUSED_LOG.search(l)), None)
+        if not refused or self.test_line:
+            return None
         if QUOTA_LOG.search(refused):
             return "infra", ("QUOTA SPENT, an outside service's quota for the run's key is used up; it resets on its "
                              f"own (an external wait, not the owner's, not a code red): {refused.strip()[:160]}")
         return "infra", ("KEY REFUSED, an outside service refused the run's key (credentials: the owner's, not a code "
                          f"red): {refused.strip()[:160]}")
-    hit = next((l for l in lines if INFRA_LOG.search(l)), None)
-    if hit and not _test_line(lines):
-        return "infra", f"infra-shaped log line: {hit[:120]}"
-    if not lines:
-        tail = " | ".join(raw[1])
-        return "unclear", f"{raw[0]}-line log with no FAILED/error/assert line (truncated? runner lost?) in step '{step}'; ends: {tail}"
-    return "test", f"failed step '{step}'" if step else "test failure"
+
+    def infra_line(self) -> Any:
+        hit = next((l for l in self.lines if INFRA_LOG.search(l)), None)
+        if hit and not self.test_line:
+            return "infra", f"infra-shaped log line: {hit[:120]}"
+        return None
+
+    def unclear(self) -> Any:
+        if self.lines:
+            return None
+        return "unclear", (f"{self.raw[0]}-line log with no FAILED/error/assert line (truncated? runner lost?) in step "
+                           f"'{self.step}'; ends: {' | '.join(self.raw[1])}")
 
 
 # ---------------------------------------------------------------- wait
