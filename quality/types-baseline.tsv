@@ -14,7 +14,7 @@ mypy-errors	batchtick	45
 mypy-errors	beats	4
 mypy-errors	blame	43
 mypy-errors	blameopen	11
-mypy-errors	blamerecords	24
+mypy-errors	blamerecords	20
 mypy-errors	branches	69
 mypy-errors	buildview	14
 mypy-errors	changekind	24
@@ -47,8 +47,8 @@ mypy-errors	generatedregen	14
 mypy-errors	ghapp	34
 mypy-errors	gov	42
 mypy-errors	govbudget	12
-mypy-errors	govcmd	31
-mypy-errors	govroute	18
+mypy-errors	govcmd	30
+mypy-errors	govroute	10
 mypy-errors	govusage	6
 mypy-errors	identitychange	11
 mypy-errors	inbox	17
@@ -77,7 +77,7 @@ mypy-errors	orphanpass	7
 mypy-errors	orphanreap	30
 mypy-errors	orphans	17
 mypy-errors	outsideflows	20
-mypy-errors	owned	47
+mypy-errors	owned	44
 mypy-errors	owner	24
 mypy-errors	ownerleases	24
 mypy-errors	owners	3
@@ -107,7 +107,7 @@ mypy-errors	recovery	52
 mypy-errors	red	48
 mypy-errors	redask	18
 mypy-errors	redauthors	12
-mypy-errors	redblock	23
+mypy-errors	redblock	18
 mypy-errors	redclaim	16
 mypy-errors	redcommands	13
 mypy-errors	redcrash	48
@@ -133,9 +133,9 @@ mypy-errors	redretired	49
 mypy-errors	redseen	50
 mypy-errors	redstatus	5
 mypy-errors	redstep	37
-mypy-errors	redtick	81
+mypy-errors	redtick	80
 mypy-errors	reduntracked	42
-mypy-errors	redvault	24
+mypy-errors	redvault	23
 mypy-errors	redverify	19
 mypy-errors	redview	25
 mypy-errors	redwaits	8

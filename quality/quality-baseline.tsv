@@ -13,12 +13,8 @@ cognitive	apply_entry	20
 cognitive	assemble	24
 cognitive	batch_check	19
 cognitive	bg_spent	16
-cognitive	blame_land_refusal	30
 cognitive	blame_open	24
-cognitive	blame_records	35
 cognitive	blame_step	26
-cognitive	blame_withdraw	16
-cognitive	block_invalid	36
 cognitive	classify_change	33
 cognitive	close_condition	19
 cognitive	close_landed_changes	19
@@ -39,14 +35,13 @@ cognitive	gate_runs_pass	17
 cognitive	gating_checks	29
 cognitive	generated_parse	16
 cognitive	gov_fits	20
-cognitive	gov_replay	27
 cognitive	hold_for_overlap	21
 cognitive	job_ever_green	21
 cognitive	land_calls	19
 cognitive	land_status_entry	25
 cognitive	land_until_done	28
 cognitive	lander_records	19
-cognitive	lander_revive	26
+cognitive	lander_revive	25
 cognitive	lander_transcript	32
 cognitive	lap_change_deadline	15
 cognitive	laptop_role	15
@@ -59,7 +54,6 @@ cognitive	open_condition	20
 cognitive	orphan_branches	27
 cognitive	outside_gate	22
 cognitive	overlap_hold	30
-cognitive	owner_cmd_unsafe	36
 cognitive	owner_of	25
 cognitive	owner_orphans	22
 cognitive	owner_work	21
@@ -67,8 +61,6 @@ cognitive	park_duty	28
 cognitive	park_release_why	18
 cognitive	pressure_reading	23
 cognitive	project_changes	14
-cognitive	read_overlap	38
-cognitive	recheck_reason	24
 cognitive	reconcile_alerts	26
 cognitive	recovery_tick	26
 cognitive	red_attach_obs	17
@@ -80,7 +72,6 @@ cognitive	red_flake_check	15
 cognitive	red_joined_idle	18
 cognitive	red_main_verify	14
 cognitive	red_offer	17
-cognitive	red_renew_blocks	26
 cognitive	red_repos_parse	26
 cognitive	red_spawn	28
 cognitive	red_unheld	19
@@ -99,8 +90,6 @@ cognitive	sync_onto_main	18
 cognitive	sync_steps	11
 cognitive	token	34
 cognitive	transcript_paths	26
-cognitive	tunnel_watch	32
-cognitive	wait_all	41
 cognitive	with_inbox	25
 cognitive	workflow_jobs	26
 cognitive	workflow_timeout_bound	22
@@ -123,12 +112,8 @@ cyclomatic	apply_entry	31
 cyclomatic	assemble	15
 cyclomatic	batch_check	17
 cyclomatic	bg_spent	15
-cyclomatic	blame_land_refusal	15
 cyclomatic	blame_open	29
-cyclomatic	blame_records	29
 cyclomatic	blame_step	19
-cyclomatic	blame_withdraw	18
-cyclomatic	block_invalid	30
 cyclomatic	build_view_change	15
 cyclomatic	classify_change	22
 cyclomatic	close_condition	15
@@ -150,7 +135,6 @@ cyclomatic	gate_runs_pass	21
 cyclomatic	gating_checks	21
 cyclomatic	generated_parse	17
 cyclomatic	gov_fits	21
-cyclomatic	gov_replay	39
 cyclomatic	hold_for_overlap	14
 cyclomatic	job_ever_green	20
 cyclomatic	jobs_verdict	23
@@ -158,7 +142,7 @@ cyclomatic	land_calls	12
 cyclomatic	land_status_entry	25
 cyclomatic	land_until_done	25
 cyclomatic	lander_records	15
-cyclomatic	lander_revive	26
+cyclomatic	lander_revive	25
 cyclomatic	lander_transcript	23
 cyclomatic	lap_change_deadline	17
 cyclomatic	laptop_role	17
@@ -171,7 +155,6 @@ cyclomatic	open_condition	22
 cyclomatic	orphan_branches	20
 cyclomatic	outside_gate	18
 cyclomatic	overlap_hold	23
-cyclomatic	owner_cmd_unsafe	32
 cyclomatic	owner_of	21
 cyclomatic	owner_orphans	13
 cyclomatic	owner_work	19
@@ -179,8 +162,6 @@ cyclomatic	park_duty	20
 cyclomatic	park_release_why	14
 cyclomatic	pressure_reading	18
 cyclomatic	project_changes	11
-cyclomatic	read_overlap	25
-cyclomatic	recheck_reason	23
 cyclomatic	reconcile_alerts	22
 cyclomatic	recovery_tick	17
 cyclomatic	red_attach_obs	18
@@ -194,7 +175,6 @@ cyclomatic	red_flake_check	17
 cyclomatic	red_joined_idle	18
 cyclomatic	red_main_verify	20
 cyclomatic	red_offer	19
-cyclomatic	red_renew_blocks	25
 cyclomatic	red_repos_parse	26
 cyclomatic	red_spawn	25
 cyclomatic	red_unheld	15
@@ -212,8 +192,6 @@ cyclomatic	sweep_land_refs	17
 cyclomatic	sync_onto_main	16
 cyclomatic	token	16
 cyclomatic	transcript_paths	19
-cyclomatic	tunnel_watch	30
-cyclomatic	wait_all	26
 cyclomatic	with_inbox	26
 cyclomatic	workflow_jobs	19
 cyclomatic	workflow_timeout_bound	21
