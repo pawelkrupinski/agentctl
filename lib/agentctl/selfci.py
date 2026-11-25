@@ -77,28 +77,51 @@ def cached(path: str, now_: float, read: Callable[[], Any], every: float) -> Any
     return value
 
 
-def inv_wa(clock, st, runs: Callable[[], Any] | None = None, pin: Callable[[], str | None] | None = None,
-           behind: Callable[[str], int | None] | None = None):
+def red_problem(runs: list[dict[str, Any]], now_: float) -> tuple[str | None, float | None]:
+    """(what is wrong, how long the streak has been red) of tests.yml's runs: wrong only past WA_RED_MAX."""
+    red = red_since(runs)
+    if not red:
+        return None, None
+    age = now_ - red[0]
+    if age <= env_num("AGENTCTL_WA_RED_MAX", WA_RED_MAX):
+        return None, age
+    return (f"agentctl's tests.yml has been red on main for {fmt_age(age)} (run #{red[1].get('number')} "
+            f"{red[1].get('conclusion')} at {str(red[1].get('headSha'))[:7]}): ci-runner's auto-pin holds on a red run, "
+            f"so no agentctl commit since is deployed"), age
+
+
+def pin_problem(pin_rev: str | None, lag: int | None) -> str | None:
+    if pin_rev and lag is not None and lag > env_num("AGENTCTL_WA_BEHIND_MAX", WA_BEHIND_MAX):
+        return f"ci-runner's pin {pin_rev[:7]} is {lag} commits behind origin/main"
+    return None
+
+
+def readings(now_: float, runs: Callable[[], Any] | None, pin: Callable[[], str | None] | None) -> tuple[Any, str | None]:
+    """(tests.yml's runs, the pin's rev), each kept WA_READ_EVERY seconds."""
+    every = env_num("AGENTCTL_WA_READ_EVERY", WA_READ_EVERY)
+    return (cached(state_root("selfci-runs.json"), now_, runs or read_runs, every),
+            cached(state_root("selfci-pin.json"), now_, pin or read_pin, every))
+
+
+def holding_words(red_age: float | None, pin_rev: str | None, lag: int | None) -> str:
+    ci = f"red for {fmt_age(red_age)}" if red_age else "green"
+    behind = f", {lag} behind main" if lag is not None else ""
+    return f"agentctl's CI is {ci}; ci-runner's pin {(pin_rev or 'unread')[:7]}{behind}"
+
+
+def inv_wa(clock: Any, st: Any, runs: Callable[[], Any] | None = None, pin: Callable[[], str | None] | None = None,
+           behind: Callable[[str], int | None] | None = None) -> tuple[bool | None, str]:
     """WA: agentctl's own main CI has not been red past WA_RED_MAX, and ci-runner's pin trails origin/main by at most
     WA_BEHIND_MAX commits. Read from the laptop (ci-runner reads itself through its auto-pin)."""
     if host_role() == "server":
         return True, "the laptop watches agentctl's CI"
     now_ = clock.time()
-    every = env_num("AGENTCTL_WA_READ_EVERY", WA_READ_EVERY)
-    runs_now = cached(state_root("selfci-runs.json"), now_, runs or read_runs, every)
-    pin_rev = cached(state_root("selfci-pin.json"), now_, pin or read_pin, every)
+    runs_now, pin_rev = readings(now_, runs, pin)
     if runs_now is None:
         return None, f"cannot read {SELF_REPO}'s tests.yml runs"
-    problems = []
-    red = red_since(runs_now)
-    if red and now_ - red[0] > env_num("AGENTCTL_WA_RED_MAX", WA_RED_MAX):
-        problems.append(f"agentctl's tests.yml has been red on main for {fmt_age(now_ - red[0])} (run #{red[1].get('number')} "
-                        f"{red[1].get('conclusion')} at {str(red[1].get('headSha'))[:7]}): ci-runner's auto-pin holds on a red run, "
-                        f"so no agentctl commit since is deployed")
+    red_words, red_age = red_problem(runs_now, now_)
     lag = (behind or commits_behind)(pin_rev) if pin_rev else None
-    if lag is not None and lag > env_num("AGENTCTL_WA_BEHIND_MAX", WA_BEHIND_MAX):
-        problems.append(f"ci-runner's pin {pin_rev[:7]} is {lag} commits behind origin/main")
+    problems = [p for p in (red_words, pin_problem(pin_rev, lag)) if p]
     if problems:
         return False, "; ".join(problems)
-    return True, (f"agentctl's CI is {'red for ' + fmt_age(now_ - red[0]) if red else 'green'}; ci-runner's pin "
-                  f"{pin_rev[:7] if pin_rev else 'unread'}" + (f", {lag} behind main" if lag is not None else ""))
+    return True, holding_words(red_age, pin_rev, lag)

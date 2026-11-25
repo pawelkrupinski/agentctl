@@ -409,7 +409,7 @@ def forge_release_asset(o_r, tag, name):
     return r.stdout
 
 
-def gh_json(o_r, *args):
+def gh_json(o_r: str, *args: str) -> Any:
     """A JSON read through gh (lib/agentctl/forge.py). A `run list` is answered from the REST API with conditional
     GETs instead (forge_run_list), when it can be, and so is a bare `api repos/<o_r>/...` read."""
     listed = forge_run_list(o_r, args) if args[:2] == ("run", "list") else None

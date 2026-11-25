@@ -42,7 +42,7 @@ LAND_BRIEF = (" `~/bin/agentctl land` QUEUES your fix like every change (red fix
 
 # THE agentctl REPOSITORY (~/bin): a fixer never edits it (`agentctl issue`); watchdog WB checks its checkout stays clean.
 # $AGENTCTL_BIN_REPO ('-': none, the tests').
-def bin_repo():
+def bin_repo() -> str | None:
     r = os.environ.get("AGENTCTL_BIN_REPO") or os.path.dirname(TOOL_PATH)
     return None if r == "-" or not os.path.isdir(os.path.join(r, ".git")) else r
 
