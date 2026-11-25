@@ -1,4 +1,4 @@
-"""WA: agentctl's own main CI red past 30 min, or ci-runner's pin far behind origin/main, opens an INVARIANT condition
+"""WA: agentctl's own main CI red past 30 min, a green run left unpinned, or no decided run for the head, opens an INVARIANT condition
 (2026-11-25: tests.yml red 5 h, the pin stuck on f90ba0e, nobody told)."""
 import os, sys, time, unittest
 
@@ -15,8 +15,13 @@ def stamp(ago_min):
     return dt.datetime.fromtimestamp(NOW - ago_min * 60, dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def run(number, conclusion, ago_min, status="completed"):
-    return {"number": number, "status": status, "conclusion": conclusion, "headSha": f"{number:040x}", "createdAt": stamp(ago_min)}
+def sha(number):
+    return f"{number:x}".ljust(40, "0")
+
+
+def run(number, conclusion, ago_min, status="completed", done_min=None):
+    return {"number": number, "status": status, "conclusion": conclusion, "headSha": sha(number),
+            "createdAt": stamp(ago_min), "updatedAt": stamp(ago_min if done_min is None else done_min)}
 
 
 class SelfCiTest(unittest.TestCase):
@@ -28,7 +33,9 @@ class SelfCiTest(unittest.TestCase):
             self.addCleanup(lambda k=k, old=old: os.environ.pop(k, None) if old is None else os.environ.__setitem__(k, old))
         self.clock = FakeClock(NOW)
 
-    def check(self, runs, pin="a" * 40, behind=0):
+    def check(self, runs, pin=None, behind=0):
+        newest_green = next((r["headSha"] for r in runs or [] if r["conclusion"] == "success"), "a" * 40)
+        pin = pin or newest_green
         for f in ("selfci-runs.json", "selfci-pin.json"):
             p = A.state_root(f)
             if os.path.exists(p):
@@ -49,11 +56,26 @@ class SelfCiTest(unittest.TestCase):
         self.assertTrue(self.check([run(9, "failure", 5), run(7, "success", 200)])[0])
         self.assertTrue(self.check([run(9, "", 1, status="in_progress"), run(8, "success", 90)])[0])
 
-    def test_a_pin_far_behind_main_violates(self):
-        ok, detail = self.check([run(9, "success", 5)], behind=11)
+    def test_a_big_push_with_ci_in_progress_is_no_alert(self):
+        pin = sha(9)
+        runs = [run(11, "", 3, status="in_progress"), run(10, "success", 40, done_min=30), run(9, "success", 90)]
+        ok, detail = self.check(runs[:1] + runs[2:], pin=pin, behind=12)
+        self.assertTrue(ok, detail)
+        self.assertIn("12 behind main", detail)
+
+    def test_a_green_run_left_unpinned_for_fifteen_minutes_alerts(self):
+        runs = [run(10, "success", 40, done_min=20), run(9, "success", 90)]
+        ok, detail = self.check(runs, pin=sha(9))
         self.assertFalse(ok)
-        self.assertIn("11 commits behind", detail)
-        self.assertTrue(self.check([run(9, "success", 5)], behind=10)[0])
+        self.assertIn("auto-pin is stuck", detail)
+        self.assertTrue(self.check([run(10, "success", 20, done_min=10), run(9, "success", 90)], pin=sha(9))[0])
+        self.assertTrue(self.check(runs, pin=sha(10)[:12])[0])
+
+    def test_no_decided_run_for_the_head_for_an_hour_alerts(self):
+        ok, detail = self.check([run(10, "", 70, status="queued"), run(9, "success", 200)], pin=sha(9))
+        self.assertFalse(ok)
+        self.assertIn("CI is stuck or queued", detail)
+        self.assertTrue(self.check([run(10, "", 50, status="queued"), run(9, "success", 200)], pin=sha(9))[0])
 
     def test_unreadable_runs_cannot_tell_and_the_server_is_never_asked(self):
         self.assertIsNone(self.check(None)[0])

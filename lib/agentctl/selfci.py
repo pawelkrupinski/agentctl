@@ -1,10 +1,12 @@
-# agentctl, part `selfci`: invariant WA, agentctl's OWN main CI and ci-runner's pin: red for long, or the pin far behind main, is the owner's
+# agentctl, part `selfci`: invariant WA, agentctl's OWN main CI and ci-runner's pin: red for long, the pin stuck behind a green run, or CI undecided for long, is the owner's
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 #
 # 2026-11-25: tests.yml was red on main for 5 h (an annotation naming `Run` above its definition, which Python 3.15
 # accepts and ci-runner's 3.13 does not), ci-runner's auto-pin stayed on f90ba0e, and nothing said so: every later fix
 # (holds, governor, RSS limit, refactors) sat undeployed. The pin only moves to a commit whose tests.yml run is green,
-# so "red for WA_RED_MAX" and "pin more than WA_BEHIND_MAX commits behind origin/main" are the two faces of one stall.
+# so "red for WA_RED_MAX" and "a green run left unpinned for WA_UNPINNED_MAX" are the two faces of one stall, and
+# "no run decided for the head for WA_UNDECIDED_MAX" is the third. A raw commit count is NOT an alert (2026-11-25: a
+# 10-commit restructure push tripped it at 12 behind while CI was healthy and still testing it); it is only shown.
 # The watchdog's WA opens an INVARIANT condition (an inbox item for the owner, `conditions: N` on `status`).
 
 import json
@@ -21,7 +23,9 @@ from agentctl.fixerland import bin_repo
 
 SELF_REPO = "pawelkrupinski/agentctl"
 WA_RED_MAX = 30 * 60       # s agentctl's tests.yml may stay red on main ($AGENTCTL_WA_RED_MAX)
-WA_BEHIND_MAX = 10         # commits ci-runner's pin may trail origin/main ($AGENTCTL_WA_BEHIND_MAX)
+WA_UNPINNED_MAX = 15 * 60  # s the newest green run may stay unpinned ($AGENTCTL_WA_UNPINNED_MAX)
+WA_UNDECIDED_MAX = 60 * 60  # s main's head may go without a decided run ($AGENTCTL_WA_UNDECIDED_MAX)
+DECIDED = ("success", "failure", "timed_out", "startup_failure")
 WA_READ_EVERY = 300        # s a gh list is kept ($AGENTCTL_WA_READ_EVERY)
 WA_SSH_EVERY = 1800        # s the ssh fallback's reading is kept at least (each new ssh auth may cost the owner a Touch ID)
 PIN_LINK = "/var/lib/agentctl-src/current"  # the export the auto-pin runs: a link to the directory named by the full rev
@@ -59,12 +63,16 @@ def commits_behind(pin: str) -> int | None:
     return int(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip().isdigit() else None
 
 
+def decided(r: dict[str, Any]) -> bool:
+    return r.get("status") == "completed" and r.get("conclusion") in DECIDED
+
+
 def red_since(runs: list[dict[str, Any]]) -> tuple[float, dict[str, Any]] | None:
     """(when the current red streak began, its newest run) when the newest decided run is a failure, else None. Runs
     that are not decided (queued, running, cancelled) say nothing."""
     streak = []
     for r in runs:
-        if r.get("status") != "completed" or r.get("conclusion") not in ("success", "failure", "timed_out", "startup_failure"):
+        if not decided(r):
             continue
         if r["conclusion"] == "success":
             break
@@ -101,10 +109,38 @@ def red_problem(runs: list[dict[str, Any]], now_: float) -> tuple[str | None, fl
             f"so no agentctl commit since is deployed"), age
 
 
-def pin_problem(pin_rev: str | None, lag: int | None) -> str | None:
-    if pin_rev and lag is not None and lag > env_num("AGENTCTL_WA_BEHIND_MAX", WA_BEHIND_MAX):
-        return f"ci-runner's pin {pin_rev[:7]} is {lag} commits behind origin/main"
+def pins(pin_rev: str, sha: Any) -> bool:
+    return str(sha).startswith(pin_rev[:12])
+
+
+def unpinned_problem(runs: list[dict[str, Any]], pin_rev: str | None, now_: float) -> str | None:
+    """The newest green run, when it is not the pin, the pin is not a newer run, and it has been decided for over
+    WA_UNPINNED_MAX: the auto-pin is stuck."""
+    if not pin_rev:
+        return None
+    for r in runs:
+        if pins(pin_rev, r.get("headSha")):
+            return None
+        if decided(r) and r["conclusion"] == "success":
+            done = iso_epoch(r.get("updatedAt") or r.get("createdAt"))
+            if done is not None and now_ - done > env_num("AGENTCTL_WA_UNPINNED_MAX", WA_UNPINNED_MAX):
+                return (f"ci-runner's pin {pin_rev[:7]} has not followed the green run #{r.get('number')} at "
+                        f"{str(r.get('headSha'))[:7]} for {fmt_age(now_ - done)}: the auto-pin is stuck")
+            return None
     return None
+
+
+def undecided_problem(runs: list[dict[str, Any]], now_: float) -> str | None:
+    """Main's head has had no decided run for over WA_UNDECIDED_MAX (the leading runs are queued, running, cancelled)."""
+    leading = []
+    for r in runs:
+        if decided(r):
+            break
+        leading.append(r)
+    began = iso_epoch(leading[-1].get("createdAt")) if leading else None
+    if began is None or now_ - began <= env_num("AGENTCTL_WA_UNDECIDED_MAX", WA_UNDECIDED_MAX):
+        return None
+    return f"no tests.yml run has decided for main's head in {fmt_age(now_ - began)}: CI is stuck or queued"
 
 
 def readings(now_: float, runs: Callable[[], Any] | None, pin: Callable[[], str | None] | None) -> tuple[Any, str | None]:
@@ -124,8 +160,9 @@ def holding_words(red_age: float | None, pin_rev: str | None, lag: int | None) -
 
 def inv_wa(clock: Any, st: Any, runs: Callable[[], Any] | None = None, pin: Callable[[], str | None] | None = None,
            behind: Callable[[str], int | None] | None = None) -> tuple[bool | None, str]:
-    """WA: agentctl's own main CI has not been red past WA_RED_MAX, and ci-runner's pin trails origin/main by at most
-    WA_BEHIND_MAX commits. Read from the laptop (ci-runner reads itself through its auto-pin)."""
+    """WA: deploys are not stuck: agentctl's own main CI has not been red past WA_RED_MAX, the newest green run is
+    pinned within WA_UNPINNED_MAX, and the head has had a decided run within WA_UNDECIDED_MAX. The commit lag is
+    informational. Read from the laptop (ci-runner reads itself through its auto-pin)."""
     if host_role() == "server":
         return True, "the laptop watches agentctl's CI"
     now_ = clock.time()
@@ -134,7 +171,7 @@ def inv_wa(clock: Any, st: Any, runs: Callable[[], Any] | None = None, pin: Call
         return None, f"cannot read {SELF_REPO}'s tests.yml runs"
     red_words, red_age = red_problem(runs_now, now_)
     lag = (behind or commits_behind)(pin_rev) if pin_rev else None
-    problems = [p for p in (red_words, pin_problem(pin_rev, lag)) if p]
+    problems = [p for p in (red_words, unpinned_problem(runs_now, pin_rev, now_), undecided_problem(runs_now, now_)) if p]
     if problems:
         return False, "; ".join(problems)
     return True, holding_words(red_age, pin_rev, lag)
