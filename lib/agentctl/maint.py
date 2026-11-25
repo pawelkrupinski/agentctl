@@ -5,7 +5,8 @@ import os
 import re
 import signal
 import time
-from typing import Callable
+from dataclasses import dataclass
+from typing import Any, Callable
 from agentctl.core import HOME, REPOS, git, pid_alive, run_cmd, slug, state_root
 from agentctl.procs import tosec
 from agentctl.selfcode import code_version
@@ -191,124 +192,217 @@ def fixture_reason(cmd, ppid, etime, isdir=os.path.isdir):
 
 def cmd_orphans(a):
     sbt_only = getattr(a, "sbt_only", False)  # the daily sweep: stuck sbt servers only
-    safe = getattr(a, "safe", False)  # the scheduled reaper: never an owner merely on old code (it re-execs itself)
-    owners = [] if sbt_only else owner_orphans(a.kill and not safe) if safe else owner_orphans(a.kill)
-    if safe and a.kill:  # a dead owner's record and runs only
-        owners = [o for o in owners if "process gone" in o[2]]
-        owner_orphans_dead_only()
+    owners = [] if sbt_only else cmd_owner_orphans(a)
     procs = ps()
     cwds = process_cwds()
     me = {os.getpid(), os.getppid()}
-    found = []
-    status_cache = {}
+    found = [] if sbt_only else wait_loop_orphans(procs, cwds, me)
+    found += sbt_orphans(procs, cwds, me)
+    found += fixture_orphans(procs, me)
+    jvms = [] if sbt_only else stale_jvms(found)
+    for kind, pid, why, what in owners:
+        print(f"{kind:9} pid {pid!s:<6}  {why}\n          {what}")
+    reap_found(a.kill, found, procs, cwds)
+    if jvms:
+        jvm_reap(jvms, a.kill, procs)
+    elif not found and not owners:
+        print("no orphans")
+    return 0
 
-    def finished(repo, rid):
-        k = (repo, rid)
-        if k not in status_cache:
-            try:
-                status_cache[k] = gh_json(repo, "run", "view", rid, "--json", "status").get("status") == "completed"
-            except Exception:
-                status_cache[k] = None
-        return status_cache[k]
 
-    seen_targets = {}
-    loops = [] if sbt_only else [p for p in procs if p[0] not in me and is_wait_loop(p[3])]
-    loops.sort(key=lambda p: p[0])
-    for pid, ppid, etime, cmd in loops:
+def reap_found(kill, found, procs, cwds):
+    """The orphans found, listed; terminated with --kill."""
+    for kind, pid, etime, why, what in found:
+        print(f"{kind:9} pid {pid:<6} up {etime:>11}  {why}\n          {what}")
+    for kind, pid, *_ in found if kill else []:
+        kill_orphan(kind, pid, found, procs, cwds)
+
+
+def cmd_owner_orphans(a):
+    """The owners' orphans: with --safe (the scheduled reaper) never an owner merely on old code (it re-execs itself):
+    a dead owner's record and runs only."""
+    safe = getattr(a, "safe", False)
+    owners = owner_orphans(a.kill and not safe) if safe else owner_orphans(a.kill)
+    if safe and a.kill:
+        owners = [o for o in owners if "process gone" in o[2]]
+        owner_orphans_dead_only()
+    return owners
+
+
+def run_finished(status_cache, repo, rid):
+    """Whether the run is completed (None: unreadable), asked of GitHub once."""
+    k = (repo, rid)
+    if k not in status_cache:
+        try:
+            status_cache[k] = gh_json(repo, "run", "view", rid, "--json", "status").get("status") == "completed"
+        except Exception:
+            status_cache[k] = None
+    return status_cache[k]
+
+
+def wait_loop_orphans(procs, cwds, me):
+    """Wait loops whose owner is gone, whose worktree is missing, whose runs all finished, or that duplicate another."""
+    status_cache, seen_targets, found = {}, {}, []
+    for pid, ppid, etime, cmd in sorted((p for p in procs if p[0] not in me and is_wait_loop(p[3])), key=lambda p: p[0]):
         body = loop_body(cmd)
-        reasons = []
-        if ppid == 1:
-            reasons.append("owning shell/agent is gone")
+        reasons = ["owning shell/agent is gone"] if ppid == 1 else []
         gone = missing_tree_paths(body + " " + cwds.get(pid, ""))
         if gone:
             reasons.append(f"worktree missing: {', '.join(gone)}")
-        repo, ids = loop_targets(body)
-        if repo and ids:
-            states = [finished(repo, i) for i in ids]
-            if all(s is True for s in states):
-                reasons.append(f"all target runs finished ({repo} {' '.join(ids)})")
-            key = (repo, tuple(ids))
-            if key in seen_targets and pid_alive(seen_targets[key]):
-                reasons.append(f"duplicate of loop pid {seen_targets[key]}")
-            else:
-                seen_targets.setdefault(key, pid)
+        reasons += wait_loop_target_reasons(pid, body, status_cache, seen_targets)
         if reasons:
             found.append(("wait-loop", pid, etime, "; ".join(reasons), body[:140].replace("\n", " ")))
-    cpu_path = state_root("sbt-cpu.json")
-    cpu_state = read_record(cpu_path, {})
+    return found
+
+
+def wait_loop_target_reasons(pid, body, status_cache, seen_targets):
+    """The loop waits on runs that all finished, or on the same runs as an earlier loop (seen_targets notes each)."""
+    repo, ids = loop_targets(body)
+    if not (repo and ids):
+        return []
+    reasons = []
+    if all(run_finished(status_cache, repo, i) is True for i in ids):
+        reasons.append(f"all target runs finished ({repo} {' '.join(ids)})")
+    key = (repo, tuple(ids))
+    if key in seen_targets and pid_alive(seen_targets[key]):
+        reasons.append(f"duplicate of loop pid {seen_targets[key]}")
+    else:
+        seen_targets.setdefault(key, pid)
+    return reasons
+
+
+def ps_cpu_tree():
+    """({pid: cpu seconds}, {ppid: [child pids]}) of every process."""
     procs_cpu, children = {}, {}
     for line in run_cmd(["ps", "-A", "-o", "pid=,ppid=,time="]).stdout.splitlines():
         f3 = line.split()
         if len(f3) == 3:
-            secs = tosec(f3[2])
-            procs_cpu[int(f3[0])] = secs
+            procs_cpu[int(f3[0])] = tosec(f3[2])
             children.setdefault(int(f3[1]), []).append(int(f3[0]))
-    clients = {}
-    for pid, ppid, etime, cmd in procs:
+    return procs_cpu, children
+
+
+@dataclass(frozen=True)
+class SbtView:
+    """What the sbt servers' stuck reasons read: every process's cpu and children, the sbtn clients per directory, the
+    servers serving, the last cpu state, the time awake, the servers kept (sbt-warm --keep), the free swap."""
+    procs_cpu: dict[int, float]
+    children: dict[int, list[int]]
+    clients: dict[str, list[int]]
+    serving: Any
+    cpu_state: dict[str, Any]
+    now: float
+    kept: set[str]
+    swap_free: Any
+
+
+def sbt_view(procs, cwds, cpu_state):
+    procs_cpu, children = ps_cpu_tree()
+    clients: dict[str, list[int]] = {}
+    for pid, _ppid, _etime, cmd in procs:
         if "sbtn" in cmd.split(" ", 1)[0] and cwds.get(pid):
             clients.setdefault(cwds[pid], []).append(pid)
-    serving, now, live = sbt_serving(), awake_now(), set()
     kept = {cwds[p] for p, _pp, _e, c in procs if "sbt-warm --keep" in c and cwds.get(p)}
-    swap_free = swap_free_mb() if os.environ.get("AGENTCTL_SBT_REAP") != "0" else None
+    return SbtView(procs_cpu, children, clients, sbt_serving(), cpu_state, awake_now(), kept,
+                   swap_free_mb() if sbt_reaping() else None)
+
+
+def sbt_reaping():
+    return os.environ.get("AGENTCTL_SBT_REAP") != "0"  # tests: "0"
+
+
+def sbt_orphans(procs, cwds, me):
+    """Stuck sbt servers, and sbt processes whose directory is gone, no longer a checkout or whose worktree is missing."""
+    cpu_path = state_root("sbt-cpu.json")
+    view = sbt_view(procs, cwds, read_record(cpu_path, {}))
+    found, live = [], set()
     for pid, ppid, etime, cmd in procs:
         if pid in me or not is_sbt(cmd):
             continue
         cwd = cwds.get(pid, "")
-        reasons = []
-        if "java" in cmd.split(" ", 1)[0] and os.environ.get("AGENTCTL_SBT_REAP") != "0":  # tests: "0"
+        if sbt_server(cmd):
             live.add(str(pid))
-            reasons += sbt_stuck_reasons(pid, cwd, tree_cpu(pid, procs_cpu, children), clients, serving, cpu_state, now,
-                                         ppid=ppid, kept=kept, swap_free_mb=swap_free)
-        if cwd and not os.path.isdir(cwd):
-            reasons.append(f"cwd gone: {cwd}")
-        elif cwd and not os.path.exists(os.path.join(cwd, ".git")) and cwd.startswith(HOME + "/projects"):
-            reasons.append(f"cwd {cwd} is no longer a git checkout")
-        gone = missing_tree_paths(cmd)
-        if gone:
-            reasons.append(f"worktree missing: {', '.join(gone)}")
+        reasons = sbt_reasons(pid, ppid, cmd, cwd, view)
         if reasons:
             found.append(("sbt", pid, etime, "; ".join(reasons), f"{cwd}: {cmd[:120]}"))
-    for pid, ppid, etime, cmd in procs:  # stale test fixture servers: listed first, reaped, logged
-        why = fixture_reason(cmd, ppid, etime) if pid not in me else None
-        if why:
-            found.append(("fixture", pid, etime, why, cmd[:160]))
+    save_sbt_cpu(cpu_path, view.cpu_state, live)
+    return found
+
+
+def sbt_server(cmd):
+    """The process is an sbt JVM the reaper judges (not an sbt client, nor the tests' no-reap run)."""
+    return "java" in cmd.split(" ", 1)[0] and sbt_reaping()
+
+
+def sbt_reasons(pid, ppid, cmd, cwd, view):
+    stuck = sbt_stuck_reasons(pid, cwd, tree_cpu(pid, view.procs_cpu, view.children), view.clients, view.serving,
+                              view.cpu_state, view.now, ppid=ppid, kept=view.kept,
+                              swap_free_mb=view.swap_free) if sbt_server(cmd) else []
+    return stuck + sbt_directory_reasons(cwd, cmd)
+
+
+def save_sbt_cpu(path, cpu_state, live):
+    """The cpu state of the servers still live (the tests' no-reap run, with none, leaves the real state alone)."""
     try:
         if not live and os.environ.get("AGENTCTL_SBT_REAP") == "0":
             raise OSError("tests: the real state is left alone")
-        write_json(cpu_path, {k: v for k, v in cpu_state.items() if k in live}, indent=None)
+        write_json(path, {k: v for k, v in cpu_state.items() if k in live}, indent=None)
     except OSError:
         pass
-    jvms = []
-    if not sbt_only and (os.environ.get("AGENTCTL_SBT_REAP") != "0" or os.environ.get("AGENTCTL_JVM_PS")):
-        try:
-            rows, jcwd, kept, ports = jvm_scan()
-            taken = {f[1] for f in found}
-            jvms = [c for c in jvm_candidates(rows, jcwd, kept, ports, os.getpid()) if c[0] not in taken]
-        except (OSError, ValueError) as e:
-            print(f"jvm scan failed: {e}")
-    for kind, pid, why, what in owners:
-        print(f"{kind:9} pid {pid!s:<6}  {why}\n          {what}")
-    if not found:
-        if jvms:
-            jvm_reap(jvms, a.kill, procs)
-        elif not owners:
-            print("no orphans")
-        return 0
-    for kind, pid, etime, why, what in found:
-        print(f"{kind:9} pid {pid:<6} up {etime:>11}  {why}\n          {what}")
-    if a.kill:
-        for kind, pid, *_ in found:
-            if kind == "sbt" and "java" in (next((c for p, _pp, _e, c in procs if p == pid), "").split(" ", 1)[0]):
-                print(f"thread dump of sbt server pid {pid}: {thread_dump(pid, cwds.get(pid, ''))}")
-            kids = run_cmd(["pgrep", "-P", str(pid)]).stdout.split()
-            for p in [pid] + [int(k) for k in kids]:
-                try:
-                    os.kill(p, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            print(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else ""))
-            reap_log(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else "") + ": "
-                     + next((f"{w} | {what}" for k, p, _e, w, what in found if p == pid), ""))
-    if jvms:
-        jvm_reap(jvms, a.kill, procs)
-    return 0
+
+
+def sbt_directory_reasons(cwd, cmd):
+    reasons = []
+    if cwd and not os.path.isdir(cwd):
+        reasons.append(f"cwd gone: {cwd}")
+    elif cwd and not os.path.exists(os.path.join(cwd, ".git")) and cwd.startswith(HOME + "/projects"):
+        reasons.append(f"cwd {cwd} is no longer a git checkout")
+    gone = missing_tree_paths(cmd)
+    if gone:
+        reasons.append(f"worktree missing: {', '.join(gone)}")
+    return reasons
+
+
+def fixture_orphans(procs, me):
+    """Stale test fixture servers: listed first, reaped, logged."""
+    out = []
+    for pid, ppid, etime, cmd in procs:
+        why = fixture_reason(cmd, ppid, etime) if pid not in me else None
+        if why:
+            out.append(("fixture", pid, etime, why, cmd[:160]))
+    return out
+
+
+def stale_jvms(found):
+    """The stale JVMs the scan finds, the ones already found as sbt orphans left out."""
+    if not (os.environ.get("AGENTCTL_SBT_REAP") != "0" or os.environ.get("AGENTCTL_JVM_PS")):
+        return []
+    try:
+        rows, jcwd, kept, ports = jvm_scan()
+        taken = {f[1] for f in found}
+        return [c for c in jvm_candidates(rows, jcwd, kept, ports, os.getpid()) if c[0] not in taken]
+    except (OSError, ValueError) as e:
+        print(f"jvm scan failed: {e}")
+        return []
+
+
+def terminate(pid):
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def kill_orphan(kind, pid, found, procs, cwds):
+    """One orphan terminated with its children (an sbt server's thread dump taken first), logged."""
+    if kind == "sbt" and "java" in (next((c for p, _pp, _e, c in procs if p == pid), "").split(" ", 1)[0]):
+        print(f"thread dump of sbt server pid {pid}: {thread_dump(pid, cwds.get(pid, ''))}")
+    kids = run_cmd(["pgrep", "-P", str(pid)]).stdout.split()
+    for p in [pid] + [int(k) for k in kids]:
+        terminate(p)
+    print(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else ""))
+    reap_log(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else "") + ": " + orphan_detail(found, pid))
+
+
+def orphan_detail(found, pid):
+    return next((f"{w} | {what}" for k, p, _e, w, what in found if p == pid), "")
