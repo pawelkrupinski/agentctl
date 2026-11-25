@@ -5,6 +5,9 @@
 # Never bypass it (no --no-verify).
 z=0000000000000000000000000000000000000000
 rc=0
+# Several agents push at once and a push rejected after the suite ran costs the whole suite again: the serialised
+# push (devtools/selfpush.py: one lock, fetch, rebase, push) runs it once. A direct push still works.
+[ -n "$AGENTCTL_SELFPUSH" ] || echo "pre-push: hint -- push with 'python3 devtools/selfpush.py' (serialised: the suite runs once even when main moves)" >&2
 while read -r _lref lsha _rref _rsha; do
   [ "$lsha" = "$z" ] && continue  # a deletion: nothing to test
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/agentctl-prepush.XXXXXX")

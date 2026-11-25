@@ -10,6 +10,12 @@ the sections and gives agentctl's own mechanics. The tool's reference is `AGENTC
 auto-pin ships main within ~5 min). Work in `git -C ~/bin worktree add -b <name> ~/bin-wt-<name> master`, Bash edits
 included (an edit in ~/bin trips watchdog WB; `hooks/pre-commit` refuses any commit in the main checkout). Land: `git -C ~/bin-wt-<name> rebase master && git -C ~/bin merge
 --ff-only <name> && git -C ~/bin push origin master:main`, then remove the worktree and `git branch -d` the branch.
+**Push from your worktree with `python3 devtools/selfpush.py`** (the owner, 2026-11-25): one repository-wide push lock
+(flock, `~/.cache/agentctl/selfpush.lock`; waiting for it costs no cores), then under it fetch, rebase onto
+origin/main and `git push origin HEAD:main`, so the pre-push hook's full suite runs ONCE on the tree that lands: main
+cannot move under the lock. A rebase conflict is aborted and the lock released; a push still refused (a pusher that
+skipped the lock moved main) is reported and not retried. A direct `git push` still works, gated by the same hook,
+which prints a hint to use this tool. Brief other agents with this command.
 Push in small, coherent steps (a regression must be easy to bisect and revert); after a push check
 `~/bin/agentctl status` and `~/bin/agentctl red status` still work.
 

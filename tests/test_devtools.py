@@ -407,5 +407,81 @@ class StatsTest(unittest.TestCase):
         self.assertEqual(out["now"]["mypy_errors"], 7)
         self.assertGreater(out["now"]["lines"], out["start"]["lines"])
 
+
+class SelfPushTest(unittest.TestCase):
+    """devtools/selfpush.py: one lock, fetch, rebase, push; the pre-push hook (a counting fake) runs once per push."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="selfpush-")
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        self.env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        self.env.update(AGENTCTL_PUSH_LOCK=os.path.join(self.tmp, "lock"), GIT_CONFIG_GLOBAL=os.devnull,
+                        GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        self.log = os.path.join(self.tmp, "hook.log")
+        hooks = os.path.join(self.tmp, "hooks")
+        os.makedirs(hooks)
+        with open(os.path.join(hooks, "pre-push"), "w") as f:  # the suite's stand-in: marks its start and end
+            f.write(f"#!/bin/sh\necho start >> {self.log}\nsleep 1\necho end >> {self.log}\n")
+        os.chmod(os.path.join(hooks, "pre-push"), 0o755)
+        self.origin = os.path.join(self.tmp, "origin.git")
+        self.git(self.tmp, "init", "-q", "--bare", "-b", "main", self.origin)
+        seed = self.clone("seed")
+        self.commit(seed, "base.txt", "base")
+        self.git(seed, "push", "-q", "origin", "HEAD:main")
+        self.hooks = hooks
+
+    def git(self, cwd, *args):
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=True, env=self.env).stdout
+
+    def clone(self, name):
+        path = os.path.join(self.tmp, name)
+        self.git(self.tmp, "clone", "-q", self.origin, path)
+        return path
+
+    def commit(self, repo, name, text):
+        with open(os.path.join(repo, name), "w") as f:
+            f.write(text)
+        self.git(repo, "add", name)
+        self.git(repo, "commit", "-qm", name)
+
+    def start(self, repo):
+        self.git(repo, "config", "core.hooksPath", self.hooks)
+        return subprocess.Popen([sys.executable, os.path.join(DEV, "selfpush.py")], cwd=repo, env=self.env,
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+
+    def test_two_concurrent_pushes_serialise_and_each_runs_the_suite_once(self):
+        a, b = self.clone("a"), self.clone("b")
+        self.commit(a, "a.txt", "a")
+        self.commit(b, "b.txt", "b")
+        procs = [self.start(a), self.start(b)]
+        outs = [p.communicate(timeout=60)[0] for p in procs]
+        self.assertEqual([p.returncode for p in procs], [0, 0], outs)
+        with open(self.log) as f:
+            self.assertEqual(f.read().split(), ["start", "end", "start", "end"])  # never overlapping, once each
+        files = self.git(self.origin, "ls-tree", "--name-only", "main").split()
+        self.assertEqual(sorted(files), ["a.txt", "b.txt", "base.txt"])
+
+    def test_a_rebase_conflict_aborts_cleanly_and_releases_the_lock(self):
+        a, other = self.clone("a"), self.clone("other")
+        self.commit(other, "base.txt", "theirs")
+        self.git(other, "push", "-q", "origin", "HEAD:main")
+        self.commit(a, "base.txt", "ours")
+        p = self.start(a)
+        out = p.communicate(timeout=60)[0]
+        self.assertEqual(p.returncode, 1, out)
+        self.assertIn("NOT PUSHED", out)
+        self.assertFalse(os.path.exists(os.path.join(a, ".git", "rebase-merge")), out)
+        self.assertFalse(os.path.exists(self.log), "the suite must not run on a conflicted tree")
+        import fcntl
+        with open(self.env["AGENTCTL_PUSH_LOCK"], "a+") as f:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises when still held
+
+    def test_a_direct_push_hook_prints_the_hint(self):
+        r = subprocess.run(["sh", os.path.join(ROOT, "hooks", "pre-push")], input="x " + "0" * 40 + " y " + "0" * 40 + "\n",
+                           capture_output=True, text=True, env=self.env, cwd=self.tmp)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("selfpush.py", r.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
