@@ -1,6 +1,7 @@
 # agentctl, part `changekind`: THE CHANGE CLASSIFIER -- what kind of change a queued change is, decided in one place.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from operator import itemgetter
 import time
 from contextlib import suppress
 from agentctl.core import fmt_age
@@ -34,7 +35,7 @@ from agentctl.statemachines import StaleVersion, machine_state
 # place (trailer_values, branches.py), and a change's named reds read in one (fixes_named).
 #
 # Where the queue ORDERS changes, a fix of ANY open red goes first (red_fix); where the GATE decides -- a change that must
-# wait for green, a known red, the hook's red gate -- only a fix of the gate's reds (gate_fix) does.
+# wait for green, a known red, the hook's red gate -- only a fix of a GATE red (gate_fix: any name of the red, the gate's newest runs or an older run of it) does.
 PRIORITY = (  # THE ORDER the queue takes changes in, first first; within a class, queue order (seq)
     ("red-fix", "its `Fixes-Red:` names an open red (the gate's or any other the store has open): checked in the red-fix "
                 "tree, pushed alone, before any batch, verification or ordinary change; never a batch member, never "
@@ -97,7 +98,7 @@ def classify_change(e, facts, t=None, repo=None):
             rid, kind = (open_.get(n) or [None, None])[:2]
             reds.append({"name": n, "red": rid, "kind": "gate" if n in gate else kind})
     red_fix = bool(reds)
-    gate_fix = bool(names & gate)
+    gate_fix = "gate" in map(itemgetter("kind"), reds)
     backlog_why = ("red-fix" if red_fix else "no-batch" if e.get("no_batch")
                    else f"batch-alone: {e['batch_alone']}" if e.get("batch_alone") else None)
     identity = None

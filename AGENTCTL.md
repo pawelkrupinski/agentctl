@@ -593,6 +593,13 @@ by). A run of an older episode -- main went green in between -- never counts; ne
 failed another way. Signatures unreadable: only the newest red run counts. movies' pre-push judges the same rule from
 gh (main's runs since that workflow's last green, and their failed job names; unread: refused as before).
 
+**A fix of an open gate red never waits (2026-11-25, batch #124: Main #2898 red, `Fixes-Red: 2896`).** The classifier
+(`red fix of 2896 (gate)`) matches a fix by every name of an open red item; the queue's `must_wait` read only the gate's
+newest runs (#2897, #2898), so the fix sat on `waiting` beside a non-fix change and a batch, which assembles only what
+may land on red, found nothing: WR, a fix waiting for the green only it could bring. `must_wait` now also lets a commit
+through that names any name of an open gate red in the store (`open_gate_red_names`); the batch then takes the fix
+alone and the non-fix change stays behind.
+
 Under each red row (the gate's and the reds outside it) ci-why prints ONE line, `fixing: <state>`, the state
 `red_state` decides for that red run -- the same function the red tick acts on, so ci-why, `--summary`, the status line
 and `red status` can never disagree (2026-10-27: Identity capture #2133 was `UNASSIGNED (assigning ...)` in ci-why

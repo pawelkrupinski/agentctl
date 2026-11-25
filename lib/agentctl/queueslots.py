@@ -45,7 +45,7 @@ RED_FIX_TREE = "redfix"  # <clone>-wt-check-redfix, under its own lease: only a 
 # the gate): whether a change is a red fix -- and a GATE red's fix -- is its KIND (changekind.py classify_change), read
 # against the gate's reds and every red the store has open (queue_facts). Where the queue ORDERS changes (a push before
 # an open batch or a combined-tree verification, the red-fix tree, no batch membership) a fix of any open red counts
-# (kind red_fix); where the GATE decides (waiting for green, a known red), the gate's reds alone still do (gate_fix).
+# (kind red_fix); where the GATE decides (waiting for green, a known red), only a fix of a gate red still does (gate_fix).
 
 
 def check_tree_slot(st, repo, d, fix=False):

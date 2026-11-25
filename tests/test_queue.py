@@ -966,6 +966,33 @@ class QueueTest(WaitingTest):
         self.drive()
         self.assertEqual(entry(ea)["status"], "landed")
 
+    def test_a_fix_naming_an_older_run_of_its_gate_red_lands_alone_never_waiting_with_a_non_fix(self):
+        """2026-11-25, batch #124: Main #2898 red; the fix named #2896, an older run of the SAME red (the red item's
+        names, kind gate). The gate's own set (gate_reds: the newest runs) lacked 2896, so must_wait kept the fix on
+        `waiting` -- beside a non-fix production change -- while the classifier already called it `red fix of 2896
+        (gate)`: the batch, assembling only what may land on red, found nothing and the fix waited for the green only it
+        could bring. A fix of an open gate red names it by any of the red's names; the batch splits and the fix lands
+        alone, the non-fix change staying behind."""
+        def entry(eid):
+            return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        d, _c, _w = A.waiting_state(self.r.path)
+        self.reds = {"8", "98000"}  # the gate reads Main #8; the red item below also names the older run 7
+        wb, _ = self.agent("b", "web/src/main/B.scala", "b\n", msg="b: a production change naming no red")
+        eb, _ = self.queued(wb)
+        self.check(eb)
+        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: the fix\n\nFixes-Red: 7")
+        ea, _ = self.queued(wa)
+        self.check(ea)
+        self.assertEqual(entry(ea)["status"], "waiting", "before the red is open in the store, nothing says it fixes one")
+        A.process_store().put_item("red", "k7", "leased", {"key": "k7", "workflow": "Main", "gate": True,
+                                                           "runs": ["7", "8"], "last_run": {"number": 8}})
+        self.assertFalse(A.must_wait(self.r.path, entry(ea)["commits"], self.reds, A.process_store()))
+        self.assertTrue(A.must_wait(self.r.path, entry(eb)["commits"], self.reds, A.process_store()))
+        did = self.drive()
+        self.assertEqual(entry(ea)["status"], "landed", f"the fix goes ahead alone: {did} {self.batch()}")
+        self.assertEqual(entry(eb)["status"], "waiting", "the non-fix change waits for green")
+        self.assertEqual(self.remote_log()[0], "a: the fix\n\nFixes-Red: 7"[:len("a: the fix")])
+
     def test_the_batchs_check_on_ci_runner_is_the_fast_only_set_on_a_check_fast_branch(self):
         head = sh(self.r.path, "git", "rev-parse", "HEAD").strip()
         calls = self.fake_github("success", head, ref="check/fast-batch-x")

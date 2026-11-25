@@ -16,7 +16,7 @@ from agentctl.queueslots import entry_owned, queue_verdict, set_change
 from agentctl.conflicts import pick
 from agentctl.queuerecheck import queued_entries, same_change_source
 from agentctl.redfixes import commit_fixes
-from agentctl.changekind import classify_change, gate_facts
+from agentctl.changekind import classify_change, queue_facts
 from agentctl.statemachines import StaleVersion, change_event, machine_state
 
 
@@ -50,15 +50,27 @@ def waiting_commits(repo, base, head):
     return git(repo, "rev-list", "--reverse", f"{base}..{head}").split()
 
 
-def must_wait(repo, commits, reds, store):
-    """A production commit with no Fixes-Red: naming a red run waits; tools-only and declared fixes go (the hook's rule)."""
-    for c in commits:
-        paths = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c).split("\n")
-        if not any(p and is_production_path(p) for p in paths):
-            continue
-        if not (commit_fixes(repo, c, store) & reds):  # a trailer that does not count (fix_check) is no fix: it waits
-            return True
-    return False
+def open_gate_red_names(store: Any) -> set[str]:
+    """Every name (run numbers and ids, key) of the gate reds the store has open: the red a fix names by an OLDER run
+    of the same red (Main #2898 red, `Fixes-Red: 2896`) is still the red's fix, though the gate's own set (gate_reds:
+    the newest runs) no longer lists that run."""
+    return {n for n, (_rid, kind) in queue_facts(set(), store)["open"].items() if kind == "gate"}
+
+
+def touches_production(repo: str, c: str) -> bool:
+    paths = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c).split("\n")
+    return any(p and is_production_path(p) for p in paths)
+
+
+# A FIX OF AN OPEN GATE RED NEVER WAITS (2026-11-25, batch #124): the classifier (changekind.py) called a change naming
+# #2896 `red fix of 2896 (gate)` -- the red item's names -- while this rule read only the gate's newest runs (#2897,
+# #2898) and kept the fix on `waiting` beside a non-fix change: a batch assembles only what may land on red, so the
+# fix waited for the green only it could bring (watchdog WR).
+def must_wait(repo: str, commits: list[str], reds: set[str], store: Any) -> bool:
+    """A production commit with no Fixes-Red: naming a red run waits; tools-only and declared fixes go (the hook's rule).
+    A red run is one of the gate's (`reds`) or any name of an open gate red in the store."""
+    named = reds | open_gate_red_names(store)
+    return any(touches_production(repo, c) and not commit_fixes(repo, c, store) & named for c in commits)
 
 
 def apply_entry(d, wt, e, base, regen=True, autoresolve=False):
@@ -152,7 +164,7 @@ def diagnoses_of(repo, commits):
 def batch_order(repo, entries, reds, store):
     """The order a batch is built in: a fix for the current red first, then (main red) what may land while red -- tools
     only, or every commit carrying a Fixes-Red for a red run -- then the rest; by join order within each."""
-    facts = gate_facts(reds)
+    facts = queue_facts(reds, store)
 
     def rank(e):
         if reds and classify_change(e, facts)["gate_fix"]:  # its KIND: a fix of the gate's red (changekind.py)
