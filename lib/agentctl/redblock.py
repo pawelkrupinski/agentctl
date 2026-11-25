@@ -123,6 +123,11 @@ def _unsafe_deletions(deleting: list[tuple[list[str], bool]], flat: str) -> str 
     return None
 
 
+def _command_words(words: list[str]) -> list[str]:
+    """The words of one command that are not wrappers (sudo, nice ...) or flags: its verb first, then its arguments."""
+    return [w for w in words if w not in OWNER_CMD_WRAPPERS and not w.startswith("-")]
+
+
 def _segment_deletion(head: str, words: list[str], verbs: list[str]) -> tuple[str | None, list[str] | None]:
     """(why one command is unsafe or None, the paths it deletes by name -- None when it deletes nothing)."""
     blind = _blind_deletion(head, words)
@@ -141,7 +146,7 @@ def owner_cmd_unsafe(cmd: Any) -> str | None:
     deleting: list[tuple[list[str], bool]] = []
     guarded = False
     for words in [s.split() for s in OWNER_CMD_SPLIT.split(flat)]:
-        verbs = [w for w in words if w not in OWNER_CMD_WRAPPERS and not w.startswith("-")]
+        verbs = _command_words(words)
         if not verbs:
             continue
         head = verbs[0]
