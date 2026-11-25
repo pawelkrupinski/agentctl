@@ -5,9 +5,10 @@ import contextlib
 import os
 import sys
 from typing import Any
+from agentctl.timefmt import ts
+from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.clock import Clock
 from agentctl.core import env_num, err, git, git_ok, slug, state_root
-from agentctl.timefmt import ts
 from agentctl.classify import INFRA_LOG, _test_line
 from agentctl.forge import forge_env
 from agentctl.waitingdir import save_entry, waiting_state, wlog
@@ -17,12 +18,11 @@ from agentctl.queueslots import CHECK_LEASE_TTL, queue_verdict, tree_slot
 from agentctl.queue import INFRA_CHECK_FAILURE
 from agentctl.identitychange import identity_model_commits
 from agentctl.waiting import tail_of, waiting_commits
-from agentctl.queuediff import CHECK_TIMEOUT, judge_failure
 from agentctl.recovery import batch_move
-from agentctl.queuepush import DEEP_BATCHES
 from agentctl.batchitem import batch_fail, batch_members
 from agentctl.batchrun import batch_check, bisect
-from agentctl.statemachines import StaleVersion, machine_state
+from agentctl.queuepush import DEEP_BATCHES
+from agentctl.queuefailure import CHECK_TIMEOUT, judge_failure
 
 
 BATCH_LEASE_MAX = 6 * 3600  # the batch executor's leases: its check (2 h) and its bisect (4 h), its machine's bounds

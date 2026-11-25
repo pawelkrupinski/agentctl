@@ -8,7 +8,6 @@ cognitive	RemoteStore._call_once	18
 cognitive	_await_entry	35
 cognitive	_gh_api_once	19
 cognitive	_push_batch_item	41
-cognitive	_push_change	94
 cognitive	_push_checked	14
 cognitive	_run_list_options	13
 cognitive	_tick_changes_pass	62
@@ -25,7 +24,6 @@ cognitive	alert_route	20
 cognitive	answer_regen_holds	13
 cognitive	apply_entry	20
 cognitive	assemble	24
-cognitive	base_failure_keys	28
 cognitive	baseline_failures	13
 cognitive	batch_check	19
 cognitive	bg_spent	16
@@ -73,7 +71,6 @@ cognitive	expire_cache	51
 cognitive	explorer_tick	19
 cognitive	failed_jobs_log	23
 cognitive	failure_detail	13
-cognitive	failure_keys	18
 cognitive	file_unheld_change	12
 cognitive	fix_between	21
 cognitive	fix_check	36
@@ -267,7 +264,6 @@ cyclomatic	RemoteStore._call_once	16
 cyclomatic	_await_entry	20
 cyclomatic	_gh_api_once	18
 cyclomatic	_push_batch_item	33
-cyclomatic	_push_change	62
 cyclomatic	_push_checked	14
 cyclomatic	_run_list_options	15
 cyclomatic	_step_branch_gone	16
@@ -285,7 +281,6 @@ cyclomatic	alert_route	21
 cyclomatic	answer_regen_holds	13
 cyclomatic	apply_entry	31
 cyclomatic	assemble	15
-cyclomatic	base_failure_keys	19
 cyclomatic	baseline_failures	13
 cyclomatic	batch_check	17
 cyclomatic	bg_spent	15
@@ -368,7 +363,6 @@ cyclomatic	job_ever_green	20
 cyclomatic	job_log_lines	17
 cyclomatic	jobs_verdict	23
 cyclomatic	joined_verdicts	12
-cyclomatic	judge_failure	12
 cyclomatic	jvm_candidates	35
 cyclomatic	jvm_reap	21
 cyclomatic	jvm_scan	25
@@ -523,7 +517,6 @@ cyclomatic	write_snapshot	23
 inner-defs	status_page_server	8
 inner-defs	sync_steps	7
 method-lines	_push_batch_item	72
-method-lines	_push_change	132
 method-lines	_tick_changes_pass	86
 method-lines	_watch	81
 method-lines	alert_probe	55

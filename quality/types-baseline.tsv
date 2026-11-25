@@ -6,7 +6,7 @@ mypy-errors	alertroute	30
 mypy-errors	alerts	61
 mypy-errors	ask	31
 mypy-errors	batch	37
-mypy-errors	batchcheck	43
+mypy-errors	batchcheck	42
 mypy-errors	batchitem	7
 mypy-errors	batchpush	34
 mypy-errors	batchrun	27
@@ -90,11 +90,12 @@ mypy-errors	procwatch	2
 mypy-errors	projector	25
 mypy-errors	queue	28
 mypy-errors	queuebatch	57
-mypy-errors	queuecheck	39
+mypy-errors	queuecheck	34
 mypy-errors	queueclose	37
-mypy-errors	queuediff	73
+mypy-errors	queuediff	41
 mypy-errors	queueenter	79
-mypy-errors	queuepush	100
+mypy-errors	queuefailure	5
+mypy-errors	queuepush	99
 mypy-errors	queuerecheck	46
 mypy-errors	queueslots	25
 mypy-errors	queuesubmit	36

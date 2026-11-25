@@ -3,14 +3,14 @@
 
 import time
 from typing import Any
-from agentctl.core import git, git_ok, remote
 from agentctl.timefmt import ts
+from agentctl.statemachines import change_event
+from agentctl.clock import Clock
+from agentctl.core import git, git_ok, remote
 from agentctl.classify import network_failure, network_only
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import save_entry, wlog
 from agentctl.clones import fetch_main, note_clone_suspect
-from agentctl.statemachines import change_event
-from agentctl.clock import Clock
 from agentctl.policy import policy_blocks
 from agentctl.queueslots import check_tree, queue_verdict, set_change
 from agentctl.queue import (
@@ -22,7 +22,8 @@ from agentctl.queuerecheck import recheck_reason
 from agentctl.redreplay import fix_replay_refusal
 from agentctl.waiting import already_landed, cancel_entry_remote
 from agentctl.blamerecords import blame_land_refusal
-from agentctl.queuediff import CHECK_TIMEOUT, TIMEOUT_RETRIES, judge_failure, keys_text, rebase_in_tree
+from agentctl.queuediff import rebase_in_tree
+from agentctl.queuefailure import CHECK_TIMEOUT, TIMEOUT_RETRIES, judge_failure, keys_text
 
 
 def regen_commands(tree: Any, files: Any) -> Any:

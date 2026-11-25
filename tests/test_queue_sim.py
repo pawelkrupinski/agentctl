@@ -336,11 +336,11 @@ MUTATIONS = {
         "", "nobatchgen"),
     # (11) the combined tree pushed unverified: main moved with no file overlap, and no verify round ran
     "a moved main's combined tree is verified": (
-        "            elif why is not None or tree_hook:  # a new round, not an attempt",
-        "            elif why is not None:  # MUTATION", "random"),
+        "        if why is not None or tree_hook:  # a new round, not an attempt",
+        "        if why is not None:  # MUTATION", "random"),
     # (11) MINIMAL RECHECKS undone: a verdict kept though a check of the change reads what main changed
     "a kept verdict needs its checks to read nothing main changed": (
-        "                verify_why = read_overlap(", "                verify_why = None and read_overlap(", "random"),
+        "        verify_why = read_overlap(", "        verify_why = None and read_overlap(", "random"),
     "overlapping changes are checked as one": (
         '    if e.get("backlog_batch"):\n        return None\n    together, first = None, None',
         '    return None  # MUTATION\n    together, first = None, None', "collisions"),

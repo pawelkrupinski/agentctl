@@ -105,6 +105,53 @@ class QueueTest(WaitingTest):
         _d, clone, _w = A.waiting_state(self.r.path)
         self.assertTrue(os.path.isdir(f"{clone}-wt-check-1"), "checked in a check tree, kept warm")
 
+    def checked_change(self):
+        """(the waiting dir, the id) of one change checked green, not yet pushed."""
+        wt, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
+        eid, _ = self.queued(wt)
+        d, _c, _w = A.waiting_state(self.r.path)
+        A.check_entry(self.r.path, eid, *on_clock(self.clock))
+        self.assertEqual(self.entry_of(d, eid)["status"], "checked")
+        return d, eid
+
+    def entry_of(self, d, eid):
+        return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+
+    def push_fails(self, words):
+        """The push's own pre-push hook prints words and refuses."""
+        with open(os.path.join(self.tmp.name, "hooks", "pre-push"), "a") as f:
+            f.write(f'echo "{words}" >&2\nexit 1\n')
+
+    def test_a_failed_push_waits_longer_each_attempt_and_its_last_escalates(self):
+        d, eid = self.checked_change()
+        self.push_fails("fatal: unable to access the remote")
+        st = A.CurrentStore(A.process_store)
+        for n in range(1, A.PUSH_ATTEMPTS_MAX + 1):
+            self.assertEqual(A.push_change(self.r.path, d, self.entry_of(d, eid), *on_clock(self.clock)), "checked")
+            e = self.entry_of(d, eid)
+            self.assertEqual((e["status"], e["push_attempts"]), ("checked", n))
+            self.assertEqual(e["retry_after"], self.clock.time() + min(60 * 2 ** n, 1800))
+            ev = st.item_events("change", eid)[-1]
+            self.assertIn(f"push attempt {n}", ev["text"])
+            self.assertEqual(ev["severity"], "escalate" if n >= A.PUSH_ATTEMPTS_MAX else "info", n)
+        # git still reads main here: the STALLED condition's probe passes, so none opens
+        self.assertEqual([c for c in A.open_conditions(st) if c["key"] == f"push-failing-{eid}"], [])
+        self.assertNotEqual(self.remote_log()[0], "a: one")
+
+    def test_a_raced_push_is_tried_again_with_no_attempt_counted(self):
+        d, eid = self.checked_change()
+        self.push_fails(" ! [rejected] HEAD -> main (non-fast-forward)")
+        self.assertEqual(A.push_change(self.r.path, d, self.entry_of(d, eid), *on_clock(self.clock)), "checked")
+        e = self.entry_of(d, eid)
+        self.assertEqual((e["status"], e.get("push_attempts")), ("checked", None))
+
+    def test_a_change_cancelled_since_its_checks_is_not_pushed(self):
+        d, eid = self.checked_change()
+        e = self.entry_of(d, eid)
+        A.write_json(os.path.join(d, "entries", f"{eid}.json"), dict(e, status="cancelled"))
+        self.assertEqual(A.push_change(self.r.path, d, e, *on_clock(self.clock)), "cancelled")
+        self.assertNotEqual(self.remote_log()[0], "a: one")
+
     def test_a_solo_change_waits_while_the_batch_checks_and_lands_after_it(self):
         """2026-10-30: batch #4 passed its 45-min check, but a solo change had pushed meanwhile, so it was assembled
         again; then the change tick took its freed check tree for another change: the batch never landed. While the
