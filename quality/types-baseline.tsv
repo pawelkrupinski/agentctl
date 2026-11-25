@@ -135,7 +135,7 @@ mypy-errors	redverify	21
 mypy-errors	redview	28
 mypy-errors	redworkflow	4
 mypy-errors	remote	45
-mypy-errors	remotejobs	19
+mypy-errors	remotejobs	18
 mypy-errors	remotestore	26
 mypy-errors	repos	29
 mypy-errors	reverts	46
@@ -149,8 +149,7 @@ mypy-errors	sessionpaths	14
 mypy-errors	slots	59
 mypy-errors	snapshot	9
 mypy-errors	statemachines	32
-mypy-errors	stats	50
-mypy-errors	statsrecords	89
+mypy-errors	stats	37
 mypy-errors	status	86
 mypy-errors	statusagents	39
 mypy-errors	statusline	4

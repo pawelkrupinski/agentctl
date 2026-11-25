@@ -5,13 +5,12 @@ import json
 import os
 import re
 import sys
-from agentctl.core import env_num, err, git, host_role
 from agentctl.timefmt import iso_at
+from agentctl.statsrecords import CHANGE_EXITS, _num, landing_records, state_spans, watch_record
+from agentctl.core import env_num, err, git, host_role
 from agentctl.waitingdir import waiting_entries, wlog
 from agentctl.gating import gate_flows
-from agentctl.statsrecords import (
-    CHANGE_EXITS, _num, condition_record, gate_run_record, landing_records, owner_decision_record, red_record,
-    state_spans, watch_record)
+from agentctl.statsepisodes import condition_record, gate_run_record, owner_decision_record, red_record
 
 
 STATS_EVERY = 60            # s between passes ($AGENTCTL_STATS_EVERY)

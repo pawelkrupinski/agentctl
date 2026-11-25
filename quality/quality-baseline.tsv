@@ -66,7 +66,6 @@ cognitive	cmd_maintain	36
 cognitive	cmd_park	14
 cognitive	cmd_recover	15
 cognitive	cmd_supersede	22
-cognitive	condition_record	13
 cognitive	config_knobs	25
 cognitive	conflict_resolve	17
 cognitive	dry_run	34
@@ -91,7 +90,6 @@ cognitive	fixer_work	12
 cognitive	fixers_land_watch	28
 cognitive	forge_run_list	22
 cognitive	gate_flow_names	17
-cognitive	gate_run_record	18
 cognitive	gate_runs_pass	17
 cognitive	gating_checks	29
 cognitive	generated_parse	16
@@ -118,7 +116,6 @@ cognitive	lander_records	19
 cognitive	lander_revive	26
 cognitive	lander_spawn	14
 cognitive	lander_transcript	32
-cognitive	landing_records	97
 cognitive	lap_change_deadline	15
 cognitive	laptop_pressure	12
 cognitive	laptop_role	15
@@ -146,7 +143,6 @@ cognitive	own_change_item	12
 cognitive	own_fixer_record_path	12
 cognitive	own_inbox_entry	18
 cognitive	owner_cmd_unsafe	36
-cognitive	owner_decision_record	17
 cognitive	owner_of	25
 cognitive	owner_orphans	22
 cognitive	owner_text	13
@@ -193,7 +189,6 @@ cognitive	red_lease_ended	48
 cognitive	red_main_verify	14
 cognitive	red_offer	31
 cognitive	red_owner_push	12
-cognitive	red_record	33
 cognitive	red_release	19
 cognitive	red_renew_blocks	26
 cognitive	red_renew_holders	17
@@ -338,7 +333,6 @@ cyclomatic	cmd_maintain	29
 cyclomatic	cmd_park	13
 cyclomatic	cmd_recover	16
 cyclomatic	cmd_supersede	18
-cyclomatic	condition_record	22
 cyclomatic	config_knobs	14
 cyclomatic	conflict_resolve	21
 cyclomatic	dry_run	20
@@ -363,7 +357,6 @@ cyclomatic	fixers_land_watch	22
 cyclomatic	forge_run_list	15
 cyclomatic	gate_fix_replay_refusal	20
 cyclomatic	gate_flow_names	22
-cyclomatic	gate_run_record	30
 cyclomatic	gate_runs_pass	21
 cyclomatic	gating_checks	21
 cyclomatic	generated_parse	17
@@ -396,7 +389,6 @@ cyclomatic	lander_records	15
 cyclomatic	lander_revive	26
 cyclomatic	lander_spawn	16
 cyclomatic	lander_transcript	23
-cyclomatic	landing_records	123
 cyclomatic	lap_change_deadline	17
 cyclomatic	laptop_pressure	13
 cyclomatic	laptop_role	17
@@ -424,7 +416,6 @@ cyclomatic	own_change_item	16
 cyclomatic	own_fixer_record_path	13
 cyclomatic	own_inbox_entry	13
 cyclomatic	owner_cmd_unsafe	32
-cyclomatic	owner_decision_record	27
 cyclomatic	owner_of	21
 cyclomatic	owner_orphans	13
 cyclomatic	owner_text	12
@@ -474,7 +465,6 @@ cyclomatic	red_main_verify	20
 cyclomatic	red_never_green	14
 cyclomatic	red_offer	38
 cyclomatic	red_owner_push	16
-cyclomatic	red_record	55
 cyclomatic	red_release	15
 cyclomatic	red_renew_blocks	25
 cyclomatic	red_renew_holders	11
@@ -555,7 +545,6 @@ method-lines	dry_run	53
 method-lines	expire_cache	58
 method-lines	explain_run_jobs	119
 method-lines	jvm_reap	57
-method-lines	landing_records	109
 method-lines	live_registry_read	53
 method-lines	live_stream	51
 method-lines	notify_escalations	85
