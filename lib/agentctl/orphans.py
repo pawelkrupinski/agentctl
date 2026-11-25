@@ -1,6 +1,8 @@
 # agentctl, part `orphans`: orphaned work: a worktree with commits nothing lands, found, offered to a fixer or escalated
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import argparse
+from typing import Any
 import glob
 import json
 import os
@@ -278,7 +280,7 @@ def orphan_submitted_alert(wt, commits, msg):
                 [], [], 0, cwd=wt, item=f"orphan:{wt.replace(HOME, '~')}")
 
 
-def probe_orphan_landed(a, store):
+def probe_orphan_landed(a: dict[str, Any], store: Any) -> tuple[bool, str]:
     """The orphan's change is on main (by patch), its worktree is gone, or somebody works in it again."""
     wt = a["worktree"]
     if not os.path.isdir(wt):

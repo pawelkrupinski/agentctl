@@ -5,6 +5,7 @@ import json
 import os
 import re
 import sys
+from agentctl.store import open_store
 from agentctl.core import env_num, err, git, host_role
 from agentctl.timefmt import iso_at
 from agentctl.waitingdir import waiting_entries, wlog
@@ -102,9 +103,9 @@ def stats_sent(st, name, iid):
     return st.meta_get(f"stats:{name}:{iid}") is not None
 
 
-def stats_pass(clock, store, repo=None, d=None, url=None, out=None):
+def stats_pass(clock, repo=None, d=None, store=None, url=None, out=None):
     """One pass: the records due (an exit older than STATS_SETTLE, not sent yet), sent; returns how many."""
-    st = store
+    st = store or open_store()
     url = url or stats_url()
     if not url:
         return 0
@@ -248,7 +249,7 @@ def maybe_stats_pass(repo, d, clock, st):
     if clock.time() - float(st.meta_get("stats_at", 0) or 0) < env_num("AGENTCTL_STATS_EVERY", STATS_EVERY):
         return 0
     st.meta_set("stats_at", clock.time())
-    n = stats_pass(clock, st, repo, d)
+    n = stats_pass(clock, repo, d, st)
     if n:
         wlog(d, f"tick: stats: {n} record(s) sent to VictoriaLogs")
     return n

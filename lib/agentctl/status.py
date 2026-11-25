@@ -1,6 +1,7 @@
 # agentctl, part `status`: the status model: each source read under a bound, assembled and cached; the status line
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import argparse
 from typing import Any, Dict
 import json
 import os
@@ -431,7 +432,7 @@ def status_cached():
         return _status_cache["data"]
 
 
-def cmd_ci_why(a, store):
+def cmd_ci_why(a: argparse.Namespace, store: Any) -> int:
     o_r = slug(a.repo) if a.repo else default_repo()
     target = None if a.target in (None, "main") else a.target.lstrip("#")
     if target is not None and not target.isdigit():

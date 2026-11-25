@@ -1,6 +1,7 @@
 # agentctl, part `recovery`: the recovery registry.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import argparse
 import json
 import os
 import re
@@ -222,7 +223,7 @@ def entry_ids(e):
     return [x for x in [e.get("entry")] + list(e.get("entries") or []) if x]
 
 
-def cmd_inbox(a, store):
+def cmd_inbox(a: argparse.Namespace, store: Any) -> int:
     if a.ids[:1] == ["escalated"]:  # the status line's: what is escalated now (the notifier already told) -- bold
         line = escalation_line(escalated_now(store))
         if line:

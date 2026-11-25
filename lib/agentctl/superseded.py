@@ -1,6 +1,8 @@
 # agentctl, part `superseded`: a worktree superseded by its successor: the marks, the successor's state, closing it, `agentctl supersede`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import argparse
+from typing import Any
 import os
 import time
 from agentctl.core import HOME, PROTECTED_BRANCHES, cherry_landed, git, remote
@@ -188,7 +190,7 @@ def resolve_successor(by, repo, store):
     return it["id"], it["id"], os.path.realpath(wt) if wt else None, it["data"].get("head")
 
 
-def cmd_supersede(a, store):
+def cmd_supersede(a: argparse.Namespace, store: Any) -> int:
     marks = superseded_marks()
     if not a.worktree:
         live = {w: m for w, m in marks.items() if a.all or m.get("state") in ("open", "landed")}

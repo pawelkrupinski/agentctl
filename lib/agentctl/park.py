@@ -1,6 +1,8 @@
 # agentctl, part `park`: a parked worktree: the marks, their release, the digest, `agentctl park` / `unpark`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import argparse
+from typing import Any
 import datetime as dt
 import os
 import re
@@ -165,7 +167,7 @@ def park_target(path):
     return os.path.realpath(top), (os.path.dirname(common) if common.endswith("/.git") else common)
 
 
-def cmd_park(a, store):
+def cmd_park(a: argparse.Namespace, store: Any) -> int:
     marks = parked_marks()
     if not a.worktree:
         for line in parked_lines():

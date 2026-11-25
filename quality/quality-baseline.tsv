@@ -217,7 +217,7 @@ cognitive	owner_spawn	11
 cognitive	owner_text	13
 cognitive	owner_work	21
 cognitive	park_duty	28
-cognitive	park_release_why	21
+cognitive	park_release_why	20
 cognitive	pick_commits	51
 cognitive	plan_worktrees	33
 cognitive	policy_blocks	12
@@ -320,7 +320,7 @@ cognitive	render_red_status	61
 cognitive	render_status_line	21
 cognitive	replay_cores	13
 cognitive	resolve_run	23
-cognitive	resolve_successor	15
+cognitive	resolve_successor	14
 cognitive	restart_gate	13
 cognitive	restart_if_changed	11
 cognitive	retire_flows	12
@@ -367,9 +367,9 @@ cognitive	stuck_child	17
 cognitive	stuck_limit	11
 cognitive	stuck_runs	77
 cognitive	submit_change	12
-cognitive	successor_state	34
+cognitive	successor_state	33
 cognitive	superseded_duty	19
-cognitive	sweep_land_refs	21
+cognitive	sweep_land_refs	20
 cognitive	sweep_repo	36
 cognitive	sync_onto_main	18
 cognitive	sync_steps	11
@@ -639,7 +639,7 @@ cyclomatic	owner_text	12
 cyclomatic	owner_turn_prompt	13
 cyclomatic	owner_work	19
 cyclomatic	park_duty	20
-cyclomatic	park_release_why	16
+cyclomatic	park_release_why	15
 cyclomatic	pick_commits	34
 cyclomatic	plan_worktrees	23
 cyclomatic	pressure_reading	18
@@ -746,9 +746,9 @@ cyclomatic	remote_poll	28
 cyclomatic	remote_progress	11
 cyclomatic	render_red_status	48
 cyclomatic	render_status_line	20
-cyclomatic	resolve_blocker	14
+cyclomatic	resolve_blocker	13
 cyclomatic	resolve_run	16
-cyclomatic	resolve_successor	17
+cyclomatic	resolve_successor	16
 cyclomatic	retire_jobs_of	32
 cyclomatic	revert_ack	13
 cyclomatic	revert_closer	11
@@ -792,9 +792,9 @@ cyclomatic	step_window_lines	14
 cyclomatic	stuck_limit	15
 cyclomatic	stuck_runs	36
 cyclomatic	submit_change	16
-cyclomatic	successor_state	25
+cyclomatic	successor_state	24
 cyclomatic	superseded_duty	11
-cyclomatic	sweep_land_refs	18
+cyclomatic	sweep_land_refs	17
 cyclomatic	sweep_repo	30
 cyclomatic	sync_onto_main	16
 cyclomatic	tick_changes	11
@@ -831,7 +831,7 @@ method-lines	alert_write	59
 method-lines	batch_step	134
 method-lines	build_view	65
 method-lines	check_batch	119
-method-lines	ci_why	183
+method-lines	ci_why	182
 method-lines	cmd_cleanup	94
 method-lines	cmd_gov	105
 method-lines	cmd_maintain	56

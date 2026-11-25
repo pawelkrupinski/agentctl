@@ -139,9 +139,11 @@ class InboxTest(unittest.TestCase):
         A.wire_collaborators(clock, A.CurrentStore())
         try:
             A.inbox_write("wait", "run o/r#1: success", [], [], 0)
+            self.assertNotEqual(A.inbox_write("wait", "run o/r#2: success", [], [], 0),
+                                A.inbox_write("wait", "run o/r#3: success", [], [], 0), "a standing clock: one id each")
         finally:
             A.wire_collaborators(A.Clock(), A.CurrentStore())
-        [e] = self.entries()
+        e = min(self.entries(), key=lambda x: x["id"])
         self.assertEqual(e["at"], 1_700_000_000.0)
         self.assertTrue(e["id"].startswith("20231114T221320"), e["id"])
         self.assertTrue(e["time"].startswith("2023-11-14"), e["time"])

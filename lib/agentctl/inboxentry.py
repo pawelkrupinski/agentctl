@@ -3,6 +3,7 @@
 
 import datetime as dt
 import glob
+import itertools
 import os
 import re
 import sys
@@ -74,7 +75,8 @@ _inbox_writers: list[Callable[[dict[str, Any]], Any]] = []
 
 
 # The time an entry is stamped with is the process's clock, wired beside the writer (the wall's until wired).
-_inbox_times: list[Callable[[], float]] = []
+_inbox_times: list[Callable[[], float]] = [time.time]
+_inbox_seq = itertools.count()  # a clock that stands still (a test's) must not give two entries one id
 
 
 def wire_inbox_writer(writer: Callable[[dict[str, Any]], Any], now: Callable[[], float] = time.time) -> None:
@@ -101,8 +103,8 @@ def inbox_write(command: str, verdict: Any, verdicts: Any, tail: Any, exit_code:
     alert_write): the id returned is the entry that carries it (its item's live alert when one is unread)."""
     if final and not reply and not _OPENING[0] and inbox_kind(verdict, final) in CONDITION_KINDS:
         raise ConditionBypass(f"a {inbox_kind(verdict, final)} inbox entry outside open_condition: {str(verdict)[:160]}")
-    now = dt.datetime.fromtimestamp((_inbox_times[0] if _inbox_times else time.time)(), dt.timezone.utc)
-    eid = (f"{now.strftime('%Y%m%dT%H%M%S%f')}-{os.getpid()}-{re.sub(r'[^a-z]+', '-', command)}"
+    now = dt.datetime.fromtimestamp(_inbox_times[0](), dt.timezone.utc)
+    eid = (f"{now.strftime('%Y%m%dT%H%M%S%f')}-{os.getpid()}-{next(_inbox_seq)}-{re.sub(r'[^a-z]+', '-', command)}"
            + ("" if final else "-waiting"))
     here = safe_cwd()
     rec = {"id": eid, "time": iso_at(now.timestamp()), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],
