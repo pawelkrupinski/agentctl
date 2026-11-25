@@ -1493,9 +1493,9 @@ class OldRedTest(RedsBase):
         self.made_callable_only([(True, "success")])
         snap = self.snap()
         self.assertEqual([o["name"] for o in snap["outside"]], ["Report run timings"])  # still observed, never re-opened
-        summary = A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path)[1]
+        summary = A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path, store=A.open_store())[1]
         self.assertNotIn("Report run timings", summary)
-        full = A.ci_why(MOVIES, snap=snap, repo=self.r.path)[1]
+        full = A.ci_why(MOVIES, snap=snap, repo=self.r.path, store=A.open_store())[1]
         self.assertNotIn("offered at the next tick", full)
         self.assertIn("fixing: verified: Report run timings runs only when called", full)
 

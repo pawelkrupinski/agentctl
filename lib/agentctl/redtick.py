@@ -455,7 +455,7 @@ def maybe_publish_gate(repo, store):
             # held (never NOBODY). Bounded: a dispatch's worktree checkout finishes on the tick's own thread
             if not run_bounded("red-tick", lambda: red_tick_repo(repo, store, snap), env_num("AGENTCTL_ASSIGN_BOUND", 20)):
                 err("red tick: still running; the gate line is published meanwhile")
-            _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo)
+            _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo, store=store)
             publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
         except (Exception, SystemExit) as e:
             err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")

@@ -69,14 +69,14 @@ def dry_run(repo, hook, head, log_path, attempt, clock, store, mode="--range", r
                 if not rechecked or moved:
                     return dry_run(repo, hook, head, log_path, f"{attempt}, against the known-red baseline", clock, store, mode,
                                    rechecked=int(rechecked) + 1, cls=cls, a=a, judged=main_at)
-                return refused(repo, out, log_path, f"the pre-push checks failed only where plain {remote()}/main fails "
+                return refused(store, repo, out, log_path, f"the pre-push checks failed only where plain {remote()}/main fails "
                                f"too ({checks}; a known red, claimable as `local`), and the hook still held them "
                                "against it (no baseline mode, or no baseline for this main), so this change lands once "
                                "they are fixed on main (or with the fix)")
             if known:
                 print(f"KNOWN RED (not held against this change): {', '.join(sorted(known))}; NEW with this change: "
                       f"{', '.join(sorted(new))}", flush=True)
-        return refused(repo, out, log_path, "the pre-push checks failed")
+        return refused(store, repo, out, log_path, "the pre-push checks failed")
     if os.path.exists(reds_dir("local.json")):  # passing checks clear main's known red
         main_ = git(repo, "rev-parse", f"{remote()}/main").strip()
         had = bool(local_red().get("checks"))
@@ -108,7 +108,7 @@ def network_requeue(repo, head, out, log_path, clock, store, a=None):
     with open(log_path, "a") as f:
         f.write(f"=== infra {ts()} {head}: {why}\n")
     if not batching(repo):
-        return refused(repo, out, log_path, f"the pre-push checks failed on the network, not on the change ({why}); "
+        return refused(store, repo, out, log_path, f"the pre-push checks failed on the network, not on the change ({why}); "
                        "land again once the remote answers")
     d, _clone, _wt = waiting_state(repo)
     if host_role() == "sync":  # ONE QUEUE: ci-runner's (its checks run there, its own network)
@@ -213,13 +213,13 @@ def precheck(repo, main_ref, sh, log_path, a, clock, store):
     return None
 
 
-def refused(repo, out, log_path, what):
+def refused(store, repo, out, log_path, what):
     """Print the NOT LANDED line for a hook or push that said no: the red gate explained by ci-why, a tunnel hinted."""
     tail = "\n  ".join([l for l in out.splitlines() if l.strip()][-25:])
     if REDGATE.search(out):
         print(f"NOT LANDED: the red gate refused the push (main is red).\n  {tail}")
         try:
-            print(ci_why(slug(repo), 4, repo=repo)[1])
+            print(ci_why(slug(repo), 4, repo=repo, store=store)[1])
         except Exception as e:
             print(f"(agentctl ci-why failed: {e})")
         return 1

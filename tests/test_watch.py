@@ -23,7 +23,7 @@ class WatchTest(Base):
     def setUp(self):
         super().setUp()
         self.saved = A.gh_json, A.ci_why
-        A.ci_why = lambda o_r, tail=6, run_id=None, repo=None: (True, "ci-why: main is RED for the gate")
+        A.ci_why = lambda o_r, tail=6, run_id=None, repo=None, store=None: (True, "ci-why: main is RED for the gate")
         self.main, self.conv, self.takes, self.jobs = [], [], None, {}
         self.listed = []
 

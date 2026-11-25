@@ -330,7 +330,7 @@ def land_loop(repo, main_ref, sh, log_path, a, clock, store):
             err(f"push failed remote-side ({remote_fault.group(0)}): retry")
             clock.sleep(min(60, 5 + 10 * attempt))
             continue
-        return refused(repo, out, log_path, f"the push failed remote-side ({remote_fault.group(0)}), {LAND_RETRIES} "
+        return refused(store, repo, out, log_path, f"the push failed remote-side ({remote_fault.group(0)}), {LAND_RETRIES} "
                        "times: the forge's fault, not the change's -- land again later" if remote_fault else
                        "the push failed (pre-push hook or remote)")
     return 1

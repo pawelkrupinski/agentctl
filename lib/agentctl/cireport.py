@@ -15,7 +15,6 @@ from agentctl.ciwhy import (
 from agentctl.runsigs import run_sigs, save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
 from agentctl.dispatchblock import short_flow
-from agentctl.store import open_store
 from agentctl.redrecord import red_active, red_what
 from agentctl.branches import branch_lines, branch_state, branch_summary
 from agentctl.redseen import gate_red_units, predict_units, stuck_runs
@@ -28,7 +27,7 @@ from agentctl.runexplain import explain_run, explain_run_jobs
 from agentctl.outsideflows import main_callable_flows, outside_gate
 
 
-def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
+def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None, *, store):
     """(red, text). run_id: explain that one run; else the gating workflows' newest decided runs on main, each red row
     followed by who holds it (`fixing: <its state, holder or offer>`; never NOBODY). summary: text is the status line's one line."""
     if run_id:
@@ -74,7 +73,6 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
         units += local_units(lrepo) + predict_units(o_r, bsnap)
         for u in units:
             units_of.setdefault((u["workflow"], u["run"].get("databaseId")), []).append(u)
-        store = open_store()
         states = red_view_of_units(store, units)
         flakes_ = [it for it in red_active(store).values() if it["data"].get("red_kind") == "flake"]
         untracked = red_untracked_runs(store, o_r, units)
@@ -156,7 +154,7 @@ def ci_why(o_r, tail=6, run_id=None, repo=None, summary=False, snap=None):
         out.append("Flaky (passed on the next run with no fix; a red until a fix lands and a run proves it):")
         for it in flakes_:
             out.append(f"  {red_what(it['data'])}: {str(it['data'].get('line'))[:120]}")
-            out.append(f"    fixing: {red_view(open_store(), it)[0]}")
+            out.append(f"    fixing: {red_view(store, it)[0]}")
     head = f"ci-why {o_r}: " + ("main is RED for the gate" if red else "main is green for the gate")
     if others_err is not None:
         out.append(f"outside the gate: could not list main's runs ({others_err})")

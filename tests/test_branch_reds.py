@@ -114,7 +114,7 @@ class BranchRedTest(BranchBase):
         its = [i for i in st.items("red") if i["data"]["red_kind"] == "predicts"]
         self.assertTrue(its and all(i["state"] == "offered" and i["data"]["predicts"] == self.branch for i in its), its)
         self.assertIn("main will fail the same way next", A.fixer_prompt(units[0], "/wt", "/brief"))
-        red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path)
+        red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.open_store())
         self.assertFalse(red)
         self.assertIn("branch reds: 1 → movies-wt-drift (convergence #2116 PREDICTS MAIN RED)", line)
         self.assertNotIn("no reds", line)
@@ -155,7 +155,7 @@ class BranchRedTest(BranchBase):
         self.assertNotIn("PREDICTS", line)
         self.assertIn("(recording 3166 ≠ main's 573); blocks promoting recording 3166", line)
         self.assertEqual(A.predict_units(MOVIES, snap), [])
-        summary = A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path)[1]
+        summary = A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path, store=A.open_store())[1]
         self.assertIn("branch reds: 1 → movies-wt-drift (convergence #2116)", summary)
 
     def test_a_commit_not_on_main_predicts_nothing(self):
@@ -174,7 +174,7 @@ class BranchRedTest(BranchBase):
         self.assertEqual(len(A.branch_reds(self.snap())), 1)
         A.branch_exists = lambda o_r, b: False
         self.assertEqual(A.branch_reds(self.snap()), [])
-        self.assertEqual(A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path)[1],
+        self.assertEqual(A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.open_store())[1],
                          "gate green · no reds")
         A.branch_exists = lambda o_r, b: True
         runs = json.load(open(os.path.join(self.d, "runs.json")))
@@ -258,7 +258,7 @@ class OrphanBranchRedTest(BranchBase):
         self.assertEqual(A.settle_branch_reds(MOVIES, snap, self.store), [])  # once
         self.assertEqual(A.route_branch_reds(MOVIES, snap), [])
         self.assertEqual([x for x in A.inbox_entries() if x["kind"] == "BRANCH_RED"], [])
-        line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path)[1]
+        line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.open_store())[1]
         self.assertNotIn("NOBODY", line)
         self.assertNotIn("branch reds", line)
 

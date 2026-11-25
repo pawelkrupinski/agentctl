@@ -59,7 +59,7 @@ def watch_landed(repo: str, sha: str, pushed_at: float | None, clock: Clock, sto
                   "its verdict is its own (`agentctl orphans` lists owners)")
             return 2
         try:
-            rc = _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes, claim if how == "mine" else None)
+            rc = _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes, claim if how == "mine" else None, store=store)
         finally:
             own.release()
     if rc == 0 and close:
@@ -156,7 +156,7 @@ class WatchClaim:
             err(f"watch {self.sha[:10]}: could not write its verdict to the store ({str(e)[:120]})")
 
 
-def _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None):
+def _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None, *, store):
     timeout = env_num("AGENTCTL_WATCH_TIMEOUT", WATCH_TIMEOUT)
     conv_start = env_num("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START)
     t0 = clock.time()
@@ -210,7 +210,7 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None):
         if v and v[0] == "red":
             verdict(3, v[1], v[2])
             try:
-                print(ci_why(o_r, 4, repo=repo)[1])
+                print(ci_why(o_r, 4, repo=repo, store=store)[1])
             except (Exception, SystemExit) as e:
                 print(f"(agentctl ci-why failed: {e})")
             return 3

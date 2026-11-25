@@ -431,7 +431,7 @@ def status_cached():
         return _status_cache["data"]
 
 
-def cmd_ci_why(a):
+def cmd_ci_why(a, store):
     o_r = slug(a.repo) if a.repo else default_repo()
     target = None if a.target in (None, "main") else a.target.lstrip("#")
     if target is not None and not target.isdigit():
@@ -445,6 +445,6 @@ def cmd_ci_why(a):
         text = status_gate_text(state_read(), time.time(), o_r)  # the status model's gate text, for this repo
         print(text)
         return 1 if text.startswith("gate RED") else 0 if GATE_LINE.match(text) else 2  # 2: UNREAD / ? / NETWORK
-    red, text = ci_why(o_r, a.tail, target, summary=getattr(a, "summary", False))
+    red, text = ci_why(o_r, a.tail, target, summary=getattr(a, "summary", False), store=store)
     print(text)
     return 1 if red else 0
