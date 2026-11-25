@@ -31,4 +31,4 @@ MODULES = ("procrunner", "govpool", "usage", "timefmt", "statefile", "moviestool
            "queuepush", "orphans", "maintain", "batchpush", "snapshot", "batch", "batchcheck", "batchtick",
            "cleanuppass", "redworkflow", "redlease", "redstep", "redhold", "server", "invariants", "watchdog",
            "landqueue", "statusline", "status", "statuspage", "redstatus", "syncsteps", "redcommands", "queueenter",
-           "landdryrun", "slots", "cliparser", "redtick", "serversteps", "processor", "cli")
+           "landdryrun", "slots", "cliparser", "redquota", "redtick", "serversteps", "processor", "cli")

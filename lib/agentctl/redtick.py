@@ -6,6 +6,7 @@ import os
 import threading
 import time
 from typing import Any
+from agentctl.statemachines import StaleVersion
 from agentctl.core import NoReadAccess, attempt, env_num, err, process_cache, run_bounded, slug
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
@@ -19,7 +20,6 @@ from agentctl.ciwhy import (
     _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap, gate_runs)
 from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
 from agentctl.dispatchblock import in_fixer
-from agentctl.statemachines import StaleVersion
 from agentctl.redrecord import RED_TERMINAL, red_what
 from agentctl.lander import lander_note_landed
 from agentctl.redfixread import red_main_current
@@ -39,17 +39,17 @@ from agentctl.localrecheck import recheck_local
 from agentctl.orphanreap import red_reap_orphans
 from agentctl.redprobe import cmd_red_probe
 from agentctl.fixerlife import red_fixer
-from agentctl.redvault import red_quota_waits
 from agentctl.ask import red_owner_reminders
 from agentctl.reddispatch import RED_MODEL, red_migrate, red_renew_holders
-from agentctl.redstep import red_step
 from agentctl.cireport import ci_state_refresh, ci_why
-from agentctl.redhold import red_enforce
 from agentctl.offerdispatch import red_dispatcher
 from agentctl.ownerwrapper import red_owner
+from agentctl.redstep import red_step
+from agentctl.redhold import red_enforce
 from agentctl.redcommands import (
     red_cmd_auto, red_cmd_block, red_cmd_dispatch, red_cmd_lease, red_cmd_owner_push, red_cmd_status,
     red_cmd_unblame, red_cmd_unblock)
+from agentctl.redquota import red_quota_waits
 
 
 # -- the tick's red step (the processor; ci-why never acts)
