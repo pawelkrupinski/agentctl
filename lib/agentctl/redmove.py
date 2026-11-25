@@ -3,6 +3,7 @@
 
 import os
 from typing import Any
+from contextlib import suppress
 from agentctl.timefmt import ts
 from agentctl.leases import lease_meta
 from agentctl.inboxentry import inbox_write
@@ -102,11 +103,9 @@ def red_stop_holder(store, key, why, outcome, force=False):
         return None  # it still holds other reds of its run: only this lease goes, never its work
     wt = lease_meta(row).get("worktree")
     if wt and os.path.isdir(wt) and allowed_path(wt):
-        try:
+        with suppress(OSError):
             with open(os.path.join(wt, "RED-STOP.md"), "w") as f:
                 f.write(f"STOP: {why} (agentctl red, {ts()}); remove this file with your worktree.\n")
-        except OSError:
-            pass
     return row["holder"]
 
 

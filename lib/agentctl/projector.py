@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from contextlib import suppress
 from agentctl.core import env_num, err
 from agentctl.timefmt import iso_at
 from agentctl.notifyurl import notification_url
@@ -39,10 +40,8 @@ def project_changes(d, store):
                                                      "red_accum0": float(st.meta_get("red_accum", 0) or 0)})
         if cur["state"] != state and not machine_state("change", cur["state"]).terminal:
             data, event = projected_transition(e, w, cur["state"], state)
-            try:
+            with suppress(StaleVersion, TerminalState):
                 st.transition("change", e["id"], state, cur["version"], data=data, event=event)
-            except (StaleVersion, TerminalState):
-                pass
             cur = st.item("change", e["id"])
         out.append(cur)
     return out

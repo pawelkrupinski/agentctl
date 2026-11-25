@@ -8,6 +8,7 @@ import re
 import signal
 import subprocess
 import time
+from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, env_num, pid_alive, run_cmd, state_root
 from agentctl.timefmt import ts
@@ -330,11 +331,9 @@ def jvm_reap(cands, kill, procs):
         why = None
         if rule == "dup-sbt-server":
             r = run_cmd(["ps", "-o", "%cpu=", "-p", str(pid)]).stdout.strip()
-            try:
+            with suppress(ValueError):
                 if float(r) > float(jvm_knob("DUP_MAX_RECENT_CPU_PERCENT", 5)):
                     why = f"busy now ({r}% CPU), not idle"
-            except ValueError:
-                pass
         if why is None and not pid_alive(pid):
             why = "already gone"
         if why is None:
@@ -364,10 +363,8 @@ def jvm_reap(cands, kill, procs):
             waited += 0.5
         how = f"SIGTERM, {waited:.0f}s"
         if pid_alive(pid):
-            try:
+            with suppress(ProcessLookupError):
                 os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
             how = f"SIGKILL after {grace:.0f}s"
         line = f"killed jvm pid {pid} ({how}) rule={rule}{dump}: {args[:150]}"
         print(line)

@@ -3,6 +3,7 @@
 
 import re
 import time
+from contextlib import suppress
 from agentctl.core import cherry_landed, git, git_ok, process_cache, remote
 from agentctl.timefmt import parse_time, ts
 from agentctl.forge import gh_json
@@ -69,23 +70,19 @@ def red_fix_facts(repo, store):
     except (Exception, SystemExit):
         landed = []
     key_runs, key_aside = {}, {}
-    try:
+    with suppress(Exception):
         for it in (store.items("red") if store is not None else []):
             k = it["data"].get("key") or it["id"]
             key_runs.setdefault(k, set()).update(map(str, it["data"].get("runs") or []))
             key_aside.setdefault(k, set()).update(set(it["data"].get("refuted") or [])
                                                   | set(it["data"].get("unverified") or []))
-    except Exception:
-        pass
     # THE FIXES' CONTENT (simplification-2026-10-31 item 3): the patch-id of every fix commit a red could take and of
     # every fix it refuted or set aside, so a rebased copy of a refuted fix -- another sha, the same change -- counts no
     # more than the original (red_fix_of). A sha whose patch cannot be read is matched by sha alone.
     shas = {e.get("landed_sha") for e in entries if e.get("landed_sha")} | {row[0] for row in landed}
-    try:
+    with suppress(Exception):
         for it in (store.items("red") if store is not None else []):
             shas |= set(it["data"].get("refuted") or []) | set(it["data"].get("unverified") or [])
-    except Exception:
-        pass
     patches = {}
     for sha in shas:
         try:

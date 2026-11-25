@@ -4,6 +4,7 @@
 import os
 import re
 import time
+from contextlib import suppress
 from agentctl.core import HOME, fmt_age, git, git_ok, remote
 from agentctl.timefmt import ts
 from agentctl.store import StoreUnavailable
@@ -251,10 +252,8 @@ def revert_ack(st, ref, how, note, by):
     if it["state"] not in REVERT_OPEN:
         d = it["data"] or {}
         reply = {"by": by, "how": how, "note": note, "at": ts()}
-        try:
+        with suppress(StaleVersion):
             st.update_item("revert", it["id"], it["version"], {"replies": (d.get("replies") or []) + [reply]})
-        except StaleVersion:
-            pass
         return st.item("revert", it["id"]), (f"revert {it['id']}: already {it['state']} -- {revert_closed_text(d)}; "
                                              f"your reply ({how}) is noted beside it")
     st.transition("revert", it["id"], "acked", it["version"],

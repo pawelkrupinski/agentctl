@@ -186,10 +186,8 @@ def _gh_api_once(o_r, method, path, params=None, body=None):
         raise ForgeHTTPError(f"gh api {method} {url}: {(r.stderr or text or r.stdout).strip()[:300]}")
     out = json.loads(text) if text.strip() else None
     if hdrs.get("etag"):
-        try:
+        with contextlib.suppress(OSError):
             write_json(etag_path(url), {"etag": hdrs["etag"], "body": out})
-        except OSError:
-            pass
     return out
 
 

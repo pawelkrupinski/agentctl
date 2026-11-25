@@ -7,6 +7,7 @@ import signal
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
+from contextlib import suppress
 from agentctl.core import HOME, REPOS, git, pid_alive, run_cmd, slug, state_root
 from agentctl.procs import tosec
 from agentctl.selfcode import code_version
@@ -78,10 +79,8 @@ def owner_orphans(kill):
             found.append(("owner", rec.get("pid"), "process gone, record left", what))
             if kill:
                 for ext in (".json", ".verdict"):
-                    try:
+                    with suppress(FileNotFoundError):
                         os.unlink(rec["path"][: -len(".json")] + ext)
-                    except FileNotFoundError:
-                        pass
                 print(f"removed the dead owner's record {rec['path']}")
             continue
         reasons = []
@@ -92,11 +91,9 @@ def owner_orphans(kill):
         if reasons:
             found.append(("owner", rec.get("pid"), "; ".join(reasons), what))
             if kill and rec.get("pid"):
-                try:
+                with suppress(ProcessLookupError):
                     os.kill(int(rec["pid"]), signal.SIGTERM)
                     print(f"sent SIGTERM to owner pid {rec['pid']} ({rec.get('kind')})")
-                except ProcessLookupError:
-                    pass
     return found
 
 
@@ -163,11 +160,9 @@ def spotlight_exclude(repos: list[str] | None = None, cwds: Callable[[], dict[in
             if todo and in_use(wt, busy or []):
                 continue  # in use: marked once nothing runs there
             for d in todo:
-                try:
+                with suppress(OSError):
                     open(os.path.join(d, SPOTLIGHT_MARKER), "a").close()
                     marked.append(d)
-                except OSError:
-                    pass
     return marked
 
 

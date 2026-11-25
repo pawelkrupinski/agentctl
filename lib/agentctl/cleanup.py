@@ -236,11 +236,9 @@ def free_worktree(wt, out=print):
     sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
     for pid, cmd in sorted(held.items()):
         if sid and not NEVER_SIGNAL.search(cmd) and process_session(pid) == sid:
-            try:
+            with contextlib.suppress(OSError):
                 os.kill(pid, signal.SIGTERM)
                 out(f"stopped pid {pid} of this session: {cmd[:120]}", flush=True)
-            except OSError:
-                pass
     deadline = time.time() + env_num("AGENTCTL_FREE_WAIT", FREE_WAIT)
     while held and time.time() < deadline:
         time.sleep(0.5)

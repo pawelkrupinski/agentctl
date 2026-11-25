@@ -4,6 +4,7 @@
 import os
 import re
 import sys
+from contextlib import suppress
 from agentctl.core import HOME
 from agentctl.selfcode import TOOL_PATH
 from agentctl.waitingdir import waiting_state
@@ -73,10 +74,8 @@ def waiting_service(action: str, repo: str) -> int:
         return 0
     if action == "uninstall":
         launchctl("bootout", f"{domain}/{SERVICE_LABEL}")
-        try:
+        with suppress(FileNotFoundError):
             os.unlink(plist)
-        except FileNotFoundError:
-            pass
         print(f"uninstalled {SERVICE_LABEL}")
         return 0
     if action == "status":

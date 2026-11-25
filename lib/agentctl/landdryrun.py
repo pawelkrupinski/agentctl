@@ -3,6 +3,7 @@
 
 import os
 import time
+from contextlib import suppress
 from agentctl.core import env_num, err, git, host_role, reds_dir, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -136,13 +137,11 @@ def baseline_failures(repo, hook, head, log_path):
     if rec is not None:
         if rec.get("main") and rec["main"] != main:  # another main with the same tree (main moved by a commit that left
             # it alone): the hook looks this main's baseline up by its sha, so it gets the same output (2c7673)
-            try:
+            with suppress(OSError, IndexError):
                 with open(reds_dir("baseline-out", rec["main"])) as f:
                     old = f.read().split("\n", 1)[1]
                 if not os.path.exists(reds_dir("baseline-out", main)):
                     write_baseline_out(main, old)
-            except (OSError, IndexError):
-                pass
         return {k: set(v) for k, v in rec["fails"].items()}
     synth = git(repo, "commit-tree", f"{main}^{{tree}}", "-p", head, "-m", f"agentctl baseline: {remote()}/main {main[:10]}",
                 check=False)

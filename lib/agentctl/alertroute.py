@@ -4,6 +4,7 @@
 import os
 import re
 import time
+from contextlib import suppress
 from agentctl.core import env_num
 from agentctl.inboxentry import CONDITION_KINDS, INBOX_COMMANDS, inbox_kind
 from agentctl.redfamilies import red_family
@@ -106,11 +107,9 @@ def alert_red_audience(rec, red, st, t):
     kind = alert_kind_of(rec)
     if red is None:
         return "fixer"  # no item to judge by (an old entry): the next escalation of a live red routes it properly
-    try:
+    with suppress(KeyError, ValueError):
         if machine_state("red", red["state"]).terminal:
             return "info"
-    except (KeyError, ValueError):
-        pass
     if kind == "RED_ESCALATE":
         return "fixer"
     d = red.get("data") or {}

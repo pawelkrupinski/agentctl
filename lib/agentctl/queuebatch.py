@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 from typing import Any, Optional
+from contextlib import suppress
 from agentctl.core import env_num, fmt_age, git, host_role, process_cache, remote, spawn_detached
 from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
@@ -240,10 +241,8 @@ def note_hold(st, e, kind, why, t, blocker=None, files=None, batch=None):
     rec = None if not why else {"kind": kind, "why": why, "blocker": blocker, "files": files, "batch": batch,
                                 "since": cur.get("since") if cur.get("kind") == kind and cur.get("blocker") == blocker
                                 else t}
-    try:
+    with suppress(StaleVersion):  # the next tick records it
         st.update_item("change", e["id"], it["version"], {"hold": rec})
-    except StaleVersion:
-        pass  # the next tick records it
 
 
 def break_hold_cycles(st, d, todo):

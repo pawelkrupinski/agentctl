@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import time
 from typing import Any
+from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, SHORT, _tokens, env_num, git, pid_alive, state_root
 from agentctl.statefile import mtime, read_record, write_json
@@ -391,7 +392,7 @@ def bg_failure(bid):
 def bg_final_text(path):
     """The session's last assistant answer (its text blocks), '' when there is none."""
     last = ""
-    try:
+    with suppress(OSError, TypeError):
         with open(path, errors="replace") as f:
             for line in f:
                 try:
@@ -403,6 +404,4 @@ def bg_final_text(path):
                     t = "\n".join(b.get("text") or "" for b in m["content"] if b.get("type") == "text")
                     if t.strip():
                         last = t
-    except (OSError, TypeError):
-        pass
     return last

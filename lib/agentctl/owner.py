@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 from typing import Any
+from contextlib import suppress
 from agentctl.core import HOME, git, git_ok, remote, spawn_detached
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -105,10 +106,8 @@ def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
                pid=None, in_turn=False, progress_at=None,
                restarts=int(rec.get("restarts", -1)) + 1, log=os.path.join(owner_dir(fam), "owner.log"))
     write_json(owner_record_path(fam), rec)
-    try:  # a STOP left by an earlier spell would stop this one at its first pass
+    with suppress(OSError):  # a STOP left by an earlier spell would stop this one at its first pass
         os.unlink(os.path.join(wt, "RED-STOP.md"))
-    except OSError:
-        pass
     env = fixer_env(o_r, f"owner-{fam}")
     env[OWNER_HEARTBEAT_ENV] = json.dumps({"epoch": hb["epoch"], "secret": hb["secret"]})
     try:

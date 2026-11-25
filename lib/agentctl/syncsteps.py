@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 from typing import Any, Callable, Sequence
+from contextlib import suppress
 from agentctl.core import (
     NoToken, env_num, err, git, git_ok, process_cache, reap_children, reds_dir, remote, run_bounded,
     spawn_detached, state_root)
@@ -158,10 +159,8 @@ def answer_regen_holds(d: str, st: Any) -> list[str]:
                 or git(wt, "status", "--porcelain", check=False).stdout.strip():
             continue  # its agent's: moved on, or at work in it
         _regen_answered[(it["id"], head, rnd)] = True
-        try:
+        with suppress(Exception):  # said for the owner's escalation only; the land runs all the same
             st.update_item("change", it["id"], it["version"], {"regen_answered": rnd})
-        except Exception:
-            pass  # said for the owner's escalation only; the land runs all the same
         with open(os.path.join(d, f"regen-land-{it['id']}.log"), "a") as logf:
             spawn_detached([sys.executable, TOOL_PATH, "land"], cwd=wt, stdin=subprocess.DEVNULL, stdout=logf,
                            stderr=logf, start_new_session=True, env=tool_env())

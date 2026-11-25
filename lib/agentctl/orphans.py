@@ -10,6 +10,7 @@ import re
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import (
     HOME, branch_of, cherry_landed, env_num, git, git_ok, hashlib_sha1, reds_dir, remote, slug, spawn_detached)
@@ -188,12 +189,10 @@ def orphan_candidates(repo, store, now_=None, dead=None, refused=None, lands=Non
     except (Exception, SystemExit):
         sessions = {}
     records = blame_records(store)
-    try:  # a change in the land queue (queued, checking, waiting) is not orphaned
+    with suppress(Exception, SystemExit):  # a change in the land queue (queued, checking, waiting) is not orphaned
         d, _c, _w = waiting_state(repo)
         live |= {os.path.realpath(e.get("worktree") or "") for e in waiting_entries(d, open_only=False)
                  if e.get("status") in ("queued", "checking", "waiting")}
-    except (Exception, SystemExit):
-        pass
     out = []
     for w in worktrees(repo):
         p = w.get("worktree")

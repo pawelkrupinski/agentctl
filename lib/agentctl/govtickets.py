@@ -6,6 +6,7 @@ import json
 import os
 import time
 from typing import Any, Optional
+from contextlib import suppress
 from agentctl.core import env_num, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
@@ -32,14 +33,12 @@ def gov_tickets() -> list[dict[str, Any]]:
     for p in sorted(glob.glob(os.path.join(gov_dir(), "t-*.json"))):
         lock = p[:-5] + ".lock"
         if not lock_held(lock):
-            try:
+            with suppress(OSError):
                 if time.time() - os.path.getmtime(p) > 30:  # never one being written
                     os.unlink(p)
                     os.unlink(lock)
                     gov_log_end(os.path.basename(lock))
                     gov_bump()
-            except OSError:
-                pass
             continue
         rec = read_record(p)
         if rec:

@@ -7,7 +7,8 @@ import json
 import os
 import time
 from typing import Any
-from agentctl.core import env_num, pct
+from contextlib import suppress
+from agentctl.core import attempt, env_num, pct
 from agentctl.machine import machine_cores, machine_load1
 from agentctl.govtickets import gov_dir, gov_tickets
 from agentctl.govbudget import cap_state, check_runs, checks_cap, gov_budget, slot_holders
@@ -24,6 +25,15 @@ from agentctl.govroute import gov_replay, gov_route
 # `def cmd_gov` and `def gov_route`; a module split moved both, and movies took no ticket for three days).
 GOV_FEATURES = ("admit", "cores", "route", "width")
 
+
+def admit_rows() -> list[Any]:
+    """The admissions of <gov>/admits.jsonl, in order: a torn line skipped, an unreadable file read as far as it went."""
+    rows: list[Any] = []
+    with suppress(OSError), open(os.path.join(gov_dir(), "admits.jsonl")) as f:
+        for line in f:
+            with suppress(ValueError):
+                rows.append(json.loads(line))
+    return rows
 
 def cmd_gov(a):
     if a.gcmd == "probe":
@@ -45,16 +55,7 @@ def cmd_gov(a):
         print(f"{where}: {why}")
         return 0 if where == "ci" else 1
     if a.gcmd == "replay":
-        rows = []
-        try:
-            with open(os.path.join(gov_dir(), "admits.jsonl")) as f:
-                for line in f:
-                    try:
-                        rows.append(json.loads(line))
-                    except ValueError:
-                        pass
-        except OSError:
-            pass
+        rows = admit_rows()
         at = dt.datetime.fromisoformat(a.at.replace("Z", "+00:00")).timestamp()
         rows = [r for r in rows if abs(float(r.get("at", r.get("end", 0))) - at) <= 12 * 3600]
         cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * (a.cores or machine_cores())
@@ -86,18 +87,7 @@ def cmd_gov(a):
     if a.gcmd == "stats":
         rc = cmd_checks(argparse.Namespace(ccmd="stats", days=a.days))
         cutoff = time.time() - a.days * 86400
-        rows = []
-        try:
-            with open(os.path.join(gov_dir(), "admits.jsonl")) as f:
-                for line in f:
-                    try:
-                        r = json.loads(line)
-                    except ValueError:
-                        continue
-                    if r.get("at", 0) >= cutoff:
-                        rows.append(r)
-        except OSError:
-            pass
+        rows = [r for r in admit_rows() if r.get("at", 0) >= cutoff]
         print(f"{'class':>7} {'admits':>6} {'p50 wait':>9} {'p90 wait':>9} {'waited>1m':>9}")
         for cls in GOV_CLASSES:
             rs = [r for r in rows if r.get("class") == cls]
@@ -109,10 +99,8 @@ def cmd_gov(a):
             m_ = gov_measured_cores(job, usage)
             print(f"cores {job}: {sum(1 for r in usage if r.get('job') == job)} runs, charged "
                   f"{gov_job_cores(job):g} ({'measured p75' if m_ is not None else 'default'})")
-        try:
-            ev = sum(1 for l in open(os.path.join(gov_dir(), "gov.log")) if " evicted " in l)
-        except OSError:
-            ev = 0
+        ev = attempt(lambda: sum(1 for l in open(os.path.join(gov_dir(), "gov.log")) if " evicted " in l), 0,
+                     catch=(OSError,))
         print(f"evictions (all time): {ev}")
         return rc
     return 2

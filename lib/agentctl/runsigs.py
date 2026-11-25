@@ -4,6 +4,7 @@
 import glob
 import os
 import time
+from contextlib import suppress
 from agentctl.core import reds_dir
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -52,19 +53,15 @@ def name_causes(o_r=None, values=()):
                 continue
             name, r = resolve_run(o_r, v)
             if r is not None and r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS:
-                try:
+                with suppress(Exception, SystemExit):
                     sigs = run_sigs(o_r, r, name)
                     cs = {cause_of(x["job"], x["line"]) for x in sigs} - {None}
                     for n in run_names(r):
                         out.setdefault(n, set()).update(cs)
                     continue
-                except (Exception, SystemExit):
-                    pass
             tried[v] = ts()
-        try:
+        with suppress(OSError):
             write_json(reds_dir("unknown-runs.json"), tried)
-        except OSError:
-            pass
     return out
 
 
@@ -132,15 +129,11 @@ def run_sigs(o_r, run, workflow, now_=None):
     if any("LOG UNREADABLE" in l for l in lines):  # a log not read is no verdict: read again when due, never cached
         sigs = [{"job": j, "kind": k, "line": (l or "")[:300], "sig": signature(workflow, j, l)} for j, k, l in per_job]
         tries = int((unread or {}).get("tries") or 0) + 1
-        try:
+        with suppress(OSError):
             write_json(unread_path, {"run": rid, "classifier": classifier_version(), "sigs": sigs, "tries": tries,
                                      "due": t + min(RUNSIG_UNREAD_MAX, RUNSIG_UNREAD_FIRST * 2 ** (tries - 1))})
-        except OSError:
-            pass
         return sigs
     if unread:
-        try:
+        with suppress(OSError):
             os.remove(unread_path)
-        except OSError:
-            pass
     return save_run_sigs(o_r, run, workflow, per_job)

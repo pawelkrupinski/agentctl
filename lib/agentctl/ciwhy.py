@@ -8,6 +8,7 @@ import os
 import re
 import time
 from typing import Any, Callable
+from contextlib import suppress
 from agentctl.core import err, fmt_age, git, git_ok, process_cache, state_root
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, gh_json
@@ -175,14 +176,12 @@ def run_no_verdict(o_r, r):
     except (Exception, SystemExit):
         return False
     nv = _no_verdict_mem[rid] = jobs_no_verdict(d.get("jobs"))
-    try:
+    with suppress(OSError):
         known = read_record(path) or {}
         known[rid] = nv
         if len(known) > 500:
             known = dict(list(known.items())[-500:])
         write_json(path, known)
-    except OSError:
-        pass
     return nv
 
 

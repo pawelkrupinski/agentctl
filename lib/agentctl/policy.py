@@ -14,6 +14,7 @@
 # is STUCK, and what the tick does then (its recovery). note_hold refuses an unknown kind, change_hold_stuck reads the
 # bound, and the change tick runs the recovery: no hold outlives its bound in silence.
 
+from contextlib import suppress
 from agentctl.core import err, process_cache
 from agentctl.statemachines import machine_state
 
@@ -112,14 +113,12 @@ def policy_blocks(pid, st, subject=None, what=None):
                 + (f" ({what})" if what else "") + f" -- {p.rule}; agent-proposed, never decided by the owner, so it "
                 "only warns (policy.py POLICIES)")
         err(line)
-        try:
+        with suppress(Exception):  # a warning, never a failure
             it = st.item("change", subject) if subject else None
             if it and not machine_state("change", it["state"]).terminal:
                 st.transition("change", subject, it["state"], it["version"],
                               event={"kind": "policy.unapproved", "text": line[:400], "severity": "info",
                                      "refs": {"policy": pid}})
-        except Exception:
-            pass  # a warning, never a failure
     return False
 
 

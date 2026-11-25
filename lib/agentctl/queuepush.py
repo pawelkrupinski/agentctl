@@ -4,6 +4,7 @@
 import os
 import re
 import time
+from contextlib import suppress
 from agentctl.core import env_num, fmt_age, git, host_role, remote
 from agentctl.timefmt import day_hhmmz, hhmmz
 from agentctl.policy import policy_blocks
@@ -288,14 +289,12 @@ def lap_change_deadline(st, e, state, t, note=None):
         # applies, its clock restarted); said quietly on the change's events, never a page
         # NEVER UNHELD BETWEEN TWO READINGS (2026-11-23, W1's "nothing holds it"): kept, its clock restarted
         restart_hold(st, e, t)
-        try:
+        with suppress(StaleVersion):
             it = st.item("change", e["id"]) or it
             st.transition("change", e["id"], state, it["version"],
                           event={"kind": "change.rederived", "severity": "info",
                                  "text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}; its hold "
                                          f"({hold.get('why')}) was stuck -- {stuck} -- so it is decided afresh"})
-        except StaleVersion:
-            pass
         return
     issue = None if hold else file_unheld_change(st, it, t, "agentctl (the change tick)")  # agentctl's bug: an issue,
     # A HELD LAP IS NO INBOX ENTRY (2026-11-19 08:39Z, 08:55Z: movies-fix-replay's "queued for 15 min / 30 min, held:
@@ -303,7 +302,9 @@ def lap_change_deadline(st, e, state, t, note=None):
     # as its audience, and the projector writes every event with one). A live hold's lap is an event with no audience:
     # `land status` and the change's events say it; only a stuck or unheld lap goes to its author.
     quiet = bool(hold) and not stuck
-    try:  # never an owner page (changekind.py, A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD)
+    # never an owner page (changekind.py, A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD); a stale version: the next
+    # tick says it
+    with suppress(StaleVersion):
         it = st.item("change", e["id"]) or it
         st.transition("change", e["id"], state, it["version"],
                       event={"text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}, "
@@ -312,8 +313,6 @@ def lap_change_deadline(st, e, state, t, note=None):
                                      + (f" -- filed as agentctl issue {issue}" if issue else ""),
                              **({} if quiet else {"audience": {"worktree": e.get("worktree")}}),
                              **({} if stuck and not issue else {"severity": "info"})})
-    except StaleVersion:
-        pass  # the next tick says it
 
 
 # ---------------------------------------------------------------- the backlog batch (the owner, 2026-11-17)

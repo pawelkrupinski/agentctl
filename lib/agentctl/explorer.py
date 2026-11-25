@@ -2,6 +2,7 @@
 import os
 import sys
 import time
+from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import NO_SIGN, err, git, reds_dir, remote
 from agentctl.forge import forge_release_asset
@@ -96,10 +97,8 @@ def explorer_file(o_r, repo, rows, now_):
         spawn_land(wt, fixer_env(o_r, "explorer"), reds_dir(f"explorer-{int(now_)}.log"))
         return wt
     finally:
-        try:
+        with suppress(OSError):
             os.unlink(asset)
-        except OSError:
-            pass
 
 
 def explorer_tick(o_r, repo, st, now_=None, force=False, fetch=None, filer=None):

@@ -4,6 +4,7 @@
 import os
 import re
 import time
+from contextlib import suppress
 from agentctl.core import git, process_cache, remote, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -82,13 +83,11 @@ def gating_checks(o_r):
         if rows:
             _gating_rows[("api", o_r)] = (time.time(), rows)
     if rows:
-        try:
+        with suppress(OSError):
             kept = read_record(gating_checks_path()) or {}
             if kept.get(o_r, {}).get("rows") != rows:
                 kept[o_r] = {**kept.get(o_r, {}), "main": main, "rows": rows, "at": ts()}
                 write_json(gating_checks_path(), kept)
-        except OSError:
-            pass
         return rows
     kept = ((read_record(gating_checks_path()) or {}).get(o_r) or {}).get("rows")
     if kept:

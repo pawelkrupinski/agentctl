@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from contextlib import suppress
 from agentctl.core import HOME, env_num, hashlib_sha1
 from agentctl.statefile import read_record, write_json
 from agentctl.claudefiles import claude_projects_root
@@ -135,9 +136,7 @@ def session_worktrees(wts, t=None, active=None):
                     continue
                 if proj == live_slug(rp) or any(p == f or p.startswith(f + "/") for p in paths for f in forms):
                     out[rp] = f"session {sid[:12]}"
-    try:
+    with suppress(OSError):
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
         write_json(cache_path, {k: v for k, v in seen.items() if v})  # only live sessions' transcripts are kept
-    except OSError:
-        pass
     return out

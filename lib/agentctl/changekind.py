@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import time
+from contextlib import suppress
 from agentctl.core import fmt_age
 from agentctl.redrecord import RED_TERMINAL, red_names
 from agentctl.queueslots import checker_alive
@@ -198,12 +199,10 @@ def file_unheld_change(st, it, t, by):
                 "test-first in tests/queue_sim.py, and close this issue with the fix's sha. "
                 f"`agentctl land status`; the change's events: `agentctl store events change {it['id']}`")
         iid = issue_open(st, text, by, now_=t)["id"]
-    try:
+    with suppress(StaleVersion, Exception):
         cur = st.item("change", it["id"])
         if cur and not machine_state("change", cur["state"]).terminal:
             st.update_item("change", it["id"], cur["version"], {"unheld_issue": iid})
-    except (StaleVersion, Exception):
-        pass
     return iid
 
 

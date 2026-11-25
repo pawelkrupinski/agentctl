@@ -8,6 +8,7 @@ import re
 import subprocess
 import threading
 import time
+from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, process_cache, reds_dir
 from agentctl.timefmt import iso_epoch
@@ -147,11 +148,9 @@ def status_head(wt):
             return head if re.fullmatch(r"[0-9a-f]{40,64}", head) else None
         ref = head[4:].strip()
         for base in (gd, common):
-            try:
+            with suppress(OSError):
                 with open(os.path.join(base, ref)) as f:
                     return f.read().strip() or None
-            except OSError:
-                pass
         with open(os.path.join(common, "packed-refs")) as f:
             for ln in f:
                 parts = ln.split()

@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 from typing import Any
+from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import err, git, git_ok, process_cache, reds_dir, remote
 from agentctl.statefile import read_record, write_json
@@ -236,11 +237,9 @@ def red_failed_steps(d: dict[str, Any]) -> list[str]:
         rec = {str(j.get("name")): [str(s.get("name")) for s in j.get("steps") or []
                                     if s.get("conclusion") in FIX_STEP_FAILED and s.get("name")]
                for j in jobs if j.get("conclusion") in FIX_STEP_FAILED}
-        try:
+        with suppress(OSError):
             os.makedirs(os.path.dirname(path), exist_ok=True)
             write_json(path, rec)
-        except OSError:
-            pass
     names = {str(j) for j in d.get("jobs") or [d.get("job")] if j}
     return sorted({s for j, ss in rec.items() if j in names for s in ss or []})
 

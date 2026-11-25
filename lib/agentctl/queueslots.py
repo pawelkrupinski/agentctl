@@ -4,6 +4,7 @@
 import os
 import subprocess
 from typing import Any
+from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, git
 from agentctl.timefmt import parse_time, ts
@@ -180,12 +181,10 @@ def joined_verdicts(st, w, joined, to, event, data):
         sha = w.get("landed_sha") if to == "landed" else None
         extra = {k: refs[k] for k in refs if k not in ("verdict", "tail", "exit", "final", "command", "entry", "no_inbox")}
         ev = change_event(q, line, refs.get("tail") or (), refs.get("exit", 0 if to == "landed" else 1), **extra)
-        try:
+        with suppress(StaleVersion, TerminalState):
             st.transition("change", q["id"], to, it["version"],
                           data={**(data or {}), "why": line[:600], **({"tip": sha, "landed_sha": sha} if sha else {})},
                           event=ev)
-        except (StaleVersion, TerminalState):
-            pass
 
 
 def queue_verdict(st, d, e, status, verdict, tail=(), code=1, **fields):

@@ -4,6 +4,7 @@
 import os
 import time
 from typing import Any
+from contextlib import suppress
 from agentctl.clock import Clock
 from agentctl.core import cherry_landed, env_num, fmt_age, git, git_ok, host_role, process_cache, remote
 from agentctl.timefmt import ts
@@ -233,13 +234,11 @@ def regen_hold_overdue(st, d, e, t):
         update, ev = {}, {"kind": "regen.escalate", "severity": "escalate", "text": text}
     e["regen_hold"], e["retry_after"] = h, t + wait
     save_entry(d, e)
-    try:
+    with suppress(StaleVersion):  # recorded on the entry; the item catches up next tick
         if update:
             st.update_item("change", e["id"], it["version"], update)
             it = st.item("change", e["id"])
         st.transition("change", e["id"], it["state"], it["version"], event=ev)
-    except StaleVersion:
-        pass  # recorded on the entry; the item catches up next tick
     wlog(d, text)
     return True
 

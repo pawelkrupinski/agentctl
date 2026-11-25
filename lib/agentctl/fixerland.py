@@ -8,6 +8,7 @@ import re
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from agentctl.core import HOME, cherry_landed, env_num, err, git, on_ci_runner, reds_dir, remote, spawn_detached
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -192,10 +193,8 @@ def fixers_land_watch(now_=None, force=False):
         if not left:
             if st:
                 for x in (sp, nudge):
-                    try:
+                    with suppress(OSError):
                         os.unlink(x)
-                    except OSError:
-                        pass
                 if st.get("escalated_at"):
                     inbox_write("red fixer", f"RECOVERED: {label}: its commits are on main ({wt.replace(HOME, '~')})",
                                 [], [], 0, cwd=wt)

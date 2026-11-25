@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+from contextlib import suppress
 from agentctl.core import env_num
 from agentctl.statefile import mtime
 from agentctl.live import live_registry, live_state, live_tail_info, live_track
@@ -254,10 +255,8 @@ def live_stream(e, start, write, closed=lambda: False, poll=None, ping=LIVE_PING
                 frames.append(sse_frame("synced", {"offset": tail.offset}, tail.offset))
             if synced and (frames or time.time() - refreshed >= 5 or said is None):
                 if time.time() - refreshed >= 5:
-                    try:
+                    with suppress(Exception, SystemExit):
                         e = live_registry().get(e["id"], e)
-                    except (Exception, SystemExit):
-                        pass
                 refreshed = time.time()
                 info["mtime"] = mtime(e["transcript"]) or time.time()
                 st = live_state(e, info)

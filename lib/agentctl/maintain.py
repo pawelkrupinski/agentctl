@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import time
+from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import REPOS, env_num, fmt_age, state_root
 from agentctl.timefmt import ts
@@ -156,7 +157,7 @@ def expire_cache(root=None, days=None, now=None, dry_run=False):
     def drop(p, why):
         if not inside(p) or not allowed_path(p):
             return
-        try:
+        with suppress(OSError):
             if not dry_run:
                 if os.path.isdir(p) and not os.path.islink(p):
                     import shutil
@@ -164,8 +165,6 @@ def expire_cache(root=None, days=None, now=None, dry_run=False):
                 else:
                     os.unlink(p)
             out.append((p, why))
-        except OSError:
-            pass
 
     for sub, pats in CACHE_EXPIRE_FILES:
         d = os.path.join(root, sub)

@@ -10,6 +10,7 @@ import subprocess
 import sys
 import time
 from typing import Any
+from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, pid_alive, process_cache, run_cmd
 from agentctl.timefmt import ts
@@ -135,12 +136,10 @@ def gov_capacity(tickets=None, m=None):
     else:
         state = "starved" if prev == "starved" else "ok"
     if state != prev:
-        try:
+        with suppress(OSError):
             write_json(path, {"state": state, "busy": busy, "at": time.time()})
             gov_log(f"capacity {prev} -> {state}: {busy:.1f} of {n} cores busy ({charged:g} charged, {measured:.1f} "
                     "measured)")
-        except OSError:
-            pass
     return {"state": state, "busy": busy, "charged": charged, "measured": measured, "cores": n,
             "load1": (m or {}).get("load1")}
 

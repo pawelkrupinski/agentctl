@@ -7,6 +7,7 @@ import os
 import re
 import time
 from typing import Any, Callable
+from contextlib import suppress
 from agentctl.core import env_num, err, fmt_age, host_role, reds_dir, remote, state_root
 from agentctl.timefmt import iso_at, ts
 from agentctl.statefile import read_record
@@ -319,12 +320,10 @@ def recovery_tick(store, now_=None, force=False):
         if server and it["state"] == "open" and t >= max(it["deadline"], float(it["data"].get("escalate_after") or 0)):
             age = fmt_age(t - float(it["data"].get("opened_at") or t))
             line = f"ESCALATED: {it['data'].get('kind')} open for {age}: {str(it['data'].get('text'))[:200]}"
-            try:
+            with suppress(StaleVersion):
                 st.transition("condition", it["id"], "open", it["version"], deadline_s=CONDITION_ESCALATE_EVERY,
                               event={"text": line, "audience": {"worktree": it["data"].get("cwd")} if it["data"].get("cwd")
                                      else {}, "refs": {"verdict": line, "key": it["data"].get("key"), "command": "recover"}})
-            except StaleVersion:
-                pass
     return out
 
 

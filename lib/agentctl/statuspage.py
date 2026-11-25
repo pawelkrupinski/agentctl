@@ -8,6 +8,7 @@ import threading
 import time
 import urllib.parse
 from typing import Any
+from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import err, on_ci_runner, process_cache, reds_dir, state_root
 from agentctl.statefile import read_json_file, write_json
@@ -174,10 +175,8 @@ def status_page_server(host, port):
             except (BrokenPipeError, ConnectionResetError):
                 pass
             except Exception as e:  # never the processor's: one request's error is that request's
-                try:
+                with suppress(OSError):
                     self.send(500, f"error: {type(e).__name__}: {str(e)[:300]}\n", "text/plain; charset=utf-8")
-                except OSError:
-                    pass
 
     class Server(http.server.ThreadingHTTPServer):
         daemon_threads = True

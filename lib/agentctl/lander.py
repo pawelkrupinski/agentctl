@@ -8,6 +8,7 @@ import os
 import re
 import time
 from typing import Any
+from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, branch_of, env_num, err, git, git_ok, process_cache, remote, slug
 from agentctl.timefmt import ts
@@ -280,11 +281,9 @@ def lander_note_landed(store, repo, o_r, t, force=False):
         idx = lander_index([{"change": it["id"], "commit_keys": it["data"]["commit_keys"], "state": "landed"}])
         hits = {k["sha"]: k.get("patch_id") for k in keys if lander_of_commit(idx, k)}
         if hits:
-            try:
+            with suppress(StaleVersion):
                 store.update_item("change", it["id"], it["version"], {"landed_commits": hits})
                 acts.append(f"lander: {it['id']} landed as {', '.join(s[:9] for s in hits)}")
-            except StaleVersion:
-                pass
     return acts
 
 

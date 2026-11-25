@@ -226,11 +226,9 @@ def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
             if resolved:  # its author hears it (the batch says its auto-resolution failed)
                 cur = st.item("change", bad["id"])
                 if cur and not machine_state("change", cur["state"]).terminal:
-                    try:
+                    with contextlib.suppress(StaleVersion):  # said in the log; the hold says the rest
                         st.transition("change", bad["id"], cur["state"], cur["version"], event={
                             "text": said, "audience": {"worktree": bad.get("worktree")}, "severity": "info"})
-                    except StaleVersion:
-                        pass  # said in the log; the hold says the rest
         else:
             # policy: batch-checks-failed
             queue_verdict(st, d, bad, "rejected", f"NOT LANDED: the checks failed with your change in the batch (entry "

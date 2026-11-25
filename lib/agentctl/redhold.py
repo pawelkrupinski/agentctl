@@ -3,6 +3,7 @@
 
 import re
 import time
+from contextlib import suppress
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.core import SHORT, env_num, fmt_age
 from agentctl.repos import red_repo_of
@@ -204,7 +205,7 @@ def red_enforce(store, facts, t):
         if not it or it["state"] in RED_TERMINAL:
             continue
         d, st = it["data"], it["state"]
-        try:
+        with suppress(StaleVersion):
             if st == "offered":
                 off = store.offer_of(f"red:{it['id']}")
                 if offer_names_holder(off):  # a stated holder with no live lease: no holder at all
@@ -223,6 +224,4 @@ def red_enforce(store, facts, t):
                 red_offer(store, it, f"INVARIANT: {red_what(d)}: {st} with no holder for "
                                      f"{fmt_age(t - it['entered_at'])}: offered", escalate=st != "red",
                           data={"cause": None, "block": None} if st == "blocked-external" else None)
-        except StaleVersion:
-            pass
     return acts

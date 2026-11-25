@@ -4,6 +4,7 @@
 import os
 from typing import Any
 import re
+from contextlib import suppress
 from agentctl.core import HOME, SHORT
 from agentctl.repos import repo_signs
 from agentctl.storetoken import no_vault, token, token_env_name
@@ -19,19 +20,15 @@ def fixer_env(o_r: str, num: Any, wrapper_pid: int | None = None) -> dict[str, s
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("CLAUDE_CODE_", "CLAUDECODE")) and k not in ("CLAUDE_PID", "PREPUSH_SKIP", "AI_AGENT")
            and not SECRET_ENV.search(k)}
-    try:
+    with suppress(Exception, SystemExit):
         tok = token(o_r)
         env[token_env_name(o_r)] = tok
-    except (Exception, SystemExit):
-        pass
     # EVERY FIXER TALKS TO THE STORE (`red claim | beat | release`, `land`) with the STORE TOKEN, whatever its repo: the
     # filter above drops it with every other secret, and a non-movies repo's credential is gh's own (none here)
     if "AGENTCTL_STORE_TOKEN" not in env:
-        try:
+        with suppress(Exception, SystemExit):
             with no_vault():
                 env["AGENTCTL_STORE_TOKEN"] = token(SHORT["movies"])
-        except (Exception, SystemExit):
-            pass
     env.update(AGENTCTL_AGENT_NAME=f"red-fixer-{num}", AGENTCTL_RED_FIXER=str(num))
     # launchd gives the processor neither USER nor LOGNAME, and without them `claude` finds no login in the keychain
     # ("Not logged in", 2026-10-27); nor ~/.local/bin on PATH

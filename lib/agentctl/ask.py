@@ -3,6 +3,7 @@
 
 import re
 import time
+from contextlib import suppress
 from agentctl.core import slug
 from agentctl.timefmt import hhmmz
 from agentctl.redrecord import RED_TERMINAL, red_closed_of, red_what
@@ -80,11 +81,9 @@ def red_owner_reminders(store, t):
         fresh = a.get("since") != spell or a.get("q") != ask["q"] or int(a.get("n") or 0) == 0  # never told yet
         if fresh and ask_held_until(members, spell, t, store) is not None:  # recorded, the owner told when the hold ends
             if a.get("since") != spell or a.get("q") != ask["q"]:
-                try:
+                with suppress(StaleVersion):
                     store.update_item("red", it["id"], it["version"], {"ask": {"q": ask["q"], "since": spell,
                                                                                "held_at": t, "last_at": t, "n": 0}})
-                except StaleVersion:
-                    pass
             continue
         n = 1 if fresh else int(a.get("n") or 1) + 1
         if not fresh and t - float(a.get("last_at") or 0) < ask_interval(n - 1):

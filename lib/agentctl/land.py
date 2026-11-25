@@ -121,10 +121,8 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
     WATCHED_GROUPS.discard(p.pid)
     with open(out_path, errors="replace") as f:
         output = f.read()
-    try:
+    with contextlib.suppress(OSError):
         os.unlink(out_path)
-    except OSError:
-        pass
     if stalled:
         output += f"{'' if not output or output.endswith(chr(10)) else chr(10)}{STALL_LINE}{stalled}\n"
     return (None if stalled else p.returncode), output
@@ -191,11 +189,9 @@ def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_o
     need = env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
     t_start = clock()  # the wall bound reads the same clock: tests drive it, so no verdict depends on the load
     while True:
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired):
             p.wait(timeout=poll)
             break
-        except subprocess.TimeoutExpired:
-            pass
         if sampler:
             sampler()
         now_size, now_cpu = os.path.getsize(out_path), cpu_of(p.pid)
