@@ -155,6 +155,71 @@ def red_fix_liveness(st: Any, t: float, snap: Any = None) -> str | None:
             + (f" (and {len(stalls) - 1} more)" if len(stalls) > 1 else ""))
 
 
+_UNDECIDED: Any = object()  # a stage of red_fix_held with no verdict: the next one looks
+
+
+def _requeue_pending(ch: Any, t: float) -> bool:
+    """The fix's change ended only just now: its worktree may queue it again (as red_fix_pending waits)."""
+    return bool(ch and ch["state"] in CHANGE_ENDED
+                and t - float(ch.get("entered_at") or 0) < env_num("AGENTCTL_RED_FIX_REQUEUE_GRACE", RED_FIX_REQUEUE_GRACE))
+
+
+def _change_open(ch: Any) -> bool:
+    return bool(ch and ch["state"] not in CHANGE_ENDED and ch["state"] != "landed")
+
+
+def _store_holder(f: dict[str, Any], t: float, store: Any) -> Any:
+    """The fix change as the store holds it: the holder text when it stands, else _UNDECIDED."""
+    if store is None or not f.get("entry") or f.get("status") not in FIX_OPEN:
+        return _UNDECIDED
+    ch: Any
+    ch, unread = red_change_read(store, f["entry"])
+    if unread:  # an unread store is no ended change: the fix stands as recorded
+        return f"fix {f['entry']} {f.get('status')} (its change unread: {unread[:80]})"
+    if _requeue_pending(ch, t):
+        return f"fix {f['entry']} {ch['state']}: its worktree may queue it again"  # the red's own step waits it out
+    if _change_open(ch):
+        # THE STORE'S QUEUE DECIDES AN OPEN CHANGE: the facts' entries are the queue's files, which only ci-runner
+        # has; a change the store holds queued or checking is on its way whatever the facts read.
+        return f"fix {f['entry']} {ch['state']}"
+    return _UNDECIDED
+
+
+def _unread_queue_holder(f: dict[str, Any], facts: Any) -> Any:
+    """The fix stands as recorded when the queue's files were unread."""
+    if facts is not None and facts.get("queue_unread") and f.get("entry") and f.get("status") in FIX_OPEN:
+        return f"fix {f['entry']} {f.get('status')} (the queue unread: {str(facts['queue_unread'])[:80]})"
+    return _UNDECIDED
+
+
+def _queue_holder(it: Any, f: dict[str, Any], facts: Any) -> Any:
+    """With facts the queue's own fix decides (None: nothing is on its way); without (the watchdog), the one recorded."""
+    if facts is not None and not f.get("waited_on"):  # a waited-on fix that landed is no candidate of its own
+        fx = red_fix_of(it, facts)
+        if fx and fx["status"] in FIX_OPEN:
+            return f"fix {fx.get('entry')} {fx['status']}"
+        if fx is None and f.get("status") not in ("verify", "owner"):  # owner: filed with the owner (red owner-push)
+            return None
+    elif f.get("status") in FIX_OPEN and f.get("entry"):
+        return f"fix {f.get('entry')} {f.get('status')}"
+    return _UNDECIDED
+
+
+def _no_fix_on_its_way(f: dict[str, Any]) -> bool:
+    """The red records no fix, or one with neither entry nor sha that is no verify run; or its verifying run was refused
+    (none will come)."""
+    if not f or (not f.get("entry") and not f.get("sha") and f.get("status") != "verify"):
+        return True  # fix None: nothing is on its way
+    return f.get("status") == "verify" and str(f.get("verify") or "").startswith("FIX UNVERIFIED:")
+
+
+def _recorded_holder(it: Any, d: dict[str, Any], f: dict[str, Any], t: float) -> str | None:
+    """The fix as the red recorded it: on its way until it was refused or its give-up passed."""
+    if _no_fix_on_its_way(f) or t - red_fix_since(it) >= red_fix_giveup(d):
+        return None
+    return f"fix {f.get('entry') or (f.get('sha') or '')[:10] or 'verify'} {f.get('status')}"
+
+
 def red_fix_held(it, t, facts=None, store=None):
     """A fix-pending red's holder, or None: its fix change open in the queue (or ended within RED_FIX_REQUEUE_GRACE:
     its worktree may queue it again, as red_fix_pending waits), or a fix landed / a verify run dispatched (or a gate run
@@ -164,34 +229,14 @@ def red_fix_held(it, t, facts=None, store=None):
     f = d.get("fix") or {}
     if f.get("status") == RED_WAITS_ON and f.get("red"):  # held by the red it waits on (red_waits_on_step resolves it)
         return f"waits on red {f['red']}'s fix {str(f.get('sha'))[:10]}"
-    if store is not None and f.get("entry") and f.get("status") in FIX_OPEN:
-        ch, unread = red_change_read(store, f["entry"])
-        if unread:  # an unread store is no ended change: the fix stands as recorded
-            return f"fix {f['entry']} {f.get('status')} (its change unread: {unread[:80]})"
-        if ch and ch["state"] in CHANGE_ENDED and \
-                t - float(ch.get("entered_at") or 0) < env_num("AGENTCTL_RED_FIX_REQUEUE_GRACE", RED_FIX_REQUEUE_GRACE):
-            return f"fix {f['entry']} {ch['state']}: its worktree may queue it again"  # the red's own step waits it out
-        if ch and ch["state"] not in CHANGE_ENDED and ch["state"] != "landed":
-            # THE STORE'S QUEUE DECIDES AN OPEN CHANGE: the facts' entries are the queue's files, which only ci-runner
-            # has; a change the store holds queued or checking is on its way whatever the facts read.
-            return f"fix {f['entry']} {ch['state']}"
-    if facts is not None and facts.get("queue_unread") and f.get("entry") and f.get("status") in FIX_OPEN:
-        return f"fix {f['entry']} {f.get('status')} (the queue unread: {str(facts['queue_unread'])[:80]})"
-    if facts is not None and not f.get("waited_on"):  # a waited-on fix that landed is no candidate of its own
-        fx = red_fix_of(it, facts)
-        if fx and fx["status"] in FIX_OPEN:
-            return f"fix {fx.get('entry')} {fx['status']}"
-        if fx is None and f.get("status") not in ("verify", "owner"):  # owner: filed with the owner (red owner-push)
-            return None
-    elif f.get("status") in FIX_OPEN and f.get("entry"):
-        return f"fix {f.get('entry')} {f.get('status')}"
-    if not f or (not f.get("entry") and not f.get("sha") and f.get("status") != "verify"):
-        return None  # fix None: nothing is on its way
-    if f.get("status") == "verify" and str(f.get("verify") or "").startswith("FIX UNVERIFIED:"):
-        return None  # its verifying run was refused: none will come
-    if t - red_fix_since(it) >= red_fix_giveup(d):
-        return None
-    return f"fix {f.get('entry') or (f.get('sha') or '')[:10] or 'verify'} {f.get('status')}"
+    held = _store_holder(f, t, store)
+    if held is not _UNDECIDED:
+        return held
+    held = _unread_queue_holder(f, facts)
+    if held is not _UNDECIDED:
+        return held
+    held = _queue_holder(it, f, facts)
+    return _recorded_holder(it, d, f, t) if held is _UNDECIDED else held
 
 
 # A HOLDER IS ONLY A LIVE LEASE (2026-10-30: Main #2647 sat offered for hours, its offer saying "its previous fixer pid

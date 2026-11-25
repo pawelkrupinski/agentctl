@@ -86,7 +86,6 @@ cognitive	red_callable_evidence	15
 cognitive	red_dispatch	27
 cognitive	red_failed_steps	14
 cognitive	red_family	16
-cognitive	red_fix_held	35
 cognitive	red_flake_check	15
 cognitive	red_joined_idle	18
 cognitive	red_main_verify	14
@@ -213,7 +212,6 @@ cyclomatic	red_diagnosis_step	14
 cyclomatic	red_dispatch	30
 cyclomatic	red_failed_steps	22
 cyclomatic	red_family	23
-cyclomatic	red_fix_held	38
 cyclomatic	red_flake_check	17
 cyclomatic	red_joined_idle	18
 cyclomatic	red_main_verify	20

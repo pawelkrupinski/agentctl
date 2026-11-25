@@ -7,6 +7,7 @@
  "owner_cmd_unsafe": "7dbc8332852cc39abb9b7525c35a48e6484de8337a6c97e00f983fc7afa43562",
  "plan_worktrees": "fec1e268bc1bdd8092766e60e41fd6cb20f4a8b6d6877a50f05a1f60df768a32",
  "red_diagnosis_step": "2ac379ec00b222ca177acb0d8d9cfd4d2e7fe225a0b2648d71e65bc837a33a95",
+ "red_fix_held": "e0eaff645b03321b269472d953c81eb858d15c60d20fef9f8cea4e7e03701fea",
  "red_offer": "b327bbe97b2fa1dbf84b9d2f03ca9066558007a9a3f6bdc99e02363e963a03e8",
  "red_renew_blocks": "036c1bcc980cb10176d932ad4be4e6ca3940df90b153bc0879ef33cf5b72b694",
  "sbt_stuck_reasons": "e3378acd8e3718e48317208aa6425f0645878fe664eadfc1fa037643c6a37533",

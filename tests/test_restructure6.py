@@ -412,6 +412,52 @@ class RedOpenTest(unittest.TestCase):
         check(self, "red_diagnosis_step", build, call, 8000)
 
 
+class RedHoldTest(unittest.TestCase):
+    def test_red_fix_held(self):
+        def build(case):
+            r = case.rng
+            case.fake("red_change_read", lambda rng, store, entry: (maybe(rng, {"state": rng.choice(["cancelled", "queued", "landed", "checking", "rejected"]), "entered_at": rng.choice([None, 100, 990])}, 0.7),
+                                                                    rng.choice([None, None, None, "store down " * 12])))
+            case.fake("red_fix_of", lambda rng, it, facts: maybe(rng, {"status": rng.choice(["queued", "landed", "verify"]), "entry": "fe"}, 0.6))
+            case.fake("env_num", lambda rng, name, default: rng.choice([default, 5, 50]))
+            case.fake("red_fix_since", lambda rng, it: rng.choice([0, 500, 990]))
+            case.fake("red_fix_giveup", lambda rng, d: rng.choice([10, 600, 5000]))
+            fix = {}
+            for k, gen in (("status", lambda: r.choice(["waits-on", "queued", "checking", "verify", "owner", "landed", "gone", None])), ("red", lambda: "other"),
+                           ("sha", lambda: "a" * 40), ("entry", lambda: "e1"), ("waited_on", lambda: True),
+                           ("verify", lambda: r.choice(["FIX UNVERIFIED: x", "ok"]))):
+                if r.random() < 0.6:
+                    fix[k] = gen()
+            d = {"fix": fix} if r.random() < 0.9 else {}
+            facts = r.choice([None, {}, {"queue_unread": "q" * 100}, {"queue_unread": None}])
+            return ({"data": d}, 1000.0, facts, r.choice([None, "store"]))
+        check(self, "red_fix_held", build, lambda A: A.red_fix_held, 10000)
+
+
+class RevertsTest(unittest.TestCase):
+    def test_tick_reverts(self):
+        def build(case):
+            r = case.rng
+            case.fake("git", lambda rng, repo, *a, **k: types.SimpleNamespace(stdout=rng.choice(["", "m" * 40 + "\n", "n" * 40 + "\n"]), returncode=0))
+            case.fake("git_ok", lambda rng, *a: rng.random() < 0.6)
+            case.fake("remote", lambda rng: "origin")
+            commits = [{"sha": f"{r.randint(0, 9)}" * 14, "reverts": r.choice([[], [], ["a1"], ["a1", "b2"]])} for _ in range(r.randint(0, 4))]
+            case.fake("revert_scan", lambda rng, repo, cur, main, t: maybe(rng, commits, 0.85))
+            case.fake("revert_closer", lambda rng, it, c: maybe(rng, "how", 0.3))
+            case.fake("revert_close", lambda rng, st, it, how, sha: rng.random() < 0.6)
+            case.fake("lander_records", lambda rng, st, o_r: ["rec"])
+            case.fake("lander_index", lambda rng, recs: "idx")
+            case.fake("revert_landings", lambda rng, repo, c, idx: [(maybe(rng, {"lander": maybe(rng, {"name": "l"}, 0.6)}, 0.7), [{"sha": "r" * 14}, {"sha": "q" * 14}][:rng.randint(1, 2)]) for _ in range(rng.randint(0, 2))])
+            case.fake("revert_open", lambda rng, st, c, rec, reverted, t: maybe(rng, f"iid{rng.randint(0, 9)}", 0.7))
+            case.fake("lander_name", lambda rng, lander: "LN")
+            case.fake("revert_deadlines", lambda rng, st, t: [f"dl{i}" for i in range(rng.randint(0, 2))])
+            case.put("RED_PRIMARY", "o/primary")
+            st = Probe(case, "st", clock=lambda rng: 77.0, meta_get=lambda rng, key: maybe(rng, rng.choice(["m" * 40, "old"]), 0.6),
+                       meta_set=lambda rng, k, v: None, items=lambda rng, kind, states=None: [{"id": f"it{i}"} for i in range(rng.randint(0, 2))])
+            return (r.choice(["/repo", "", None]), st, r.choice([None, 5.0]), r.choice([None, "o/r"]))
+        check(self, "tick_reverts", build, lambda A: A.tick_reverts, 8000)
+
+
 def raising(rng, p, value=None):
     if rng.random() < p:
         raise RuntimeError("boom")
