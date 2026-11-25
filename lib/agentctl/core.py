@@ -190,28 +190,35 @@ def git_ok(repo: str, *args: str) -> bool:
 _changed_lines_cache, _main_index_cache = process_cache({}), process_cache({})
 
 
-def parse_changed_lines(diff):
-    """{file header: [the +/- lines, in order]} of a `git show -U0` text: the file's header keeps its modes and
-    binary-ness (its index line is dropped, its blob id kept for a binary change), its hunks their +/- lines."""
-    out, cur, in_hunk, blob = {}, None, False, None
-    for line in diff.splitlines():
-        if line.startswith("diff --git "):
-            cur, in_hunk, blob = line, False, None
-            out[cur] = []
-        elif cur is None or (in_hunk and line.startswith("@@")):
-            continue
-        elif in_hunk:
+def file_change_lines(section: list[str]) -> list[str]:
+    """The +/- lines of one file's section of a `git show -U0` text: its header keeps its modes and binary-ness (its
+    index line is dropped, its blob id kept for a binary change), its hunks their +/- lines."""
+    out, in_hunk, blob = [], False, None
+    for line in section:
+        if in_hunk:
             if line[:1] in ("+", "-", "\\"):
-                out[cur].append(line)
+                out.append(line)
         elif line.startswith("@@"):
             in_hunk = True
         elif line.startswith("index "):
             blob = line.split()[1].split("..")[-1]
         elif line.startswith(("new file mode", "deleted file mode", "old mode", "new mode")):
-            out[cur].append(line)
+            out.append(line)
         elif line.startswith(("Binary files", "GIT binary patch")):
-            out[cur].append(f"{line} {blob}")
+            out.append(f"{line} {blob}")
     return out
+
+
+def parse_changed_lines(diff: str) -> dict[str, list[str]]:
+    """{file header: [the +/- lines, in order]} of a `git show -U0` text."""
+    sections: dict[str, list[str]] = {}
+    cur = None
+    for line in diff.splitlines():
+        if line.startswith("diff --git "):
+            cur = sections[line] = []
+        elif cur is not None:
+            cur.append(line)
+    return {header: file_change_lines(section) for header, section in sections.items()}
 
 
 def changed_lines(repo, c):
@@ -230,9 +237,9 @@ def changed_lines(repo, c):
     return out
 
 
-def _index_main_log(log):
+def _index_main_log(log: str) -> dict[tuple[str, ...], list[str]]:
     """{(author name, email, author date, subject): [sha]} of a `%H%x00%an%x00%ae%x00%at%x00%s` log."""
-    idx = {}
+    idx: dict[tuple[str, ...], list[str]] = {}
     for line in log.splitlines():
         p = line.split("\x00")
         if len(p) == 5:

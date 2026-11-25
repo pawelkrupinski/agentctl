@@ -1,9 +1,11 @@
-# agentctl, part `redvault`: vault asks, spent quotas as external waits, blocks nobody can see clear.
+# agentctl, part `redvault`: vault asks, blocks nobody can see clear.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
 import re
 import time
+from dataclasses import dataclass
+from typing import Any
 from agentctl.core import HOME, fmt_age, git, remote, slug
 from agentctl.timefmt import iso_at, iso_epoch
 from agentctl.statefile import read_record
@@ -263,13 +265,19 @@ def red_unblock(store, o_r, target, why, who=None):
     return 0, lines
 
 
-def red_block(st, o_r, a):
-    """`red block`: the red waits on the OWNER, for an owner cause only, as a block lease the tick renews while its
-    probe -- named (--until-green / --until-http / --until-tcp), an open cause's, or the red's own workflow going green
-    -- still fails and its justification holds. --cause NAME: ONE lease for that outage, every red it explains attached."""
-    n = str(a.run).lstrip("#")
+class NotBlocked(Exception):
+    """`red block` refused: what to tell (after `NOT BLOCKED: `) and the exit code."""
+
+    def __init__(self, rc: int, message: str) -> None:
+        super().__init__(message)
+        self.rc = rc
+
+
+def block_target_units(st: Any, o_r: str, n: str) -> tuple[Any, list[Any], list[Any]]:
+    """(workflow name, units, the reds already known) of `red block`'s target: a red key, or a run the tick has seen
+    (as `red claim` finds it)."""
     name, units = None, []
-    known = red_targets(st, o_r, n, create=False)  # a red key, or a run the tick has seen: as `red claim` finds it
+    known = red_targets(st, o_r, n, create=False)
     try:
         name, _r, units = red_run_units(o_r, n)
     except (Exception, SystemExit):
@@ -281,116 +289,208 @@ def red_block(st, o_r, a):
         name = name or known[0]["data"].get("workflow")
         units = [{"kind": it["data"].get("kind"), "line": it["data"].get("line"), "job": it["data"].get("job")}
                  for it in known]
-    cause = getattr(a, "cause", None)
+    return name, units, known
+
+
+def check_blockable(n: str, units: list[Any], vault: Any, owner_cmd: Any, owner_cause: Any) -> None:
+    """Raises NotBlocked unless the units are the owner's to act on: an owner cause (or a locked vault, any red kind),
+    no spent quota (an external wait), no test failure (a code red is never the owner's), a safe owner command."""
+    if owner_cause not in OWNER_CAUSES and not vault:
+        raise NotBlocked(2, f"a block on the owner needs --owner-cause, one of: {', '.join(OWNER_CAUSES)} (a cause outside "
+                            "the code that only the owner can act on). A code red is yours: claim it and fix it.")
+    if any(QUOTA_LOG.search(str(x.get("line") or "")) for x in units):
+        raise NotBlocked(2, f"#{n}'s key hit a spent quota ({str(units[0].get('line'))[:120]}): it resets on its own, so "
+                            "it is no owner action -- the tick holds the red as an external wait and re-runs its workflow "
+                            "after the reset (`agentctl red status`)")
+    if any(x.get("kind") == "test" for x in units) and not vault:
+        raise NotBlocked(2, f"#{n} is a TEST FAILURE ({units[0].get('job')}): a code red is never the owner's -- "
+                            f"`~/bin/agentctl red claim {n}` and fix it")
+    unsafe = owner_cmd_unsafe(owner_cmd)
+    if unsafe:
+        raise NotBlocked(2, f"the owner command is unsafe -- {unsafe}. A command that deletes names each path and "
+                            "checks, inside the command, that it is still unused when the owner runs it.")
+
+
+def is_handed_lease(st: Any, name: str, own: Any) -> bool:
+    """True when the live red lease `name` is the block caller's own, or its family owner's (A FAMILY OWNER blocks a red
+    it holds: issues 20261106T210149-680984, 20261119T015532-983695: "a live fixer is on #1005:
+    laptop:owner:convergence" -- the owner itself)."""
+    row = st.get(name)
+    fam = own.get("family")
+    if not lease_is_live(row, st.clock()):
+        return False
+    return (name == own.get("lease") and row["epoch"] == own.get("epoch")) \
+        or bool(fam and row["holder"] == owner_holder(fam) and lease_meta(row).get("family") == fam)
+
+
+def handed_leases(st: Any, items: list[Any]) -> list[str]:
+    """The reds' leases the block's caller holds (its own fixer's, handed to the owner with the block)."""
+    own = read_record(own_fixer_record_path() or "") or {}
+    return [x for x in (red_lease(it["data"]["key"]) for it in items) if is_handed_lease(st, x, own)]
+
+
+def refuse_live_fixer(st: Any, items: list[Any], handed: list[str], n: str) -> None:
+    """Raises NotBlocked when a fixer other than the caller holds one of the reds."""
+    for it in items:
+        name = red_lease(it["data"]["key"])
+        if name not in handed and lease_is_live(st.get(name), st.clock()):
+            raise NotBlocked(1, f"a live fixer is on #{n}: {st.get(name)['holder']}")
+
+
+def block_on_vault(st: Any, items: list[Any], handed: list[str], ns: str, a: Any) -> int:
+    """A LOCKED VAULT IS ONE WAIT, never an owner cause (issue 20261119T015532-983695): the reds join the vault's lease
+    (red_vault_block), which the owner's `decide vault-<ns>` lifts for every red on it."""
+    t = st.clock()
+    for it in items:
+        for line in red_vault_block(st, st.item("red", it["id"]), {}, ns, f"`red block`: {a.owner_cmd}", t):
+            print(line)
+    for x in handed:
+        st.revoke(x, f"BLOCKED ON OWNER (handed over by its fixer): the {ns} vault is locked")
+    return 0
+
+
+def named_probe(o_r: str, a: Any) -> Any:
+    """The probe --until-green / --until-http / --until-tcp names, or None."""
+    if a.until_green:
+        return run_probe("workflow_green", {"repo": o_r, "workflow": a.until_green})
+    if a.until_http:
+        return run_probe("http", {"url": a.until_http})
+    if a.until_tcp:
+        host, _, port = a.until_tcp.rpartition(":")
+        return run_probe("tcp", {"host": host, "port": int(port)})
+    return None
+
+
+def pick_probe(o_r: str, a: Any, cause: Any, old: Any, om: Any, name: Any, n: str) -> Any:
+    """The run probe that clears the block: the outage's own (attaching to its ONE lease), a named one
+    (--until-green / --until-http / --until-tcp), or the red's own workflow going green; NotBlocked when none."""
+    if not (a.until_green or a.until_http or a.until_tcp):
+        if old:
+            return run_probe(om["probe"]["kind"], om["probe"]["args"])
+        if cause:
+            raise NotBlocked(2, f"no open cause {cause!r} to attach to; open it with its probe: --cause {cause} "
+                                "--until-green <workflow> | --until-http <url> | --until-tcp <host:port>")
+    probe = named_probe(o_r, a) or (run_probe("workflow_green", {"repo": o_r, "workflow": name}) if name else None)
+    if probe:
+        return probe
+    raise NotBlocked(2, f"#{n}'s workflow is unknown, so no probe can clear the block; name one: --until-green "
+                        "<workflow> | --until-http <url> | --until-tcp <host:port>")
+
+
+def join_block(st: Any, lname: str, row: Any, keys: list[Any]) -> None:
+    """The reds' keys added to a live block lease's."""
+    st.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(lease_meta(row).get("keys") or []) | set(keys))})
+
+
+@dataclass(frozen=True)
+class BlockPlan:
+    """What `red block` decided: the reds it blocks, the probe that clears it, and the lease it joins or opens."""
+    lname: Any
+    owner_cause: Any
+    items: Any
+    iprobe: Any
+    words: str
+    details: str
+    workflow: Any
+
+    @property
+    def keys(self) -> list[Any]:
+        return [it["data"]["key"] for it in self.items]
+
+    @property
+    def what(self) -> str:
+        return ", ".join(red_what(it["data"]) for it in self.items)
+
+
+def block_meta(a: Any, plan: BlockPlan) -> dict[str, Any]:
+    """The meta of a new block lease: its probe, the owner's command and question, the reds it holds."""
+    cause, ip, oc = getattr(a, "cause", None), plan.iprobe, plan.owner_cause
+    text = f"BLOCKED: {cause} down (auto-clears when {plan.words})" if cause else f"BLOCKED ON OWNER: {plan.details}"
+    return {"kind": "block", "owner_cause": oc, "cmd": a.owner_cmd,
+            "cause": cause, "question": f"run `! {a.owner_cmd}` ({OWNER_CAUSES[oc]})" +
+                                        (f" -- {a.note}" if getattr(a, "note", "") else ""),
+            "probe": {"kind": ip.kind, "args": ip.args}, "until": plan.words, "keys": plan.keys, "text": text,
+            "details": plan.details, "verify": not (ip.kind == "workflow_green" and ip.args.get("workflow") == plan.workflow),
+            "probed_at": time.time()}
+
+
+def open_block(st: Any, a: Any, plan: BlockPlan) -> str:
+    """Acquires the block lease (named after the cause, else the first red) and tells what it holds: the lease's name.
+    NotBlocked when another holder has the name."""
+    cause, ip, oc = getattr(a, "cause", None), plan.iprobe, plan.owner_cause
+    lname = plan.lname or block_lease(plan.keys[0])
+    r = st.acquire(lname, f"owner:{oc}", BLOCK_TTL, BLOCK_MAX, progress=f"{ip.detail}@{int(time.time())}",
+                   meta={**block_meta(a, plan), "category": OWNER_CAUSE_CATEGORY[oc]})
+    same = st.get(lname) if "held" in r else None
+    if "held" in r and lease_meta(same).get("kind") != "block":
+        raise NotBlocked(1, f"{lname} is held by {r['held']['holder']}")
+    if same:  # the run's block is already up (named after its first red): these reds join it
+        join_block(st, lname, same, plan.keys)
+        print(f"already blocked: {plan.what} joined {lname}: {lease_meta(same).get('text')}")
+    else:  # the owner is told by the tick (red_owner_reminders: ONE inbox entry and a notification, then reminders)
+        head = f"{cause} down (blocks {plan.what})" if cause else plan.what
+        print(f"RED BLOCKED ON OWNER [{OWNER_CAUSE_CATEGORY[oc]}]: {head}: {plan.details} "
+              f"({ip.detail}; `agentctl red status`)")
+    return lname
+
+
+def existing_block(st: Any, cause: Any) -> tuple[Any, Any, Any]:
+    """(lease name, its live row or None, its meta) of the outage lease --cause names."""
     lname = block_lease(cause=cause) if cause else None
     old = st.get(lname) if lname else None
     old = old if lease_is_live(old, st.clock()) else None
-    om = lease_meta(old)
-    owner_cause = getattr(a, "owner_cause", None) or om.get("owner_cause")
-    vault = vault_ask_ns(a.owner_cmd)  # a locked vault: no owner cause, any red kind (red_vault_block, below)
-    if owner_cause not in OWNER_CAUSES and not vault:
-        print(f"NOT BLOCKED: a block on the owner needs --owner-cause, one of: {', '.join(OWNER_CAUSES)} (a cause outside "
-              "the code that only the owner can act on). A code red is yours: claim it and fix it.")
-        return 2
-    if any(QUOTA_LOG.search(str(x.get("line") or "")) for x in units):
-        print(f"NOT BLOCKED: #{n}'s key hit a spent quota ({str(units[0].get('line'))[:120]}): it resets on its own, so "
-              "it is no owner action -- the tick holds the red as an external wait and re-runs its workflow after the "
-              "reset (`agentctl red status`)")
-        return 2
-    if any(x.get("kind") == "test" for x in units) and not vault:
-        print(f"NOT BLOCKED: #{n} is a TEST FAILURE ({units[0].get('job')}): a code red is never the owner's -- "
-              f"`~/bin/agentctl red claim {n}` and fix it")
-        return 2
-    unsafe = owner_cmd_unsafe(a.owner_cmd or om.get("cmd"))
-    if unsafe:
-        print(f"NOT BLOCKED: the owner command is unsafe -- {unsafe}. A command that deletes names each path and "
-              "checks, inside the command, that it is still unused when the owner runs it.")
-        return 2
-    items = known or (red_targets(st, o_r, n) if units else [])
-    own = read_record(own_fixer_record_path() or "") or {}
-    handed = [] if not items else [red_lease(it["data"]["key"]) for it in items]
-    fam = own.get("family")  # A FAMILY OWNER blocks a red it holds (issues 20261106T210149-680984,
-    # 20261119T015532-983695: "a live fixer is on #1005: laptop:owner:convergence" -- the owner itself)
-    handed = [x for x in handed if lease_is_live(st.get(x), st.clock()) and (
-        x == own.get("lease") and st.get(x)["epoch"] == own.get("epoch")
-        or fam and st.get(x)["holder"] == owner_holder(fam) and lease_meta(st.get(x)).get("family") == fam)]
-    live = [st.get(red_lease(it["data"]["key"]))["holder"] for it in items
-            if red_lease(it["data"]["key"]) not in handed and lease_is_live(st.get(red_lease(it["data"]["key"])), st.clock())]
-    if live:
-        print(f"NOT BLOCKED: a live fixer is on #{n}: {live[0]}")
-        return 1
-    ns = vault
-    if ns and items:  # A LOCKED VAULT IS ONE WAIT, never an owner cause (issue 20261119T015532-983695): the red joins the
-        # vault's lease (red_vault_block), which the owner's `decide vault-<ns>` lifts for every red on it
-        t = st.clock()
-        for it in items:
-            for line in red_vault_block(st, st.item("red", it["id"]), {}, ns, f"`red block`: {a.owner_cmd}", t):
-                print(line)
-        for x in handed:
-            st.revoke(x, f"BLOCKED ON OWNER (handed over by its fixer): the {ns} vault is locked")
-        return 0
-    if old and not (a.until_green or a.until_http or a.until_tcp):  # attach to the outage's ONE lease: its probe
-        iprobe = run_probe(om["probe"]["kind"], om["probe"]["args"])
-    elif cause and not (a.until_green or a.until_http or a.until_tcp):
-        print(f"NOT BLOCKED: no open cause {cause!r} to attach to; open it with its probe: --cause {cause} "
-              "--until-green <workflow> | --until-http <url> | --until-tcp <host:port>")
-        return 2
-    elif a.until_green:
-        iprobe = run_probe("workflow_green", {"repo": o_r, "workflow": a.until_green})
-    elif a.until_http:
-        iprobe = run_probe("http", {"url": a.until_http})
-    elif a.until_tcp:
-        host, _, port = a.until_tcp.rpartition(":")
-        iprobe = run_probe("tcp", {"host": host, "port": int(port)})
-    elif name:
-        iprobe = run_probe("workflow_green", {"repo": o_r, "workflow": name})
-    else:
-        print(f"NOT BLOCKED: #{n}'s workflow is unknown, so no probe can clear the block; name one: --until-green "
-              "<workflow> | --until-http <url> | --until-tcp <host:port>")
-        return 2
-    words = probe_words(iprobe.kind, iprobe.args)
+    return lname, old, lease_meta(old)
+
+
+def unclear_probe(o_r: str, a: Any, cause: Any, old: Any, om: Any, name: Any, n: str, items: list[Any]) -> Any:
+    """The probe that clears the block, which must still fail (else nothing waits on the owner), with reds to block."""
+    iprobe = pick_probe(o_r, a, cause, old, om, name, n)
     if iprobe.ok:
-        print(f"NOT BLOCKED: {words} already ({iprobe.detail}): nothing waits on the owner -- `red claim {n}` and fix it")
-        return 1
+        raise NotBlocked(1, f"{probe_words(iprobe.kind, iprobe.args)} already ({iprobe.detail}): nothing waits on the "
+                            f"owner -- `red claim {n}` and fix it")
     if not items:
-        print(f"NOT BLOCKED: #{n} names no red on main")
-        return 1
-    details = owner_details(o_r, n, name, units, a.owner_cmd or om.get("cmd"), words, owner_cause, st)
-    keys = [it["data"]["key"] for it in items]
-    what = ", ".join(red_what(it["data"]) for it in items)
-    text = (f"BLOCKED: {cause} down (auto-clears when {words})" if cause else
-            f"BLOCKED ON OWNER: {details}")
-    verify = not (iprobe.kind == "workflow_green" and iprobe.args.get("workflow") == name)
+        raise NotBlocked(1, f"#{n} names no red on main")
+    return iprobe
+
+
+def block_reds(st: Any, o_r: str, a: Any, n: str) -> int:
+    """The stages of `red block`: the target's units, what may be blocked, the reds and the fixers holding them, the
+    probe that clears the block, then the block lease the reds join. NotBlocked refuses at any stage."""
+    name, units, known = block_target_units(st, o_r, n)
+    cause = getattr(a, "cause", None)
+    lname, old, om = existing_block(st, cause)
+    owner_cause = getattr(a, "owner_cause", None) or om.get("owner_cause")
+    owner_cmd = a.owner_cmd or om.get("cmd")
+    vault = vault_ask_ns(a.owner_cmd)  # a locked vault: no owner cause, any red kind (block_on_vault)
+    check_blockable(n, units, vault, owner_cmd, owner_cause)
+    items = known or (red_targets(st, o_r, n) if units else [])
+    handed = handed_leases(st, items)
+    refuse_live_fixer(st, items, handed, n)
+    if vault and items:
+        return block_on_vault(st, items, handed, vault, a)
+    iprobe = unclear_probe(o_r, a, cause, old, om, name, n, items)
+    words = probe_words(iprobe.kind, iprobe.args)
+    plan = BlockPlan(lname, owner_cause, items, iprobe, words,
+                     owner_details(o_r, n, name, units, owner_cmd, words, owner_cause, st), name)
     if old:
-        st.set_meta(lname, old["epoch"], old["secret"], {"keys": sorted(set(om.get("keys") or []) | set(keys))})
-        print(f"attached {what} to {cause!r}: {om.get('text')} ({iprobe.detail}; `agentctl red status`)")
+        join_block(st, lname, old, plan.keys)
+        print(f"attached {plan.what} to {cause!r}: {om.get('text')} ({iprobe.detail}; `agentctl red status`)")
     else:
-        lname = lname or block_lease(keys[0])
-        r = st.acquire(lname, f"owner:{owner_cause}", BLOCK_TTL, BLOCK_MAX, progress=f"{iprobe.detail}@{int(time.time())}",
-                       meta={"kind": "block", "owner_cause": owner_cause, "category": OWNER_CAUSE_CATEGORY[owner_cause],
-                             "cmd": a.owner_cmd, "cause": cause,
-                             "question": f"run `! {a.owner_cmd}` ({OWNER_CAUSES[owner_cause]})" +
-                                         (f" -- {a.note}" if getattr(a, "note", "") else ""),
-                             "probe": {"kind": iprobe.kind, "args": iprobe.args}, "until": words, "keys": keys,
-                             "text": text, "details": details, "verify": verify, "probed_at": time.time()})
-        same = st.get(lname) if "held" in r else None
-        if "held" in r and lease_meta(same).get("kind") != "block":
-            print(f"NOT BLOCKED: {lname} is held by {r['held']['holder']}")
-            return 1
-        if same:  # the run's block is already up (named after its first red): these reds join it
-            sm = lease_meta(same)
-            st.set_meta(lname, same["epoch"], same["secret"], {"keys": sorted(set(sm.get("keys") or []) | set(keys))})
-            print(f"already blocked: {what} joined {lname}: {sm.get('text')}")
-        else:
-            cat = OWNER_CAUSE_CATEGORY[owner_cause]
-            line = (f"RED BLOCKED ON OWNER [{cat}]: {cause} down (blocks {what}): {details}" if cause else
-                    f"RED BLOCKED ON OWNER [{cat}]: {what}: {details}")
-            # the owner is told by the tick (red_owner_reminders: ONE inbox entry and a notification, then reminders)
-            print(line + f" ({iprobe.detail}; `agentctl red status`)")
+        lname = open_block(st, a, plan)
     for it in items:
         cur = st.item("red", it["id"])
         st.update_item("red", it["id"], cur["version"], {"block": lname})
     for x in handed:  # the dispatched fixer's own lease, handed to the owner: its wrapper ends with the block's verdict
-        st.revoke(x, f"BLOCKED ON OWNER (handed over by its fixer): {a.owner_cmd or om.get('cmd')}")
+        st.revoke(x, f"BLOCKED ON OWNER (handed over by its fixer): {owner_cmd}")
     return 0
 
+
+def red_block(st, o_r, a):
+    """`red block`: the red waits on the OWNER, for an owner cause only, as a block lease the tick renews while its
+    probe -- named (--until-green / --until-http / --until-tcp), an open cause's, or the red's own workflow going green
+    -- still fails and its justification holds. --cause NAME: ONE lease for that outage, every red it explains attached."""
+    try:
+        return block_reds(st, o_r, a, str(a.run).lstrip("#"))
+    except NotBlocked as e:
+        print(f"NOT BLOCKED: {e}")
+        return e.rc

@@ -3,8 +3,9 @@
 
 import re
 import time
+from typing import Any
 from agentctl.timefmt import dt, parse_time
-from agentctl.core import SHORT
+from agentctl.core import SHORT, attempt
 from agentctl.classify import QUOTA_LOG
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.inboxentry import inbox_write
@@ -33,6 +34,27 @@ def next_quota_reset(after):
     return r.timestamp()
 
 
+def created_after(run: Any, since: float) -> bool:
+    """True when the run was created after unix time `since` (a run whose time does not read is not)."""
+    return attempt(lambda: parse_time(run["createdAt"]).timestamp() > since, False,
+                   catch=(KeyError, ValueError, TypeError))
+
+
+def quota_run_verdict(o_r: str, a: Any, r: Any) -> tuple[bool, str] | None:
+    """(cleared, why) of one run since the quota was spent: past its first job (a['job'], the preflight) or green clears
+    it, that job failing again keeps it; None when the run says nothing yet."""
+    label = f"{a['workflow']} #{r.get('number')}"
+    if r.get("conclusion") == "success":
+        return True, f"{label} green"
+    first = next((j for j in run_jobs(o_r, r) or [] if j.get("name") == a.get("job")), None)
+    conclusion = first.get("conclusion") if first else None
+    if conclusion == "success":
+        return True, f"{label}: {a.get('job')} passed (the key is accepted again)"
+    if conclusion in ("failure", "timed_out"):
+        return False, f"{label}: {a.get('job')} failed again (still spent)"
+    return None
+
+
 def probe_quota_reset(a):
     """The key accepted again: a run of a['workflow'] on main created after a['since'] got past its first job
     (a['job'], the preflight) -- or the whole run is green."""
@@ -41,54 +63,54 @@ def probe_quota_reset(a):
     runs = gh_json(o_r, "run", "list", "--workflow", a["workflow"], "--branch", "main", "--json", RUN_FIELDS, "-L", "10")
     since = float(a.get("since") or 0)
     for r in runs or []:
-        try:
-            if parse_time(r["createdAt"]).timestamp() <= since:
-                continue
-        except (KeyError, ValueError, TypeError):
-            continue
-        if r.get("conclusion") == "success":
-            return True, f"{a['workflow']} #{r.get('number')} green"
-        jobs = run_jobs(o_r, r) or []
-        first = next((j for j in jobs if j.get("name") == a.get("job")), None)
-        if first and first.get("conclusion") == "success":
-            return True, f"{a['workflow']} #{r.get('number')}: {a.get('job')} passed (the key is accepted again)"
-        if first and first.get("conclusion") in ("failure", "timed_out"):
-            return False, f"{a['workflow']} #{r.get('number')}: {a.get('job')} failed again (still spent)"
+        verdict = created_after(r, since) and quota_run_verdict(o_r, a, r)
+        if verdict:
+            return verdict
     return False, (f"no run of {a['workflow']} since the quota was spent; the next window opens "
                    f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(next_quota_reset(since)))}")
 
 
-def red_quota_waits(store, o_r, repo, t):
-    """Each open red whose line says a quota is spent, held by nobody (no fixer lease, no block): put on the WAIT lease
-    of its service; each wait past its window's reset with no run since: its workflow dispatched once per window."""
+def waits_on_quota(store: Any, it: Any, t: float) -> bool:
+    """True when the red's line says a quota is spent and nobody holds it (no fixer lease, no block)."""
+    d = it["data"]
+    return bool(QUOTA_LOG.search(str(d.get("line") or ""))) and d.get("kind") != "test" \
+        and not lease_is_live(store.get(red_lease(d["key"])), t) and not red_block_of(it, store)
+
+
+def open_quota_wait(store: Any, o_r: str, d: Any, svc: str, lname: str, t: float) -> None:
+    """The WAIT lease of a service's spent quota, opened for the red `d`, and the owner-visible line that says it waits."""
+    job = d.get("job") if d.get("job") else "preflight"
+    probe = {"kind": "quota_reset", "args": {"repo": o_r, "workflow": d["workflow"], "since": t, "job": job}}
+    until = f"{svc}'s quota resets and {d['workflow']}'s {job} passes"
+    store.acquire(lname, "wait:quota", BLOCK_TTL, BLOCK_MAX, progress=f"spent@{int(t)}",
+                  meta={"kind": "block", "wait_cause": "quota", "cause": f"quota-{svc.lower()}", "probe": probe,
+                        "until": until, "keys": [d["key"]], "probed_at": t, "redispatch": d["workflow"],
+                        "text": f"WAITING: {svc}'s quota for the run's key is spent; it resets on its own "
+                                f"(auto-clears when {until})"})
+    line = f"RED WAITING: {red_what(d)}: {svc}'s quota is spent -- an external wait, not the owner's; " \
+           f"{d['workflow']} is dispatched again after the reset"
+    inbox_write("red", line, [line], [], 0)
+
+
+def put_on_quota_wait(store: Any, o_r: str, it: Any, t: float) -> str:
+    """Puts one red on the WAIT lease of its service's quota (joining it when live, else opening it)."""
+    d = it["data"]
+    svc = quota_service(d.get("line"))
+    lname = block_lease(cause=f"quota-{svc.lower()}")
+    row = store.get(lname)
+    if lease_is_live(row, t):
+        m = lease_meta(row)
+        store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(m.get("keys") or []) | {d["key"]})})
+    else:
+        open_quota_wait(store, o_r, d, svc, lname, t)
+    cur = store.item("red", it["id"])
+    store.update_item("red", it["id"], cur["version"], {"block": lname})
+    return f"{red_what(d)}: waits on {svc}'s quota ({lname})"
+
+
+def redispatch_quota_waits(store: Any, o_r: str, repo: Any, t: float) -> list[str]:
+    """Each live quota wait past its window's reset with no run since: its workflow dispatched once per window."""
     out = []
-    for it in red_active_of(store, o_r).values():
-        d = it["data"]
-        if not QUOTA_LOG.search(str(d.get("line") or "")) or d.get("kind") == "test":
-            continue
-        if lease_is_live(store.get(red_lease(d["key"])), t) or red_block_of(it, store):
-            continue
-        svc = quota_service(d.get("line"))
-        lname = block_lease(cause=f"quota-{svc.lower()}")
-        row = store.get(lname)
-        if lease_is_live(row, t):
-            m = lease_meta(row)
-            store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(m.get("keys") or []) | {d["key"]})})
-        else:
-            probe = {"kind": "quota_reset", "args": {"repo": o_r, "workflow": d["workflow"], "since": t, "job": d.get("job")
-                                                     if d.get("job") else "preflight"}}
-            until = f"{svc}'s quota resets and {d['workflow']}'s {probe['args']['job']} passes"
-            store.acquire(lname, "wait:quota", BLOCK_TTL, BLOCK_MAX, progress=f"spent@{int(t)}",
-                          meta={"kind": "block", "wait_cause": "quota", "cause": f"quota-{svc.lower()}", "probe": probe,
-                                "until": until, "keys": [d["key"]], "probed_at": t, "redispatch": d["workflow"],
-                                "text": f"WAITING: {svc}'s quota for the run's key is spent; it resets on its own "
-                                        f"(auto-clears when {until})"})
-            line = f"RED WAITING: {red_what(d)}: {svc}'s quota is spent -- an external wait, not the owner's; " \
-                   f"{d['workflow']} is dispatched again after the reset"
-            inbox_write("red", line, [line], [], 0)
-        cur = store.item("red", it["id"])
-        store.update_item("red", it["id"], cur["version"], {"block": lname})
-        out.append(f"{red_what(d)}: waits on {svc}'s quota ({lname})")
     for row in store.list("block/cause/quota-"):
         m = lease_meta(row)
         if not lease_is_live(row, t) or not m.get("redispatch"):
@@ -100,3 +122,11 @@ def red_quota_waits(store, o_r, repo, t):
             out.append(f"{m['redispatch']} after {m.get('cause')}'s reset (re-checks the key): {msg}")
             store.set_meta(row["name"], row["epoch"], row["secret"], {"dispatched_at": t})
     return out
+
+
+def red_quota_waits(store, o_r, repo, t):
+    """Each open red whose line says a quota is spent, held by nobody (no fixer lease, no block): put on the WAIT lease
+    of its service; each wait past its window's reset with no run since: its workflow dispatched once per window."""
+    out = [put_on_quota_wait(store, o_r, it, t) for it in red_active_of(store, o_r).values()
+           if waits_on_quota(store, it, t)]
+    return out + redispatch_quota_waits(store, o_r, repo, t)

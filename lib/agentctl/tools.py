@@ -6,6 +6,8 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterator
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, MAX_FOREIGN, ZERO, env_num, err, git, git_ok, remote, scratch
 from agentctl.timefmt import ts
@@ -87,7 +89,7 @@ def env_print(ns: str) -> int:
     return 0
 
 
-def which_in(env, cmd):
+def which_in(env: Any, cmd: str) -> str | None:
     """The executable `cmd` on env's PATH, or None."""
     for d in env["PATH"].split(":"):
         p = os.path.join(d, cmd)
@@ -96,13 +98,13 @@ def which_in(env, cmd):
     return None
 
 
-def check_sbt(env):
+def check_sbt(env: Any) -> tuple[list[str], list[str]]:
     """(report, problems) of the sbt check."""
     sbt = which_in(env, "sbt")
     return ([f"sbt: {sbt}"], []) if sbt else ([], ["sbt: NOT FOUND (install sdkman sbt)"])
 
 
-def check_java(env):
+def check_java(env: Any) -> tuple[list[str], list[str]]:
     """(report, problems) of the java check: a java that runs `-version`."""
     java = os.path.join(env["JAVA_HOME"], "bin", "java") if env.get("JAVA_HOME") else which_in(env, "java")
     jv = process_runner().run([java, "-version"], capture_output=True, text=True, timeout=30) if java else None
@@ -111,14 +113,14 @@ def check_java(env):
     return [], [f"java: no java that runs ({java or 'none on PATH'})"]
 
 
-def check_vault(ns, st):
+def check_vault(ns: str, st: str) -> tuple[list[str], list[str]]:
     """(report, problems) of the vault check, st being vault_state(ns)."""
     note = ", not needed (this fixer's credentials are in its environment)" if st == "locked" else ""
     line = f"vault {ns}: {st}{note}"
     return ([line], []) if st in ("unlocked", "locked") else ([], [line])
 
 
-def check_tunnels():
+def check_tunnels() -> tuple[list[str], list[str]]:
     """(report, problems) of the tunnel check: every tunnel port open, else the fix."""
     report, problems = [], []
     for port, what in tunnel_ports():
@@ -129,10 +131,21 @@ def check_tunnels():
     return report, problems
 
 
-def check_github(env):
+def check_github(env: Any) -> tuple[list[str], list[str]]:
     """(report, problems) of the github check (gh's own auth)."""
     gh = (GH_CLI if os.path.isabs(GH_CLI) and os.access(GH_CLI, os.X_OK) else None) or which_in(env, GH_CLI)
     return ([f"github: gh {gh}"], []) if gh else ([], [f"github: gh MISSING ({GH_CLI})"])
+
+
+def print_env_checks(checks: list[tuple[list[str], list[str]]]) -> int:
+    """Prints each check's report (`ok`) then every problem (`FAIL`): 1 when any check had one."""
+    for report, _ in checks:
+        for line in report:
+            print(f"ok   {line}")
+    problems = [line for _, probs in checks for line in probs]
+    for line in problems:
+        print(f"FAIL {line}")
+    return 1 if problems else 0
 
 
 def cmd_env(a):
@@ -145,13 +158,7 @@ def cmd_env(a):
         print(locked_line(ns))
         return 1
     checks = [check_sbt(env), check_java(env), check_vault(ns, st), check_tunnels(), check_github(env)]
-    for report, _ in checks:
-        for line in report:
-            print(f"ok   {line}")
-    problems = [line for _, probs in checks for line in probs]
-    for line in problems:
-        print(f"FAIL {line}")
-    return 1 if problems else 0
+    return print_env_checks(checks)
 
 
 # ---------------------------------------------------------------- state
@@ -168,7 +175,7 @@ notes:
 """
 
 
-def set_field(text, field, value, append):
+def set_field(text: str, field: str, value: str, append: bool) -> str:
     """text with `field: value` set (appended, comma-separated, to a non-empty value when `append`); a missing field is
     added at the end."""
     m = re.search(rf"^{re.escape(field)}:[ \t]*(.*)$", text, re.M)
@@ -301,7 +308,7 @@ def identifiers(lines):
     return {t for ln in lines for t in IDENTIFIER.findall(ln)}
 
 
-def undone_in_other_file(repo, mb, head, q, commit, gone):
+def undone_in_other_file(repo: str, mb: str, head: str, q: str, commit: str, gone: set[str]) -> bool:
     """True when the push undoes, in file q of `commit`, lines of `commit` that carry an identifier in `gone` and
     removes them WITHOUT restoring what `commit` replaced there (the replacement is new content)."""
     commit_removed, commit_added = diff_lines(repo, f"{commit}^", commit, q)
@@ -336,7 +343,7 @@ def allowed(path, globs):
     return any(fnmatch.fnmatch(path, g) or path.startswith(g.rstrip("/") + "/") for g in globs)
 
 
-def empty_commits_problem(repo, base, mb, head):
+def empty_commits_problem(repo: str, base: str, mb: str, head: str) -> str | None:
     """The problem line for the push's EMPTY commits (four landed as re-queued duplicates, 2026-10-27), or None."""
     empty = [c for c in git(repo, "rev-list", "--no-merges", f"{mb}..{head}").split()
              if is_empty_commit(repo, c) and not deliberate_empty(repo, c)]
@@ -348,7 +355,7 @@ def empty_commits_problem(repo, base, mb, head):
               f"`{ALLOW_EMPTY_TRAILER}: <why>` trailer")
 
 
-def reverts_problem(repo, base, head, reverts, max_foreign):
+def reverts_problem(repo: str, base: str, head: str, reverts: list[Any], max_foreign: int) -> str | None:
     """The problem line for files reverted back to an older main version past the cap, or None."""
     if len(reverts) <= max_foreign:
         return None
@@ -365,7 +372,7 @@ def reverts_problem(repo, base, head, reverts, max_foreign):
     )
 
 
-def foreign_reverts_of(repo, base, mb, head, files, allow):
+def foreign_reverts_of(repo: str, base: str, mb: str, head: str, files: Any, allow: Any) -> list[Any]:
     """The (path, commit) reverts the push makes back to an older main version, minus the exempt, the coherent edits and
     (files in the allowed set are the agent's own: reverting them is its call) the allowed files."""
     exempt = reverted_commits(repo, mb, head) | renamed_away(repo, mb, head)
@@ -387,7 +394,7 @@ def check_range(repo, base, head, allow, max_foreign):
     return [p for p in problems if p]
 
 
-def hook_ranges(repo, remote, lines):
+def hook_ranges(repo: str, remote: str, lines: list[str]) -> Iterator[tuple[str, str]]:
     """(base, pushed sha) of every pushed branch of a pre-push hook's stdin `lines`: deletes and tags have nothing to
     check."""
     base_ref = f"refs/remotes/{remote}/main"
