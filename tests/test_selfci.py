@@ -60,6 +60,40 @@ class SelfCiTest(unittest.TestCase):
         os.environ["AGENTCTL_ROLE"] = "server"
         self.assertTrue(self.check([run(9, "failure", 500)])[0])
 
+    def wire(self, rev, calls):
+        sf = os.path.join(self.tmp, "state.json")
+        with open(sf, "w") as f:
+            f.write(__import__("json").dumps({"rev": rev} if rev is not None else {}))
+        os.environ["AGENTCTL_STATE_FILE"] = sf
+        self.addCleanup(os.environ.pop, "AGENTCTL_STATE_FILE", None)
+
+        def fake(argv, **kw):
+            calls.append(argv)
+            return A.subprocess.CompletedProcess(argv, 0, "/var/lib/agentctl-src/" + "b" * 40 + "\n", "")
+        from fake_runner import FakeRunner
+        A.wire_runner(FakeRunner(run=fake))
+
+    def read(self, **kw):
+        return A.inv_wa(self.clock, None, runs=lambda: [run(9, "success", 5)], behind=lambda rev: 0, **kw)
+
+    def test_the_pin_is_read_from_the_reconcilers_reported_rev_with_no_ssh(self):
+        calls = []
+        self.wire("c" * 12, calls)
+        self.assertEqual(A.readings(NOW, lambda: [], None)[1], "c" * 12)
+        self.assertTrue(self.read()[0])
+        self.assertEqual(calls, [])
+
+    def test_without_a_reported_rev_ssh_reuses_the_master_and_is_kept_thirty_minutes(self):
+        calls = []
+        self.wire(None, calls)
+        self.assertEqual(A.readings(NOW, lambda: [], None)[1], "b" * 40)
+        self.assertNotIn("ControlPath=none", " ".join(calls[0]))
+        self.assertNotIn("ControlMaster=no", " ".join(calls[0]))
+        A.readings(NOW + 1500, lambda: [], None)
+        self.assertEqual(len(calls), 1)
+        A.readings(NOW + 1900, lambda: [], None)
+        self.assertEqual(len(calls), 2)
+
     def test_the_watchdog_registers_it(self):
         self.assertIn("WA", A.INVARIANTS)
 

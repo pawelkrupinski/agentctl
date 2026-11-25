@@ -9,18 +9,21 @@
 
 import json
 import os
+import re
 import time
 from typing import Any, Callable
 from agentctl.core import env_num, fmt_age, git, host_role, run_cmd, state_root
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record, write_json
+from agentctl.cistate import state_read
 from agentctl.forge import gh_json
 from agentctl.fixerland import bin_repo
 
 SELF_REPO = "pawelkrupinski/agentctl"
 WA_RED_MAX = 30 * 60       # s agentctl's tests.yml may stay red on main ($AGENTCTL_WA_RED_MAX)
 WA_BEHIND_MAX = 10         # commits ci-runner's pin may trail origin/main ($AGENTCTL_WA_BEHIND_MAX)
-WA_READ_EVERY = 300        # s a reading (a gh list and an ssh) is kept ($AGENTCTL_WA_READ_EVERY)
+WA_READ_EVERY = 300        # s a gh list is kept ($AGENTCTL_WA_READ_EVERY)
+WA_SSH_EVERY = 1800        # s the ssh fallback's reading is kept at least (each new ssh auth may cost the owner a Touch ID)
 PIN_LINK = "/var/lib/agentctl-src/current"  # the export the auto-pin runs: a link to the directory named by the full rev
 
 
@@ -31,9 +34,17 @@ def read_runs() -> list[dict[str, Any]]:
                         "--json", "databaseId,number,status,conclusion,headSha,createdAt,updatedAt"))
 
 
-def read_pin() -> str | None:
-    """The rev ci-runner runs, read-only over ssh; None when it cannot say."""
-    r = run_cmd(["ssh", "-o", "ControlPath=none", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "ci-runner",
+def pin_from_state() -> str | None:
+    """The rev ci-runner runs, as its reconciler reports it in the state mirror (`status`: "code <rev>"): the reconciler
+    runs the auto-pin's export, so its rev is the pin's (12 hex). No ssh. None when the mirror carries none."""
+    rev = str(state_read().get("rev") or "")
+    return rev if re.fullmatch(r"[0-9a-f]{12}", rev) else None
+
+
+def read_pin_over_ssh() -> str | None:
+    """The fallback: the rev ci-runner runs, read-only over ssh through the shared ControlMaster (never ControlPath=none:
+    a dedicated connection authenticates afresh, and every Touch ID-gated auth is a prompt); None when it cannot say."""
+    r = run_cmd(["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "ci-runner",
                  f"sudo -n readlink -f {PIN_LINK}"], timeout=30)
     rev = os.path.basename(r.stdout.strip())
     return rev if r.returncode == 0 and len(rev) == 40 else None
@@ -99,8 +110,10 @@ def pin_problem(pin_rev: str | None, lag: int | None) -> str | None:
 def readings(now_: float, runs: Callable[[], Any] | None, pin: Callable[[], str | None] | None) -> tuple[Any, str | None]:
     """(tests.yml's runs, the pin's rev), each kept WA_READ_EVERY seconds."""
     every = env_num("AGENTCTL_WA_READ_EVERY", WA_READ_EVERY)
-    return (cached(state_root("selfci-runs.json"), now_, runs or read_runs, every),
-            cached(state_root("selfci-pin.json"), now_, pin or read_pin, every))
+    pin_rev = pin_from_state() if pin is None else None
+    if pin_rev is None:
+        pin_rev = cached(state_root("selfci-pin.json"), now_, pin or read_pin_over_ssh, max(every, WA_SSH_EVERY))
+    return cached(state_root("selfci-runs.json"), now_, runs or read_runs, every), pin_rev
 
 
 def holding_words(red_age: float | None, pin_rev: str | None, lag: int | None) -> str:
