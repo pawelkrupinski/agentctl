@@ -4,6 +4,7 @@
 import os
 import re
 import time
+from typing import Any
 from agentctl.core import env_num, process_cache
 from agentctl.timefmt import parse_time
 from agentctl.forge import gh_json
@@ -59,17 +60,22 @@ def retire_file(o_r, sha, path):
     return _retire_get(("file", o_r, sha, path), None, read)
 
 
+def _workflow_listing(o_r: Any, sha: Any) -> Any:
+    """The workflow files' listing at sha ([] when the directory does not exist there)."""
+    try:
+        ls = gh_json(o_r, "api", f"repos/{o_r}/contents/.github/workflows?ref={sha}")
+    except RuntimeError as e:
+        if "404" in str(e) or "Not Found" in str(e):
+            return []
+        raise
+    return ls if isinstance(ls, list) else []
+
+
 def retire_flows(o_r, sha):
     """{workflow name: (path, text)} of the workflow files at sha."""
     def read():
-        try:
-            ls = gh_json(o_r, "api", f"repos/{o_r}/contents/.github/workflows?ref={sha}")
-        except RuntimeError as e:
-            if "404" in str(e) or "Not Found" in str(e):
-                return {}
-            raise
         out = {}
-        for f in ls if isinstance(ls, list) else []:
+        for f in _workflow_listing(o_r, sha):
             p = f.get("path") or ""
             if not p.endswith((".yml", ".yaml")):
                 continue

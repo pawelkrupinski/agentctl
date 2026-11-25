@@ -291,6 +291,17 @@ def alert_close(d, idx, item, why):
     return True
 
 
+def _close_entry(d: Any, idx: Any, live: Any, e: Any, why: Any) -> None:
+    """Close entry e: through its index item when it has one, else by writing its record closed and acking it."""
+    if e["id"] in live:
+        alert_close(d, idx, live[e["id"]], why)
+        return
+    rec = {k: v for k, v in e.items() if k != "read"}
+    rec["closed"] = {"at": time.time(), "why": why}
+    write_json(os.path.join(d, e["id"] + ".json"), rec)
+    alert_ack(d, e["id"])
+
+
 def alert_close_naming(pattern, why, d=None):
     """Close every unread alert whose verdict matches `pattern` (a question answered after its red closed). Returns
     how many."""
@@ -302,13 +313,7 @@ def alert_close_naming(pattern, why, d=None):
         for e in inbox_entries():
             if e["read"] or not pattern.search(str(e.get("verdict") or "")):
                 continue
-            if e["id"] in live:
-                alert_close(d, idx, live[e["id"]], why)
-            else:
-                rec = {k: v for k, v in e.items() if k != "read"}
-                rec["closed"] = {"at": time.time(), "why": why}
-                write_json(os.path.join(d, e["id"] + ".json"), rec)
-                alert_ack(d, e["id"])
+            _close_entry(d, idx, live, e, why)
             n += 1
         alert_index_save(d, idx)
     return n

@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+from typing import Any
 from agentctl.core import env_num, fmt_age, git, reds_dir, remote, spawn_detached
 from agentctl.statefile import read_record
 from agentctl.procs import proc_alive, process_start
@@ -119,6 +120,21 @@ def blame_apply(b, i, v):
     return b, None
 
 
+def _blame_confirmed(store: Any, it: Any, b: Any, k: Any, t: Any) -> Any:
+    """The culprit is group k: recorded, announced, and the red offered again with the tier its decision gives."""
+    d, g = it["data"], b["groups"][k]
+    b = dict(b, state="confirmed", culprit=k, parent=blame_boundary(b, k), decided_at=t,
+             evidence="; ".join(str(p.get("evidence") or "") for p in b.get("probes") or [] if p.get("evidence")))
+    who, text = blame_decision(b)
+    line = (f"RED BLAME: {red_what(d)}: the culprit is {blame_change_name(g)} "
+            f"({', '.join(c[:10] for c in g['commits'][:5])}, {g.get('subject') or ''!s:.80}), {text}: its parent "
+            f"{b['parent'][:10]} passes the same check, its end fails ({b['evidence'][:200]})")
+    inbox_write("red", line, [line], [], 0)
+    dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
+    red_offer(store, it, line, data={"blame": b}, quiet=True)
+    return [line]
+
+
 def blame_finish(store, it, b, why, t):
     """The search decided: confirmed (lo and hi adjacent), or undetermined with why. The red is offered again with the
     tier the decision gives (red_offer). Returns the act lines."""
@@ -131,16 +147,7 @@ def blame_finish(store, it, b, why, t):
         if g.get("bot"):
             why = f"the culprit {g['commits'][0][:10]} is a bot's change ({g.get('author')}): never reverted"
         else:
-            b = dict(b, state="confirmed", culprit=k, parent=blame_boundary(b, k), decided_at=t,
-                     evidence="; ".join(str(p.get("evidence") or "") for p in b.get("probes") or [] if p.get("evidence")))
-            who, text = blame_decision(b)
-            line = (f"RED BLAME: {red_what(d)}: the culprit is {blame_change_name(g)} "
-                    f"({', '.join(c[:10] for c in g['commits'][:5])}, {g.get('subject') or ''!s:.80}), {text}: its parent "
-                    f"{b['parent'][:10]} passes the same check, its end fails ({b['evidence'][:200]})")
-            inbox_write("red", line, [line], [], 0)
-            dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
-            red_offer(store, it, line, data={"blame": b}, quiet=True)
-            return [line]
+            return _blame_confirmed(store, it, b, k, t)
     b = dict(b, state="undetermined", why=why, decided_at=t)
     line = f"RED BLAME: {red_what(d)}: no culprit determined ({why}): the normal fixer flow"
     dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)

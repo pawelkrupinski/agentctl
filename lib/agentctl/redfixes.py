@@ -4,6 +4,7 @@
 import re
 import time
 from contextlib import suppress
+from typing import Any
 from agentctl.core import attempt, cherry_landed, git, git_ok, process_cache, remote
 from agentctl.timefmt import parse_time, ts
 from agentctl.forge import gh_json
@@ -28,6 +29,15 @@ def commit_fixes(repo, sha, store):
 _trailer_fixes = process_cache({})
 
 
+def _commit_fixes(repo: Any, c: Any, store: Any) -> Any:
+    """The runs commit c's Fixes-Red trailers name that count (cached per commit)."""
+    if c not in _trailer_fixes:
+        r = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", c, check=False)
+        vals = trailer_values(r.stdout) if r.returncode == 0 else set()
+        _trailer_fixes[c] = sorted(fix_check(repo, c, vals, store)[0]) if vals else []  # only those that count
+    return _trailer_fixes[c]
+
+
 def entry_fixes(repo, e, store):
     """The runs a queued change says it fixes: its `fixes` (recorded at submission from its Fixes-Red trailers), else
     read again from its commits' trailers (cached per commit) -- an entry that lost the field still links its red."""
@@ -35,11 +45,7 @@ def entry_fixes(repo, e, store):
         return sorted(fixes_named(e))
     out = []
     for c in e.get("commits") or []:
-        if c not in _trailer_fixes:
-            r = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", c, check=False)
-            vals = trailer_values(r.stdout) if r.returncode == 0 else set()
-            _trailer_fixes[c] = sorted(fix_check(repo, c, vals, store)[0]) if vals else []  # only those that count
-        out += _trailer_fixes[c]
+        out += _commit_fixes(repo, c, store)
     return out
 
 

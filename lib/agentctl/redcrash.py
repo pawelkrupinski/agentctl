@@ -74,20 +74,24 @@ def keep_awake(pid: int | None = None) -> "subprocess.Popen[Any] | None":
         return None
 
 
+def _sleep_log_text() -> Any:
+    """`pmset -g log`'s text (or $AGENTCTL_SLEEP_LOG's file); "" when unreadable."""
+    try:
+        path = os.environ.get("AGENTCTL_SLEEP_LOG")
+        if path:
+            return open(path).read()
+        return process_runner().run(["pmset", "-g", "log"], capture_output=True, text=True, timeout=30).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
 def sleep_intervals():
     """[(start, end)] epoch seconds of the host's recent sleeps, from `pmset -g log` (or $AGENTCTL_SLEEP_LOG, a file in
     its format). [] when unreadable. Cached for a minute."""
     now = time.time()
     if now - _SLEEP_CACHE[0] < 60 and not os.environ.get("AGENTCTL_SLEEP_LOG"):
         return _SLEEP_CACHE[1]
-    try:
-        path = os.environ.get("AGENTCTL_SLEEP_LOG")
-        if path:
-            text = open(path).read()
-        else:
-            text = process_runner().run(["pmset", "-g", "log"], capture_output=True, text=True, timeout=30).stdout
-    except (OSError, subprocess.SubprocessError):
-        text = ""
+    text = _sleep_log_text()
     out, start = [], None
     for m in re.finditer(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d [+-]\d{4}) (Sleep|Wake|DarkWake)\b", text, re.M):
         try:
@@ -169,15 +173,22 @@ def red_crash_evidence(streak):
     return tail[-30:]
 
 
-def red_crash_cmd(streak):
-    """The owner's look at the crashes: `red status -v`, then the newest crashed launch's log (its wrapper's stderr or its
-    transcript), else its worktree -- never a `less ?`, nor a log that was never written (a launch that failed)."""
+def _crash_evidence(streak: Any) -> Any:
+    """The first log or worktree of the streak's launches that exists on disk, else None."""
     for h in streak:
         for p in (h.get("log"), h.get("worktree")):
             if p and os.path.exists(p):
-                return (f"~/bin/agentctl red status -v; " + (f"less {p}" if not os.path.isdir(p) else f"cd {p}")
-                        ).replace(HOME, "~")
-    return "~/bin/agentctl red status -v"
+                return p
+    return None
+
+
+def red_crash_cmd(streak):
+    """The owner's look at the crashes: `red status -v`, then the newest crashed launch's log (its wrapper's stderr or its
+    transcript), else its worktree -- never a `less ?`, nor a log that was never written (a launch that failed)."""
+    p = _crash_evidence(streak)
+    if not p:
+        return "~/bin/agentctl red status -v"
+    return (f"~/bin/agentctl red status -v; " + (f"less {p}" if not os.path.isdir(p) else f"cd {p}")).replace(HOME, "~")
 
 
 def red_crash_launches(streak):

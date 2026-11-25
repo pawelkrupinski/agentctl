@@ -3,6 +3,7 @@
 
 import os
 import re
+from typing import Any
 from agentctl.core import HOME, PROTECTED_BRANCHES, _tokens, err, git, remote
 from agentctl.timefmt import ts
 from agentctl.repos import movies_repo_path
@@ -163,6 +164,19 @@ def blame_drop_revert_worktree(repo, wt, change, why, store):
     return msg + (f"; cancelled {', '.join(cancelled)}" if cancelled else "")
 
 
+def _cancelled(st: Any, cid: Any, why: Any) -> Any:
+    """Cancel queued change cid; False (logged) when that failed."""
+    try:
+        if hasattr(st, "cancel_change"):
+            st.cancel_change(cid)
+        else:
+            cancel_submitted(st, cid)
+        return True
+    except (Exception, SystemExit) as e:
+        err(f"could not cancel {cid} ({why}): {str(e)[:120]}")
+        return False
+
+
 def blame_cancel_changes_of(wt, why, st):
     """Cancel every open queued change submitted from `wt`; returns their ids."""
     rw, out = os.path.realpath(wt), []
@@ -174,14 +188,8 @@ def blame_cancel_changes_of(wt, why, st):
         if machine_state("change", it["state"]).terminal or \
                 os.path.realpath(str((it.get("data") or {}).get("worktree") or "")) != rw:
             continue
-        try:
-            if hasattr(st, "cancel_change"):
-                st.cancel_change(it["id"])
-            else:
-                cancel_submitted(st, it["id"])
+        if _cancelled(st, it["id"], why):
             out.append(it["id"])
-        except (Exception, SystemExit) as e:
-            err(f"could not cancel {it['id']} ({why}): {str(e)[:120]}")
     return out
 
 

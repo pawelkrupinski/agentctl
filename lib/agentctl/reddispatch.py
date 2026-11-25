@@ -195,7 +195,7 @@ def red_migrate(store):
         if it["state"] in RED_TERMINAL:
             continue
         want = red_identity(it["data"])
-        if all(k in it["data"] and it["data"][k] == v for k, v in want.items()):
+        if want.items() <= it["data"].items():
             continue
         try:
             store.update_item("red", it["id"], it["version"], want)
@@ -229,6 +229,11 @@ def red_capacity(store, waited, t, alive=None):
     return False, head + eta
 
 
+def _fixer_or_claim(m: Any) -> Any:
+    """A lease meta of a dispatched fixer, or of a claim made inside one."""
+    return m.get("kind") == "fixer" or (m.get("kind") == "claim" and bool(m.get("fixer")))
+
+
 def red_family_holder(store, fam, t, active=None):
     """The live primary lease on a red of queue family fam, or None: a fixer's own (not a sibling), or a CLAIM made
     inside a dispatched fixer (`red claim <M>` there: its record on the lease, 2026-11-07 -- the dispatcher started a
@@ -239,7 +244,7 @@ def red_family_holder(store, fam, t, active=None):
     active = active if active is not None else red_active(store)
     for row in store.list("red/"):
         m = lease_meta(row)
-        if not lease_is_live(row, t) or not (m.get("kind") == "fixer" or (m.get("kind") == "claim" and m.get("fixer"))):
+        if not lease_is_live(row, t) or not _fixer_or_claim(m):
             continue
         it = active.get(row["name"].split("/", 1)[1])
         if it and red_queue_family(it["data"]) == fam:

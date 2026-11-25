@@ -391,16 +391,21 @@ RED_WAITS_ON = "waits-on"
 RED_WAIT_CHAIN_MAX = 20
 
 
+def _waits_on(store: Any, key: Any) -> Any:
+    """The red key that red `key` waits on, None when it is gone, closed or waits on nothing."""
+    o = red_of_key(store, key)
+    f = ((o or {}).get("data") or {}).get("fix") or {}
+    if not o or o["state"] in RED_TERMINAL or f.get("status") != RED_WAITS_ON:
+        return None
+    return f.get("red")
+
+
 def red_wait_cycle(store, own_key, other):
     """The keys from `other` back to own_key when other waits (through its waits-on chain) on own_key, else None."""
     chain, cur = [], other
     while cur and len(chain) < RED_WAIT_CHAIN_MAX:
         chain.append(cur)
-        o = red_of_key(store, cur)
-        f = ((o or {}).get("data") or {}).get("fix") or {}
-        if not o or o["state"] in RED_TERMINAL or f.get("status") != RED_WAITS_ON:
-            return None
-        cur = f.get("red")
+        cur = _waits_on(store, cur)
         if cur == own_key:
             return chain
         if cur in chain:

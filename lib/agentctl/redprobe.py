@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import attempt, env_num, err, git, remote, slug
 from agentctl.timefmt import ts
@@ -75,6 +76,16 @@ def drift_seed_check(out):
     return "; ".join(bad) or None
 
 
+def _seed_checked(v: Any, said: Any, r: Any) -> Any:
+    """The probe's verdict dict: a pass or fail stands only when every row replayed the seed it pinned."""
+    if v == "none":
+        return {"verdict": v, "evidence": said}
+    wrong = drift_seed_check((r.stdout or "") + "\n" + (r.stderr or ""))
+    if wrong:
+        return {"verdict": "none", "evidence": f"{said}; NOT THE RED'S SEEDS: {wrong}"}
+    return {"verdict": v, "evidence": said, "seeds": True}
+
+
 def probe_drift(repo, commit, run, wall):
     """The red run's failing drift rows replayed on `commit` with THE RED RUN'S OWN SEEDS (identity-drift-ci
     --for-red), on drift_overlay's commit (main's CI over its code). The replayed seed is checked against the pinned one
@@ -91,12 +102,7 @@ def probe_drift(repo, commit, run, wall):
     last = (r.stdout.strip().splitlines() or [""])[-1].strip()
     v = "pass" if last.startswith("DRIFT CLEAN") else "fail" if last.startswith(("DRIFT RED", "DRIFT PROGRESS")) else "none"
     said = f"identity-drift-ci {probe[:10]} ({commit[:10]} + main's CI) --for-red {run}: {last[:200] or f'exit {r.returncode}'}"
-    if v != "none":
-        wrong = drift_seed_check((r.stdout or "") + "\n" + (r.stderr or ""))
-        if wrong:
-            return {"verdict": "none", "evidence": f"{said}; NOT THE RED'S SEEDS: {wrong}"}
-        return {"verdict": v, "evidence": said, "seeds": True}  # every row replayed the seed it pinned
-    return {"verdict": v, "evidence": said}
+    return _seed_checked(v, said, r)
 
 
 def probe_checks(repo, o_r, commit, run, tokens, wall, clock):

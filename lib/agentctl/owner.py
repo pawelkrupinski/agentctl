@@ -80,6 +80,19 @@ def owner_meta(fam, wt, pid, notebook):
     return {"kind": "owner", "family": fam, "worktree": wt, "pid": pid, "notebook": notebook, "host": socket_host()}
 
 
+def _ensure_notebook(nb: Any, fam: Any) -> None:
+    """The family's notebook file, created once."""
+    if not os.path.exists(nb):
+        with open(nb, "w") as f:
+            f.write(f"# {fam} red family: the owner's notebook\n\nKept by the family's owner session across reds and "
+                    "restarts: reproducers, hypotheses tried (and how they ended), what is left.\n")
+
+
+def _owner_started_line(fam: Any, restarted: Any, pid: Any, wt: Any, pic: Any) -> str:
+    return (f"RED OWNER {fam}: {'RESTARTED (it had died)' if restarted else 'STARTED'} pid {pid} in "
+            f"{wt.replace(HOME, '~')} for {pic.get('workflow')} #{(pic.get('run') or {}).get('number')}")
+
+
 def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
     """Start (or restart, after it died) the family's owner: its worktree and notebook kept, the taken leases handed
     to it, its heartbeat taken for it (ONE START PER FAMILY), its wrapper detached. (ok, message)."""
@@ -94,10 +107,7 @@ def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
                        meta=owner_meta(fam, wt, None, nb))
     if "held" in hb:  # another pass started it a moment ago: the red is the starting owner's next turn
         return True, f"RED OWNER {fam}: already starting ({hb['held']['holder']}): red {off['lease']} handed to it"
-    if not os.path.exists(nb):
-        with open(nb, "w") as f:
-            f.write(f"# {fam} red family: the owner's notebook\n\nKept by the family's owner session across reds and "
-                    "restarts: reproducers, hypotheses tried (and how they ended), what is left.\n")
+    _ensure_notebook(nb, fam)
     restarted = bool(rec.get("started"))
     # A RESTART CONTINUES (2026-11-03): the turn count, the session (rec["session"], resumed or adopted by the wrapper),
     # the worktree and the notebook go on; the last spell's end is kept for the resumed session's first prompt
@@ -120,9 +130,7 @@ def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
         return False, f"RED OWNER {fam}: NOT STARTED: {e}"
     rec.update(pid=p.pid, process_start=process_start(p.pid))
     write_json(owner_record_path(fam), rec)
-    pic = off["picture"]
-    line = (f"RED OWNER {fam}: {'RESTARTED (it had died)' if restarted else 'STARTED'} pid {p.pid} in "
-            f"{wt.replace(HOME, '~')} for {pic.get('workflow')} #{(pic.get('run') or {}).get('number')}")
+    line = _owner_started_line(fam, restarted, p.pid, wt, off["picture"])
     inbox_write("red", line, [], [], 0, cwd=wt)
     return True, line
 
@@ -138,6 +146,15 @@ def owner_resume_target(rec):
     return None
 
 
+def _red_brief(d: Any) -> Any:
+    """The fixer_prompt fields of a red's data."""
+    return {"workflow": d.get("workflow"), "job": d.get("job") or (d.get("jobs") or ["?"])[0], "jobs": d.get("jobs"),
+            "kind": d.get("kind") or "test", "line": d.get("line"), "run": d.get("last_run") or {}, "key": d.get("key"),
+            "refuted": d.get("refuted"), "predicts": d.get("predicts"), "flake": d.get("red_kind") == "flake",
+            "diagnosis": d.get("diagnosis"), "prior_work": d.get("prior_work"), "old_note": d.get("old_note"),
+            "decision": red_decision(d)}
+
+
 def owner_turn_prompt(fam, rec, st, names, first, resumed=False, handover=None):
     """The turn's prompt: the first red's task (fixer_prompt) in the owner's voice, every red of the turn listed. A
     resumed session (its wrapper restarted) is told to continue, never to start over; a fresh one past its predecessor's
@@ -147,12 +164,7 @@ def owner_turn_prompt(fam, rec, st, names, first, resumed=False, handover=None):
     reds = [f"{red_what(i['data'])} (red {i['data'].get('key')}): {str(i['data'].get('line') or '')[:160]}" for i in its]
     if not its:
         return None
-    d = its[0]["data"]
-    u = {"workflow": d.get("workflow"), "job": d.get("job") or (d.get("jobs") or ["?"])[0], "jobs": d.get("jobs"),
-         "kind": d.get("kind") or "test", "line": d.get("line"), "run": d.get("last_run") or {}, "key": d.get("key"),
-         "refuted": d.get("refuted"), "predicts": d.get("predicts"), "flake": d.get("red_kind") == "flake",
-         "diagnosis": d.get("diagnosis"), "prior_work": d.get("prior_work"), "old_note": d.get("old_note"),
-         "decision": red_decision(d)}
+    u = _red_brief(its[0]["data"])
     return fixer_prompt(u, rec["worktree"], sync_brief(), handover or owner_turn_note(rec, first, resumed),
                         owner={"family": fam, "notebook": rec["notebook"], "reds": reds})
 

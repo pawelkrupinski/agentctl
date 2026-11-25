@@ -5,6 +5,7 @@ import os
 import re
 import time
 from contextlib import suppress
+from typing import Any
 from agentctl.core import attempt, env_num
 from agentctl.inboxentry import CONDITION_KINDS, INBOX_COMMANDS, inbox_kind
 from agentctl.redfamilies import red_family
@@ -100,6 +101,19 @@ def alert_norm(v):
     return re.sub(r"[0-9a-f]{7,40}|\d+", "N", str(v or "").splitlines()[0] if v else "")[:120]
 
 
+def _fixers_hold(st: Any, red: Any, t: Any) -> Any:
+    """Someone holds the red's lease, or its family's owner session is alive; True too when the store cannot tell now
+    (the fixers', the next round asks again)."""
+    d = red.get("data") or {}
+    try:
+        if lease_is_live(st.get(red_lease(d.get("key") or red["id"])), t):
+            return True
+        fam = red_family(d)
+        return bool(fam and owner_alive(st, fam, t))
+    except Exception:
+        return True
+
+
 def alert_red_audience(rec, red, st, t):
     """Who must act on a red escalation (UNCLAIMED, STARVED, ESCALATE): the fixer machinery while anyone holds the red,
     its family's owner session is alive, or it has had fewer than ALERT_RED_OWNER_LEVEL offer rounds; the owner once
@@ -112,14 +126,7 @@ def alert_red_audience(rec, red, st, t):
             return "info"
     if kind == "RED_ESCALATE":
         return "fixer"
-    d = red.get("data") or {}
-    try:
-        if lease_is_live(st.get(red_lease(d.get("key") or red["id"])), t):
-            return "fixer"
-        fam = red_family(d)
-        if fam and owner_alive(st, fam, t):
-            return "fixer"
-    except Exception:  # the store cannot tell now: the fixers', the next round asks again
+    if _fixers_hold(st, red, t):
         return "fixer"
     return "owner" if int(red.get("level") or 0) >= env_num("AGENTCTL_ALERT_RED_OWNER_LEVEL", ALERT_RED_OWNER_LEVEL) \
         else "fixer"
