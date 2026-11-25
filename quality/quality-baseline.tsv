@@ -33,7 +33,6 @@ cognitive	close_landed_changes	19
 cognitive	close_superseded	16
 cognitive	close_worktree	20
 cognitive	cmd_config	21
-cognitive	cmd_gov	37
 cognitive	cmd_issue	19
 cognitive	cmd_lease	17
 cognitive	cmd_maintain	36
@@ -196,7 +195,6 @@ cyclomatic	close_landed_changes	15
 cyclomatic	close_superseded	22
 cyclomatic	close_worktree	25
 cyclomatic	cmd_config	15
-cyclomatic	cmd_gov	43
 cyclomatic	cmd_issue	13
 cyclomatic	cmd_lease	20
 cyclomatic	cmd_maintain	29
@@ -326,7 +324,6 @@ inner-defs	sync_steps	7
 method-lines	_push_batch_item	72
 method-lines	_tick_changes_pass	86
 method-lines	alert_probe	55
-method-lines	cmd_gov	69
 method-lines	cmd_maintain	56
 method-lines	dry_run	53
 method-lines	expire_cache	58

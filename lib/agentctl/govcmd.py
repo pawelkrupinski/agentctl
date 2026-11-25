@@ -35,75 +35,113 @@ def admit_rows() -> list[Any]:
                 rows.append(json.loads(line))
     return rows
 
-def cmd_gov(a):
-    if a.gcmd == "probe":
-        print("agentctl governor: " + " ".join(GOV_FEATURES))
+def gov_probe(a: Any) -> int:
+    print("agentctl governor: " + " ".join(GOV_FEATURES))
+    return 0
+
+
+def gov_admit_cmd(a: Any) -> int:
+    t = gov_admit(a.cls, a.mem, a.label or "", kind=a.kind, fd=a.fd, ticket=a.ticket, wait=not a.try_,
+                  force=a.force, pid=a.pid, cwd=a.cwd, cores=a.cores, job=a.job)
+    return 0 if t else 1
+
+
+def gov_usage_cmd(a: Any) -> int:
+    rec = gov_record_usage(a.job, a.wall, a.cpu, a.load1, a.label or "", a.meter)
+    print(f"{a.job}: {rec['cores']:g} cores over {a.wall:g} s" if rec else f"{a.job}: under {GOV_USAGE_MIN_WALL} s, not recorded")
+    return 0
+
+
+def gov_cores_cmd(a: Any) -> int:
+    print(f"{gov_job_cores(a.job, a.cls):g}")
+    return 0
+
+
+def gov_route_cmd(a: Any) -> int:
+    where, why = gov_route(a.job, a.cls, a.mem)
+    print(f"{where}: {why}")
+    return 0 if where == "ci" else 1
+
+
+def _live_cores(jobs: Any) -> str:
+    return ", ".join(f"{label} {cores:g}" for label, cores in jobs) or "-"
+
+
+def gov_replay_cmd(a: Any) -> int:
+    """`gov replay --at T`: the admissions around T, as admitted and under the cores rule."""
+    at = dt.datetime.fromisoformat(a.at.replace("Z", "+00:00")).timestamp()
+    rows = [r for r in admit_rows() if abs(float(r.get("at", r.get("end", 0))) - at) <= 12 * 3600]
+    cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * (a.cores or machine_cores())
+    res = gov_replay(rows, cap, at, a.hold * 60)
+    print(f"replay at {a.at} (cap {cap:g} cores; a ticket with no end record held {a.hold:g} min):")
+    print(f"  as admitted:    {len(res['old'])} live, {sum(c for _, c in res['old']):g} cores: {_live_cores(res['old'])}")
+    print(f"  the cores rule: {len(res['new'])} live, {sum(c for _, c in res['new']):g} cores: {_live_cores(res['new'])}; "
+          f"{len(res['waiting'])} waiting: {_live_cores(res['waiting'])}")
+    print(f"  peak cores live: {res['old_peak']:g} as admitted, {res['new_peak']:g} under the rule; p50 wait "
+          f"{res['old_wait_p50'] / 60:.0f} min as admitted, {res['new_wait_p50'] / 60:.0f} min under the rule")
+    return 0
+
+
+def gov_evict_cmd(a: Any) -> int:
+    if a.dry_run:
+        for idle, root, _p in idle_servers():
+            print(f"would evict {root} (unused {int(idle // 60)} min)")
         return 0
-    if a.gcmd == "admit":
-        t = gov_admit(a.cls, a.mem, a.label or "", kind=a.kind, fd=a.fd, ticket=a.ticket, wait=not a.try_,
-                      force=a.force, pid=a.pid, cwd=a.cwd, cores=a.cores, job=a.job)
-        return 0 if t else 1
-    if a.gcmd == "usage":
-        rec = gov_record_usage(a.job, a.wall, a.cpu, a.load1, a.label or "", a.meter)
-        print(f"{a.job}: {rec['cores']:g} cores over {a.wall:g} s" if rec else f"{a.job}: under {GOV_USAGE_MIN_WALL} s, not recorded")
-        return 0
-    if a.gcmd == "cores":
-        print(f"{gov_job_cores(a.job, a.cls):g}")
-        return 0
-    if a.gcmd == "route":
-        where, why = gov_route(a.job, a.cls, a.mem)
-        print(f"{where}: {why}")
-        return 0 if where == "ci" else 1
-    if a.gcmd == "replay":
-        rows = admit_rows()
-        at = dt.datetime.fromisoformat(a.at.replace("Z", "+00:00")).timestamp()
-        rows = [r for r in rows if abs(float(r.get("at", r.get("end", 0))) - at) <= 12 * 3600]
-        cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * (a.cores or machine_cores())
-        res = gov_replay(rows, cap, at, a.hold * 60)
-        fmt = lambda js: ", ".join(f"{l} {c:g}" for l, c in js) or "-"
-        print(f"replay at {a.at} (cap {cap:g} cores; a ticket with no end record held {a.hold:g} min):")
-        print(f"  as admitted:    {len(res['old'])} live, {sum(c for _, c in res['old']):g} cores: {fmt(res['old'])}")
-        print(f"  the cores rule: {len(res['new'])} live, {sum(c for _, c in res['new']):g} cores: {fmt(res['new'])}; "
-              f"{len(res['waiting'])} waiting: {fmt(res['waiting'])}")
-        print(f"  peak cores live: {res['old_peak']:g} as admitted, {res['new_peak']:g} under the rule; p50 wait "
-              f"{res['old_wait_p50'] / 60:.0f} min as admitted, {res['new_wait_p50'] / 60:.0f} min under the rule")
-        return 0
-    if a.gcmd == "evict":
-        if a.dry_run:
-            for idle, root, _p in idle_servers():
-                print(f"would evict {root} (unused {int(idle // 60)} min)")
-            return 0
-        root = gov_evict("by hand (agentctl gov evict)")
-        print(f"evicted {root}" if root else "no idle sbt server to evict")
-        return 0
-    if a.gcmd == "capacity":
-        cap, tickets = gov_capacity(), gov_tickets()
-        print(f"{cap['state']}: {cap['busy']:.1f} of {cap['cores']} cores busy ({cap['charged']:g} charged, "
-              f"{cap['measured']:.1f} measured, load {machine_load1():.1f}); {len(tickets)} admitted, "
-              f"{len(gov_waiters())} waiting")
-        return 0
-    if a.gcmd == "status":
-        return gov_status()
-    if a.gcmd == "stats":
-        rc = cmd_checks(argparse.Namespace(ccmd="stats", days=a.days))
-        cutoff = time.time() - a.days * 86400
-        rows = [r for r in admit_rows() if r.get("at", 0) >= cutoff]
-        print(f"{'class':>7} {'admits':>6} {'p50 wait':>9} {'p90 wait':>9} {'waited>1m':>9}")
-        for cls in GOV_CLASSES:
-            rs = [r for r in rows if r.get("class") == cls]
-            if rs:
-                w = [r.get("waited", 0) for r in rs]
-                print(f"{cls:>7} {len(rs):>6} {pct(w, .5):>8.0f}s {pct(w, .9):>8.0f}s {sum(1 for x in w if x > 60):>9}")
-        usage = gov_usage(a.days)
-        for job in sorted({r.get("job") for r in usage if r.get("job")}):
-            m_ = gov_measured_cores(job, usage)
-            print(f"cores {job}: {sum(1 for r in usage if r.get('job') == job)} runs, charged "
-                  f"{gov_job_cores(job):g} ({'measured p75' if m_ is not None else 'default'})")
-        ev = attempt(lambda: sum(1 for l in open(os.path.join(gov_dir(), "gov.log")) if " evicted " in l), 0,
-                     catch=(OSError,))
-        print(f"evictions (all time): {ev}")
-        return rc
-    return 2
+    root = gov_evict("by hand (agentctl gov evict)")
+    print(f"evicted {root}" if root else "no idle sbt server to evict")
+    return 0
+
+
+def gov_capacity_cmd(a: Any) -> int:
+    cap, tickets = gov_capacity(), gov_tickets()
+    print(f"{cap['state']}: {cap['busy']:.1f} of {cap['cores']} cores busy ({cap['charged']:g} charged, "
+          f"{cap['measured']:.1f} measured, load {machine_load1():.1f}); {len(tickets)} admitted, "
+          f"{len(gov_waiters())} waiting")
+    return 0
+
+
+def gov_status_cmd(a: Any) -> int:
+    return gov_status()
+
+
+def _admit_waits(days: int) -> None:
+    """The stats table of the admissions of the last `days` days: a row per class that admitted any."""
+    cutoff = time.time() - days * 86400
+    rows = [r for r in admit_rows() if r.get("at", 0) >= cutoff]
+    print(f"{'class':>7} {'admits':>6} {'p50 wait':>9} {'p90 wait':>9} {'waited>1m':>9}")
+    for cls in GOV_CLASSES:
+        rs = [r for r in rows if r.get("class") == cls]
+        if rs:
+            w = [r.get("waited", 0) for r in rs]
+            print(f"{cls:>7} {len(rs):>6} {pct(w, .5):>8.0f}s {pct(w, .9):>8.0f}s {sum(1 for x in w if x > 60):>9}")
+
+
+def _measured_cores(days: int) -> None:
+    """A line per job with usage records: its runs and the cores it is charged."""
+    usage = gov_usage(days)
+    for job in sorted({r.get("job") for r in usage if r.get("job")}):
+        m_ = gov_measured_cores(job, usage)
+        print(f"cores {job}: {sum(1 for r in usage if r.get('job') == job)} runs, charged "
+              f"{gov_job_cores(job):g} ({'measured p75' if m_ is not None else 'default'})")
+
+
+def gov_stats_cmd(a: Any) -> int:
+    rc = cmd_checks(argparse.Namespace(ccmd="stats", days=a.days))
+    _admit_waits(a.days)
+    _measured_cores(a.days)
+    ev = attempt(lambda: sum(1 for l in open(os.path.join(gov_dir(), "gov.log")) if " evicted " in l), 0, catch=(OSError,))
+    print(f"evictions (all time): {ev}")
+    return rc
+
+
+GOV_COMMANDS = {"probe": gov_probe, "admit": gov_admit_cmd, "usage": gov_usage_cmd, "cores": gov_cores_cmd,
+                "route": gov_route_cmd, "replay": gov_replay_cmd, "evict": gov_evict_cmd, "capacity": gov_capacity_cmd,
+                "status": gov_status_cmd, "stats": gov_stats_cmd}
+
+
+def cmd_gov(a: Any) -> int:
+    handler = GOV_COMMANDS.get(a.gcmd)
+    return handler(a) if handler else 2
 
 
 def ticket_line(t: dict[str, Any]) -> str:

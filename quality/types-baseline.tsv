@@ -47,7 +47,7 @@ mypy-errors	generated	38
 mypy-errors	ghapp	34
 mypy-errors	gov	42
 mypy-errors	govbudget	12
-mypy-errors	govcmd	34
+mypy-errors	govcmd	31
 mypy-errors	govroute	18
 mypy-errors	govusage	6
 mypy-errors	identitychange	11
