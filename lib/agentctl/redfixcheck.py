@@ -105,14 +105,54 @@ def fix_reaches_red(repo, sha, d):
     return bool(cache[k].get("ok"))
 
 
-def fix_check(repo, sha, values, store):
-    """(the values that count as fixes, {value: why not} for those that do not): each `Fixes-Red:` value of commit sha
-    against the reds it names (see above): a value counts when any red it names reads the commit. Cached per sha; a
-    value naming no known red counts (unsure) and is not cached, so a red opened later is still checked."""
-    values = {str(v).strip().lstrip("#") for v in values if str(v).strip()}
-    if not values or not repo:
-        return values, {}
-    path, cache = fix_cache(sha)
+class FixValues:
+    """The `Fixes-Red:` values of one commit judged against the reds they name: the values that count (ok), those that
+    do not (bad: value -> why), and the verdicts to cache (fresh)."""
+
+    def __init__(self, repo: Any, sha: Any, items: Any, ok: Any, bad: Any) -> None:
+        self.repo, self.sha, self.items, self.ok, self.bad = repo, sha, items, ok, bad
+        self.fresh: dict[str, Any] = {}
+        self.changed: Any = None
+
+    def judge(self, v: Any) -> None:
+        its = [it for it in self.items if v in {str(x) for x in red_names(it["data"]) if x is not None}]
+        if not its or v == "local":
+            self.ok.add(v)  # unsure: the red unknown (not cached), or local
+            if its:
+                self.fresh[v] = {"ok": True, "why": "local"}
+            return
+        verdict = self.red_verdicts(its)
+        self.fresh[v] = {"ok": True} if verdict["ok"] else verdict
+        if verdict["ok"]:
+            self.ok.add(v)
+        else:
+            self.bad[v] = verdict["why"]
+
+    def record(self, path: Any, cache: Any) -> None:
+        """The fresh verdicts cached; each value that does not count told to its author."""
+        if not self.fresh:
+            return
+        fix_cache_put(path, cache, self.fresh)
+        for v, c in self.fresh.items():
+            if not v.startswith("red:") and not c.get("ok"):
+                fix_not_counted_tell(self.repo, self.sha, v, c["why"])
+
+    def red_verdicts(self, its: Any) -> Any:
+        """The value's verdict: the first red's, until one refuses (a value counts when any red it names reads the
+        commit); each red's own verdict kept too: the red takes the fix only on its own (fix_reaches_red)."""
+        if self.changed is None:
+            self.changed = fix_changed(self.repo, self.sha)
+        verdict = None
+        for it in its:
+            rv = fix_red_verdict(self.repo, self.sha, it["data"], self.changed)
+            self.fresh[f"red:{it['data']['key']}"] = rv
+            if verdict is None or not verdict["ok"]:
+                verdict = rv
+        return verdict
+
+
+def _cached_verdicts(values: Any, cache: Any) -> Any:
+    """(the values the cache says count, {value: why not} of those it refuses, the values it does not know)."""
     ok, bad, todo = set(), {}, []
     for v in sorted(values):
         c = cache.get(v)
@@ -122,37 +162,26 @@ def fix_check(repo, sha, values, store):
             ok.add(v)
         else:
             bad[v] = c.get("why") or "touches nothing its job reads"
+    return ok, bad, todo
+
+
+def fix_check(repo, sha, values, store):
+    """(the values that count as fixes, {value: why not} for those that do not): each `Fixes-Red:` value of commit sha
+    against the reds it names (see above): a value counts when any red it names reads the commit. Cached per sha; a
+    value naming no known red counts (unsure) and is not cached, so a red opened later is still checked."""
+    values = {str(v).strip().lstrip("#") for v in values if str(v).strip()}
+    if not values or not repo:
+        return values, {}
+    path, cache = fix_cache(sha)
+    ok, bad, todo = _cached_verdicts(values, cache)
     if not todo:
         return ok, bad
     # SystemExit: NoToken (the laptop's land with no token: the server checks again)
     items = attempt(lambda: [it for it in store.items("red") if it["data"].get("key")], [], catch=(Exception, SystemExit))
-    changed = None
-    fresh = {}
+    judged = FixValues(repo, sha, items, ok, bad)
     for v in todo:
-        its = [it for it in items if v in {str(x) for x in red_names(it["data"]) if x is not None}]
-        if not its or v == "local":
-            ok.add(v)  # unsure: the red unknown (not cached), or local
-            if its:
-                fresh[v] = {"ok": True, "why": "local"}
-            continue
-        if changed is None:
-            changed = fix_changed(repo, sha)
-        verdict = None
-        for it in its:  # each red's own verdict kept too: the red takes the fix only on its own (fix_reaches_red)
-            rv = fix_red_verdict(repo, sha, it["data"], changed)
-            fresh[f"red:{it['data']['key']}"] = rv
-            if verdict is None or not verdict["ok"]:
-                verdict = rv
-        fresh[v] = {"ok": True} if verdict["ok"] else verdict
-        if verdict["ok"]:
-            ok.add(v)
-        else:
-            bad[v] = verdict["why"]
-    if fresh:
-        fix_cache_put(path, cache, fresh)
-        for v, c in fresh.items():
-            if not v.startswith("red:") and not c.get("ok"):
-                fix_not_counted_tell(repo, sha, v, c["why"])
+        judged.judge(v)
+    judged.record(path, cache)
     return ok, bad
 
 

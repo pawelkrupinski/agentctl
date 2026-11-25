@@ -186,5 +186,69 @@ class RedRetiredTest(unittest.TestCase):
         check(self, A, "red_run_retired", build, wrapped, 4000)
 
 
+TREE = ["scripts/a.py", "scripts/b.sh", "scripts/lib/util.py", "scripts/lib.sh", "scripts/x_test.py", "scripts/y-test.sh",
+        ".github/workflows/w.yml", ".github/workflows/v.yml", ".github/actions/act/action.yml", ".github/actions/two/action.yaml",
+        "android/app/build.gradle", "android/src/m.kt", "ios/Package.swift", "ios/scripts/t.sh", "docs/readme.md", "Makefile"]
+SCRIPT_LINES = ["import util", "from lib import util", "source scripts/lib.sh", ". ./lib.sh", "run scripts/a.py now", "uses: ./.github/actions/act",
+                "uses: ./.github/actions/two/", "for t in '*_test.py'; do", "find scripts -name '*-test.sh'", "cd android", "--package-path ios",
+                "sbt test", "sbt Foo/testOnly BarSpec", "lint .github/workflows/v.yml", "cat scripts/a.py scripts/b.sh", "x ios/scripts/t.sh", "see docs/readme.md", "shellcheck source=lib.sh", "echo Hello", ""]
+
+
+def script_text(rng):
+    return "\n".join(rng.choice(SCRIPT_LINES) for _ in range(rng.randint(0, 6)))
+
+
+def workflow_with_steps(rng):
+    steps = ["    steps:"]
+    for i in range(rng.randint(1, 4)):
+        steps += [f"      - name: step{i}", f"        run: {rng.choice(SCRIPT_LINES) or 'true'}"] + rng.choice([[], ["        if: inputs.x"]])
+    return "name: w\non: push\njobs:\n  job1:\n    name: Job One\n" + "\n".join(steps) + "\n  job2:\n    steps:\n      - run: sbt test\n"
+
+
+class RedFixReadTest(unittest.TestCase):
+    def test_red_job_reads(self):
+        def build(case):
+            r = case.rng
+            texts = {}
+
+            def show_many(rng, repo, sha, paths):
+                return {p: texts.setdefault(p, script_text(rng)) for p in paths if rng.random() < 0.85}
+            case.fake("fix_tree_files", lambda rng, repo, sha: rng.sample(TREE, rng.randint(0, len(TREE))))
+            case.fake("fix_show", lambda rng, repo, sha, path: maybe(rng, workflow_with_steps(rng), 0.9))
+            case.fake("fix_show_many", show_many)
+            case.fake("red_failed_steps", lambda rng, d: rng.choice([[], ["step1"], ["step0", "step2"], ["Run sbt test"]]))
+            d = {"workflow": r.choice(["w", "w.yml", "x"]), "jobs": r.choice([["job1"], ["Job One (a)"], ["job2 / x"], []]),
+                 "line": r.choice(["", "FooSpec failed"])}
+            return ("repo", "sha", d)
+        check(self, A, "red_job_reads", build, lambda A: A.red_job_reads, 3000)
+
+    def test_fix_job_steps(self):
+        def build(case):
+            r = case.rng
+            lines = ["    name: n", "    runs-on: x", "    steps:", "      - name: one", "        run: a", "      - uses: z", "        name: two",
+                     "        with:", "          name: not-a-step", "      - run: b", "        if: c", "    env:", "      A: b", "    # comment", "",
+                     "      -   name: odd", "        - name: nested", "    timeout-minutes: 1"]
+            return ("\n".join(r.choice(lines) for _ in range(r.randint(0, 12))),)
+        check(self, A, "fix_job_steps", build, lambda A: A.fix_job_steps, 4000)
+
+    def test_fix_check(self):
+        def build(case):
+            r = case.rng
+            case.fake("fix_cache", lambda rng, sha: ("path", {v: rng.choice([{"ok": True}, {"ok": False, "why": "w"}, {"ok": False}])
+                                                              for v in ["1", "2", "3"] if rng.random() < 0.3}))
+            case.fake("fix_changed", lambda rng, repo, sha: ["p"])
+            case.fake("fix_red_verdict", lambda rng, repo, sha, d: rng.choice([{"ok": True}, {"ok": False, "why": "no"}]))
+            case.fake("fix_cache_put", lambda rng, *a: None)
+            case.fake("fix_not_counted_tell", lambda rng, *a: None)
+            items = [{"data": {"key": f"k{i}", "runs": r.sample(["1", "2", "3", 4], r.randint(0, 3)),
+                               "workflow": r.choice(["w", "Local checks"])}} for i in range(r.randint(0, 3))]
+            items += [{"data": {}}] * r.randint(0, 1)
+            store = Probe(case, "store", items=lambda rng, kind: items)
+            if r.random() < 0.1:
+                store = Probe(case, "store", items=lambda rng, kind: 1 / 0)
+            return ("repo", "sha", r.sample(["1", "2", "3", "local", " 5", "#2", ""], r.randint(0, 5)), store) if r.random() < 0.95 else (None, "sha", ["1"], store)
+        check(self, A, "fix_check", build, lambda A: A.fix_check, 4000)
+
+
 if __name__ == "__main__":
     unittest.main()

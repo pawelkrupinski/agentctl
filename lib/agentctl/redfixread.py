@@ -152,40 +152,56 @@ def fix_show_many(repo: str, sha: str, paths: list[str]) -> dict[str, str]:
     return out
 
 
+class JobSteps:
+    """A job block read line by line: the lines before its `steps:` (and after them), and each step's own lines."""
+
+    def __init__(self) -> None:
+        self.pre: list[str] = []
+        self.items: list[list[str]] = []
+        self.steps_ind: Any = None
+        self.item_ind: Any = None
+
+    def add(self, l: str) -> None:
+        if self.steps_ind is not None:
+            self.in_steps(l)
+            return
+        m = re.match(r"^(\s*)steps:\s*$", l)
+        if m:
+            self.steps_ind = len(m.group(1))
+        else:
+            self.pre.append(l)
+
+    def in_steps(self, l: str) -> None:
+        ind = len(l) - len(l.lstrip())
+        if l.strip() and not l.lstrip().startswith("#") and ind <= self.steps_ind:  # a job key after its steps
+            self.steps_ind, self.item_ind = -1, None
+            self.pre.append(l)
+            return
+        m = re.match(r"^(\s*)-\s", l)
+        if self.steps_ind >= 0 and m and (self.item_ind is None or len(m.group(1)) == self.item_ind):
+            self.item_ind = len(m.group(1))
+            self.items.append([l])
+        elif self.items and self.steps_ind >= 0:
+            self.items[-1].append(l)
+        else:
+            self.pre.append(l)
+
+
+def _step_name(ls: list[str], item_ind: Any) -> str | None:
+    """The step's own `name:` (never a `with:` input's), or None."""
+    for i, l in enumerate(ls):
+        m = re.match(r"^\s*(-\s+)?name:\s*['\"]?([^'\"\n]+?)['\"]?\s*$", l)
+        if m and (i == 0 and m.group(1) or len(l) - len(l.lstrip()) == item_ind + 2):
+            return m.group(2).strip()
+    return None
+
+
 def fix_job_steps(body: str) -> tuple[str, list[tuple[str | None, str]]]:
     """(the job block without its steps, [(step name or None, step text)]) of a job block, by indentation."""
-    pre, items, steps_ind, item_ind = [], [], None, None
+    job = JobSteps()
     for l in body.splitlines():
-        if steps_ind is None:
-            m = re.match(r"^(\s*)steps:\s*$", l)
-            if m:
-                steps_ind = len(m.group(1))
-            else:
-                pre.append(l)
-            continue
-        ind = len(l) - len(l.lstrip())
-        if l.strip() and not l.lstrip().startswith("#") and ind <= steps_ind:  # a job key after its steps
-            steps_ind, item_ind = -1, None
-            pre.append(l)
-            continue
-        m = re.match(r"^(\s*)-\s", l)
-        if steps_ind >= 0 and m and (item_ind is None or len(m.group(1)) == item_ind):
-            item_ind = len(m.group(1))
-            items.append([l])
-        elif items and steps_ind >= 0:
-            items[-1].append(l)
-        else:
-            pre.append(l)
-    out = []
-    for ls in items:
-        nm = None
-        for i, l in enumerate(ls):  # the step's own `name:` (never a `with:` input's)
-            m = re.match(r"^\s*(-\s+)?name:\s*['\"]?([^'\"\n]+?)['\"]?\s*$", l)
-            if m and (i == 0 and m.group(1) or len(l) - len(l.lstrip()) == item_ind + 2):
-                nm = m.group(2).strip()
-                break
-        out.append((nm, "\n".join(ls)))
-    return "\n".join(pre), out
+        job.add(l)
+    return "\n".join(job.pre), [(_step_name(ls, job.item_ind), "\n".join(ls)) for ls in job.items]
 
 
 def fix_step_failed(nm: str | None, txt: str, failing: list[str]) -> bool:
@@ -256,6 +272,107 @@ def red_failing_jobs(text: str, d: dict[str, Any]) -> list[str]:
             if k.lower() in heads or re.sub(r"\$\{\{.*?\}\}", "", nm).strip().lower() in heads] if heads else []
 
 
+class JobReads:
+    """The paths a job's steps read, followed through the actions, scripts and tests they name (three levels deep):
+    `reads`, the files the walk reached, each file read once (`seen`)."""
+
+    def __init__(self, repo: Any, sha: Any, files: Any) -> None:
+        self.repo, self.sha, self.files = repo, sha, files
+        self.tree, self.dirs = set(files), {f.rsplit("/", 1)[0] for f in files if "/" in f}
+        self.reads: set[Any] = set()
+        self.seen: set[Any] = set()
+
+    def walk(self, first: Any) -> Any:
+        """The texts read, `first` (the job's steps) and every file found within three levels; the last level's names
+        are read too (never followed further)."""
+        texts = [first]
+        todo: list[Any] = [(None, first, False)]
+        for _depth in range(3):
+            todo = self.read_next([x for src, t, data in todo for x in self.scan(src, t, data)])
+            texts += [t for _p, t, data in todo if not data]  # a found test's reach adds paths alone (above)
+        for src, t, data in todo:
+            self.scan(src, t, data)
+        return texts
+
+    def read_next(self, want_next: Any) -> Any:
+        """(path, text, data) of each file wanted that the commit holds, unless it is huge."""
+        bodies = fix_show_many(self.repo, self.sha, [p for p, _ in want_next if p])
+        return [(p, bodies[p], data) for p, data in want_next if bodies.get(p) and len(bodies[p]) < 400_000]
+
+    def scan(self, src: Any, t: Any, data: Any) -> Any:
+        """The paths text t (of file src; data: reached through a self-test a runner found) names, into reads; the
+        files to read next, as (path, data)."""
+        out = self.actions(t, data)
+        named = self.named_paths(src, t)
+        out += self.found_tests(t)
+        for p in named:
+            self.reads.add(p)
+            if p in self.seen or p not in self.tree or FIX_WORKFLOW_FILE.match(p):
+                continue  # another workflow named in a script is its DATA (a lint's input): read, never run here
+            self.seen.add(p)
+            out.append((p, data))
+        return out
+
+    def actions(self, t: Any, data: Any) -> Any:
+        """The local actions and workflows `uses:` names: (their file, data) to read next."""
+        out = []
+        for m in re.finditer(r"uses:\s*\./([\w./-]+)", t):
+            p = m.group(1).rstrip("/")
+            self.reads.add(p)
+            if p not in self.seen:
+                self.seen.add(p)
+                out.append((p if FIX_WORKFLOW_FILE.match(p) else
+                            next((p + a for a in ("/action.yml", "/action.yaml") if p + a in self.tree), None), data))
+        return out
+
+    def named_paths(self, src: Any, t: Any) -> Any:
+        """The repository paths text t names, the files it sources and (of a .py file) imports among them."""
+        named = [m.group(1).rstrip("/.") for m in FIX_REPO_PATH.finditer(t)]
+        base = src.rsplit("/", 1)[0] if src and "/" in src else ""
+        for m in FIX_SOURCED.finditer(t):  # a sourced or imported sibling: the file beside its user
+            for n in filter(None, (m.group(1), m.group(2))):
+                named += [c for c in (n, f"{base}/{n}") if c in self.tree]
+        if src and src.endswith(".py"):
+            named += self.py_imports(t, base)
+        return named
+
+    def py_imports(self, t: Any, base: Any) -> Any:
+        """The sibling modules a Python text imports that the tree holds."""
+        out = []
+        for m in FIX_PY_IMPORT.finditer(t):
+            for n in re.split(r"\s*,\s*", m.group(1) or m.group(2)):
+                c = f"{base}/{n.split()[0].replace('.', '/')}.py" if base else f"{n.split()[0].replace('.', '/')}.py"
+                if c in self.tree:
+                    out.append(c)
+        return out
+
+    def found_tests(self, t: Any) -> Any:
+        """A self-test runner: every test it finds (under the roots it names), read as data."""
+        out = []
+        for m in FIX_TEST_GLOB.finditer(t):
+            roots = {w.strip("'\"").removeprefix("./").rstrip("/") for w in re.findall(r"[\w./'\"-]+", t)} & self.dirs
+            for f in self.files:
+                if f.endswith(m.group(1)) and (not roots or any(f.startswith(r + "/") for r in roots)):
+                    out += self.found(f)
+        return out
+
+    def found(self, f: Any) -> Any:
+        """A test the runner finds, read; (it, data) to read next the first time."""
+        self.reads.add(f)
+        if f in self.seen:
+            return []
+        self.seen.add(f)
+        return [(f, True)]
+
+
+def _job_steps_text(workflow_text: Any, d: Any) -> Any:
+    """The text of red d's failing job's failing steps; (unsure which) the whole workflow."""
+    picked = red_failing_jobs(workflow_text, d)
+    failing = red_failed_steps(d) if picked else []
+    picked = [fix_step_text(body, failing) for body in picked] if failing else picked
+    return "\n".join(picked) if picked else workflow_text
+
+
 def red_job_reads(repo, sha, d):
     """What red d's failing job reads, from the tree of `sha`: {files, prefixes, text, broad, sbt} -- or None when it
     cannot be told (no workflow file of that name, nothing readable)."""
@@ -263,65 +380,15 @@ def red_job_reads(repo, sha, d):
     wf = red_workflow_file(repo, sha, d, files)
     if not wf:
         return None
-    reads, texts = {wf[0]}, []
-    picked = red_failing_jobs(wf[1], d)
-    failing = red_failed_steps(d) if picked else []
-    picked = [fix_step_text(body, failing) for body in picked] if failing else picked
-    texts.append("\n".join(picked) if picked else wf[1])  # its job's steps, or (unsure which) the whole workflow
-    tree, dirs = set(files), {f.rsplit("/", 1)[0] for f in files if "/" in f}
-    seen = set()
-
-    def scan(src, t, data):
-        """The paths text t (of file src; data: reached through a self-test a runner found) names, into reads; the
-        files to read next, as (path, data)."""
-        out = []
-        for m in re.finditer(r"uses:\s*\./([\w./-]+)", t):
-            p = m.group(1).rstrip("/")
-            reads.add(p)
-            if p not in seen:
-                seen.add(p)
-                out.append((p if FIX_WORKFLOW_FILE.match(p) else
-                            next((p + a for a in ("/action.yml", "/action.yaml") if p + a in tree), None), data))
-        named = [m.group(1).rstrip("/.") for m in FIX_REPO_PATH.finditer(t)]
-        base = src.rsplit("/", 1)[0] if src and "/" in src else ""
-        for m in FIX_SOURCED.finditer(t):  # a sourced or imported sibling: the file beside its user
-            for n in filter(None, (m.group(1), m.group(2))):
-                named += [c for c in (n, f"{base}/{n}") if c in tree]
-        if src and src.endswith(".py"):
-            for m in FIX_PY_IMPORT.finditer(t):
-                for n in re.split(r"\s*,\s*", m.group(1) or m.group(2)):
-                    c = f"{base}/{n.split()[0].replace('.', '/')}.py" if base else f"{n.split()[0].replace('.', '/')}.py"
-                    if c in tree:
-                        named.append(c)
-        for m in FIX_TEST_GLOB.finditer(t):  # a self-test runner: every test it finds (under the roots it names)
-            roots = {w.strip("'\"").removeprefix("./").rstrip("/") for w in re.findall(r"[\w./'\"-]+", t)} & dirs
-            for f in files:
-                if f.endswith(m.group(1)) and (not roots or any(f.startswith(r + "/") for r in roots)):
-                    reads.add(f)
-                    if f not in seen:
-                        seen.add(f)
-                        out.append((f, True))
-        for p in named:
-            reads.add(p)
-            if p in seen or p not in tree or FIX_WORKFLOW_FILE.match(p):
-                continue  # another workflow named in a script is its DATA (a lint's input): read, never run here
-            seen.add(p)
-            out.append((p, data))
-        return out
-
-    todo = [(None, texts[0], False)]
-    for _depth in range(3):
-        want_next = [x for src, t, data in todo for x in scan(src, t, data)]
-        bodies = fix_show_many(repo, sha, [p for p, _ in want_next if p])
-        todo = [(p, bodies[p], data) for p, data in want_next if bodies.get(p) and len(bodies[p]) < 400_000]
-        texts += [t for _p, t, data in todo if not data]  # a found test's reach adds paths alone (above)
-    for src, t, data in todo:  # the last level read: the paths it names are read too (never followed further)
-        scan(src, t, data)
+    steps = _job_steps_text(wf[1], d)  # its job's steps, or (unsure which) the whole workflow
+    job = JobReads(repo, sha, files)
+    job.reads.add(wf[0])
+    texts = job.walk(steps)
     text = "\n".join(texts)
     sbt = bool(FIX_SBT.search(text))
-    return {"files": reads, "workflow": wf[0], "text": text, "sbt": sbt, "broad": sbt and bool(FIX_BROAD_TEST.search(text)),
+    return {"files": job.reads, "workflow": wf[0], "text": text, "sbt": sbt, "broad": sbt and bool(FIX_BROAD_TEST.search(text)),
             "named": set(re.findall(r"\b[A-Z]\w+\b", text + " " + str(d.get("line") or "") + " " + " ".join(red_job_names(d)))),
-            "tops": {top: fix_top_reads(top, text, texts[0], files) for top in FIX_UNREAD_TOP}}
+            "tops": {top: fix_top_reads(top, text, steps, files) for top in FIX_UNREAD_TOP}}
 
 
 def fix_top_reads(top, text, steps, files):
