@@ -39,7 +39,7 @@ class Probe:
 
 class Case:
     def __init__(self, A, seed):
-        self.A, self.rng, self.log, self.saved = A, random.Random(seed), [], {}
+        self.A, self.rng, self.log, self.saved, self.attrs = A, random.Random(seed), [], {}, []
 
     def recorded(self, name, gen):
         def fake(*a, **k):
@@ -61,9 +61,17 @@ class Case:
         self.saved.setdefault(name, getattr(self.A, name))
         setattr(self.A, name, value)
 
+    def patch(self, obj, attr, gen):
+        """obj.attr (a function of the standard library: os.path.isdir, glob.glob) replaced by a recorded fake, restored
+        afterwards."""
+        self.attrs.append((obj, attr, getattr(obj, attr)))
+        setattr(obj, attr, self.recorded(f"{getattr(obj, '__name__', type(obj).__name__)}.{attr}", gen))
+
     def restore(self):
         for name, value in self.saved.items():
             setattr(self.A, name, value)
+        for obj, attr, value in reversed(self.attrs):
+            setattr(obj, attr, value)
 
 
 def outcome(A, seed, build, fn_of):
