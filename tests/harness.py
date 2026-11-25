@@ -108,8 +108,9 @@ def _stdlib_patched():
 
 def _reset_process_state():
     """agentctl's process-wide state a test may leave set (a processor run marks the process as the processor; a
-    token read caches the token; the registered caches; a wired FakeRunner): every test starts as a fresh,
-    non-processor process with no cached token, empty caches and the real process runner."""
+    token read caches the token; the registered caches; a wired FakeRunner; main's wiring of a test's clock): every test
+    starts as a fresh, non-processor process with no cached token, empty caches, the real process runner and the
+    import-time wiring (the wall's clock, the process's store)."""
     for mod in _agentctl_modules():
         for name in ("_IN_PROCESSOR", "_NO_VAULT"):
             flag = mod.__dict__.get(name)
@@ -126,6 +127,12 @@ def _reset_process_state():
         runner, real = mod.__dict__.get("_runner"), mod.__dict__.get("ProcessRunner")
         if isinstance(runner, list) and real is not None and mod.__name__ == "agentctl.procrunner":
             runner[:] = [real()]
+        # the composition root's wiring (cli.wire_collaborators: the inbox's clock and writer, the probes reading the
+        # clock and store): what main wired with a test's FakeClock ends with that test. 2026-11-25 (agentctl CI red
+        # since e4d02a4): a test's standing clock stamped the next test's inbox entries 400 s behind the wall, and
+        # test_orphans' infra retry read its verdict as older than its submit -- in CI's worker order only.
+        if mod.__name__ == "agentctl.cli":
+            mod.wire_collaborators(mod.Clock(), mod.CurrentStore())
 
 
 # --- the per-test timeout -------------------------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """The shared harness (tests/harness.py): the environment is the harness's, a hang fails within the per-test timeout,
 and a test that fakes the stdlib's clock fails."""
-import os, subprocess, sys, time, unittest
+import contextlib, io, os, subprocess, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -90,6 +90,22 @@ class TimeoutAndClockTest(unittest.TestCase):
         agentctl's time behind its back -- what reads the time takes a Clock (tests/fake_clock.py FakeClock)."""
         self.assertIs(A.time, time)
 
+
+    def test_a_clock_main_wired_ends_with_the_test(self):
+        """agentctl CI red since e4d02a4 (2026-11-25): main(clock=FakeClock) wires the inbox's clock (cli's
+        wire_collaborators) process-wide, and it stayed wired after the test. The next test in that worker stamped its
+        inbox entries with the previous test's standing clock, behind the wall; test_orphans' infra-retry test read its
+        `crashed: StoreUnavailable` verdict as older than its submit and escalated an UNLANDED ORPHAN -- on CI's
+        4-worker order, never in the laptop's. Every test starts from the import-time wiring: the wall's clock."""
+        from fake_clock import lagging_clock
+
+        def body(self):
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                A.main(["ci-why", "--help"], clock=lagging_clock())  # wires, then argparse exits
+        res = self.outcome(body)
+        self.assertEqual((res.failures, res.errors), ([], []))
+        stamped = A._inbox_times[0]()
+        self.assertLess(abs(stamped - time.time()), 60, "the inbox still reads the finished test's clock")
 
     def test_an_agentctl_function_left_faked_fails_the_test_and_is_undone(self):
         """2026-11-18: RecoveryTest (test_red_crash_loop) faked ci_state_load twice in one test and its tearDown put
