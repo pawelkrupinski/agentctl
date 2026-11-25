@@ -110,7 +110,7 @@ def inbox_write(command: str, verdict: Any, verdicts: Any, tail: Any, exit_code:
     if final and not reply and not _OPENING[0] and inbox_kind(verdict, final) in CONDITION_KINDS:
         raise ConditionBypass(f"a {inbox_kind(verdict, final)} inbox entry outside open_condition: {str(verdict)[:160]}")
     now = dt.datetime.fromtimestamp(_inbox_times[0](), dt.timezone.utc)
-    eid = (f"{now.strftime('%Y%m%dT%H%M%S%f')}-{os.getpid()}-{next(_inbox_seq)}-{re.sub(r'[^a-z]+', '-', command)}"
+    eid = (f"{now.strftime('%Y%m%dT%H%M%S%f')}-{os.getpid()}-{next(_inbox_seq):06d}-{re.sub(r'[^a-z]+', '-', command)}"
            + ("" if final else "-waiting"))
     here = safe_cwd()
     rec = {"id": eid, "time": iso_at(now.timestamp()), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],

@@ -85,6 +85,22 @@ class InboxTest(unittest.TestCase):
         self.assertEqual(final["verdict"], "WATCH OK: Main #5 green, convergence #6 green")
         self.assertEqual(final["verdicts"][-2:], ["LANDED abc123", "WATCH OK: Main #5 green, convergence #6 green"])
 
+    def test_entries_stay_in_write_order_when_the_sequence_passes_ten_under_a_standing_clock(self):
+        # the id's sequence was unpadded: "-10-" sorted before "-9-", so the final verdict read before its WAITING line
+        # whenever a worker process had written 9 entries before this one (a flake that moved with the test partition)
+        saved_times, saved_seq = list(A._inbox_times), A._inbox_seq
+        self.addCleanup(lambda: (A._inbox_times.__setitem__(slice(None), saved_times), setattr(A, "_inbox_seq", saved_seq)))
+        A._inbox_times[:] = [lambda: 1_800_000_000.0]
+        A._inbox_seq = __import__("itertools").count(9)
+
+        def handler(a):
+            print("WAITING abc123 (entry e1)")
+            print("LANDED abc123")
+            return 0
+        with contextlib.redirect_stdout(io.StringIO()):
+            A.with_inbox("land", handler, None)
+        self.assertEqual([e["final"] for e in self.entries()], [False, True])
+
     def test_a_land_that_ends_at_waiting_writes_it_once(self):
         def handler(a):
             print("WAITING abc123 (entry e1, 2 in batch)")
