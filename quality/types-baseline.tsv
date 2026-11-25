@@ -43,7 +43,8 @@ mypy-errors	fixersession	38
 mypy-errors	forge	51
 mypy-errors	gatesummary	4
 mypy-errors	gating	31
-mypy-errors	generated	38
+mypy-errors	generated	22
+mypy-errors	generatedregen	14
 mypy-errors	ghapp	34
 mypy-errors	gov	42
 mypy-errors	govbudget	12

@@ -4,14 +4,11 @@
 import fnmatch
 import os
 import re
-import shlex
 import subprocess
-import sys
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from agentctl.procrunner import process_runner
-from agentctl.core import env_num, git, host_role, process_cache, slug
+from agentctl.core import git, host_role, process_cache, slug
 from agentctl.repos import red_repo_conf
-from agentctl.land import tool_env
 
 
 # GENERATED FILES ARE NO OVERLAP (2026-11-19 ~06:05Z: six movies changes from parallel refactoring lanes -- agreement,
@@ -152,15 +149,33 @@ def three_way(b, o, t, prefer_ours=False):
     raise KeyError
 
 
+def table_sides(base: str, ours: str, theirs: str) -> Optional[list[Any]]:
+    """The three texts parsed as generated tables, a set table when they have no value column; None when one cannot be read."""
+    parsed = [table_parse(x) for x in (base, ours, theirs)]
+    if None in parsed and not any(valued_table(x) for x in (base, ours, theirs)):
+        parsed = [table_parse(x, whole_line=True) for x in (base, ours, theirs)]
+    return None if None in parsed else parsed
+
+
+def rows_order(orow: list[tuple[str, str]], trow: list[tuple[str, str]], merged: dict[str, Any]) -> list[str]:
+    """The merged rows' keys: ours' order, each added row of theirs after the row it follows there."""
+    order = [k for k, _ in orow if merged.get(k) is not None]
+    theirs_order = [k for k, _ in trow]
+    for i, k in enumerate(theirs_order):
+        if merged.get(k) is None or k in order:
+            continue
+        before = next((p for p in reversed(theirs_order[:i]) if p in order), None)
+        order.insert(order.index(before) + 1 if before else 0, k)
+    return order
+
+
 def rows_merge(base, ours, theirs, prefer_ours=False):
     """A generated table merged row by row (GENERATED FILES ARE NO OVERLAP): ours' order, theirs' added rows after the
     row they follow there; None when a row (or the header) changed on both sides differently (prefer_ours: then ours'
     row), or a side cannot be read as a table. A table whose keys repeat and that has no value column (valued_table)
     is read as a SET table (each line its own row: present or not, which never conflicts)."""
-    parsed = [table_parse(x) for x in (base, ours, theirs)]
-    if None in parsed and not any(valued_table(x) for x in (base, ours, theirs)):
-        parsed = [table_parse(x, whole_line=True) for x in (base, ours, theirs)]
-    if None in parsed:
+    parsed = table_sides(base, ours, theirs)
+    if parsed is None:
         return None
     (bh, br), (oh, orow), (th, trow) = parsed
     try:
@@ -169,14 +184,7 @@ def rows_merge(base, ours, theirs, prefer_ours=False):
         merged = {k: three_way(b.get(k), o.get(k), t.get(k), prefer_ours) for k in set(b) | set(o) | set(t)}
     except KeyError:
         return None
-    order = [k for k, _ in orow if merged.get(k) is not None]
-    theirs_order = [k for k, _ in trow]
-    for i, k in enumerate(theirs_order):
-        if merged.get(k) is None or k in order:
-            continue
-        before = next((p for p in reversed(theirs_order[:i]) if p in order), None)
-        order.insert(order.index(before) + 1 if before else 0, k)
-    text = "".join(head) + "".join(merged[k] for k in order)
+    text = "".join(head) + "".join(merged[k] for k in rows_order(orow, trow, merged))
     return text if ours.endswith("\n") or not ours else text.rstrip("\n")
 
 
@@ -272,166 +280,6 @@ def block_merge(base: str, ours: str, theirs: str, block: List[str]) -> Optional
     if r.returncode != 0 or r.stdout.count(BLOCK_HELD) != 1:
         return None
     return r.stdout.replace(BLOCK_HELD, "".join(cuts[1][1]))
-
-
-# SNAPSHOTS ARE REGENERATED, NEVER MERGED (2026-11-21 ~07:40Z: split-shared-js `held: its check waits for scrapers-2`,
-# both changing movies' page snapshots expected-{index,warszawa-index,wroclaw-index}.html -- files PageSnapshotSpec
-# writes, which no agent edits by hand). A snapshot -- rendered HTML, a JSON read model, a whole-corpus text -- has no
-# rows: a three-way merge of its lines, git's or ours, is a guess at what the combined code renders. Registered with
-# `merge: regen`, it is no overlap (like every generated file), and whenever BOTH sides changed it -- a conflict, or a
-# clean textual merge of two edits -- its regen command runs over the combined tree and its output is what the batch
-# checks. A REGENERATED SNAPSHOT HIDES NOTHING: its output must be EXPLAINED by the two sides -- every line it adds
-# added by one of them, every line it drops dropped by one of them (snapshot_unexplained) -- or the resolution fails
-# and the member is held as before: an interaction neither side committed (a line only the combined code renders) is
-# never landed by a regenerator; its author regenerates and commits it. Where no regen command runs (the server role)
-# a snapshot is never kept provisionally: held. Then the batch's checks run over the combined tree as over any other
-# (movies: FilmScheduleEndToEnd asserts expected-schedules.txt and the read model; PageSnapshotSpec runs on Main).
-def snapshot_unexplained(base, ours, theirs, regenerated):
-    """The first line of a regenerated snapshot neither side explains (added by neither, or dropped by neither), as
-    `+line` / `-line`; None when each of its changes against the base is one of the sides' own."""
-    from collections import Counter
-    b, o, t, r = (Counter(x.splitlines()) for x in (base, ours, theirs, regenerated))
-    added, removed = r - b, b - r
-    may_add, may_remove = (o - b) | (t - b), (b - o) | (b - t)
-    for line, n in added.items():
-        if n > may_add.get(line, 0):
-            return "+" + line[:160]
-    for line, n in removed.items():
-        if n > may_remove.get(line, 0):
-            return "-" + line[:160]
-    return None
-
-
-def regen_env():
-    """tool_env with the interpreter agentctl runs under last on PATH: a derived file's `python3 <script>` runs on a host
-    whose PATH has no python3 of its own (ci-runner's reconciler: python3 by its store path; REGENERATED WHERE THE
-    COMBINE HAPPENS)."""
-    env = tool_env()
-    here = os.path.dirname(sys.executable)
-    if here and here not in env.get("PATH", "").split(":"):
-        env["PATH"] = ":".join(x for x in (env.get("PATH", ""), here) if x)
-    return env
-
-
-def run_regen(wt, g):
-    """Run registry entry g's regen command in wt: None, or why it failed, in words."""
-    limit = g.get("timeout") or env_num("AGENTCTL_GENERATED_REGEN_TIMEOUT", GENERATED_REGEN_TIMEOUT)
-    cmd = " ".join(shlex.quote(x) for x in g["regen"])
-    try:
-        r = process_runner().run(g["regen"], cwd=wt, capture_output=True, text=True, timeout=limit, env=regen_env(),
-                           stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        return f"`{cmd}` ran past {limit:.0f} s"
-    except OSError as ex:
-        return f"`{cmd}` could not run ({ex.strerror or ex})"
-    return None if r.returncode == 0 else regen_exit_text(cmd, r)
-
-
-def regen_exit_text(cmd: str, r: Any) -> str:
-    """A regen command's non-zero exit, in words: its code and the last line of its stderr (else stdout)."""
-    last = ((r.stderr or r.stdout or "").strip().splitlines() or [""])[-1][:200]
-    return f"`{cmd}` exited {r.returncode}" + (f": {last}" if last else "")
-
-
-def regenerate(wt, files, regenerated=None, provisional=None, sides=None):
-    """Resolve wt's conflicted generated files over the tree as it stands (the combined tree): each merged row by row,
-    else its registry entry's regen command run in wt and its files staged -- or, where no regen command runs (the
-    server role), merged row by row keeping the tree's (ours: main's) side of a row both sides changed, the file named
-    in `provisional` (MAIN'S ROW, PROVISIONALLY). A SNAPSHOT (`merge: regen`) is never merged by rows: regenerated, its
-    output explained by the sides (SNAPSHOTS ARE REGENERATED, NEVER MERGED), or not resolved. `sides`: {file: {1: base,
-    2: ours, 3: theirs}} of files both sides changed that git merged cleanly (a snapshot's, regenerated all the same);
-    else the conflict's stages. None: resolved (staged, appended to `regenerated`); else why not, in words."""
-    stages = sides if sides is not None else conflict_stages(wt, files)
-    if stages is None:
-        return "added or deleted on one side"
-    pending = []
-
-    def take(f, text):
-        with open(os.path.join(wt, f), "w") as fh:
-            fh.write(text)
-        git(wt, "add", "--", f)
-    for f in files:
-        text = None if regen_only(generated_entry(wt, f)) else rows_merge(stages[f][1], stages[f][2], stages[f][3])
-        if text is None:
-            pending.append(f)
-            continue
-        take(f, text)
-    for g in generated_registry(wt):  # one run of each command, however many of its files conflict
-        mine = [f for f in pending if generated_entry(wt, f) is g]
-        if not mine:
-            continue
-        if not g.get("regen"):  # a hand-written table merged row by row only: never a side's row kept provisionally
-            return f"a row both sides changed in {', '.join(mine)}, which no regen command decides"
-        if not regen_runs(g):
-            if regen_only(g):
-                return f"{', '.join(mine)}: a snapshot both sides changed, and the server role runs no regen command"
-            for f in mine:
-                text = rows_merge(stages[f][1], stages[f][2], stages[f][3], prefer_ours=True)
-                if text is None:
-                    return f"{f} cannot be read as a table, and the server role runs no regen command"
-                take(f, text)
-                if provisional is not None:
-                    provisional.append(f)
-            continue
-        if sides is None:  # no conflict markers in what the command reads
-            why = regen_base(wt, g, mine, stages, take)
-            if why:
-                return why
-        before = {p: git(wt, "show", f":{p}", check=False).stdout for p in tracked(wt, g["paths"])
-                  if p not in mine} if explained(g) else {}
-        why = run_regen(wt, g)
-        if why:
-            return ("both sides changed the snapshot " if explained(g) else "both sides changed the derived file "
-                    if regen_only(g) else "a row both sides changed, and ") + why
-        why = snapshot_hidden(wt, g, mine, stages, before) if explained(g) else None
-        if why:
-            return why
-        git(wt, "add", "-A", "--", *g["paths"], check=False)
-        left = sorted(set(unmerged(wt)) & set(mine))
-        if left:
-            return f"`{' '.join(g['regen'])}` left {', '.join(left)} unresolved"
-        stray = git(wt, "diff", "--name-only", check=False).stdout.split()  # what else it wrote: never picked along
-        if stray:
-            git(wt, "checkout", "--", *stray, check=False)
-    if regenerated is not None:
-        regenerated.extend(f for f in files if f not in regenerated)
-    return None
-
-
-def snapshot_hidden(wt: str, g: Dict[str, Any], mine: List[str], stages: Dict[str, Dict[int, str]],
-                    before: Dict[str, str]) -> Optional[str]:
-    """Why a snapshot regenerated in wt is no resolution -- a file not written, a change neither side made, another
-    snapshot of the command moved (A REGENERATED SNAPSHOT HIDES NOTHING) --, or None."""
-    for f in mine:
-        path = os.path.join(wt, f)
-        if not os.path.exists(path):
-            return f"`{' '.join(g['regen'])}` did not write {f}"
-        with open(path) as fh:
-            odd = snapshot_unexplained(stages[f][1], stages[f][2], stages[f][3], fh.read())
-        if odd:
-            return (f"the regenerated {f} holds a change neither side made ({odd}): an interaction its "
-                    "authors regenerate and commit")
-    for p, text in before.items():
-        path = os.path.join(wt, p)
-        if os.path.exists(path) and open(path).read() != text:
-            return (f"the regen also moved {p}, which only one side changed: an interaction its authors "
-                    "regenerate and commit")
-    return None
-
-
-def regen_base(wt: str, g: Dict[str, Any], mine: List[str], stages: Dict[str, Dict[int, str]],
-               take: Callable[[str, str], None]) -> Optional[str]:
-    """Put wt's conflicted files of entry g in a state its regen command reads: ours' side, or -- a file with a
-    generated `block` -- its hand-written lines merged (A DERIVED FILE IS THE COMBINED TREE'S). None, or why not."""
-    if not g.get("block"):
-        git(wt, "checkout", "--ours", "--", *mine, check=False)
-        return None
-    for f in mine:
-        text = block_merge(stages[f][1], stages[f][2], stages[f][3], g["block"])
-        if text is None:
-            return f"{f}: both sides changed its hand-written lines, outside the generated block, in one place"
-        take(f, text)
-    return None
 
 
 def regen_owed(wt: str, base: str, moved: str, head: Optional[str]) -> List[str]:

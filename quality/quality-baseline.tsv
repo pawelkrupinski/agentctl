@@ -126,10 +126,8 @@ cognitive	red_spawn	28
 cognitive	red_unheld	19
 cognitive	refresh_pinned_recording	16
 cognitive	regen_hold_overdue	22
-cognitive	regenerate	53
 cognitive	render_red_status	52
 cognitive	retire_jobs_of	71
-cognitive	rows_merge	12
 cognitive	run_local_recheck	14
 cognitive	run_verdict	20
 cognitive	sbt_stuck_reasons	24
@@ -290,10 +288,8 @@ cyclomatic	red_spawn	25
 cyclomatic	red_unheld	15
 cyclomatic	refresh_pinned_recording	18
 cyclomatic	regen_hold_overdue	21
-cyclomatic	regenerate	31
 cyclomatic	render_red_status	43
 cyclomatic	retire_jobs_of	32
-cyclomatic	rows_merge	21
 cyclomatic	run_local_recheck	18
 cyclomatic	run_verdict	26
 cyclomatic	sbt_stuck_reasons	17
@@ -335,7 +331,6 @@ method-lines	red_claim	62
 method-lines	red_dispatch	59
 method-lines	red_job_reads	66
 method-lines	red_run_retired	51
-method-lines	regenerate	63
 method-lines	retire_jobs_of	55
 method-lines	stats_pass	71
 method-lines	sweep_repo	61
