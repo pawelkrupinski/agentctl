@@ -12,54 +12,85 @@ from agentctl.status import status_data, status_store
 from agentctl.redhold import red_fix_liveness
 
 
-def render_red_status(m, verbose=False):
-    """`agentctl red status` from the model's reds, families and dispatcher sections."""
-    reds = m["reds"]
-    if isinstance(reds, dict) and "error" in reds:
-        return f"reds: unread ({reds['error']})"
+def red_lines(reds: list[dict[str, Any]], verbose: bool) -> list[str]:
+    """The open reds, each with its history when verbose."""
     out = [f"reds ({len(reds)} open):" if reds else "reds: none open"]
     for r in reds:
         out.append(f"  {r['state']:<16} {r['what']} {r['key']}" + (f" [{r['family']}]" if r.get("family") else "")
                    + f": {r['text']}")
         if verbose:
             out += [f"      {h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:140]}" for h in r["history"]]
-    rv = m.get("reverts")
+    return out
+
+
+def revert_lines(rv: Any) -> list[str]:
+    """The reverted changes their landers have not acknowledged (reverts.py), or why they are unread."""
     if isinstance(rv, dict) and "error" in rv:
-        out.append(f"reverts: unread ({rv['error']})")
-    elif rv:  # a reverted change its lander has not acknowledged (reverts.py)
-        out.append(f"reverts ({len(rv)} unacked: `agentctl revert ack <id> --rework|--drop`):")
-        out += [revert_line(r, time.time()) for r in rv]
-    unread = {k: m[k]["error"] for k in ("families", "owners") if isinstance(m.get(k), dict) and "error" in m[k]}
-    out += [f"{k}: unread ({e})" for k, e in unread.items()]  # a timed-out section (status_sources) is no list
-    never = m.get("untracked")
-    if verbose and isinstance(never, list) and never:  # for information only: no red, no fixer, no alert (reduntracked.py)
-        out.append(f"untracked (never green) ({len(never)}):")
-        for u in never:
-            short = "" if u.get("repo") == RED_PRIMARY else f"{red_repo_short(u.get('repo') or '')} "
-            out.append(f"  {short}{u.get('workflow')} #{(u.get('run') or {}).get('number')}"
-                       + (f" [{', '.join(u.get('jobs') or [])}]" if u.get("jobs") else "") + f": {u.get('why')}")
-    for f in [] if "families" in unread else m.get("families") or []:
-        if f.get("holder") and f.get("at_work") is False:  # never "leased ... none at work": orphaned, re-offered
-            who = f"ORPHANED LEASE ({f['holder']}: {f.get('work')}) -> revoked and re-offered at the next tick"
-        elif f.get("holder"):
-            who = (f"{f['holder']} ({str(f.get('worktree') or '?').replace(HOME, '~')})"
-                   + (f": {f['work']}" if f.get("at_work") else ""))
-        else:
-            who = "none at work"
-        out.append(f"family {f['family']}: {f['open']} open red(s), ONE fixer: {who}")
+        return [f"reverts: unread ({rv['error']})"]
+    if not rv:
+        return []
+    return [f"reverts ({len(rv)} unacked: `agentctl revert ack <id> --rework|--drop`):"] + [revert_line(r, time.time()) for r in rv]
+
+
+def untracked_lines(never: Any) -> list[str]:
+    """The workflows never green, for information only: no red, no fixer, no alert (reduntracked.py)."""
+    if not (isinstance(never, list) and never):
+        return []
+    out = [f"untracked (never green) ({len(never)}):"]
+    for u in never:
+        short = "" if u.get("repo") == RED_PRIMARY else f"{red_repo_short(u.get('repo') or '')} "
+        out.append(f"  {short}{u.get('workflow')} #{(u.get('run') or {}).get('number')}"
+                   + (f" [{', '.join(u.get('jobs') or [])}]" if u.get("jobs") else "") + f": {u.get('why')}")
+    return out
+
+
+def family_line(f: dict[str, Any]) -> str:
+    """A red family's line: its ONE fixer, an orphaned lease revoked, or none at work."""
+    if f.get("holder") and f.get("at_work") is False:  # never "leased ... none at work": orphaned, re-offered
+        who = f"ORPHANED LEASE ({f['holder']}: {f.get('work')}) -> revoked and re-offered at the next tick"
+    elif f.get("holder"):
+        who = (f"{f['holder']} ({str(f.get('worktree') or '?').replace(HOME, '~')})"
+               + (f": {f['work']}" if f.get("at_work") else ""))
+    else:
+        who = "none at work"
+    return f"family {f['family']}: {f['open']} open red(s), ONE fixer: {who}"
+
+
+def dispatcher_lines(dp: dict[str, Any]) -> list[str]:
+    """The dispatcher: on or off and why, the fixers alive, the repos switched off, the laptop's pressure."""
+    if "error" in dp:
+        return [f"dispatcher: unread ({dp['error']})"]
+    out = [f"dispatcher: {'OFF -- ' + dp['blocker'] if dp.get('blocker') else 'ON'}; fixers alive: "
+           f"{dp['alive']}/{dp['cap']}; gate reds never wait (no slot cap, no laptop pressure)"]
+    for r, rec in sorted((dp.get("repos_off") or {}).items()):
+        out.append(f"dispatch off for {r} (owner) since {rec.get('at')}: its reds recorded, never offered or asked")
+    if dp.get("pressure"):
+        out.append(f"laptop: {dp['pressure']} (holds other work only, never a red fix)")
+    return out
+
+
+def unread_sections(m: dict[str, Any]) -> dict[str, Any]:
+    """The families and owners sections that came back as an error (a timed-out section, status_sources, is no list)."""
+    return {k: m[k]["error"] for k in ("families", "owners") if isinstance(m.get(k), dict) and "error" in m[k]}
+
+
+def holder_lines(m: dict[str, Any], unread: dict[str, Any], verbose: bool) -> list[str]:
+    """The families' ONE fixers and the owners' lines, each section left out when it was unread."""
+    out = [] if "families" in unread else [family_line(f) for f in m.get("families") or []]
     for o in [] if "owners" in unread else m.get("owners") or []:
         out += owner_status_lines(o, verbose) if o.get("worktree") else []
-    dp = m.get("dispatcher") or {}
-    if "error" in dp:
-        out.append(f"dispatcher: unread ({dp['error']})")
-    else:
-        out.append(f"dispatcher: {'OFF -- ' + dp['blocker'] if dp.get('blocker') else 'ON'}; fixers alive: "
-                   f"{dp['alive']}/{dp['cap']}; gate reds never wait (no slot cap, no laptop pressure)")
-        for r, rec in sorted((dp.get("repos_off") or {}).items()):
-            out.append(f"dispatch off for {r} (owner) since {rec.get('at')}: its reds recorded, never offered or asked")
-        if dp.get("pressure"):
-            out.append(f"laptop: {dp['pressure']} (holds other work only, never a red fix)")
-    return "\n".join(out)
+    return out
+
+
+def render_red_status(m: dict[str, Any], verbose: bool = False) -> str:
+    """`agentctl red status` from the model's reds, families and dispatcher sections."""
+    reds = m["reds"]
+    if isinstance(reds, dict) and "error" in reds:
+        return f"reds: unread ({reds['error']})"
+    unread = unread_sections(m)
+    out = red_lines(reds, verbose) + revert_lines(m.get("reverts")) + [f"{k}: unread ({e})" for k, e in unread.items()]
+    out += untracked_lines(m.get("untracked")) if verbose else []
+    return "\n".join(out + holder_lines(m, unread, verbose) + dispatcher_lines(m.get("dispatcher") or {}))
 
 
 def owner_status_lines(o: dict[str, Any], verbose: bool) -> list[str]:

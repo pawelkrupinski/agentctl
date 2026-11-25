@@ -126,7 +126,6 @@ cognitive	red_spawn	28
 cognitive	red_unheld	19
 cognitive	refresh_pinned_recording	16
 cognitive	regen_hold_overdue	22
-cognitive	render_red_status	52
 cognitive	retire_jobs_of	71
 cognitive	run_local_recheck	14
 cognitive	run_verdict	20
@@ -288,7 +287,6 @@ cyclomatic	red_spawn	25
 cyclomatic	red_unheld	15
 cyclomatic	refresh_pinned_recording	18
 cyclomatic	regen_hold_overdue	21
-cyclomatic	render_red_status	43
 cyclomatic	retire_jobs_of	32
 cyclomatic	run_local_recheck	18
 cyclomatic	run_verdict	26
