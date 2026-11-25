@@ -70,7 +70,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         self.r.push()
         with open(os.environ["AGENTCTL_RED_REPOS"], "w") as f:
             json.dump({"repos": [{"repo": A.slug(self.r.path), "gate": [["Main", "main.yml"]], "generated": [
-                {"paths": [test_generated.BASELINE], "regen": "scripts/regen"},
+                {"paths": [test_generated.BASELINE], "regen": "scripts/regen", "order_sensitive": True},
                 {"paths": [CATALOGUE], "regen": "scripts/catalogue", "merge": "derived"},
                 {"paths": [PATHS], "regen": "scripts/paths", "merge": "derived",
                  "block": ["# BEGIN GENERATED", "# END GENERATED"]}]}]}, f)
@@ -244,15 +244,20 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         self.assertIn(eb, self.started, f"checked now, beside the older: {self.hold_of(eb)}")
         self.check_and_push(ea, eb)
 
-    def test_a_table_registered_holds_false_shared_with_a_check_in_flight_is_checked_now(self):
-        """migration-classes.tsv (2026-11-23): a hand-written table merged by rows, registered `holds: false` -- its
-        rows apart combine at the push. Never held behind the check in flight; both rows on main."""
+    def register(self, **extra):
+        """CLASSES added to the registry as a hand-written table, its entry given extra keys."""
         conf = json.load(open(os.environ["AGENTCTL_RED_REPOS"]))
-        conf["repos"][0]["generated"].append({"paths": [CLASSES], "holds": False})
+        conf["repos"][0]["generated"].append({"paths": [CLASSES], **extra})
         with open(os.environ["AGENTCTL_RED_REPOS"], "w") as f:
             json.dump(conf, f)
         for c in A.PROCESS_CACHES:
             c.clear()
+
+    def test_a_table_shared_with_a_check_in_flight_is_checked_now(self):
+        """migration-classes.tsv (2026-11-23): a hand-written table merged by rows -- its rows apart combine at the
+        push. Not declared order-sensitive, it holds nothing behind the check in flight (ONLY A VOIDED CHECK HOLDS:
+        before, every generated file did unless its entry said `holds: false`); both rows on main."""
+        self.register()
         ea = self.lane("tool-a", {"tools/a.sh": "the first tool"}, alone=True, classes=["tools/a.sh\tMIGRATE"])
         self.in_flight(ea)
         eb = self.lane("tool-b", {"tools/b.sh": "the second tool"}, classes=["tools/b.sh\tKEEP"])
@@ -262,19 +267,14 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         self.assertEqual(sorted(self.on_main(CLASSES).splitlines()[1:]),
                          ["tools/a.sh\tMIGRATE", "tools/b.sh\tKEEP", "tools/m.sh\tKEEP"], "both lanes' rows")
 
-    def test_without_holds_false_the_same_table_still_waits_for_the_check_in_flight(self):
-        conf = json.load(open(os.environ["AGENTCTL_RED_REPOS"]))
-        conf["repos"][0]["generated"].append({"paths": [CLASSES]})
-        with open(os.environ["AGENTCTL_RED_REPOS"], "w") as f:
-            json.dump(conf, f)
-        for c in A.PROCESS_CACHES:
-            c.clear()
+    def test_a_table_declared_order_sensitive_still_waits_for_the_check_in_flight(self):
+        self.register(order_sensitive=True)
         ea = self.lane("tool-a", {"tools/a.sh": "a"}, alone=True, classes=["tools/a.sh\tMIGRATE"])
         self.in_flight(ea)
         eb = self.lane("tool-b", {"tools/b.sh": "b"}, classes=["tools/b.sh\tKEEP"])
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertNotIn(eb, self.started)
-        self.assertEqual(self.hold_of(eb).get("files"), [CLASSES])
+        self.assertEqual(self.hold_of(eb).get("files"), [CLASSES], "held for the declared path alone")
 
     def test_a_clean_line_merge_of_the_catalogue_at_the_push_is_a_new_round_never_a_stale_page(self):
         """Rows apart (a.sh, z.sh): main's page and the younger's merge cleanly at its push -- one tool short in the
@@ -419,11 +419,11 @@ class DerivedRegistryTest(unittest.TestCase):
         self.assertTrue(A.regen_only(got))
         self.assertFalse(A.explained(got), "a derived file's output needs no explaining")
         self.assertTrue(A.explained(self.parse({"paths": [PATHS], "regen": "x", "merge": "regen"})))
-        self.assertEqual(self.parse({"paths": [CLASSES], "holds": False}).get("holds"), False)
-        self.assertFalse(A.holds_in_flight(self.parse({"paths": [CLASSES], "holds": False})))
-        self.assertTrue(A.holds_in_flight(self.parse({"paths": [CLASSES]})))
-        self.assertFalse(A.holds_in_flight(self.parse({"paths": [PATHS], "regen": "x", "merge": "derived"})))
-        for bad in ({"paths": [CLASSES], "holds": "no"}, {"paths": [CLASSES], "regen": "x", "holds": False},
+        self.assertIs(self.parse({"paths": [CLASSES], "order_sensitive": True}).get("order_sensitive"), True)
+        self.assertNotIn("order_sensitive", self.parse({"paths": [CLASSES]}))
+        for bad in ({"paths": [CLASSES], "holds": False},  # gone (2026-11-25): `order_sensitive` declares a wait
+                    {"paths": [CLASSES], "order_sensitive": "yes"},
+                    {"paths": [PATHS], "regen": "x", "merge": "derived", "order_sensitive": True},
                     {"paths": [PATHS], "merge": "derived"},
                     {"paths": [PATHS], "regen": "x", "block": ["# B", "# E"]},
                     {"paths": [PATHS], "regen": "x", "merge": "derived", "block": ["# B"]}):

@@ -94,8 +94,8 @@ def generated_parse(repo, raw):
     HTML, JSON, a rendered text -- never merged by rows, regenerated over the combined tree whenever both sides changed
     it: generated.py SNAPSHOTS ARE REGENERATED, NEVER MERGED; `merge: derived`: the same, its output needing no
     explaining by the sides, and `block` a file only part of which is generated: generated.py A DERIVED FILE IS THE
-    COMBINED TREE'S; `holds: false` on a hand-written table: its row merge is safe, so it holds no change behind a check
-    in flight, generated.py holds_in_flight). Raises ValueError."""
+    COMBINED TREE'S; `order_sensitive: true`: its files hold a change behind a check in flight, generated.py ONLY A
+    VOIDED CHECK HOLDS). Raises ValueError."""
     out = []
     for g in raw or []:
         paths, regen = (g or {}).get("paths"), (g or {}).get("regen")
@@ -121,16 +121,21 @@ def generated_merge(repo: str, g: Dict[str, Any], regen: Optional[str]) -> Dict[
                          f"combined tree's): {g!r}")
     block = generated_block(repo, g, merge)
     return {**({"merge": merge} if merge != "rows" else {}), **({"block": block} if block else {}),
-            **generated_holds(repo, g, merge, regen)}
+            **generated_order(repo, g, merge)}
 
 
-def generated_holds(repo: str, g: Dict[str, Any], merge: str, regen: Optional[str]) -> Dict[str, Any]:
-    """A `generated` entry's `holds: false` as its parsed entry carries it ({} when it holds). Raises ValueError."""
-    holds = g.get("holds", True)
-    if not isinstance(holds, bool) or (holds is False and (merge != "rows" or regen is not None)):
-        raise ValueError(f"{repo}: a `generated` entry's `holds: false` is for a hand-written table merged by rows (no "
-                         f"`regen`, no `merge`): its row merge safe, it holds no change behind a check in flight: {g!r}")
-    return {} if holds else {"holds": False}
+def generated_order(repo: str, g: Dict[str, Any], merge: str) -> Dict[str, Any]:
+    """A `generated` entry's `order_sensitive: true` as its parsed entry carries it ({} when absent): its files hold a
+    change behind a check in flight (generated.py ONLY A VOIDED CHECK HOLDS) -- never a DERIVED file's. Raises
+    ValueError."""
+    if "holds" in g:
+        raise ValueError(f"{repo}: a `generated` entry's `holds` is gone (2026-11-25): an entry holds a change behind a "
+                         f"check in flight only when it says `order_sensitive: true`: {g!r}")
+    order = g.get("order_sensitive", False)
+    if not isinstance(order, bool) or (order and merge == "derived"):
+        raise ValueError(f"{repo}: a `generated` entry's `order_sensitive` is true or false, and never true on a "
+                         f"`derived` entry (regenerated over whatever tree it lands in): {g!r}")
+    return {"order_sensitive": True} if order else {}
 
 
 def generated_block(repo: str, g: Dict[str, Any], merge: str) -> Optional[List[str]]:

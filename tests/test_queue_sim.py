@@ -332,7 +332,7 @@ MUTATIONS = {
         '        note_hold(st, e, "batch", f"its push waits for batch {first[\'id\']} ({first[\'state\']}), which it is not in", t,\n'
         '                  batch=first["id"])\n', "", "chaoshold"),
     "generated files are no overlap": (
-        "        shared = shared if strict else without_generated(repo, shared)\n",
+        "        shared = combined_elsewhere(repo, shared, strict)\n",
         "", "nobatchgen"),
     # (11) the combined tree pushed unverified: main moved with no file overlap, and no verify round ran
     "a moved main's combined tree is verified": (

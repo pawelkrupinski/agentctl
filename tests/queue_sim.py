@@ -790,9 +790,11 @@ class Sim:
         repos = os.path.join(self.tmp, "red-repos.json")
         with open(repos, "w") as f:
             json.dump({"repos": [{"repo": "sim/movies", "gate": [["Main", "main.yml"]], "push": "land",
-                                  "generated": [{"paths": list(BASELINES), "regen": "true"}] + (
+                                  # order-sensitive, as movies declares them (generated.py ONLY A VOIDED CHECK HOLDS)
+                                  "generated": [{"paths": list(BASELINES), "regen": "true", "order_sensitive": True}] + (
                                       [] if self.profile.get("before_tiers") else
-                                      [{"paths": list(SNAPSHOTS), "regen": "true", "merge": "regen"}])}]}, f)
+                                      [{"paths": list(SNAPSHOTS), "regen": "true", "merge": "regen",
+                                        "order_sensitive": True}])}]}, f)
         os.environ.update(AGENTCTL_RED_REPOS=repos)
         os.environ.update(AGENTCTL_STATE_ROOT=os.path.join(self.tmp, "state"), AGENTCTL_ROLE="server",
                           AGENTCTL_CHECK_TREES=str(self.trees),

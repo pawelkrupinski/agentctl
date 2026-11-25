@@ -104,6 +104,8 @@ class RegistryTest(unittest.TestCase):
             "test/resources/js-quality-baseline.tsv": ["scripts/js-quality-report", "--update"],
             # the Python quality ratchet's baseline (2026-11-23: the shell-to-Python lanes each move its rows)
             "test/resources/py-quality-baseline.tsv": ["scripts/py-quality-report", "--update"],
+            # a measured baseline (a JVM's allocations): merged by rows only
+            "test/resources/identity-boot-cost-baseline.tsv": None,
             # DERIVED FILES (2026-11-23): regenerated over the combined tree, never merged by lines
             "docs/tools.md": ["python3", "scripts/tool_catalogue.py"],
             ".github/convergence-paths.txt": ["python3", "scripts/ci/convergence_paths.py", "--write"],
@@ -120,6 +122,11 @@ class RegistryTest(unittest.TestCase):
                                  "scripts/tool-catalogue/migration-classes.tsv")}})
         self.assertEqual(derived, {"docs/tools.md": None,
                                    ".github/convergence-paths.txt": ["# BEGIN GENERATED", "# END GENERATED"]})
+        # ONLY A VOIDED CHECK HOLDS (2026-11-25): every baseline, measured table and snapshot is order-sensitive; the
+        # derived pages and the catalogue's table are not
+        self.assertEqual(sorted(p for g in movies["generated"] if not g.get("order_sensitive") for p in g["paths"]),
+                         [".github/convergence-paths.txt", "docs/tools.md",
+                          "scripts/tool-catalogue/migration-classes.tsv"])
 
 
 # the repo's regen command: writes the baseline the way the repo's own tool would, from the combined tree (its row
@@ -147,7 +154,8 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         repos = os.path.join(self.tmp.name, "red-repos.json")
         with open(repos, "w") as f:
             json.dump({"repos": [{"repo": A.slug(self.r.path), "gate": [["Main", "main.yml"]],
-                                  "generated": [{"paths": [BASELINE, REFS], "regen": "scripts/regen"}]}]}, f)
+                                  "generated": [{"paths": [BASELINE, REFS], "regen": "scripts/regen",
+                                                 "order_sensitive": True}]}]}, f)  # as movies declares them
         self.saved_repos = os.environ.get("AGENTCTL_RED_REPOS")
         os.environ["AGENTCTL_RED_REPOS"] = repos
         for c in A.PROCESS_CACHES:

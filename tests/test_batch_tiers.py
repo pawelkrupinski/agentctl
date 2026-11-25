@@ -52,7 +52,8 @@ class TiersTest(test_generated.GeneratedQueueTest):
         with open(os.environ["AGENTCTL_RED_REPOS"], "w") as f:
             json.dump({"repos": [{"repo": A.slug(self.r.path), "gate": [["Main", "main.yml"]],
                                   "generated": [{"paths": [test_generated.BASELINE], "regen": "scripts/regen"},
-                                                {"paths": [SNAP], "regen": "scripts/snap", "merge": "regen"}]}]}, f)
+                                                {"paths": [SNAP], "regen": "scripts/snap", "merge": "regen",
+                                                 "order_sensitive": True}]}]}, f)  # as movies declares them
         for c in A.PROCESS_CACHES:
             c.clear()
 

@@ -1791,10 +1791,11 @@ The reconciler then takes it, a step per tick:
   regen` (below); since 2026-11-23 the DERIVED FILES, `merge: derived` (below); since 2026-11-20 also the HAND-WRITTEN
   TABLES, registered with no `regen`: coupling-exemptions.tsv,
   coupling-layers.tsv, identity-judgements.tsv, identity-unmatched/expected-matches.tsv and
-  scripts/tool-catalogue/migration-classes.tsv -- metrics-packages sat held
+  scripts/tool-catalogue/migration-classes.tsv; since 2026-11-25 the measured identity-boot-cost-baseline.tsv --
+  metrics-packages sat held
   behind phase6-data on coupling-exemptions.tsv -- merged row by row only, a row both sides changed staying the author's
   conflict, never one side's row kept provisionally: no ratchet would judge a lost exemption). Such a file is no overlap -- not
-  for the hold (but A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT, below), backlog-batch membership, the CONFLICTS a queued change is told of, `main_conflict`, nor the push's
+  for the hold (ONLY A VOIDED CHECK HOLDS, below), backlog-batch membership, the CONFLICTS a queued change is told of, `main_conflict`, nor the push's
   full-recheck rule; a real source both change (TestWiring.scala) holds as before. A conflict in one, on a rebase, a
   batch's assembly or land's own rebase, is RESOLVED in the commit being picked (its message and trailers kept): its
   rows merged three-way (keyed by every column but the value; disjoint rows always merge; a SET table, a key on many
@@ -1869,14 +1870,13 @@ The reconciler then takes it, a step per tick:
   generator's; a real source conflict still refused; every own commit landed: LANDED).
   **A DERIVED FILE HOLDS NOTHING (2026-11-23: the three migration lanes still sat `its check waits for <older>
   (checking): both change docs/tools.md`, one after another).** A derived file is no overlap even behind a check IN
-  FLIGHT (A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT, below, is for the baselines, tables and snapshots): the
+  FLIGHT (only an entry declared `order_sensitive: true` does: ONLY A VOIDED CHECK HOLDS, below): the
   younger is checked now, beside the older, and its push, finding main moved under a snapshot or derived file both
   changed -- a conflict, or a clean line merge git made, which is no tree's output -- is a new round that regenerates it
   over the combined tree (`main moved under regenerated files it changes too (...)`), never git's merge pushed. On the
   server role too (2026-11-23, the 22-change deadlock on ci-runner): A DERIVED FILE IS REGENERATED WHERE THE COMBINE
   HAPPENS -- its cheap command (no JVM) runs on every role, agentctl's interpreter on PATH (generated.py `regen_runs`,
-  `regen_env`); a hand-written table registered `holds: false` (movies' migration-classes.tsv: rows apart combine, a row
-  both change is its author's) holds nothing in flight either (`holds_in_flight`). queuebatch.py `generated_overlap`,
+  `regen_env`). queuebatch.py `ordered_overlap`,
   generated.py `derived`, `regen_owed`, queuediff.py `generated_round`. **A hand-written file both sides only add to
   (scripts/hooks/lint-registry.tsv rows, a skill's bullets) still holds behind a check in flight**, by decision: two
   QUEUED changes adding to it already meet in one batch (tier 3; a `*.md` is union-merged), but with the older in
@@ -1902,18 +1902,25 @@ The reconciler then takes it, a step per tick:
   RepositoryReadSwallows.scala (worker-rest-2 behind review-common) is NOT a registered table: its rows are a Scala
   Map's multi-line entries, the last one without a comma, so no row is one line; two appended entries resolve here.
   waiting.py `hunks_resolve`, `source_resolve`, `conflict_resolve`; batch.py's bisect; tests: `tests/test_batch_tiers.py`.
-- **A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT (2026-11-21, measured before choosing).** A queued change sharing
-  only generated files with a change queued before it is no overlap (the batch takes both); with that change already
-  IN FLIGHT (checking, checked, pushing), checking the younger now spent a check main moving under it then voids (both
-  read the generated files: its push owed a verify round, often two). Over 20 seeds the six baseline lanes of 2026-11-19
-  ran 148 checks unheld and 40 held (median 5 -> 6 ticks, p90 9 -> 7, mean 5.4 both); the two holds of 2026-11-21 as
-  observed (the younger two queued while the older two checked in batch #76), 100 checks -> 40 (median 5 both, p90
-  8 -> 9). So the younger waits, quietly, and meets the others in the next batch, its generated files merged or
-  regenerated there; never behind a `waiting` change, and a red fix never waits. Queued together, the two holds of
-  2026-11-21 are one batch, one check, all four landed (before: 2 of 4, the others told they no longer applied).
-  A source overlap with a change in flight still waits as before: a check of the younger stacked on the older's tip
-  is not built. queuebatch.py `generated_overlap`, `overlap_hold`; simulator invariant I10 (v3: no change held behind a
-  QUEUED one for generated files alone). Derived files aside: A DERIVED FILE HOLDS NOTHING (above).
+- **ONLY A VOIDED CHECK HOLDS (2026-11-25, the owner: "fix structurally / for the future" -- py-scalafix `held: its
+  check waits for py-isolated (checking): both change docs/tools.md`, py-reuse behind it for py-quality-baseline.tsv).**
+  A queued change waits for an older one only where checking it now is a check thrown away: the two do not merge
+  (`git merge-tree` of their heads conflicts in a file no batch tier resolves: told `CONFLICTS`); a SOURCE both change
+  (THE RULE would recheck it in full once the older lands: simulator invariant I9); or, with the older already in
+  flight, a generated file of a registry entry DECLARED `order_sensitive: true`. Whether a generated file holds is data
+  on its one registry row (red-repos.json `generated`, which the hold, the batch's row merge and the regeneration all
+  read), never a default: a new generated file needs no agentctl change. A derived file never holds -- not in flight,
+  not for a change checked alone (`batch_alone`, strict: py-scalafix's hold) -- and `order_sensitive` is refused on a
+  derived entry; `holds: false` is gone (a parse error names `order_sensitive`). Movies declares its baselines, its
+  hand-written judgement and coupling tables and its snapshots order-sensitive -- measured, the queue simulator over
+  the six baseline lanes of 2026-11-19 (20 seeds, 4 trees): held, 40 checks, mean 5.4 ticks to land, p90 7; unheld,
+  108 checks, mean 5.8, p90 9 (the younger's check, made beside the older, is voided by its landing) -- and leaves
+  migration-classes.tsv, docs/tools.md and convergence-paths.txt free. Replaces A GENERATED OVERLAP WAITS FOR A CHECK
+  IN FLIGHT (2026-11-21). generated.py `order_sensitive`, `without_derived`; repos.py `generated_order`; queuebatch.py
+  `ordered_overlap`, `combined_elsewhere`, `overlap_hold`; tests: `tests/test_conflict_holds.py` (lanes sharing only
+  undeclared generated files with a check in flight: one batch, one check, one push; py-scalafix checked alone beside
+  a check in flight; a real conflict still held, naming the source alone; a source edited apart still held),
+  `tests/test_derived.py`, `tests/test_batch_tiers.py`, `tests/test_generated.py` (movies' declarations).
 - **THE PUSH BATCH (the owner, 2026-11-17: "combine them instead of landing them one by one", W1).** A checked change
   pushed alone: each on a main that moved since its full check paid a verify round of its own, and THE OLDEST
   VERIFICATION PUSHES FIRST held the younger ones meanwhile, so N checked changes landed serially (ref-scrapers

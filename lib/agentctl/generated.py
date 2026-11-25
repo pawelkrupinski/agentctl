@@ -23,8 +23,8 @@ from agentctl.land import tool_env
 # rows regenerated over it" -- and two changes touching DISJOINT rows do not conflict at all. A repo registers them in
 # red-repos.json (`generated`: {paths, regen: its own --update command, timeout}); a registered file is
 # - NO OVERLAP: the hold (OVERLAPPING CHANGES ARE CHECKED AS ONE, queuebatch.py), backlog-batch membership, the conflict a
-#   queued change is told of, `no longer applies on main` and the push's full-recheck rule all leave it out -- a real
-#   source both change (TestWiring.scala) still holds the younger as before;
+#   queued change is told of, `no longer applies on main` and the push's full-recheck rule all leave it out -- a
+#   source both change (TestWiring.scala) still holds the younger (ONLY A VOIDED CHECK HOLDS, below);
 # - RESOLVED, when a rebase, a batch's assembly or land's own rebase conflicts in it: its rows merged three-way (each
 #   row keyed by its columns but the value: a row one side changed takes that side's value; disjoint rows always
 #   merge), else -- a row both sides changed differently -- the repo's own regen command run in the tree, which IS
@@ -90,6 +90,30 @@ def without_generated(repo: Optional[str], paths: List[str]) -> List[str]:
     """paths less the repo's registered generated files (GENERATED FILES ARE NO OVERLAP)."""
     reg = generated_registry(repo)
     return [p for p in paths if not reg or not generated_entry(repo, p)] if paths else paths
+
+
+def without_derived(repo: Optional[str], paths: Optional[List[str]]) -> Optional[List[str]]:
+    """paths less the repo's DERIVED files: regenerated over whatever tree they land in, never anyone's conflict, not
+    even a change's checked alone (A DERIVED FILE HOLDS NOTHING)."""
+    return [p for p in paths if not derived(generated_entry(repo, p))] if paths else paths
+
+
+# ONLY A VOIDED CHECK HOLDS (2026-11-25: py-scalafix `held: its check waits for py-isolated (checking): both change
+# docs/tools.md` -- a change checked alone, batch_alone, was judged strictly, every file it shares an overlap, the
+# derived page too; and a generated file held a change behind a check in flight by default, unless its entry opted
+# out with `holds: false`). A hold is worth having only where checking the younger now is a check thrown away: the
+# two do not merge (it cannot land), a SOURCE both change (THE RULE rechecks it in full once the older lands:
+# simulator invariant I9), or -- with the older already in flight, past the batch the two could have shared -- a
+# generated file whose push round would void it: an entry DECLARED `order_sensitive: true`, in the one registry
+# (red-repos.json `generated`) the hold, the batch's row merge and the regeneration all read. A derived file never is
+# (regenerated over whatever tree it lands in, strict or not); movies declares its baselines, its measured tables
+# and its snapshots (the queue simulator, 2026-11-25, the six baseline lanes of 2026-11-19 over 20 seeds: held, 40
+# checks, landed in a mean 5.4 ticks, p90 7; unheld, 108 checks, 5.8, p90 9 -- the younger's check is voided by the
+# older's landing and made again). So a new generated file is a registry row, and whether it holds is data on it.
+def order_sensitive(repo: Optional[str], path: str) -> bool:
+    """Whether path is a generated file of an entry declared ORDER-SENSITIVE (`order_sensitive: true`): both changes
+    changing it holds the younger behind a check in flight (ONLY A VOIDED CHECK HOLDS)."""
+    return bool((generated_entry(repo, path) or {}).get("order_sensitive"))
 
 
 def table_parse(text, whole_line=False):
@@ -180,14 +204,6 @@ def regen_runs(g: Optional[Dict[str, Any]]) -> bool:
 def regenerated_here(g: Optional[Dict[str, Any]]) -> bool:
     """Whether entry g is regenerated-only (a snapshot, a derived file) and its command runs on this host."""
     return regen_only(g) and regen_runs(g)
-
-
-def holds_in_flight(g: Optional[Dict[str, Any]]) -> bool:
-    """Whether a registered generated file both changes change holds the younger behind a check in flight (A GENERATED
-    OVERLAP WAITS FOR A CHECK IN FLIGHT, queuebatch.py): never a DERIVED file (regenerated over the combined tree,
-    regen_runs), nor a hand-written table registered `holds: false` (its row merge is safe: rows apart combine, a row
-    both changed is its author's conflict)."""
-    return bool(g) and not derived(g) and (g or {}).get("holds", True) is not False
 
 
 def regen_only(g: Optional[Dict[str, Any]]) -> bool:
