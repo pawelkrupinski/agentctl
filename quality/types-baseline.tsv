@@ -16,7 +16,7 @@ mypy-errors	blame	43
 mypy-errors	blameopen	13
 mypy-errors	blamerecords	25
 mypy-errors	branches	69
-mypy-errors	buildview	42
+mypy-errors	buildview	14
 mypy-errors	changekind	27
 mypy-errors	checkslot	26
 mypy-errors	cireport	42
@@ -97,7 +97,7 @@ mypy-errors	queuediff	40
 mypy-errors	queueenter	79
 mypy-errors	queuefailure	5
 mypy-errors	queuepush	99
-mypy-errors	queuerecheck	46
+mypy-errors	queuerecheck	45
 mypy-errors	queueslots	25
 mypy-errors	queuesubmit	36
 mypy-errors	queueuntil	18

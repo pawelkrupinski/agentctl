@@ -181,6 +181,12 @@ class BuildViewTest(unittest.TestCase):
     def test_the_comment_strip_keeps_strings(self):
         self.assertEqual(A.scala_code('val x = "a // b" // c\n/* d */val y = 1'), 'val x = "a // b" \nval y = 1')
 
+    def test_the_comment_strip_keeps_triple_quoted_strings_and_ends_at_an_unterminated_one(self):
+        self.assertEqual(A.scala_code('a """x // y\n/* z */""" b // c'), 'a """x // y\n/* z */""" b ')
+        self.assertEqual(A.scala_code('a "open // c\nb'), 'a "open // c\nb')
+        self.assertEqual(A.scala_code('a /* never closed'), 'a ')
+        self.assertEqual(A.scala_code('a "esc \\" // k" // c'), 'a "esc \\" // k" ')
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -43,30 +43,48 @@ SBT_WILDCARD_IMPORT = re.compile(r"^import\s+([\w.]+?)\.(?:_|\*)\s*$")
 SBT_NAMED_IMPORT = re.compile(r"^import\s+([\w.]+?)\.\{([^}]*)\}\s*$")
 
 
-def scala_code(text):
+def _literal_end(text: str, i: int) -> int | None:
+    """Where the string literal starting at text[i] ends (a triple-quoted one, or a plain one to its closing quote or the
+    line's end); None when text[i] starts no literal."""
+    n = len(text)
+    if text.startswith('"""', i):
+        j = text.find('"""', i + 3)
+        return n if j < 0 else j + 3
+    if text[i] != '"':
+        return None
+    j = i + 1
+    while j < n and text[j] != '"' and text[j] != "\n":
+        j += 2 if text[j] == "\\" else 1
+    return j + 1
+
+
+def _comment_end(text: str, i: int) -> int | None:
+    """Where the comment starting at text[i] ends (a `//` one at its line's end, a block one after its `*/`); None when
+    text[i] starts no comment."""
+    n = len(text)
+    if text.startswith("//", i):
+        j = text.find("\n", i)
+        return n if j < 0 else j
+    if text.startswith("/*", i):
+        j = text.find("*/", i + 2)
+        return n if j < 0 else j + 2
+    return None
+
+
+def scala_code(text: str) -> str:
     """Scala/sbt source without its comments, each string literal kept (so a `//` inside one is no comment)."""
     out, i, n = [], 0, len(text)
     while i < n:
-        c = text[i]
-        if text.startswith('"""', i):
-            j = text.find('"""', i + 3)
-            j = n if j < 0 else j + 3
-            out.append(text[i:j])
-            i = j
-        elif c == '"':
-            j = i + 1
-            while j < n and text[j] != '"' and text[j] != "\n":
-                j += 2 if text[j] == "\\" else 1
-            out.append(text[i:j + 1])
-            i = j + 1
-        elif text.startswith("//", i):
-            j = text.find("\n", i)
-            i = n if j < 0 else j
-        elif text.startswith("/*", i):
-            j = text.find("*/", i + 2)
-            i = n if j < 0 else j + 2
+        end = _literal_end(text, i)
+        if end is not None:
+            out.append(text[i:end])
+            i = end
+            continue
+        end = _comment_end(text, i)
+        if end is not None:
+            i = end
         else:
-            out.append(c)
+            out.append(text[i])
             i += 1
     return "".join(out)
 
@@ -125,17 +143,10 @@ def scala_object_parts(code, name):
     return " ".join(" ".join(h.split()) for h in header), members
 
 
-def read_build(tree, rev):
-    """The build at rev, parsed: {defs, globals, projects (dir -> def name), files ({path: code}), objects
-    ({name: (file, parts or None)}), always ([unit]), imports ({member: object})}; None when unreadable."""
-    sbt = git(tree, "show", f"{rev}:build.sbt", check=False)
-    if sbt.returncode != 0:
-        return None
-    listing = git(tree, "ls-tree", "-r", "--name-only", rev, "--", "project", check=False)
-    if listing.returncode != 0:
-        return None
-    b = {"defs": {}, "globals": [], "projects": {}, "files": {}, "objects": {}, "always": [], "imports": {}}
-    for raw, norm in scala_statements(scala_code(sbt.stdout), 0):
+def _note_sbt_statements(b: dict[str, Any], sbt: str) -> None:
+    """build.sbt's statements into b: a definition into defs (and projects, by its directory), anything else a global
+    statement (an import also into imports)."""
+    for raw, norm in scala_statements(scala_code(sbt), 0):
         m = SBT_DEF.match(raw)
         if m:
             b["defs"][m.group(1)] = b["defs"].get(m.group(1), "") + norm
@@ -144,58 +155,88 @@ def read_build(tree, rev):
                 b["projects"][p.group(1).strip("./") or "."] = m.group(1)
             continue
         b["globals"].append(norm)
-        w = SBT_WILDCARD_IMPORT.match(norm)
-        if w:
-            b["imports"].setdefault("*", []).append(w.group(1).split(".")[-1])
-        n = SBT_NAMED_IMPORT.match(norm)
-        if n:
-            for name in n.group(2).split(","):
-                b["imports"][name.strip().split("=>")[0].strip()] = n.group(1).split(".")[-1]
+        _note_import(b, norm)
+
+
+def _note_import(b: dict[str, Any], norm: str) -> None:
+    """A build-wide statement that is an import: its wildcard object, or each named member's, into b's imports."""
+    w = SBT_WILDCARD_IMPORT.match(norm)
+    if w:
+        b["imports"].setdefault("*", []).append(w.group(1).split(".")[-1])
+    n = SBT_NAMED_IMPORT.match(norm)
+    if n:
+        for name in n.group(2).split(","):
+            b["imports"][name.strip().split("=>")[0].strip()] = n.group(1).split(".")[-1]
+
+
+def _note_whole_file(tree: str, rev: str, path: str, b: dict[str, Any]) -> bool:
+    """A file in every view, whole (by its blob): False when its blob cannot be read."""
+    blob = git(tree, "rev-parse", f"{rev}:{path}", check=False)
+    if blob.returncode != 0:
+        return False
+    b["always"].append(("file", path, blob.stdout.strip()))
+    return True
+
+
+def _note_root_sbts(tree: str, rev: str, b: dict[str, Any]) -> bool:
+    """Every root *.sbt but build.sbt (coupling.sbt, identity-impact.sbt: sbt reads them all) in every view, whole; False
+    when the root or a blob cannot be read."""
     roots = git(tree, "ls-tree", "--name-only", rev, check=False)
     if roots.returncode != 0:
+        return False
+    sbts = [p for p in roots.stdout.split() if p.endswith(".sbt") and p != "build.sbt"]
+    return all(_note_whole_file(tree, rev, p, b) for p in sbts)
+
+
+def _note_scala_file(tree: str, rev: str, path: str, b: dict[str, Any]) -> bool:
+    """A project/*.scala file: its text, its objects, and whether it is an AutoPlugin in every view; False when unreadable."""
+    r = git(tree, "show", f"{rev}:{path}", check=False)
+    if r.returncode != 0:
+        return False
+    code = scala_code(r.stdout)
+    b["files"][path] = " ".join(code.split())
+    if re.search(r"\bextends\s+AutoPlugin\b", code) and re.search(r"\btrigger\b[^=\n]*=\s*allRequirements\b", code):
+        b["always"].append(("file", path))
+    for kind, name in SCALA_TOPLEVEL.findall(code):
+        b["objects"][name] = (path, scala_object_parts(code, name) if kind == "object" else None)
+    return True
+
+
+def _note_project_file(tree: str, rev: str, path: str, b: dict[str, Any]) -> bool:
+    """One file under project/ (a target directory's none): a .scala file read, any other whole; False when unreadable."""
+    if "/target/" in f"/{path}":
+        return True
+    if re.fullmatch(r"project/[^/]+\.scala", path):
+        return _note_scala_file(tree, rev, path, b)
+    return _note_whole_file(tree, rev, path, b)
+
+
+def read_build(tree: str, rev: str) -> dict[str, Any] | None:
+    """The build at rev, parsed: {defs, globals, projects (dir -> def name), files ({path: code}), objects
+    ({name: (file, parts or None)}), always ([unit]), imports ({member: object})}; None when unreadable."""
+    sbt = git(tree, "show", f"{rev}:build.sbt", check=False)
+    if sbt.returncode != 0:
         return None
-    for path in roots.stdout.split():  # another root *.sbt (coupling.sbt, identity-impact.sbt): in every view, whole
-        if path.endswith(".sbt") and path != "build.sbt":
-            blob = git(tree, "rev-parse", f"{rev}:{path}", check=False)
-            if blob.returncode != 0:
-                return None
-            b["always"].append(("file", path, blob.stdout.strip()))
-    for path in listing.stdout.split():
-        if "/target/" in f"/{path}":
-            continue
-        if not re.fullmatch(r"project/[^/]+\.scala", path):
-            blob = git(tree, "rev-parse", f"{rev}:{path}", check=False)
-            if blob.returncode != 0:
-                return None
-            b["always"].append(("file", path, blob.stdout.strip()))
-            continue
-        r = git(tree, "show", f"{rev}:{path}", check=False)
-        if r.returncode != 0:
-            return None
-        code = scala_code(r.stdout)
-        b["files"][path] = " ".join(code.split())
-        if re.search(r"\bextends\s+AutoPlugin\b", code) and re.search(r"\btrigger\b[^=\n]*=\s*allRequirements\b", code):
-            b["always"].append(("file", path))
-        for kind, name in SCALA_TOPLEVEL.findall(code):
-            b["objects"][name] = (path, scala_object_parts(code, name) if kind == "object" else None)
-    return b
-
-
-def build_view(tree, rev, module_dirs):
-    """{unit: text} of the build at rev as the modules in module_dirs see it (THE VIEW above); None when unreadable or
-    a module directory has no project in build.sbt."""
-    b = read_build(tree, rev)
-    if b is None:
+    listing = git(tree, "ls-tree", "-r", "--name-only", rev, "--", "project", check=False)
+    if listing.returncode != 0:
         return None
-    seeds = []
-    for d in sorted(module_dirs):
-        if d not in b["projects"]:
-            return None
-        seeds.append(("def", b["projects"][d]))
-    view, todo = {}, [("global", g) for g in b["globals"]] + seeds + list(b["always"])
-    wild = set(b["imports"].get("*", []))
+    b: dict[str, Any] = {"defs": {}, "globals": [], "projects": {}, "files": {}, "objects": {}, "always": [],
+                         "imports": {}}
+    _note_sbt_statements(b, sbt.stdout)
+    if not _note_root_sbts(tree, rev, b):
+        return None
+    return b if all(_note_project_file(tree, rev, p, b) for p in listing.stdout.split()) else None
 
-    def text_of(u):
+
+class BuildView:
+    """THE VIEW above over a parsed build b: the units reachable from the seeds, each with its text."""
+
+    def __init__(self, b: dict[str, Any]) -> None:
+        self.b = b
+        self.wild = set(b["imports"].get("*", []))
+
+    def text_of(self, u: tuple[Any, ...]) -> Any:
+        b = self.b
         if u[0] == "global":
             return u[1]
         if u[0] == "def":
@@ -206,46 +247,83 @@ def build_view(tree, rev, module_dirs):
             return b["objects"][u[1]][1][0]
         return b["objects"][u[1]][1][1][u[2]]  # member
 
-    def obj_member(o, m):
-        path, parts = b["objects"][o]
+    def obj_member(self, o: str, m: str) -> list[tuple[Any, ...]]:
+        path, parts = self.b["objects"][o]
         if parts is None or m not in parts[1]:
             return [("file", path)]
         return [("header", o), ("member", o, m)]
 
-    while todo:
-        u = todo.pop()
-        if u in view:
-            continue
-        text = text_of(u)
-        if text is None:
-            return None
-        view[u] = text
-        if u[0] == "file" and len(u) == 3:
-            continue
-        if u[0] == "global" and text.startswith("import "):
-            continue  # what it imports is read where it is used (b["imports"])
+    def members_of(self, obj: str) -> dict[str, Any]:
+        """The members of project/ object obj (none for an unread one)."""
+        return (self.b["objects"][obj][1] or ("", {}))[1]
+
+    def string_files(self, text: str) -> list[tuple[Any, ...]]:
+        """The project/ files a string literal of text names (`"Coupling.scala"`: a module's source)."""
+        return [("file", f) for lit in SCALA_STRING.findall(text) for f in self.b["files"]
+                if os.path.basename(f) in lit]
+
+    def named_units(self, u: tuple[Any, ...], name: str, member: str | None) -> list[tuple[Any, ...]]:
+        """The units identifier `name` (`name.member`) pulls in from unit u."""
         here = u[1] if u[0] in ("header", "member") else None
-        if u[0] in ("global", "def"):  # a project/ file named in a string is a module's source (`"Coupling.scala"`)
-            for lit in SCALA_STRING.findall(text):
-                todo += [("file", f) for f in b["files"] if os.path.basename(f) in lit]
+        if here and name == here and not member:
+            return []  # the object's own signature
+        defined = [("def", name)] if name in self.b["defs"] and u[0] in ("global", "def") else []  # project/ code
+        own = [("member", here, name)] if here and self.members_of(here).get(name) is not None else []  # sees no def
+        return defined + self.object_units(name, member) + own + self.imported_units(name)
+
+    def object_units(self, name: str, member: str | None) -> list[tuple[Any, ...]]:
+        """The units a project/ object named `name` (`name.member`) pulls in: the member, else its whole file."""
+        if name not in self.b["objects"]:
+            return []
+        return self.obj_member(name, member) if member else [("file", self.b["objects"][name][0])]
+
+    def imported_units(self, name: str) -> list[tuple[Any, ...]]:
+        """The units a bare `name` pulls in through build.sbt's imports: a named import's object, every wildcard one's."""
+        owner = self.b["imports"].get(name)
+        out = self.obj_member(owner, name) if owner in self.b["objects"] else []
+        for o in self.wild:
+            if o in self.b["objects"] and self.members_of(o).get(name) is not None:
+                out += self.obj_member(o, name)
+        return out
+
+    def references(self, u: tuple[Any, ...], text: str) -> list[tuple[Any, ...]]:
+        """The units unit u (its text) names, in the order they are read."""
+        out = self.string_files(text) if u[0] in ("global", "def") else []
         code = SCALA_STRING.sub('""', text)  # a name inside a string (an alias's command, a path) is no reference
         for m in re.finditer(r"([A-Za-z_][A-Za-z0-9_]*)(\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?", code):
-            name, member = m.group(1), m.group(3)
-            if here and name == here and not member:
-                continue  # the object's own signature
-            if name in b["defs"] and u[0] in ("global", "def"):  # project/ code cannot see build.sbt's definitions
-                todo.append(("def", name))
-            if name in b["objects"]:
-                todo += obj_member(name, member) if member else [("file", b["objects"][name][0])]
-            if here and (b["objects"][here][1] or ("", {}))[1].get(name) is not None:
-                todo.append(("member", here, name))
-            owner = b["imports"].get(name)
-            if owner in b["objects"]:
-                todo += obj_member(owner, name)
-            for o in wild:
-                if o in b["objects"] and (b["objects"][o][1] or ("", {}))[1].get(name) is not None:
-                    todo += obj_member(o, name)
-    return {":".join(str(x) for x in u): t for u, t in view.items()}
+            out += self.named_units(u, m.group(1), m.group(3))
+        return out
+
+    def reachable(self, todo: list[tuple[Any, ...]]) -> dict[tuple[Any, ...], str] | None:
+        """{unit: text} of everything todo reaches; None when a unit cannot be read."""
+        view: dict[tuple[Any, ...], str] = {}
+        while todo:
+            u = todo.pop()
+            if u in view:
+                continue
+            text = self.text_of(u)
+            if text is None:
+                return None
+            view[u] = text
+            if (u[0] == "file" and len(u) == 3) or (u[0] == "global" and text.startswith("import ")):
+                continue  # a whole file; or an import: what it imports is read where it is used (b["imports"])
+            todo += self.references(u, text)
+        return view
+
+
+def build_view(tree: str, rev: str, module_dirs: Any) -> dict[str, str] | None:
+    """{unit: text} of the build at rev as the modules in module_dirs see it (THE VIEW above); None when unreadable or
+    a module directory has no project in build.sbt."""
+    b = read_build(tree, rev)
+    if b is None:
+        return None
+    seeds = []
+    for d in sorted(module_dirs):
+        if d not in b["projects"]:
+            return None
+        seeds.append(("def", b["projects"][d]))
+    view = BuildView(b).reachable([("global", g) for g in b["globals"]] + seeds + list(b["always"]))
+    return None if view is None else {":".join(str(x) for x in u): t for u, t in view.items()}
 
 
 def _selection_words(selection: Any) -> Any:

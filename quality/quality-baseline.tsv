@@ -33,7 +33,6 @@ cognitive	blame_status	13
 cognitive	blame_step	26
 cognitive	blame_withdraw	16
 cognitive	block_invalid	36
-cognitive	build_view	70
 cognitive	change_exit_event	14
 cognitive	change_exits_unannounced	12
 cognitive	change_hold_stuck	13
@@ -122,7 +121,6 @@ cognitive	previous_fixer_tree	14
 cognitive	project_changes	14
 cognitive	project_events	25
 cognitive	push_batchable	11
-cognitive	read_build	42
 cognitive	read_overlap	38
 cognitive	recheck_reason	24
 cognitive	reconcile_alerts	26
@@ -170,7 +168,6 @@ cognitive	run_local_recheck	14
 cognitive	run_sigs	11
 cognitive	run_verdict	20
 cognitive	sbt_stuck_reasons	24
-cognitive	scala_code	24
 cognitive	session_worktrees	25
 cognitive	set_change	16
 cognitive	spotlight_exclude	19
@@ -200,7 +197,6 @@ cognitive	workflow_triggers	26
 cognitive	write_snapshot	12
 copies	blame	2
 copies	blame|blamerecords	2
-copies	buildview	2
 copies	cireport|redtick	2
 copies	clones|serverclone	2
 copies	redcrash	2
@@ -238,7 +234,6 @@ cyclomatic	blame_step	19
 cyclomatic	blame_unproven	15
 cyclomatic	blame_withdraw	18
 cyclomatic	block_invalid	30
-cyclomatic	build_view	35
 cyclomatic	build_view_change	15
 cyclomatic	change_exit_event	16
 cyclomatic	change_exits_unannounced	14
@@ -340,7 +335,6 @@ cyclomatic	project_changes	11
 cyclomatic	project_events	21
 cyclomatic	push_batchable	14
 cyclomatic	push_candidates	14
-cyclomatic	read_build	24
 cyclomatic	read_overlap	25
 cyclomatic	recheck_reason	23
 cyclomatic	reconcile_alerts	22
@@ -391,7 +385,6 @@ cyclomatic	run_local_recheck	18
 cyclomatic	run_sigs	15
 cyclomatic	run_verdict	26
 cyclomatic	sbt_stuck_reasons	17
-cyclomatic	scala_code	13
 cyclomatic	session_worktrees	18
 cyclomatic	set_change	18
 cyclomatic	spotlight_exclude	15
@@ -423,7 +416,6 @@ method-lines	_push_batch_item	72
 method-lines	_tick_changes_pass	86
 method-lines	_watch	81
 method-lines	alert_probe	55
-method-lines	build_view	65
 method-lines	check_batch	117
 method-lines	cmd_gov	69
 method-lines	cmd_maintain	56
@@ -434,7 +426,6 @@ method-lines	live_registry_read	53
 method-lines	live_stream	51
 method-lines	notify_escalations	85
 method-lines	pick_commits	59
-method-lines	read_build	54
 method-lines	red_claim	62
 method-lines	red_dispatch	59
 method-lines	red_fix_pending	260
