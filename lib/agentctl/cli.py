@@ -81,7 +81,7 @@ def wire_collaborators(clock: Clock, store: Any) -> None:
     wire_probes({"invariant": lambda a: probe_invariant(a, clock, store),
                  "change_source": lambda a: probe_change_source(a, store),
                  "red_newer_verdict": lambda a: probe_red_newer_verdict(a, store)})
-    wire_inbox_writer(lambda rec: alert_write(rec, store))
+    wire_inbox_writer(lambda rec: alert_write(rec, store), clock.time)
     wire_token_missing_note(lambda ns, why: token_unavailable_note(ns, why, store))
 
 

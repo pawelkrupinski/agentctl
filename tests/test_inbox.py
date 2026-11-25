@@ -133,6 +133,19 @@ class InboxTest(unittest.TestCase):
         self.assertEqual((e["id"], e["verdict"]), (eid, "run o/r#1: success"))
         self.assertNotIn("audience", e)  # never routed: no alert model ran
 
+    def test_an_entry_is_stamped_by_the_clock_the_composition_root_wired(self):
+        from fake_clock import FakeClock
+        clock = FakeClock(t=1_700_000_000.0)
+        A.wire_collaborators(clock, A.CurrentStore())
+        try:
+            A.inbox_write("wait", "run o/r#1: success", [], [], 0)
+        finally:
+            A.wire_collaborators(A.Clock(), A.CurrentStore())
+        [e] = self.entries()
+        self.assertEqual(e["at"], 1_700_000_000.0)
+        self.assertTrue(e["id"].startswith("20231114T221320"), e["id"])
+        self.assertTrue(e["time"].startswith("2023-11-14"), e["time"])
+
     def test_inbox_lists_unread_and_acks(self):
         A.inbox_write("land", "WATCH RED: Main #9 test", [], [], 3)
         A.inbox_write("wait", "run o/r#1: success", [], [], 0)
