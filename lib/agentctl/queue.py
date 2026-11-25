@@ -266,7 +266,20 @@ def forces_full_recheck(path):
 def hook_selection(tree, paths):
     """What the tree's hook selects for paths (SELECTION-AWARE, above): {mode: words} for each dry-run mode the hook has,
     and local-tests.txt's lines for the areas its plan runs; None when a mode it has cannot be read."""
-    hook = precheck_hook(tree)
+    out = hook_mode_selections(precheck_hook(tree), tree, paths)
+    if out is None:
+        return None
+    shares = share_selection(tree)
+    if shares is False:
+        return None
+    if shares is not None:
+        out[SHARE_KEY] = shares
+    out["local-tests"] = local_test_lines(tree, out.get("--plan", []))
+    return out
+
+
+def hook_mode_selections(hook, tree, paths):
+    """{mode: words} of each dry-run mode the hook has, or None when the hook or a mode it has cannot be read."""
     try:
         with open(hook or "") as f:
             text = f.read()
@@ -279,19 +292,18 @@ def hook_selection(tree, paths):
         out[mode] = hook_query(hook, tree, mode, paths)
         if out[mode] is None:
             return None
-    shares = share_selection(tree)
-    if shares is False:
-        return None
-    if shares is not None:
-        out[SHARE_KEY] = shares
-    areas = {"basic"} if "sbt" in out.get("--plan", []) else set()
-    areas |= set(out.get("--plan", []))
+    return out
+
+
+def local_test_lines(tree, plan):
+    """local-tests.txt's lines for the areas the hook's plan runs (the basic tests with sbt in it)."""
+    areas = {"basic"} if "sbt" in plan else set()
+    areas |= set(plan)
     try:
         with open(os.path.join(tree, "scripts", "hooks", "local-tests.txt")) as f:
-            out["local-tests"] = [line.rstrip("\n") for line in f if line.split()[:1] and line.split()[0] in areas]
+            return [line.rstrip("\n") for line in f if line.split()[:1] and line.split()[0] in areas]
     except OSError:
-        out["local-tests"] = []
-    return out
+        return []
 
 
 def share_selection(tree):
@@ -389,17 +401,21 @@ def land_hold(st: Any, now_: float | None = None, expire: bool = True) -> dict[s
     live = None
     for it in land_holds(st):
         if it["deadline"] <= t:
-            if not expire:
-                continue
-            try:
-                st.transition("hold", it["id"], "expired", it["version"],
-                              event={"text": f"land hold {it['id']} expired (held by {it['data'].get('by')}: "
-                                             f"{it['data'].get('why') or 'no reason given'})"})
-            except (StaleVersion, TerminalState):
-                pass
+            if expire:
+                expire_land_hold(st, it)
         elif live is None or it["deadline"] > live["deadline"]:
             live = it
     return live
+
+
+def expire_land_hold(st: Any, it: dict[str, Any]) -> None:
+    """A hold past its deadline moved to `expired`, an event saying who held it and why (one already moved: left)."""
+    try:
+        st.transition("hold", it["id"], "expired", it["version"],
+                      event={"text": f"land hold {it['id']} expired (held by {it['data'].get('by')}: "
+                                     f"{it['data'].get('why') or 'no reason given'})"})
+    except (StaleVersion, TerminalState):
+        pass
 
 
 def hold_text(h: Any, t: float | None = None) -> str:

@@ -77,27 +77,35 @@ def status_sources(sources, bound, keep=False):
     for the next refresh (one read per source at a time) -- a slow source never empties its section; else it is an
     error."""
     out, threads = {}, []
-
-    def work(name, fn):
-        t0 = time.time()
-        try:
-            v = fn()
-        except (Exception, SystemExit) as e:
-            v = status_err(e)
-        out[name] = (time.time(), v, round(time.time() - t0, 2))
-        if keep:
-            _status_last[name] = out[name]
     start = time.time()
     for name, fn, factor in sources:
         th = _status_reading.get(name) if keep else None
         if not (th and th.is_alive()):
-            th = threading.Thread(target=work, args=(name, fn), daemon=True, name=f"status:{name}")
+            th = threading.Thread(target=status_read, args=(name, fn, out, keep), daemon=True, name=f"status:{name}")
             th.start()
             if keep:
                 _status_reading[name] = th
         threads.append((name, th, bound * factor))
     for _name, th, b in threads:
         th.join(max(0.0, start + b - time.time()))
+    return status_answers(threads, out, keep)
+
+
+def status_read(name, fn, out, keep):
+    """One source read in its thread: its answer (or its error) and how long it took, into out (and, keep, the last)."""
+    t0 = time.time()
+    try:
+        v = fn()
+    except (Exception, SystemExit) as e:
+        v = status_err(e)
+    out[name] = (time.time(), v, round(time.time() - t0, 2))
+    if keep:
+        _status_last[name] = out[name]
+
+
+def status_answers(threads, out, keep):
+    """Each source's answer once the deadline passed: its read, else (keep) its last finished one marked stale, else an
+    error."""
     res, stale, took = {}, {}, {}
     for name, th, b in threads:
         got = out.get(name) or (_status_last.get(name) if keep and not th.is_alive() else None)

@@ -107,16 +107,34 @@ def config_load():
         return
     vals = {}
     for path in config_files():  # later files win over earlier ones
-        try:
-            with open(path, "rb") as f:
-                data = tomllib.load(f)
-        except FileNotFoundError:
-            continue
-        except (OSError, ValueError) as e:
-            CONFIG_ERRORS.append(f"{path}: {e}")
-            continue
+        data = config_read(path)
         for k, v in config_flatten(data):
             vals[k] = (v, path)
+    config_apply(vals)
+
+
+def config_read(path):
+    """The config file's tables ({} for a missing one, or one that does not read: noted in CONFIG_ERRORS)."""
+    import tomllib
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        CONFIG_ERRORS.append(f"{path}: {e}")
+        return {}
+
+
+def config_text(v):
+    """A config value as its environment text: a bool 1 / 0, a list comma-joined."""
+    if isinstance(v, bool):
+        return "1" if v else "0"
+    return ",".join(map(str, v)) if isinstance(v, list) else str(v)
+
+
+def config_apply(vals):
+    """The knobs {name: (value, file)} put into the environment, the user's own environment winning."""
     # What an earlier agentctl process put here from a config file (a re-exec, a child) is config, not the user's
     # environment: re-read, so an edited or removed knob applies after the next restart.
     inherited = [k for k in os.environ.get("AGENTCTL_CONFIG_SET", "").split(",") if k]
@@ -126,8 +144,7 @@ def config_load():
     for k, (v, path) in vals.items():
         if k in os.environ and k not in inherited:
             continue  # the environment says otherwise: it wins
-        os.environ[k] = ("1" if v else "0") if isinstance(v, bool) else ",".join(map(str, v)) if isinstance(v, list) \
-            else str(v)
+        os.environ[k] = config_text(v)
         CONFIG_SOURCE[k] = path
     if CONFIG_SOURCE or inherited:
         os.environ["AGENTCTL_CONFIG_SET"] = ",".join(sorted(CONFIG_SOURCE))

@@ -244,15 +244,18 @@ def red_verify_run_on_way(o_r, repo, f):
     """The undecided run on main of a scheduled fix's workflow that will decide it -- created since its slot, or one
     containing the fix -- or None."""
     for r in workflow_main_runs(o_r, f["verify_file"]) if f.get("verify_file") else []:
-        if r.get("status") == "completed":
-            continue
-        try:
-            since_slot = parse_time(r.get("createdAt")).timestamp() >= float(f.get("next_run_at") or 0) - 60
-        except (ValueError, TypeError, AttributeError):
-            since_slot = False
-        if since_slot or (repo and r.get("headSha") and contains_local(repo, f.get("sha"), r["headSha"])):
+        if r.get("status") != "completed" and (
+                run_since_slot(r, f) or (repo and r.get("headSha") and contains_local(repo, f.get("sha"), r["headSha"]))):
             return r
     return None
+
+
+def run_since_slot(r, f):
+    """The run was created since the scheduled fix's slot (a minute's grace)."""
+    try:
+        return parse_time(r.get("createdAt")).timestamp() >= float(f.get("next_run_at") or 0) - 60
+    except (ValueError, TypeError, AttributeError):
+        return False
 
 
 RED_PRIORITY = {"gate": 0, "fix": 1, "outside": 2, "flake": 3}
