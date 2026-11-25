@@ -6,6 +6,17 @@
 # process agentctl spawned without a session -- its fixer environment. `agentctl red am-fixer` exits 0 for a fixer,
 # 1 for anybody else; any other exit (agentctl itself broken) lets the commit through with a warning, so a broken
 # agentctl can always be fixed.
+# Never commit in the MAIN checkout (~/bin itself, the live agentctl: 8c8f7c8 and 4167951 did, 2026-11-25, and an
+# unpushed commit there blocks every other agent's fast-forward). A linked worktree's top level differs from the
+# directory holding the shared git dir, so the test is the same in every worktree (hooks are shared through it).
+top=$(git rev-parse --show-toplevel 2>/dev/null)
+common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)
+if [ -n "$top" ] && [ "$(cd "$top" && pwd -P)" = "$(cd "$common/.." && pwd -P)" ]; then
+  echo "pre-commit: refused -- $top is the main checkout (live code); commit in a worktree instead." >&2
+  echo "  git -C ~/bin worktree add -b <branch> ~/bin-wt-<name> origin/main" >&2
+  exit 1
+fi
+
 tool="${AGENTCTL_HOOK_TOOL:-$HOME/bin/agentctl}"
 who=$("$tool" red am-fixer 2>/dev/null)
 rc=$?

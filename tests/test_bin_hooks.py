@@ -144,3 +144,27 @@ class MutantBoundTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BinPreCommitMainCheckoutTest(unittest.TestCase):
+    """2026-11-25: agents committed straight into the live ~/bin twice (8c8f7c8, 4167951). The pre-commit hook refuses
+    any commit made in a repository's main checkout; a linked worktree (~/bin-wt-*) commits freely."""
+    HOOK = os.path.join(os.path.dirname(HERE), "hooks", "pre-commit")
+
+    def commit_in(self, cwd):
+        # the hook's own tool answers `red am-fixer`: this one always says "not a fixer" (exit 1)
+        env = dict(ENV, AGENTCTL_HOOK_TOOL=os.path.join(HERE, "fixtures", "not-a-fixer"))
+        return subprocess.run(["sh", self.HOOK], cwd=cwd, capture_output=True, text=True, env=env)
+
+    def test_main_checkout_refused_and_worktree_allowed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "bin")
+            git(tmp, "init", "-q", repo)
+            git(repo, "commit", "-q", "--allow-empty", "-m", "base")
+            wt = os.path.join(tmp, "bin-wt-x")
+            git(repo, "worktree", "add", "-q", "-b", "x", wt)
+            main = self.commit_in(repo)
+            self.assertEqual(main.returncode, 1, main.stderr)
+            self.assertIn("git -C ~/bin worktree add -b <branch> ~/bin-wt-<name> origin/main", main.stderr)
+            linked = self.commit_in(wt)
+            self.assertEqual(linked.returncode, 0, linked.stderr)

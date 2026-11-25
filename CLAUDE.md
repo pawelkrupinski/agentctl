@@ -8,7 +8,7 @@ the sections and gives agentctl's own mechanics. The tool's reference is `AGENTC
 
 `~/bin` is the LIVE agentctl every process runs (the laptop's processor re-execs onto its commits; ci-runner's
 auto-pin ships main within ~5 min). Work in `git -C ~/bin worktree add -b <name> ~/bin-wt-<name> master`, Bash edits
-included (an edit in ~/bin trips watchdog WB). Land: `git -C ~/bin-wt-<name> rebase master && git -C ~/bin merge
+included (an edit in ~/bin trips watchdog WB; `hooks/pre-commit` refuses any commit in the main checkout). Land: `git -C ~/bin-wt-<name> rebase master && git -C ~/bin merge
 --ff-only <name> && git -C ~/bin push origin master:main`, then remove the worktree and `git branch -d` the branch.
 Push in small, coherent steps (a regression must be easy to bisect and revert); after a push check
 `~/bin/agentctl status` and `~/bin/agentctl red status` still work.
