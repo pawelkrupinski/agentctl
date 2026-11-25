@@ -3,7 +3,7 @@
 # commit carrying `Types: <why>`. CLAUDE.md, "The ratchets".
 mypy-errors	alertprobe	27
 mypy-errors	alertroute	30
-mypy-errors	alerts	61
+mypy-errors	alerts	60
 mypy-errors	ask	29
 mypy-errors	batch	35
 mypy-errors	batchcheck	38
@@ -29,7 +29,7 @@ mypy-errors	clones	1
 mypy-errors	conditions	40
 mypy-errors	config	19
 mypy-errors	configfile	8
-mypy-errors	conflicts	30
+mypy-errors	conflicts	27
 mypy-errors	core	24
 mypy-errors	culpritfix	34
 mypy-errors	dispatchblock	13
@@ -92,12 +92,13 @@ mypy-errors	procwatch	2
 mypy-errors	projector	22
 mypy-errors	queue	28
 mypy-errors	queuebatch	54
+mypy-errors	queuebatchsel	19
 mypy-errors	queuecheck	34
 mypy-errors	queueclose	36
 mypy-errors	queuediff	40
 mypy-errors	queueenter	77
 mypy-errors	queuefailure	5
-mypy-errors	queuepush	88
+mypy-errors	queuepush	69
 mypy-errors	queuerecheck	45
 mypy-errors	queueslots	25
 mypy-errors	queuesubmit	36
@@ -114,8 +115,9 @@ mypy-errors	redcrash	48
 mypy-errors	reddispatch	34
 mypy-errors	redearly	8
 mypy-errors	redfamilies	10
-mypy-errors	redfixes	47
-mypy-errors	redfixread	34
+mypy-errors	redfixcheck	18
+mypy-errors	redfixes	38
+mypy-errors	redfixread	8
 mypy-errors	redfollow	5
 mypy-errors	redhold	29
 mypy-errors	redlease	27
@@ -128,7 +130,7 @@ mypy-errors	redquota	9
 mypy-errors	redrecord	4
 mypy-errors	redreplay	17
 mypy-errors	redrepos	11
-mypy-errors	redretired	57
+mypy-errors	redretired	49
 mypy-errors	redseen	50
 mypy-errors	redstatus	5
 mypy-errors	redstep	37
@@ -154,7 +156,7 @@ mypy-errors	sessionpaths	14
 mypy-errors	slots	57
 mypy-errors	snapshot	9
 mypy-errors	statemachines	31
-mypy-errors	stats	35
+mypy-errors	stats	33
 mypy-errors	status	85
 mypy-errors	statusagents	38
 mypy-errors	statusline	4
