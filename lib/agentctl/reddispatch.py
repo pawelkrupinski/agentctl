@@ -15,7 +15,7 @@ from agentctl.procs import socket_host
 from agentctl.inboxentry import inbox_write
 from agentctl.worktrees import WorktreeGuard
 from agentctl.fixerenv import fixer_env
-from agentctl.redrepos import red_owner_only
+from agentctl.redrepos import red_owner_only, red_repo_note
 from agentctl.redfamilies import red_identity
 from agentctl.statemachines import StaleVersion
 from agentctl.redrecord import RED_JOIN_IDLE, RED_TERMINAL, lease_is_live, red_active, red_names, red_what
@@ -282,6 +282,7 @@ def red_spawn(store, o_r, repo, off, took, extra=()):
          "flake": pic.get("red_kind") == "flake", "diagnosis": pic.get("diagnosis"), "key": pic["key"],
          "names": set(pic.get("names") or []), "prior_work": pic.get("prior_work"), "old_note": pic.get("old_note"),
          "history": pic.get("history") or [], "repo": pic.get("repo"), "decision": pic.get("decision")}
+    u["repo_note"] = red_repo_note(o_r, u["run"])
     for x in extra:  # the run's other reds, under the same fixer
         u["jobs"] = sorted(set(u.get("jobs") or [u["job"]]) | set(x["picture"].get("jobs") or []))
     if tier == "lander":  # THE DECISION RULE's determined culprit: reverted, its lander revived (blame.py)

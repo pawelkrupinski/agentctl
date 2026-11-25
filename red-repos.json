@@ -51,6 +51,12 @@
      "clone": "~/bitcashier/core",
      "gate": [["Main Pipeline", "main-pipeline.yml"]],
      "family": "core-repo",
-     "push": "land"}
+     "push": "land"},
+    {"repo": "pawelkrupinski/agentctl",
+     "clone": "~/bin",
+     "gate": [["tests", "tests.yml"]],
+     "family": "agentctl-repo",
+     "push": "selfpush",
+     "note": "agentctl's own CI (tests.yml). Read ~/bin/CLAUDE.md in your worktree. Push ONLY with `python3 devtools/selfpush.py` from your worktree (never `agentctl land`, never commit or edit in ~/bin itself); replay the failure with the failing run's own REPLAY line (`python3 tests/run.py --seed N <tests>`) at main and at your fix, and fix only when the replay fails before and passes after. NEVER rerun the run to green, and never quarantine, skip or loosen a test: find the root cause and fix the code or the test."}
   ]
 }

@@ -224,6 +224,8 @@ def fixer_task_context(u: Any, o_r: str, num: Any) -> str:
     task = ""
     if red_owner_only(o_r):  # every task above says "land it": not in an owner-only repo
         task += red_owner_rules(o_r, num)
+    if u.get("repo_note"):  # the repo's own rules for its fixer (red-repos.json `note`), over every `land` above
+        task += f" REPO RULES ({o_r}), overriding any `land` above: {u['repo_note']}"
     if u.get("old_note"):
         task += (f" This red's newest run is old and {u['old_note']}: decide whether it still fails (fix it), or why it "
                  "cannot recur (land the change that makes that so, e.g. its workflow fixed or removed), and say which.")

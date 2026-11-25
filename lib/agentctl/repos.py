@@ -40,7 +40,7 @@ RED_PRIMARY = GATED_REPOS[0]
 RED_REPOS_DEFAULT = [{"repo": RED_PRIMARY, "push": "land", "red_workflows": True, "signed": False}]
 
 
-RED_PUSH_POLICIES = ("land", "owner-only")
+RED_PUSH_POLICIES = ("land", "owner-only", "selfpush")  # selfpush: agentctl's own, pushed by devtools/selfpush.py
 
 
 _red_repos_cache = process_cache({})
@@ -78,7 +78,7 @@ def red_repos_parse(raw):
         out.append({"repo": repo, "gate": [tuple(g) for g in gate], "family": x.get("family"), "push": push,
                     "clone": os.path.expanduser(clone) if clone else None,
                     "generated": generated_parse(repo, x.get("generated")), "red_workflows": keeps,
-                    "signed": signed})
+                    "signed": signed, "note": x.get("note") or None})
     if len({c["repo"] for c in out}) != len(out):
         raise ValueError("a repo is listed twice")
     if not any(c["repo"] == RED_PRIMARY for c in out):

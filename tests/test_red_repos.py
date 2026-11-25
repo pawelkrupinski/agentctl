@@ -10,7 +10,7 @@ from test_agentctl import A, sh  # noqa: E402
 from test_red import run, MOVIES  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 
-INFRA, CORE = "bitcashier/infra", "bitcashier/core"
+INFRA, CORE, AGENTCTL = "bitcashier/infra", "bitcashier/core", "pawelkrupinski/agentctl"
 STAGE = "Stage NixOS closures"
 NIXBLD = "error: the user 'nixbld1' in the group 'nixbld' does not exist"
 
@@ -108,6 +108,8 @@ class ConfigTest(RedReposBase):
         self.assertEqual(repos[INFRA]["gate"], [(STAGE, "nix-stage-closures.yaml")])
         self.assertEqual(repos[INFRA]["push"], "owner-only")
         self.assertEqual(repos[CORE]["gate"], [("Main Pipeline", "main-pipeline.yml")])
+        self.assertEqual((repos[AGENTCTL]["gate"], repos[AGENTCTL]["push"]), ([("tests", "tests.yml")], "selfpush"))
+        self.assertEqual(repos[AGENTCTL]["family"], "agentctl-repo")
         self.assertEqual(repos[MOVIES]["gate"], [], "movies' gate is its gating checks registry, never a list here")
 
     def test_run_numbers_and_keys_are_per_repo(self):
@@ -297,6 +299,27 @@ class BriefTest(RedReposBase):
         self.assertGreater(task.index("OWNER-ONLY REPO"), task.index("land it with"), "the override comes after")
         core = A.fixer_prompt(dict(self.U, repo=CORE, workflow="Main Pipeline"), "/wt", "/brief")
         self.assertNotIn("OWNER-ONLY", core)
+
+    def test_an_agentctl_fixer_is_briefed_with_its_runs_replay_command_and_told_never_to_rerun(self):
+        # 2026-11-25: agentctl's own tests.yml red got an alert (WA) and no fixer; the red machine now watches the repo
+        # (red-repos.json) and the fixer's task carries the failing run's REPLAY line from its log
+        with open(os.path.join(os.path.dirname(A.TOOL_PATH), "red-repos.json")) as f:
+            tracked = json.load(f)
+        with open(self.repos_file, "w") as f:
+            json.dump({"repos": [r for r in tracked["repos"] if r["repo"] in (MOVIES, AGENTCTL)]}, f)
+        A._red_repos_cache.clear()
+        log = ("suite\tstep\tFAIL: test_reds.BackgroundSessionTest.test_x\nsuite\tstep\tseed: 4242\n"
+               "suite\tstep\tREPLAY: python3 tests/run.py --seed 4242 test_reds.BackgroundSessionTest\n")
+        asked = []
+        note = A.red_repo_note(AGENTCTL, {"number": 9, "databaseId": 77}, lambda o_r, rid: asked.append((o_r, rid)) or log)
+        self.assertEqual(asked, [(AGENTCTL, 77)])
+        u = dict(self.U, repo=AGENTCTL, workflow="tests", repo_note=note)
+        task = A.fixer_prompt(u, "/wt", "/brief").split("=== END OF THE FIXER BRIEF ===", 1)[1]
+        for text in ("python3 devtools/selfpush.py", "never `agentctl land`", "replay: python3 tests/run.py --seed 4242 "
+                     "test_reds.BackgroundSessionTest", "NEVER rerun the run to green", "never quarantine"):
+            self.assertIn(text, task)
+        self.assertGreater(task.index("REPO RULES"), task.index("land it with"), "the override comes after")
+        self.assertEqual(A.red_repo_note(CORE, {"databaseId": 1}, lambda *a: self.fail("no note: no log read")), "")
 
     def test_the_brief_filter_keeps_text_after_the_last_section(self):
         text = "# B\nintro\n## Per-repo rules\n### REPO a/a\nA rules\n### REPO b/b\nB rules\n## Tail\ntail text\n"

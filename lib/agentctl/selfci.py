@@ -18,7 +18,8 @@ from agentctl.core import env_num, fmt_age, git, host_role, run_cmd, state_root
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record, write_json
 from agentctl.cistate import state_read
-from agentctl.forge import forge_argv, forge_env, gh_json
+from agentctl.forge import gh_json
+from agentctl.redrepos import diagnosis, read_failure
 from agentctl.fixerland import bin_repo
 
 SELF_REPO = "pawelkrupinski/agentctl"
@@ -96,29 +97,6 @@ def cached(path: str, now_: float, read: Callable[[], Any], every: float) -> Any
     return value
 
 
-def read_failure(run_id: Any) -> str | None:
-    """The failing steps' log of a tests.yml run, as `gh run view --log-failed` prints it; None when it cannot say."""
-    try:
-        argv = forge_argv(SELF_REPO, "run", "view", str(run_id), "--log-failed")  # type: ignore[no-untyped-call]
-        r = run_cmd(argv, timeout=90, env=forge_env(SELF_REPO))  # type: ignore[no-untyped-call]
-    except OSError:  # no gh
-        return None
-    return r.stdout if r.returncode == 0 and r.stdout.strip() else None
-
-
-def diagnosis(log: str | None) -> str:
-    """What a red run's log says to do about it (tests/run.py prints `seed:`, `FAIL: <id>` and `REPLAY: <command>`): the
-    failing tests, the seed and the command that replays the order; '' when the log has none of them."""
-    if not log:
-        return ""
-    fails = list(dict.fromkeys(re.findall(r"FAIL: (\S+)", log)))
-    seed = re.search(r"seed: (\d+)", log)
-    replay = re.search(r"REPLAY: (python3 tests/run\.py[^\r\n]*)", log)
-    parts = [f"failing: {', '.join(fails[:3])}{' ...' if len(fails) > 3 else ''}" if fails else "",
-             f"seed {seed.group(1)}" if seed else "", f"replay: {replay.group(1).strip()}" if replay else ""]
-    return "; ".join(p for p in parts if p)
-
-
 def red_problem(runs: list[dict[str, Any]], now_: float, why: str = "") -> tuple[str | None, float | None]:
     """(what is wrong, how long the streak has been red) of tests.yml's runs: wrong only past WA_RED_MAX."""
     red = red_since(runs)
@@ -178,7 +156,7 @@ def red_why(runs: list[dict[str, Any]], now_: float, failure: Callable[[Any], st
     path = state_root("selfci-why.json")
     kept = read_record(path) or {}
     if kept.get("run") != run_id:
-        kept = {"run": run_id, "why": diagnosis((failure or read_failure)(run_id))}
+        kept = {"run": run_id, "why": diagnosis((failure or (lambda rid: read_failure(SELF_REPO, rid)))(run_id))}
         write_json(path, kept)
     return str(kept.get("why") or "")
 
