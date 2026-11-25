@@ -8,7 +8,6 @@ import time
 from agentctl.core import HOME, env_num, git
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.store import open_store
 from agentctl.inboxentry import inbox_write
 from agentctl.conditions import recovery_dir
 from agentctl.queueclose import change_landed
@@ -56,7 +55,7 @@ def park_until_text(m):
     return "until the owner decides"
 
 
-def park_release_why(m, repo, t=None, store=None):
+def park_release_why(m, repo, store, t=None):
     """Why mark m's condition is met now, else None (unread: None -- the mark stands)."""
     t = time.time() if t is None else t
     u = m.get("until") or {}
@@ -66,7 +65,7 @@ def park_release_why(m, repo, t=None, store=None):
         return None
     if u.get("change"):
         try:
-            end = change_chain_end(store or open_store(), u["change"])
+            end = change_chain_end(store, u["change"])
         except (Exception, SystemExit):
             end = None
         if end and end["state"] == "landed":
@@ -88,7 +87,7 @@ def drop_orphan_records(wt):
         write_json(path, keep)
 
 
-def park_duty(repo, dry_run=False, now_=None):
+def park_duty(repo, store, dry_run=False, now_=None):
     """One maintain pass over the parks: a met condition releases its mark; the weekly digest of the old ones."""
     t = time.time() if now_ is None else now_
     marks = parked_marks()
@@ -103,7 +102,7 @@ def park_duty(repo, dry_run=False, now_=None):
                 changed = True
             did.append(f"parked {name}: released (its worktree is gone)")
             continue
-        why = park_release_why(m, m.get("repo") or repo, t)
+        why = park_release_why(m, m.get("repo") or repo, store, t)
         if why:
             if not dry_run:
                 m.update(state="released", why=why, decided=ts())
@@ -136,10 +135,10 @@ def parked_lines():
     return [f"parked: {len(live)}"] + [f"  {os.path.basename(w)}  {park_until_text(m)}: {m['reason']}" for w, m in live]
 
 
-def resolve_blocker(x, repo, store=None):
+def resolve_blocker(x, repo, store):
     """{change, commit} of `--until-landed x`: a change id (whole or a unique part; its head the commit), else a commit
     of repo. Raises ValueError."""
-    st = store or open_store()
+    st = store
     try:
         items = st.items("change")
     except (Exception, SystemExit):
@@ -166,7 +165,7 @@ def park_target(path):
     return os.path.realpath(top), (os.path.dirname(common) if common.endswith("/.git") else common)
 
 
-def cmd_park(a):
+def cmd_park(a, store):
     marks = parked_marks()
     if not a.worktree:
         for line in parked_lines():
@@ -183,7 +182,7 @@ def cmd_park(a):
         return 2
     if a.until_landed:
         try:
-            until = {"kind": "landed", **resolve_blocker(a.until_landed, repo)}
+            until = {"kind": "landed", **resolve_blocker(a.until_landed, repo, store)}
         except ValueError as e:
             print(f"park: {e}")
             return 2

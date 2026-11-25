@@ -6,7 +6,6 @@ import time
 from agentctl.core import HOME, PROTECTED_BRANCHES, cherry_landed, git, remote
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.store import open_store
 from agentctl.procs import process_cwds
 from agentctl.inboxentry import inbox_write
 from agentctl.worktrees import worktrees
@@ -56,9 +55,9 @@ def change_chain_end(st, cid):
     return it
 
 
-def successor_state(m, repo, store=None):
+def successor_state(m, repo, store):
     """(open | landed | lapsed, why) of mark m's successor."""
-    st = store or open_store()
+    st = store
     by, at = m["by"], float(m.get("at") or 0)
     end = change_chain_end(st, m["change"]) if m.get("change") else None
     if end and end["state"] == "landed":
@@ -123,7 +122,7 @@ def close_superseded(repo, wt, why):
     return True, line
 
 
-def superseded_duty(repo, dry_run=False):
+def superseded_duty(repo, store, dry_run=False):
     """One maintain pass over the marks: each successor read again; a landed one's worktree closed, a lapsed mark said
     (the orphan rules take it back). Returns what it did."""
     marks = superseded_marks()
@@ -133,7 +132,7 @@ def superseded_duty(repo, dry_run=False):
             continue
         name = os.path.basename(wt)
         try:
-            state, why = successor_state(m, repo)
+            state, why = successor_state(m, repo, store)
         except (Exception, SystemExit) as e:  # the store unread: no verdict, the mark stands
             did.append(f"superseded {name}: could not read its successor ({str(e)[:120]})")
             continue
@@ -165,7 +164,7 @@ def superseded_duty(repo, dry_run=False):
     return did
 
 
-def resolve_successor(by, repo, store=None):
+def resolve_successor(by, repo, store):
     """(display name, change id or None, successor worktree or None, its head or None) of `--by`: a worktree path (or
     the name of a sibling of repo's worktrees), else a change id (the whole id or a unique part of it)."""
     cands = [os.path.expanduser(by), os.path.join(os.path.dirname(os.path.realpath(repo)), by)]
@@ -179,7 +178,7 @@ def resolve_successor(by, repo, store=None):
             raise ValueError(f"{os.path.basename(top)} carries nothing that is not on main yet: mark it superseded once "
                              "its successor holds the work (commit it there first)")
         return os.path.basename(top), None, os.path.realpath(top), git(top, "rev-parse", "HEAD").strip()
-    st = store or open_store()
+    st = store
     its = [i for i in st.items("change") if i["id"] == by] or [i for i in st.items("change") if by in i["id"]]
     if len(its) != 1:
         raise ValueError(f"--by {by}: no worktree of that name, and {'no' if not its else len(its)} change id"
@@ -189,7 +188,7 @@ def resolve_successor(by, repo, store=None):
     return it["id"], it["id"], os.path.realpath(wt) if wt else None, it["data"].get("head")
 
 
-def cmd_supersede(a):
+def cmd_supersede(a, store):
     marks = superseded_marks()
     if not a.worktree:
         live = {w: m for w, m in marks.items() if a.all or m.get("state") in ("open", "landed")}
@@ -215,7 +214,7 @@ def cmd_supersede(a):
     repo = git(wt, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
     repo = os.path.dirname(repo) if repo.endswith("/.git") else repo
     try:
-        name, change, succ, head = resolve_successor(a.by, wt)
+        name, change, succ, head = resolve_successor(a.by, wt, store)
     except (Exception, SystemExit) as e:  # SystemExit: NoToken (a change id is read from the store)
         print(f"supersede: {str(e).replace('agentctl: ', '')}")
         return 2
@@ -238,10 +237,10 @@ def cmd_supersede(a):
 # re-submitted: a person cancelled it, so UNLANDED ORPHAN goes to a person at once. Any other orphan still gets its
 # one submit (design §11 I9) -- turning every orphan into a condition (option c) would leave real finished work, the
 # common case, waiting on the owner.
-def worktree_change_items(wt, store=None):
+def worktree_change_items(wt, store):
     """{"open": [the open change items], "last": this worktree's newest change item (any state) or None}."""
     try:
-        items = (store or open_store()).items("change")
+        items = store.items("change")
     except (Exception, SystemExit):
         return {"open": [], "last": None}
     rw = os.path.realpath(wt)

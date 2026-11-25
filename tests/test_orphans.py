@@ -196,11 +196,11 @@ class OrphanTest(RedBase):
         self.assertEqual(A.orphan_duty(A.CurrentStore(), self.r.path), [], "carried: no submit")
         st.put_item("change", second, "queued", {"worktree": gone, "head": "b" * 40})
         st.transition("change", first, "superseded", it["version"], data={"superseded_by": second})
-        self.assertEqual(A.successor_state(A.superseded_mark(wt), self.r.path)[0], "open", "re-submitted: still on its way")
+        self.assertEqual(A.successor_state(A.superseded_mark(wt), self.r.path, A.CurrentStore())[0], "open", "re-submitted: still on its way")
         it2 = st.item("change", second)
         st.transition("change", second, "rejected", it2["version"])
         third = st.put_item("change", "20261030-190000-repo-wt-ci-5-aa11bb", "queued", {"worktree": gone, "head": "c" * 40})
-        self.assertEqual(A.successor_state(A.superseded_mark(wt), self.r.path)[0], "open", "landed again from its tree")
+        self.assertEqual(A.successor_state(A.superseded_mark(wt), self.r.path, A.CurrentStore())[0], "open", "landed again from its tree")
         st.transition("change", third["id"], "cancelled", third["version"])
         did = A.orphan_duty(A.CurrentStore(), self.r.path)
         self.assertIn(f"superseded repo-wt-review: the mark lapsed (its change {second} ended rejected, unlanded); "
@@ -271,14 +271,14 @@ class OrphanTest(RedBase):
         rc, out = self.run_tool("park", later, "--reason", "no condition")
         self.assertEqual(rc, 2, out)
         t = time.time()
-        did = A.park_duty(self.r.path, now_=t)
+        did = A.park_duty(self.r.path, A.CurrentStore(), now_=t)
         self.assertEqual(did, ["parked repo-wt-later: released (its date 2026-01-01 passed); the orphan rules apply again"])
-        self.assertEqual(A.park_duty(self.r.path, now_=t + 13 * 86400), [], "younger than 14 days: no digest")
-        [line] = A.park_duty(self.r.path, now_=t + 15 * 86400)
+        self.assertEqual(A.park_duty(self.r.path, A.CurrentStore(), now_=t + 13 * 86400), [], "younger than 14 days: no digest")
+        [line] = A.park_duty(self.r.path, A.CurrentStore(), now_=t + 15 * 86400)
         self.assertTrue(line.startswith("PARKED DIGEST: repo-wt-flip-stage5 (15 d, until the owner decides: kept for "
                                         "reference)"), line)
-        self.assertEqual(A.park_duty(self.r.path, now_=t + 16 * 86400), [], "one a week")
-        self.assertEqual(len(A.park_duty(self.r.path, now_=t + 22.5 * 86400)), 1)
+        self.assertEqual(A.park_duty(self.r.path, A.CurrentStore(), now_=t + 16 * 86400), [], "one a week")
+        self.assertEqual(len(A.park_duty(self.r.path, A.CurrentStore(), now_=t + 22.5 * 86400)), 1)
         self.assertEqual(len([e for e in self.inbox("PARKED") if e["verdict"].startswith("PARKED DIGEST")]), 2)
         self.assertNotIn("PARKED", A.WAIT_KINDS_DEFAULT.split(","), "a digest wakes nobody")
         self.assertEqual(A.open_conditions(A.CurrentStore()), [], "never an escalation")
@@ -306,10 +306,10 @@ class OrphanTest(RedBase):
         self.assertEqual(A.session_worktrees([wt + "-2"]), {}, "a sibling's name is no match")
         self.assertEqual(len(A.recovery_tick(A.CurrentStore(), force=True)), 1)  # the escalation clears: a live session works in it
         self.assertEqual(A.open_conditions(A.CurrentStore()), [])
-        self.assertEqual(A.orphan_candidates(self.r.path), [])
+        self.assertEqual(A.orphan_candidates(self.r.path, A.CurrentStore()), [])
         self.session(wt, minutes_ago=150)  # the session went quiet: ownership lapses with it
         self.assertEqual(A.session_worktrees([wt]), {})
-        self.assertEqual(len(A.orphan_candidates(self.r.path)), 1)
+        self.assertEqual(len(A.orphan_candidates(self.r.path, A.CurrentStore())), 1)
 
     def test_an_infra_failed_submit_is_retried_when_the_store_answers_and_never_escalated(self):
         """flip-stage5: `crashed: StoreUnavailable` in a tunnel outage was its final verdict, escalated for good."""
@@ -320,13 +320,13 @@ class OrphanTest(RedBase):
         self.assertEqual(A.orphan_duty(A.CurrentStore(), self.r.path), ["orphan repo-wt-stage5: submit (never landed)"])
         crash = "crashed: StoreUnavailable: POST /v1/store/items: <urlopen error [Errno 61] Connection refused>"
         A.inbox_write("land", crash, [], [], 1, cwd=wt, reply=True)
-        A.store_answers = lambda store=None: False
+        A.store_answers = lambda store: False
         did = A.orphan_duty(A.CurrentStore(), self.r.path)
         self.assertEqual(did, [f"orphan repo-wt-stage5: its last try failed on infra ({crash[:120]}); retried when the "
                                "store answers"])
         self.assertEqual(A.orphan_duty(A.CurrentStore(), self.r.path), [], "said once")
         self.assertEqual(A.open_conditions(A.CurrentStore()), [])
-        A.store_answers = lambda store=None: True  # the store is back
+        A.store_answers = lambda store: True  # the store is back
         self.assertEqual(A.orphan_duty(A.CurrentStore(), self.r.path), [f"orphan repo-wt-stage5: submit again (its last try failed on "
                                                       f"infra: {crash[:120]})"])
         self.assertEqual(self.relands, [wt, wt])

@@ -14,7 +14,6 @@ from agentctl.core import (
 from agentctl.timefmt import parse_time, ts
 from agentctl.statefile import read_record, write_json
 from agentctl.classify import NETWORK_CHECK_FAILURE
-from agentctl.store import open_store
 from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import do_not_land, held_commit
@@ -116,10 +115,10 @@ def orphan_infra(verdict):
     return bool(ORPHAN_INFRA.search(v) or NETWORK_CHECK_FAILURE.search(v)) and not ORPHAN_REAL_FAILURE.search(v)
 
 
-def store_answers(store=None):
+def store_answers(store):
     """True when the store answers now (an infra-failed orphan's retry waits for it)."""
     try:
-        (store or open_store()).item("change", "store-answers-probe")
+        store.item("change", "store-answers-probe")
         return True
     except (Exception, SystemExit):
         return False
@@ -156,10 +155,10 @@ def orphan_dispatch(repo, wt, name, verdict):
     return True, f"fixer pid {p.pid} in {wt.replace(HOME, '~')}"
 
 
-def live_lease_worktrees():
+def live_lease_worktrees(store):
     """The worktrees a live lease names (a fixer's, an interactive claim's): somebody works there."""
     out, t = set(), time.time()
-    for r in open_store().list():
+    for r in store.list():
         if r["holder"] and r["expires_at"] > t:
             wt = (json.loads(r["meta"] or "{}") or {}).get("worktree")
             if wt:
@@ -167,7 +166,7 @@ def live_lease_worktrees():
     return out
 
 
-def orphan_candidates(repo, now_=None, dead=None, refused=None, lands=None):
+def orphan_candidates(repo, store, now_=None, dead=None, refused=None, lands=None):
     """[(worktree, commits, key, last verdict)] of the orphans now. A worktree holding a withdrawn or refuted blame
     revert (blame_land_refusal) is never one: it goes to `dead` [(worktree, why)] when given; one whose work is not for
     landing (orphan_refusal) goes to `refused` [(worktree, key, why)]. lands: the pass's land_entries_once reader."""
@@ -181,12 +180,12 @@ def orphan_candidates(repo, now_=None, dead=None, refused=None, lands=None):
         landers = {os.path.realpath(w) for w in land_cwds()}
     except (Exception, SystemExit):
         landers = set()
-    live = live_lease_worktrees()
+    live = live_lease_worktrees(store)
     try:
         sessions = session_worktrees([w.get("worktree") for w in worktrees(repo)], t)
     except (Exception, SystemExit):
         sessions = {}
-    records = blame_records()
+    records = blame_records(store)
     try:  # a change in the land queue (queued, checking, waiting) is not orphaned
         d, _c, _w = waiting_state(repo)
         live |= {os.path.realpath(e.get("worktree") or "") for e in waiting_entries(d, open_only=False)
@@ -279,7 +278,7 @@ def orphan_submitted_alert(wt, commits, msg):
                 [], [], 0, cwd=wt, item=f"orphan:{wt.replace(HOME, '~')}")
 
 
-def probe_orphan_landed(a):
+def probe_orphan_landed(a, store):
     """The orphan's change is on main (by patch), its worktree is gone, or somebody works in it again."""
     wt = a["worktree"]
     if not os.path.isdir(wt):
@@ -292,13 +291,13 @@ def probe_orphan_landed(a):
     sup = superseded_mark(rp)
     if sup:
         return True, f"superseded by {sup['by']}"
-    dead = blame_land_refusal(wt, _c, wt)
+    dead = blame_land_refusal(wt, _c, wt, store=store)
     if dead:
         return True, f"never landed: {dead}"
     kept = orphan_refusal(wt, _c)
     if kept:
         return True, f"not for landing: {kept}"
-    if rp in live_lease_worktrees():
+    if rp in live_lease_worktrees(store):
         return True, "a live claim works in it"
     park = parked_mark(rp)
     if park:
@@ -306,7 +305,7 @@ def probe_orphan_landed(a):
     owner = session_worktrees([rp]).get(rp)
     if owner:
         return True, f"a live session works in it ({owner})"
-    cover = orphan_covered_by(wt, worktree_change_items(wt))  # orphan_duty's rule (a): an open change carries it
+    cover = orphan_covered_by(wt, worktree_change_items(wt, store))  # orphan_duty's rule (a): an open change carries it
     if cover:
         return True, f"covered by {cover}"
     return False, f"{len(_c)} commit(s) still not on main, nobody in it"
@@ -339,13 +338,13 @@ def orphan_duty(store, repo=None, dry_run=False, now_=None):
     repo = repo or movies_repo_path()
     if not os.path.isdir(repo):
         return []
-    did, acted, dead = superseded_duty(repo, dry_run) + park_duty(repo, dry_run, now_), 0, []
+    did, acted, dead = superseded_duty(repo, store, dry_run) + park_duty(repo, store, dry_run, now_), 0, []
     path = recovery_dir("orphans.json")
     st = read_record(path) or {}  # after park_duty: a released park's records are gone (its one submit again)
     fixers = read_record(orphan_fixers_path()) or {}
     fixers_changed = fixer_sent = False
     refused, lands = [], land_entries_once()  # one inbox read for the whole pass
-    cands = orphan_candidates(repo, now_, dead, refused, lands)
+    cands = orphan_candidates(repo, store, now_, dead, refused, lands)
     for wt, key, why in refused:  # not for landing: said once, never submitted, never escalated
         rec = st.get(key) or {"worktree": wt, "first": ts(), "actions": []}
         if rec.get("refused") != why:
@@ -362,7 +361,7 @@ def orphan_duty(store, repo=None, dry_run=False, now_=None):
         if dry_run:
             did.append(f"orphan {name}: {len(commits)} commit(s); last verdict: {verdict or 'never landed'}")
             continue
-        items = worktree_change_items(wt)
+        items = worktree_change_items(wt, store)
         cover = orphan_covered_by(wt, items)
         if cover:  # (a) already in the queue under another change: its verdict is that change's (the probe clears too)
             if rec.get("covered_by") != cover:
@@ -410,7 +409,7 @@ def orphan_duty(store, repo=None, dry_run=False, now_=None):
                 wait_s = ORPHAN_INFRA_BACKOFF[min(n, len(ORPHAN_INFRA_BACKOFF) - 1)]
                 if time.time() - last_at < wait_s:
                     pass
-                elif not store_answers():
+                elif not store_answers(store):
                     if rec.get("infra_said") != after[:120]:
                         rec["infra_said"] = after[:120]
                         did.append(f"orphan {name}: its last try failed on infra ({after[:120]}); retried when the "
