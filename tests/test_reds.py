@@ -15,7 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 from fake_clock import FakeClock  # noqa: E402
-from harness import default_clock  # noqa: E402
+from agentctl.clock import Clock  # noqa: E402
 from test_red import RedBase, run, FAIL_LINE, MOVIES  # noqa: E402
 
 OTHER_LINE = "[info] - BarSpec should baz *** FAILED ***"
@@ -43,6 +43,21 @@ class DroppingStore:
         return call
 
 
+class TickClock(Clock):
+    """The time of the test's own ticks (RedsBase.t): what a command run in-process stamps its leases with. The default
+    test clock starts AGENTCTL_TEST_CLOCK_LAG s behind the wall, so a 10-minute block lease it stamped read as long
+    expired to a tick at the wall's time from a lag of 600 s (OwnerTest, 2026-11-25)."""
+
+    def __init__(self, t):
+        self.t = t
+
+    def time(self):
+        return self.t[0]
+
+    def monotonic(self):
+        return self.t[0]
+
+
 class RedsBase(RedBase):
     def setUp(self):
         super().setUp()
@@ -50,10 +65,7 @@ class RedsBase(RedBase):
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
         os.environ["AGENTCTL_RECOVERY_DIR"] = os.path.join(self.tmp.name, "recovery")
         os.environ["AGENTCTL_RUNNERS_PAGE_CACHE"] = os.path.join(self.tmp.name, "runners-page.json")
-        # the test clock's time, never the wall's: a command run in-process (`red block`, a claim) stamps its leases with
-        # the default clock, which starts AGENTCTL_TEST_CLOCK_LAG s behind the wall, so a tick reading the wall found a
-        # 10-minute block lease long expired at a lag of 600 s or more
-        self.t = [default_clock().time()]
+        self.t = [time.time()]
         self.st = A.process_store(clock=lambda: self.t[0])
         A._blocker_cache.clear()
 
@@ -71,9 +83,11 @@ class RedsBase(RedBase):
         A._outside_lists.clear()
         return A.ci_state_refresh(MOVIES)  # written: a workflow_green probe reads it
 
+    def tool(self, *argv, cwd=None, clock=None):
+        return super().tool(*argv, cwd=cwd, clock=clock or TickClock(self.t))
+
     def tick(self, dispatch=False, advance=0, snap=True):
         self.t[0] += advance
-        default_clock().advance(advance)  # an in-process command after it stamps on the same moved time
         return A.red_tick(self.st, MOVIES, self.r.path, self.snap() if snap else None, now_=self.t[0], dispatch=dispatch,
                           sync=True)  # this process plays both hosts: the server's tick and the sync's claims
 
