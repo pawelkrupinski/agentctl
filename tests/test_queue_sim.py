@@ -336,7 +336,8 @@ class Timeline08010cTest(unittest.TestCase):
 # invariant. A mutation whose anchor is gone fails here, naming it: update it with the code.
 MUTATIONS = {
     "ee7b744 (the batch keeps its age-order place)": (
-        'if not fix and batch_seq is not None and batch_seq < e["seq"] and not check_tree_slot_free(st, repo, d) \\\n'
+        'if not fix and self.batch_seq is not None and self.batch_seq < e["seq"] \\\n'
+        '                and not check_tree_slot_free(st, self.repo, self.d) \\\n'
         '                and policy_blocks("older-batch", st, e["id"], "the last free check tree kept for the older batch"):',
         "if False:  # MUTATION", "loadlone"),
     "pushes first, then the holds": (
