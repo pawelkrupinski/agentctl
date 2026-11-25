@@ -1,24 +1,23 @@
 # agentctl, part `redtick`: the tick's red step (the processor; ci-why never acts).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import functools
 import os
 import threading
 import time
-from agentctl.core import NoReadAccess, env_num, err, process_cache, reds_dir, run_bounded, slug
-from agentctl.timefmt import ts
+from agentctl.core import NoReadAccess, env_num, err, process_cache, run_bounded, slug
 from agentctl.forge import RUN_FIELDS, gh_json
-from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos, scan_repo_for
+from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
 from agentctl.redretired import red_retired
 from agentctl.storetoken import red_read_token
 from agentctl.gating import gate_dirty_path
 from agentctl.fixerrecords import agent_name, own_fixer_record_path
 from agentctl.owned import default_repo
-from agentctl.worktrees import claimant
 from agentctl.redrepos import red_gate_flows, red_is_other
 from agentctl.ciwhy import (
     _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap, gate_runs)
 from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
-from agentctl.dispatchblock import _blocker_cache, dispatch_blocker, in_fixer
+from agentctl.dispatchblock import in_fixer
 from agentctl.statemachines import StaleVersion
 from agentctl.redrecord import RED_TERMINAL, red_what
 from agentctl.lander import lander_note_landed
@@ -26,31 +25,30 @@ from agentctl.redfixread import red_main_current
 from agentctl.conditions import open_condition, run_probe
 from agentctl.redfixes import red_fix_facts
 from agentctl.red import RED_TICK_INTERVAL, red_active_of, red_obs_for
-from agentctl.redmove import red_put_offer, red_settled_runs
+from agentctl.redmove import red_settled_runs
 from agentctl.recordingpins import refresh_pinned_recording
 from agentctl.branches import route_branch_reds, settle_branch_reds
 from agentctl.redseen import gate_red_units, red_merge_rekeyed, red_obs_of_units, stuck_obs
 from agentctl.redobserve import red_observe
 from agentctl.reduntracked import red_active_untracked, red_note_untracked, red_split_untracked, red_untrack
 from agentctl.redblock import gate_unread_spell, red_renew_blocks
-from agentctl.redopen import red_attach_obs, red_offer, red_open
+from agentctl.redopen import red_attach_obs, red_open
 from agentctl.redearly import early_attach, early_observed, early_opened, early_unobserved
-from agentctl.redclaim import bind_fixer_session, red_beat, red_claim, red_release, red_targets
-from agentctl.blamerecords import blame_withdraw
 from agentctl.localrecheck import recheck_local
 from agentctl.orphanreap import red_reap_orphans
 from agentctl.redprobe import cmd_red_probe
 from agentctl.fixerlife import red_fixer
-from agentctl.redvault import red_block, red_owner_push, red_quota_waits, red_unblock
+from agentctl.redvault import red_quota_waits
 from agentctl.ask import red_owner_reminders
-from agentctl.reddispatch import RED_MODEL, red_migrate, red_renew_holders, repo_dispatch_off_all
+from agentctl.reddispatch import RED_MODEL, red_migrate, red_renew_holders
 from agentctl.redstep import red_step
-from agentctl.redview import repo_dispatch_set
 from agentctl.cireport import ci_state_refresh, ci_why
 from agentctl.redhold import red_enforce
-from agentctl.redstatus import red_status
 from agentctl.offerdispatch import red_dispatcher
 from agentctl.ownerwrapper import red_owner
+from agentctl.redcommands import (
+    red_cmd_auto, red_cmd_block, red_cmd_dispatch, red_cmd_lease, red_cmd_owner_push, red_cmd_status,
+    red_cmd_unblame, red_cmd_unblock)
 
 
 # -- the tick's red step (the processor; ci-why never acts)
@@ -58,106 +56,115 @@ _red_lock = threading.Lock()
 _last_red_tick = [0.0]
 
 
+def tick_stage(what, stage, default=None, after=""):
+    """One stage of the tick: its result, or `default` once its failure is told (one stage never stops the tick)."""
+    try:
+        return stage()
+    except (Exception, SystemExit) as e:
+        err(f"red tick: {what} ({str(e)[:160]}){after}")
+        return default
+
+
 def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync=False, early=None):
     """One level-triggered pass: observe (unless the gate is unread: nothing opens or clears on an unknown; early reds
     too, redearly.py), each red one step (per item, inside try: one bad item never stops the tick), the claims renewed, the dispatcher. Returns what it
     did."""
     t = now_ if now_ is not None else store.clock()
-    acts = []
-    obs = None
     # THE PRIMARY'S TICK also runs the store-wide passes (the migration, the blocks, the invariant); another watched
     # repo's tick only observes, opens and steps ITS OWN reds -- the primary's observation never clears another repo's
     # red (it is simply absent from it), nor the other way round
     primary = not red_is_other(o_r)
+    obs, untracked = tick_observation(store, o_r, repo, snap, t, primary, early)
+    acts, facts = tick_prelude(store, o_r, repo, snap, t, primary, facts)
+    active = tick_open_reds(store, o_r, repo, t, obs, acts)
+    acts += tick_stage("merging re-keyed reds failed", lambda: red_merge_rekeyed(store, active, obs), [])
+    if primary:
+        acts += tick_stage("renewing the blocks failed", lambda: red_renew_blocks(store, t), [])
+    acts += tick_stage("the quota waits failed", lambda: red_quota_waits(store, o_r, repo, t), [])
+    for key, it in list(active.items()):
+        acts += step_red(store, o_r, repo, snap, facts, key, it, obs, untracked, t)
+    if primary:  # WAITING ON YOU: each red on the owner told once, then reminded (ask.py)
+        acts += tick_stage("the owner's reminders failed", lambda: red_owner_reminders(store, t), [])
+        acts += tick_stage("the invariant pass failed", lambda: red_enforce(store, facts, t), [])
+    if sync or dispatch:  # the sync's half on the same store (claims renewed; with dispatch its dispatcher): the tests'
+        # one-process stand-in for the two hosts. In production the laptop's sync runs these (sync_steps)
+        acts += tick_stage("renewing the claims failed", lambda: renew_and_reap(store, t), [])
+    if dispatch:  # fixers run on the laptop (owner decision 8): its sync dispatches
+        acts += tick_stage("the dispatcher failed", lambda: red_dispatcher(store, o_r, repo, t), [])
+    return acts
+
+
+def tick_observation(store, o_r, repo, snap, t, primary, early):
+    """(observed reds or None for an unread gate, the untracked ones): the gate observed, early reds added
+    (redearly.py), and A CHECK NEVER GREEN ON MAIN set apart as untracked (reduntracked.py: listed for red status -v)."""
+    obs = None
     if snap:
-        try:
-            obs = red_obs_for(o_r, red_observe(o_r, repo, snap) if primary else red_observe_gate(o_r, snap))
-        except (Exception, SystemExit) as e:
-            err(f"red tick: could not observe ({str(e)[:160]}): nothing opens or clears this tick")
+        obs = tick_stage("could not observe", lambda: red_obs_for(
+            o_r, red_observe(o_r, repo, snap) if primary else red_observe_gate(o_r, snap)),
+            after=": nothing opens or clears this tick")
     obs = early_observed(store, o_r, snap, t, obs, early)  # EARLY REDS (redearly.py): failed jobs of running runs
     untracked = {}
-    if obs is not None:  # A CHECK NEVER GREEN ON MAIN IS NOT TRACKED (reduntracked.py): set apart, listed for red status -v
+    if obs is not None:
         obs, untracked = red_split_untracked(store, o_r, obs, t)
-        try:
-            red_note_untracked(store, o_r, untracked)
-        except (Exception, SystemExit) as e:
-            err(f"red tick: could not note the untracked reds ({str(e)[:160]})")
-    try:
-        n = red_migrate(store) if primary else 0
+        tick_stage("could not note the untracked reds", lambda: red_note_untracked(store, o_r, untracked))
+    return obs, untracked
+
+
+def tick_prelude(store, o_r, repo, snap, t, primary, facts):
+    """(what the primary's pre-passes did, the fix facts): the model migration, main brought up to date (when no facts
+    were handed in), the facts, and THE LANDER's note of each landed change's commits (lander.py), made while its keys
+    still find them."""
+    acts = []
+    if primary:
+        n = tick_stage("the red model migration failed", lambda: red_migrate(store), 0, "; tried again next tick")
         if n:
             acts.append(f"red model {RED_MODEL}: {n} open red(s) migrated in place")
-    except (Exception, SystemExit) as e:
-        err(f"red tick: the red model migration failed ({str(e)[:160]}); tried again next tick")
-    if facts is None and primary:
-        try:
-            red_main_current(repo, snap)
-        except (Exception, SystemExit) as e:
-            err(f"red tick: could not bring main up to date ({str(e)[:160]})")
+        if facts is None:
+            tick_stage("could not bring main up to date", lambda: red_main_current(repo, snap))
     facts = facts if facts is not None else red_fix_facts(repo, store)
     if primary:
-        try:  # THE LANDER (lander.py): each landed change's commits on main, noted while its keys still find them
-            acts += lander_note_landed(store, repo, o_r, t)
-        except (Exception, SystemExit) as e:
-            err(f"red tick: noting the landed changes' commits failed ({str(e)[:160]})")
-    active, settled = red_active_of(store, o_r), None
+        acts += tick_stage("noting the landed changes' commits failed", lambda: lander_note_landed(store, repo, o_r, t), [])
+    return acts, facts
+
+
+def tick_open_reds(store, o_r, repo, t, obs, acts):
+    """The store's active reds of the repo, each observed red attached to its red or opened as one (acts told)."""
+    active = red_active_of(store, o_r)
+    settled_of = functools.cache(lambda: red_settled_runs(store))
     for key, ob in (obs or {}).items():
-        try:
-            it = active.get(key)
-            if it:
-                active[key] = red_attach_obs(store, early_attach(store, it, ob, repo, o_r, t, acts), ob)
-                continue
-            settled = red_settled_runs(store) if settled is None else settled
-            if (key, str(ob["run"].get("databaseId"))) not in settled \
-                    and not red_retired(o_r, {"red_kind": ob["red_kind"], "workflow": ob["workflow"],
-                                              "last_run": ob["run"], "jobs": ob["jobs"]}, t):
-                active[key] = early_opened(red_open(store, ob, repo, t, o_r), acts)  # a retired check's run opens no red
-        except (Exception, SystemExit) as e:
-            err(f"red tick: {key}: {str(e)[:160]}")
+        tick_stage(key, lambda: open_observed(store, o_r, repo, t, key, ob, active, settled_of, acts))
+    return active
+
+
+def open_observed(store, o_r, repo, t, key, ob, active, settled_of, acts):
+    it = active.get(key)
+    if it:
+        active[key] = red_attach_obs(store, early_attach(store, it, ob, repo, o_r, t, acts), ob)
+    elif (key, str(ob["run"].get("databaseId"))) not in settled_of() \
+            and not red_retired(o_r, {"red_kind": ob["red_kind"], "workflow": ob["workflow"],
+                                      "last_run": ob["run"], "jobs": ob["jobs"]}, t):
+        active[key] = early_opened(red_open(store, ob, repo, t, o_r), acts)  # a retired check's run opens no red
+
+
+def step_red(store, o_r, repo, snap, facts, key, it, obs, untracked, t):
+    """One red's step (what it did): untracked, or its run ended or cleared, then its own step. A failure is told and
+    stops only this red; a version another writer moved waits for the next tick."""
     try:
-        acts += red_merge_rekeyed(store, active, obs)
+        why = red_active_untracked(store, o_r, it, untracked, obs, t)
+        if why:
+            red_untrack(store, it, why)
+            return [f"untracked {red_what(it['data'])}: {why}"]
+        return early_unobserved(store, it, obs, snap, repo, o_r, t) + red_step(store, it, obs, snap, facts, repo, o_r, t)
+    except StaleVersion:
+        return []  # another writer moved it: the next tick
     except (Exception, SystemExit) as e:
-        err(f"red tick: merging re-keyed reds failed ({str(e)[:160]})")
-    try:
-        acts += red_renew_blocks(store, t) if primary else []
-    except (Exception, SystemExit) as e:
-        err(f"red tick: renewing the blocks failed ({str(e)[:160]})")
-    try:
-        acts += red_quota_waits(store, o_r, repo, t)
-    except (Exception, SystemExit) as e:
-        err(f"red tick: the quota waits failed ({str(e)[:160]})")
-    for key, it in list(active.items()):
-        try:
-            why = red_active_untracked(store, o_r, it, untracked, obs, t)
-            if why:
-                red_untrack(store, it, why)
-                acts.append(f"untracked {red_what(it['data'])}: {why}")
-                continue
-            acts += early_unobserved(store, it, obs, snap, repo, o_r, t)  # its run ended, or a rerun cleared it
-            acts += red_step(store, it, obs, snap, facts, repo, o_r, t)
-        except StaleVersion:
-            pass  # another writer moved it: the next tick
-        except (Exception, SystemExit) as e:
-            err(f"red tick: {key}: {type(e).__name__}: {str(e)[:200]}")
-    try:  # WAITING ON YOU: each red on the owner told once, then reminded (ask.py)
-        acts += red_owner_reminders(store, t) if primary else []
-    except (Exception, SystemExit) as e:
-        err(f"red tick: the owner's reminders failed ({str(e)[:160]})")
-    try:
-        acts += red_enforce(store, facts, t) if primary else []
-    except (Exception, SystemExit) as e:
-        err(f"red tick: the invariant pass failed ({str(e)[:160]})")
-    if sync or dispatch:  # the sync's half on the same store (claims renewed; with dispatch its dispatcher): the tests'
-        try:  # one-process stand-in for the two hosts. In production the laptop's sync runs these (sync_steps)
-            red_renew_holders(store, t)
-            acts += red_reap_orphans(store, t)
-        except (Exception, SystemExit) as e:
-            err(f"red tick: renewing the claims failed ({str(e)[:160]})")
-    if dispatch:  # fixers run on the laptop (owner decision 8): its sync dispatches
-        try:
-            acts += red_dispatcher(store, o_r, repo, t)
-        except (Exception, SystemExit) as e:
-            err(f"red tick: the dispatcher failed ({str(e)[:160]})")
-    return acts
+        err(f"red tick: {key}: {type(e).__name__}: {str(e)[:200]}")
+        return []
+
+
+def renew_and_reap(store, t):
+    red_renew_holders(store, t)
+    return red_reap_orphans(store, t)
 
 
 def red_tick_repo(repo, store, snap=None, dispatch=False):
@@ -349,90 +356,12 @@ def cmd_red(a, clock, st):
     if a.rcmd == "probe":
         return cmd_red_probe(a, clock)
     o_r = slug(a.repo) if getattr(a, "repo", None) and a.rcmd not in ("fixer", "owner") else default_repo()
-    if a.rcmd == "block":
-        return red_block(st, o_r, a)
-    if a.rcmd == "unblock":
-        rc, lines = red_unblock(st, o_r, a.run, a.why)
-        print("\n".join(lines))
-        return rc
-    if a.rcmd == "owner-push":
-        rc, lines = red_owner_push(st, o_r, a.run, a.note or "", getattr(a, "worktree", None))
-        print("\n".join(lines))
-        return rc
-    if a.rcmd in ("claim", "beat", "release"):
-        if a.rcmd == "claim":
-            if getattr(a, "fixer", None):  # the dispatched fixer says who it is (its prompt): bound to its session
-                sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
-                if sid and not bind_fixer_session(sid, os.path.realpath(a.fixer)):
-                    print(f"NOT CLAIMED: {a.fixer} is no live fixer record of this session ({sid[:8]})")
-                    return 2
-            rc, lines = red_claim(st, o_r, a.run, a.note or "", getattr(a, "worktree", None))
-        elif a.rcmd == "beat":
-            rc, lines = red_beat(st, o_r, a.run, a.note or "")
-        else:
-            rc, lines = red_release(st, o_r, a.run, a.any)
-        print("\n".join(lines))
-        return rc
-    if a.rcmd == "status":
-        if a.rcmd != "status":
-            print(f"(`red {a.rcmd}` is now `red status`: the tick acts on every red)")
-        return red_status(st, getattr(a, "verbose", False), getattr(a, "live", False))
-    if a.rcmd == "auto" and getattr(a, "repo", None):  # ONE REPO's dispatch (the owner, 2026-11-19: "no bitcashier
-        # builds"), in the store: the server's tick reads it
-        if a.state in ("on", "off"):
-            repo_dispatch_set(st, o_r, a.state == "off", claimant())
-        offs = repo_dispatch_off_all(st)
-        print(f"dispatch off for {o_r} (owner, since {offs[o_r].get('at')})" if o_r in offs else
-              f"dispatch on for {o_r}")
-        return 0
-    if a.rcmd == "auto":
-        off = reds_dir("DISPATCH_OFF")
-        os.makedirs(reds_dir(), exist_ok=True)
-        if a.state == "off":
-            open(off, "w").write(ts() + "\n")
-        elif a.state == "on" and os.path.exists(off):
-            os.unlink(off)
-        _blocker_cache.clear()
-        b = dispatch_blocker()
-        print(f"automatic dispatch: {'ON' if not b else 'OFF -- ' + b}")
-        return 0
-    if a.rcmd == "owner":
-        return red_owner(a, st)
-    if a.rcmd == "fixer":
-        return red_fixer(a, st)
-    if a.rcmd == "unblame":
-        items = red_targets(st, o_r, a.run, create=False)
-        if not items:
-            print(f"NOT WITHDRAWN: #{a.run} names no red")
-            return 1
-        rc = 0
-        for it in items:
-            ok, line = blame_withdraw(st, it, a.why, scan_repo_for(o_r, None))
-            print(line)
-            rc = rc or (0 if ok else 1)
-        return rc
-    if a.rcmd == "dispatch":
-        b = dispatch_blocker()
-        if b:
-            print(f"NOT DISPATCHED: {b}")
-            return 2
-        items = red_targets(st, o_r, a.run)
-        if not items:
-            print(f"NOT DISPATCHED: #{a.run} names no red on main")
-            return 1
-        for it in items:  # its offer at top priority: the dispatcher takes it now
-            if it["state"] == "red":
-                it = red_offer(st, it, f"{red_what(it['data'])}: dispatched by hand")
-            store_it = st.item("red", it["id"])
-            st.update_item("red", it["id"], store_it["version"], {"priority": -1, "author_tried": True})
-            if it["state"] == "offered":
-                red_put_offer(st, st.item("red", it["id"]))
-        repo = scan_repo_for(o_r, getattr(a, "repo", None) and os.path.abspath(a.repo))
-        lines = red_dispatcher(st, o_r, repo, st.clock())
-        print("\n".join(lines) if lines else "NOT DISPATCHED: " + "; ".join(
-            (st.offer_of(f"red:{it['id']}") or {}).get("reason") or it["state"] for it in items))
-        return 0 if lines else 1
-    return 2
+    handlers = {"block": red_cmd_block, "unblock": red_cmd_unblock, "owner-push": red_cmd_owner_push,
+                "claim": red_cmd_lease, "beat": red_cmd_lease, "release": red_cmd_lease, "status": red_cmd_status,
+                "auto": red_cmd_auto, "owner": lambda a, st, o_r: red_owner(a, st),
+                "fixer": lambda a, st, o_r: red_fixer(a, st), "unblame": red_cmd_unblame,
+                "dispatch": red_cmd_dispatch}
+    return handlers[a.rcmd](a, st, o_r) if a.rcmd in handlers else 2
 
 
 def maybe_publish_gate(repo, store):
