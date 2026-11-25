@@ -7,7 +7,6 @@ cognitive	LiveTail.poll	22
 cognitive	RemoteStore._call_once	18
 cognitive	_await_entry	35
 cognitive	_gh_api_once	19
-cognitive	_push_batch_item	41
 cognitive	_tick_changes_pass	62
 cognitive	_watch_group	28
 cognitive	adjust_cap	24
@@ -165,7 +164,6 @@ cyclomatic	LiveTail.poll	13
 cyclomatic	RemoteStore._call_once	16
 cyclomatic	_await_entry	20
 cyclomatic	_gh_api_once	18
-cyclomatic	_push_batch_item	33
 cyclomatic	_tick_changes_pass	37
 cyclomatic	_watch_group	21
 cyclomatic	adjust_cap	36
@@ -315,7 +313,6 @@ cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
 cyclomatic	write_snapshot	23
 inner-defs	sync_steps	7
-method-lines	_push_batch_item	72
 method-lines	_tick_changes_pass	86
 method-lines	alert_probe	55
 method-lines	cmd_maintain	56

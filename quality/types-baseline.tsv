@@ -8,7 +8,7 @@ mypy-errors	ask	29
 mypy-errors	batch	35
 mypy-errors	batchcheck	38
 mypy-errors	batchitem	7
-mypy-errors	batchpush	34
+mypy-errors	batchpush	24
 mypy-errors	batchrun	26
 mypy-errors	batchtick	45
 mypy-errors	beats	4
