@@ -43,7 +43,11 @@ class Case:
 
     def recorded(self, name, gen):
         def fake(*a, **k):
-            value = gen(self.rng, *a, **k)
+            try:
+                value = gen(self.rng, *a, **k)
+            except Exception as e:
+                self.log.append([name, stable(a), stable(k), "raised " + type(e).__name__])
+                raise
             self.log.append([name, stable(a), stable(k), stable(value)])
             return value
         return fake

@@ -110,75 +110,100 @@ def stats_sent(st, name, iid):
 
 def stats_pass(clock, store, repo=None, d=None, url=None, out=None):
     """One pass: the records due (an exit older than STATS_SETTLE, not sent yet), sent; returns how many."""
-    st = store
     url = url or stats_url()
     if not url:
         return 0
-    t = clock.time()
-    since = _num(st.meta_get("stats_since"))
-    if since is None:
-        since = t
-        st.meta_set("stats_since", since)
-    deadline = clock.monotonic() + env_num("AGENTCTL_STATS_PASS_BOUND", STATS_PASS_BOUND)
-    entries = {}
-    if d:
-        for e in waiting_entries(d, open_only=False):
-            entries[e["id"]] = e
-    due = []  # (marker name, id, builder)
-    settle = env_num("AGENTCTL_STATS_SETTLE", STATS_SETTLE)
-    changes = st.items("change")
-    for it in changes:
-        if it["state"] in CHANGE_EXITS and it["entered_at"] <= t - settle and not stats_sent(st, "landing", it["id"]):
-            due.append(("landing", it["id"], it))
-    for it in st.items("watch", ["ok", "red", "unknown"]):
-        if it["entered_at"] <= t - 60 and not stats_sent(st, "landing_watch", it["id"]):
-            due.append(("landing_watch", it["id"], it))
-    for it in st.items("red", ["verified", "cleared"]):
-        if it["entered_at"] <= t - 60 and not stats_sent(st, "red", it["id"]):
-            due.append(("red", it["id"], it))
-    for it in st.items("condition", ["closed"]):
-        if it["entered_at"] <= t - 60 and not stats_sent(st, "condition", it["id"]):
-            due.append(("condition", it["id"], it))
-    due.sort(key=lambda x: x[2]["entered_at"])
-    waits = None
-    by_sha = {(c["data"] or {}).get("landed_sha"): c["id"] for c in changes if (c["data"] or {}).get("landed_sha")}
-    sent = 0
-    cap = int(env_num("AGENTCTL_STATS_PER_PASS", STATS_PER_PASS))
-    for name, iid, it in due:
-        if sent >= cap or clock.monotonic() > deadline:
-            break
-        if name == "landing":
-            evs = item_events(st, "change", iid)
-            e = entries.get(iid) or {}
-            start = _num((it["data"] or {}).get("submitted_at")) or it["entered_at"]
-            try:
-                runs = check_runs_of(url, iid, (start, it["entered_at"]))
-            except Exception as ex:  # the collector's rows unread: wait for the next pass, never a record without them
-                err(f"stats: the check runs of {iid} could not be read ({str(ex)[:160]})")
+    return StatsPass(clock, store, repo, d, url, out).run()
+
+
+class StatsPass:
+    """One pass of stats_pass: what is due, each due item's records built (a method per kind) and sent."""
+
+    def __init__(self, clock, st, repo, d, url, out):
+        self.clock, self.st, self.repo, self.url, self.out = clock, st, repo, url, out
+        self.t = clock.time()
+        self.since = _num(st.meta_get("stats_since"))
+        if self.since is None:
+            self.since = self.t
+            st.meta_set("stats_since", self.since)
+        self.deadline = clock.monotonic() + env_num("AGENTCTL_STATS_PASS_BOUND", STATS_PASS_BOUND)
+        self.entries = {e["id"]: e for e in waiting_entries(d, open_only=False)} if d else {}
+        self.waits, self.by_sha = None, {}
+        self.changes = []
+        self.builders = {"landing": self.landing, "landing_watch": self.watch, "red": self.red,
+                         "condition": self.condition}
+
+    def due(self):
+        """[(marker name, id, item)], oldest first: the exits settled and the watches, reds and conditions closed."""
+        st, t = self.st, self.t
+        settle = env_num("AGENTCTL_STATS_SETTLE", STATS_SETTLE)
+        self.changes = st.items("change")
+        due = [("landing", it["id"], it) for it in self.changes if it["state"] in CHANGE_EXITS
+               and it["entered_at"] <= t - settle and not stats_sent(st, "landing", it["id"])]
+        for name, kind, states in (("landing_watch", "watch", ["ok", "red", "unknown"]),
+                                   ("red", "red", ["verified", "cleared"]), ("condition", "condition", ["closed"])):
+            due += [(name, it["id"], it) for it in st.items(kind, states)
+                    if it["entered_at"] <= t - 60 and not stats_sent(st, name, it["id"])]
+        return sorted(due, key=lambda x: x[2]["entered_at"])
+
+    def run(self):
+        """How many records were sent, the gate runs after the due items while the pass has time left."""
+        due = self.due()
+        cap = int(env_num("AGENTCTL_STATS_PER_PASS", STATS_PER_PASS))
+        sent = self.send_due(due, cap)
+        if self.clock.monotonic() <= self.deadline and sent < cap:
+            sent += gate_runs_pass(self.st, self.url, self.t, self.since, cap - sent, self.out)
+        return sent
+
+    def send_due(self, due, cap):
+        """The due items' records sent, up to cap and the pass's deadline, none after one that could not be."""
+        self.by_sha = {(c["data"] or {}).get("landed_sha"): c["id"] for c in self.changes
+                       if (c["data"] or {}).get("landed_sha")}
+        sent = 0
+        for name, iid, it in due:
+            if sent >= cap or self.clock.monotonic() > self.deadline:
                 break
-            recs = landing_records(it, evs, e, runs, change_paths(repo, e, it["data"] or {}), since)
-        elif name == "landing_watch":
-            recs = [watch_record(it, by_sha.get(iid), since)]
-        elif name == "red":
-            if waits is None:
-                waits = change_waits(st, changes, t)
-            evs = item_events(st, "red", iid)
-            recs = [red_record(it, evs, waits, since)]
-            od = owner_decision_record(it, evs, since)
-            recs += [od] if od else []
-        else:
-            recs = [condition_record(it, item_events(st, "condition", iid), since)]
+            recs = self.builders[name](iid, it)
+            if recs is None or not self.send(name, iid, recs):
+                break
+            sent += len(recs)
+        return sent
+
+    def send(self, name, iid, recs):
+        """Whether the records were posted (and marked sent); a refusal waits for the next pass."""
         try:
-            stats_post(url, recs)
+            stats_post(self.url, recs)
         except Exception as ex:
-            err(f"stats: VictoriaLogs at {url} refused the records ({str(ex)[:160]}): the next pass sends them")
-            break
-        st.meta_set(f"stats:{name}:{iid}", t)
-        stats_echo(recs, out)
-        sent += len(recs)
-    if clock.monotonic() <= deadline and sent < cap:
-        sent += gate_runs_pass(st, url, t, since, cap - sent, out)
-    return sent
+            err(f"stats: VictoriaLogs at {self.url} refused the records ({str(ex)[:160]}): the next pass sends them")
+            return False
+        self.st.meta_set(f"stats:{name}:{iid}", self.t)
+        stats_echo(recs, self.out)
+        return True
+
+    def landing(self, iid, it):
+        evs = item_events(self.st, "change", iid)
+        e = self.entries.get(iid) or {}
+        start = _num((it["data"] or {}).get("submitted_at")) or it["entered_at"]
+        try:
+            runs = check_runs_of(self.url, iid, (start, it["entered_at"]))
+        except Exception as ex:  # the collector's rows unread: wait for the next pass, never a record without them
+            err(f"stats: the check runs of {iid} could not be read ({str(ex)[:160]})")
+            return None
+        return landing_records(it, evs, e, runs, change_paths(self.repo, e, it["data"] or {}), self.since)
+
+    def watch(self, iid, it):
+        return [watch_record(it, self.by_sha.get(iid), self.since)]
+
+    def red(self, iid, it):
+        if self.waits is None:
+            self.waits = change_waits(self.st, self.changes, self.t)
+        evs = item_events(self.st, "red", iid)
+        recs = [red_record(it, evs, self.waits, self.since)]
+        od = owner_decision_record(it, evs, self.since)
+        return recs + [od] if od else recs
+
+    def condition(self, iid, it):
+        return [condition_record(it, item_events(self.st, "condition", iid), self.since)]
 
 
 def stats_echo(recs, out=None):

@@ -60,5 +60,50 @@ class TickChangesPassTest(unittest.TestCase):
         check(self, A, "_tick_changes_pass", self.build, lambda A: A._tick_changes_pass)
 
 
+def item(rng, i, states):
+    return {"id": f"i{i}", "state": rng.choice(states), "entered_at": rng.randint(3000, 5000),
+            "data": rng.choice([None, {}, {"landed_sha": f"s{rng.randint(0, 3)}", "submitted_at": rng.randint(2000, 4000)}])}
+
+
+def raising(rng, p, value):
+    if rng.random() < p:
+        raise RuntimeError("down")
+    return value
+
+
+class StatsPassTest(unittest.TestCase):
+    def build(self, case):
+        r, ticks = case.rng, [0]
+
+        def monotonic(rng):
+            ticks[0] += rng.randint(0, 6)
+            return ticks[0]
+        clock = Probe(case, "clock", time=lambda rng: 5000, monotonic=monotonic)
+        items = lambda rng, typ, states=None: [item(rng, i, states or ["landed", "queued", "rejected", "ok", "red", "verified"])  # noqa: E731
+                                              for i in range(rng.randint(0, 3))]
+        st = Probe(case, "st", meta_get=lambda rng, k, default=None: maybe(rng, rng.randint(1000, 4000), 0.4) if k == "stats_since" else maybe(rng, 1, 0.2),
+                   meta_set=lambda rng, *a: None, items=items)
+        for name, gen in (
+                ("stats_url", lambda rng: maybe(rng, "http://u", 0.85)),
+                ("env_num", lambda rng, name, default: rng.choice([1, 3, 20, 900]) if "SETTLE" in name else rng.choice([2, 4, 150]) if "PER_PASS" in name else rng.choice([5, 40])),
+                ("waiting_entries", lambda rng, d, open_only=True: [{"id": f"i{rng.randint(0, 3)}"} for _ in range(rng.randint(0, 2))]),
+                ("item_events", lambda rng, st, typ, iid: [{"to_state": "x"}]),
+                ("check_runs_of", lambda rng, *a: raising(rng, 0.2, [{"run_id": rng.randint(0, 2)}])),
+                ("change_paths", lambda rng, *a: ["p"]),
+                ("landing_records", lambda rng, *a: [{"record": "landing", "backfill": rng.random() < 0.5}] * rng.randint(1, 2)),
+                ("watch_record", lambda rng, *a: {"record": "watch", "backfill": rng.random() < 0.5}),
+                ("red_record", lambda rng, *a: {"record": "red", "backfill": False}),
+                ("owner_decision_record", lambda rng, *a: maybe(rng, {"record": "od", "backfill": True}, 0.4)),
+                ("condition_record", lambda rng, *a: {"record": "cond", "backfill": False}),
+                ("stats_post", lambda rng, url, recs: raising(rng, 0.15, None)),
+                ("stats_echo", lambda rng, *a: None), ("change_waits", lambda rng, *a: [("i1", 1, 2)]),
+                ("gate_runs_pass", lambda rng, *a: rng.randint(0, 3)), ("err", lambda rng, m: None)):
+            case.fake(name, gen)
+        return (clock, st, "repo", maybe(r, "dir", 0.8), maybe(r, "http://given", 0.5), None)
+
+    def test_stats_pass(self):
+        check(self, A, "stats_pass", self.build, lambda A: A.stats_pass)
+
+
 if __name__ == "__main__":
     unittest.main()
