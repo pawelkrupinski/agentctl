@@ -183,7 +183,10 @@ LOG_LINES = ["*** FAILED ***", "[error] Test failed", "##[error]Process complete
              "::error::Acme refuses the key: request limit reached", "daily limit hit", "too many requests",
              "Connection reset by peer", "ENOENT: no such file", "No space left on device", "The operation was canceled",
              "all good", "  ", "FAILED rows are fine", "  1) [chromium] › tests/x.spec.ts:1:1", "  2 failed", "Killed",
-             "Resource not accessible by integration", "exit code 137", "assert failed", "Could not resolve host: x"]
+             "Resource not accessible by integration", "exit code 137", "assert failed", "Could not resolve host: x",
+             "::error::UNKNOWN: proxy unreachable " + "u" * 200, "::error::Acme refuses the key " + "k" * 200,
+             "::error::Acme refuses the key: quota exceeded " + "q" * 200, "ENOENT " + "e" * 200, "x " * 100 + "ENOENT",
+             "##[error]" + "m" * 200]
 
 
 class ClassifyJobTest(unittest.TestCase):
@@ -201,22 +204,34 @@ class ClassifyJobTest(unittest.TestCase):
 
 # ------------------------------------------------------------------------------------------------ checkslot
 class AdjustCapTest(unittest.TestCase):
+    PRESSURE = {"calm": [None, 10, 20, 49], "mid": [None, 49, 50, 60, 74], "high": [None, 10, 74, 75, 90]}
+    SWAP = {"calm": [None, 0, 30, 63, 64], "mid": [None, 0, 100, 300], "high": [None, 0, 511, 512, 600]}
+
+    def run_of(self, r, cap, profile, at, durations):
+        running = r.choice([cap, cap, cap - 1, cap - 1, cap + 1, 0])
+        run = {"duration": durations.get(running, 5) * (3 if r.random() < 0.15 else 1), "running": running, "at": at}
+        for key, pool in (("pressure", self.PRESSURE[profile[0]]), ("swap_mb", self.SWAP[profile[1]]), ("swap_mb_start", [None, 0, 0, 50])):
+            if r.random() < 0.85:
+                run[key] = r.choice(pool)
+        if r.random() < 0.03:
+            del run["at"]
+        return run
+
     def build(self, case):
         r = case.rng
         cap = r.randint(1, 4)
-        day = r.choice([0, 3, 6, 12, 25])
-        runs = []
-        for _ in range(day + r.choice([0, 0, 10])):
-            run = {"duration": r.choice([5, 10, 40, 100, 300]) * r.choice([1, 1, 2]), "running": r.choice([cap, cap, cap - 1, cap - 1, cap + 1, 0]),
-                   "at": NOW - r.choice([60, 4000, 80000, 90000, 200000])}
-            for key, gen in (("pressure", lambda: r.choice([None, 10, 49, 50, 60, 74, 75, 90])), ("swap_mb", lambda: r.choice([None, 0, 100, 600, 1000])),
-                             ("swap_mb_start", lambda: r.choice([None, 0, 50, 500])), ("waited", lambda: r.choice([0, 30, 61, 120]))):
-                if r.random() < 0.8:
-                    run[key] = gen()
-            if r.random() < 0.05:
-                del run["at"]
-            runs.append(run)
-        return (runs, cap, r.randint(1, 5), maybe(r, NOW - r.choice([100, 80000, 90000, 500000]), 0.8), NOW)
+        profile = (r.choice(["calm", "calm", "calm", "mid", "high"]), r.choice(["calm", "calm", "calm", "mid", "high"]))
+        below = r.choice([10, 20, 30])
+        durations = {cap: int(below * r.choice([1, 1.5, 1.6, 3])), cap - 1: below}
+        day = [self.run_of(r, cap, profile, NOW - r.choice([60, 4000, 86400, 86399]), durations) for _ in range(r.choice([0, 3, 4, 5, 6, 10, 25]))]
+        for run in day:
+            run["waited"] = r.choice([0, 30, 60])
+        for run in r.sample(day, r.randint(0, len(day))):
+            run["waited"] = r.choice([61, 120])
+        old = [self.run_of(r, cap, profile, NOW - r.choice([86401, 90000, 200000]), durations) for _ in range(r.choice([0, 0, 3, 6]))]
+        runs = day + old
+        r.shuffle(runs)
+        return (runs, cap, r.randint(1, 5), maybe(r, NOW - r.choice([100, 86399, 86400, 86401, 500000]), 0.8), NOW)
 
     def test_adjust_cap(self):
         check(self, "adjust_cap", self.build, lambda A: A.adjust_cap, 8000)
