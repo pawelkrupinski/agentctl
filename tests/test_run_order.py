@@ -70,7 +70,7 @@ class StressLaneTest(unittest.TestCase):
         finally:
             stress.subprocess.run, stress.changed_paths = orig_run, orig_changed
         cmd, kw = calls[0]
-        self.assertEqual(cmd[2:], ["--repeat", "5", "--budget", "45.0", "test_selfci."])
+        self.assertEqual(cmd[2:], ["--repeat", "5", "--budget", "45", "test_selfci."])
         self.assertGreater(float(kw["env"]["AGENTCTL_TEST_CLOCK_LAG"]), 400)
 
     def test_a_budget_stops_the_dispatch_without_a_failure(self):

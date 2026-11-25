@@ -99,7 +99,8 @@ def cached(path: str, now_: float, read: Callable[[], Any], every: float) -> Any
 def read_failure(run_id: Any) -> str | None:
     """The failing steps' log of a tests.yml run, as `gh run view --log-failed` prints it; None when it cannot say."""
     try:
-        r = run_cmd(forge_argv(SELF_REPO, "run", "view", str(run_id), "--log-failed"), timeout=90, env=forge_env(SELF_REPO))
+        argv = forge_argv(SELF_REPO, "run", "view", str(run_id), "--log-failed")  # type: ignore[no-untyped-call]
+        r = run_cmd(argv, timeout=90, env=forge_env(SELF_REPO))  # type: ignore[no-untyped-call]
     except OSError:  # no gh
         return None
     return r.stdout if r.returncode == 0 and r.stdout.strip() else None
