@@ -7,7 +7,7 @@ import os
 import re
 import time
 from contextlib import suppress
-from agentctl.core import HOME, env_num, hashlib_sha1
+from agentctl.core import HOME, attempt, env_num, hashlib_sha1
 from agentctl.statefile import read_record, write_json
 from agentctl.claudefiles import claude_projects_root
 from agentctl.live import live_slug
@@ -61,6 +61,11 @@ def tool_input_strings(x):
             yield from tool_input_strings(v)
 
 
+def transcript_session_key(path: str) -> str:
+    """The session a transcript belongs to: its own path less `.jsonl`, or the session dir above its `subagents/`."""
+    return path[:-len(".jsonl")] if "subagents" not in path else os.path.dirname(os.path.dirname(path))
+
+
 def session_transcripts(t=None, active=None):
     """{session key: [(path, mtime)]} of every LIVE session's transcripts (its own and its subagents'): a session is live
     while any of them was written within `active` s."""
@@ -70,12 +75,10 @@ def session_transcripts(t=None, active=None):
     groups = {}
     for g in (os.path.join(glob.escape(root), "*", "*.jsonl"), os.path.join(glob.escape(root), "*", "*", "subagents", "*.jsonl")):
         for p in glob.glob(g):
-            try:
-                m = os.stat(p).st_mtime
-            except OSError:
+            m = attempt(lambda: os.stat(p).st_mtime, None, catch=(OSError,))
+            if m is None:
                 continue
-            key = p[:-len(".jsonl")] if "subagents" not in p else os.path.dirname(os.path.dirname(p))
-            groups.setdefault(key, []).append((p, m))
+            groups.setdefault(transcript_session_key(p), []).append((p, m))
     return {k: v for k, v in groups.items() if any(t - m <= active for _p, m in v)}
 
 

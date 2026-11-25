@@ -12,7 +12,7 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.core import env_num, err, pid_alive, process_cache, run_cmd
+from agentctl.core import attempt, env_num, err, pid_alive, process_cache, run_cmd
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.procs import proc_alive, process_start
@@ -232,6 +232,19 @@ def gov_waiters():
     return sorted(out, key=lambda r: (GOV_CLASSES.get(r.get("class"), 9), r.get("at", 0)))
 
 
+def evictable_root(root_file: str, prefix: str) -> str | None:
+    """The checkout of the kept server whose files start with `prefix`, when it is one the governor may evict: a live
+    server in a non-root-checkout directory, neither serving nor in a call."""
+    try:
+        with open(root_file) as rf, open(prefix + ".pid") as pf:
+            root, pid = rf.read().strip(), int(pf.read().strip())
+    except (OSError, ValueError):
+        return None
+    if not os.path.isdir(root) or os.path.isdir(os.path.join(root, ".git")) or not pid_alive(pid):
+        return None
+    return None if os.path.exists(prefix + ".serving") or lock_held(prefix + ".busy") else root
+
+
 def idle_servers(min_idle=None):
     """The kept sbt servers the governor may evict, unused longest first: [(idle seconds, root, key prefix)]. Never the
     root checkout's (the owner's own), a serving one, or one a call is running in (its busy lock held)."""
@@ -239,20 +252,9 @@ def idle_servers(min_idle=None):
     out = []
     for f in glob.glob(os.path.join(sbt_warm_state(), "*.root")):
         prefix = f[:-5]
-        try:
-            with open(f) as rf, open(prefix + ".pid") as pf:
-                root, pid = rf.read().strip(), int(pf.read().strip())
-        except (OSError, ValueError):
-            continue
-        if not os.path.isdir(root) or os.path.isdir(os.path.join(root, ".git")) or not pid_alive(pid):
-            continue
-        if os.path.exists(prefix + ".serving") or lock_held(prefix + ".busy"):
-            continue
-        try:
-            idle = time.time() - os.path.getmtime(prefix + ".used")
-        except OSError:
-            continue
-        if idle >= min_idle:
+        root = evictable_root(f, prefix)
+        idle = attempt(lambda: time.time() - os.path.getmtime(prefix + ".used"), None, catch=(OSError,)) if root else None
+        if idle is not None and idle >= min_idle:
             out.append((idle, root, prefix))
     return sorted(out, reverse=True)
 

@@ -134,19 +134,29 @@ def parked_lines():
     return [f"parked: {len(live)}"] + [f"  {os.path.basename(w)}  {park_until_text(m)}: {m['reason']}" for w, m in live]
 
 
+def matching_changes(x: str, store: Any) -> list[Any]:
+    """The change items whose id is x, else those whose id contains it."""
+    items: list[Any] = attempt(lambda: store.items("change"), [], catch=(Exception, SystemExit))
+    return [i for i in items if i["id"] == x] or [i for i in items if x in i["id"]]
+
+
+def commit_named(repo: Any, x: str) -> str | None:
+    """The sha of the commit of repo that x names, or None."""
+    r = git(repo, "rev-parse", "--verify", "-q", f"{x}^{{commit}}", check=False)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
 def resolve_blocker(x, repo, store):
     """{change, commit} of `--until-landed x`: a change id (whole or a unique part; its head the commit), else a commit
     of repo. Raises ValueError."""
-    st = store
-    items: list[Any] = attempt(lambda: st.items("change"), [], catch=(Exception, SystemExit))
-    its = [i for i in items if i["id"] == x] or [i for i in items if x in i["id"]]
+    its = matching_changes(x, store)
     if len(its) == 1:
         return {"change": its[0]["id"], "commit": (its[0].get("data") or {}).get("head")}
     if len(its) > 1:
         raise ValueError(f"--until-landed {x}: {len(its)} change ids match it")
-    r = git(repo, "rev-parse", "--verify", "-q", f"{x}^{{commit}}", check=False)
-    if r.returncode == 0 and r.stdout.strip():
-        return {"change": None, "commit": r.stdout.strip()}
+    commit = commit_named(repo, x)
+    if commit:
+        return {"change": None, "commit": commit}
     if re.fullmatch(r"\d{8}-\d{6}-[\w.-]+", x):  # a change id the store does not hold (yet): named, read each pass
         return {"change": x, "commit": None}
     raise ValueError(f"--until-landed {x}: no change id and no commit of that name")

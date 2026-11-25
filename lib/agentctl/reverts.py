@@ -103,10 +103,15 @@ def revert_matches(ref, sha):
     return bool(ref and sha) and len(ref) >= 7 and sha.startswith(ref.lower())
 
 
+def reverted_shas(d: Any) -> list[Any]:
+    """The shas a revert item's reverted commits had."""
+    return [x["sha"] for x in d.get("reverted") or []]
+
+
 def revert_closer(it, c):
     """How commit c re-lands revert item it (`Rework-Of`, a revert of the revert, `Relands-Change`), or None."""
     d = it["data"] or {}
-    shas = [d.get("revert_sha")] + [x["sha"] for x in d.get("reverted") or []]
+    shas = [d.get("revert_sha")] + reverted_shas(d)
     if any(revert_matches(ref, s) for ref in c["rework_of"] for s in shas):
         return f"Rework-Of: in {c['sha'][:10]}"
     if any(revert_matches(ref, d.get("revert_sha")) for ref in c["reverts"]):
@@ -242,6 +247,15 @@ def revert_closed_text(d):
     return "never acknowledged"
 
 
+def note_closed_reply(st: Any, it: Any, reply: dict[str, Any]) -> tuple[Any, str]:
+    """(the item, message) of a reply to a notice closed already: the reply recorded beside the closing."""
+    d = it["data"] or {}
+    with suppress(StaleVersion):
+        st.update_item("revert", it["id"], it["version"], {"replies": (d.get("replies") or []) + [reply]})
+    return st.item("revert", it["id"]), (f"revert {it['id']}: already {it['state']} -- {revert_closed_text(d)}; "
+                                         f"your reply ({reply['how']}) is noted beside it")
+
+
 def revert_ack(st, ref, how, note, by):
     """Acknowledge the notice whose id starts with ref. (item or None, message). A notice closed already (acked by
     its orchestrator, re-landed) says by whom, when and how, and keeps this reply's note beside its own."""
@@ -251,17 +265,16 @@ def revert_ack(st, ref, how, note, by):
         return None, f"revert {ref}: {'no notice' if not hits else f'{len(hits)} notices'} with that id"
     it = hits[0]
     if it["state"] not in REVERT_OPEN:
-        d = it["data"] or {}
-        reply = {"by": by, "how": how, "note": note, "at": ts()}
-        with suppress(StaleVersion):
-            st.update_item("revert", it["id"], it["version"], {"replies": (d.get("replies") or []) + [reply]})
-        return st.item("revert", it["id"]), (f"revert {it['id']}: already {it['state']} -- {revert_closed_text(d)}; "
-                                             f"your reply ({how}) is noted beside it")
+        return note_closed_reply(st, it, {"by": by, "how": how, "note": note, "at": ts()})
     st.transition("revert", it["id"], "acked", it["version"],
                   data={"acked_by": by, "how": how, "note": note, "closed_at": ts()},
                   event={"text": f"revert {it['id']} acknowledged by {by}: {how}" + (f" ({note})" if note else ""),
                          "severity": "info"})
     return st.item("revert", it["id"]), f"revert {it['id']}: acknowledged ({how})"
+
+
+def revert_reply_line(x: Any) -> str:
+    return f"      reply by {x.get('by')} at {x.get('at')} ({x.get('how')})" + (f": {x['note']}" if x.get("note") else "")
 
 
 def revert_line(r, t):
@@ -275,8 +288,7 @@ def revert_line(r, t):
     if r["state"] in REVERT_OPEN:
         return head + ", unacked " + fmt_age(t - float(d.get("opened_at") or t))
     return "\n".join([f"{head}; {revert_closed_text(d)}"]
-                     + [f"      reply by {x.get('by')} at {x.get('at')} ({x.get('how')})"
-                        + (f": {x['note']}" if x.get("note") else "") for x in d.get("replies") or []])
+                     + [revert_reply_line(x) for x in d.get("replies") or []])
 
 
 def revert_brief(i):

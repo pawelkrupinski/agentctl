@@ -32,7 +32,6 @@ def tunnel_state_path():
 
 def tunnel_probe():
     """'ok' (any HTTP answer), 'timeout' or 'refused' for GET <store>/ (the tunnel carries the agentctl store)."""
-    import socket
     url = (store_url() or default_store_url()).rstrip("/") + "/"
     try:
         with urllib.request.urlopen(url, timeout=TUNNEL_PROBE_TIMEOUT) as resp:
@@ -41,11 +40,15 @@ def tunnel_probe():
     except urllib.error.HTTPError:
         return "ok"
     except Exception as e:
-        if isinstance(e, urllib.error.URLError):
-            e = e.reason if isinstance(e.reason, BaseException) else e
-        if isinstance(e, (socket.timeout, TimeoutError)) or "timed out" in str(e):
-            return "timeout"
-        return "refused"
+        return "timeout" if probe_timed_out(e) else "refused"
+
+
+def probe_timed_out(e: BaseException) -> bool:
+    """Whether a failed probe's error (the URLError's reason, when it wraps one) is a timeout."""
+    import socket
+    if isinstance(e, urllib.error.URLError) and isinstance(e.reason, BaseException):
+        e = e.reason
+    return isinstance(e, (socket.timeout, TimeoutError)) or "timed out" in str(e)
 
 
 def default_route():

@@ -1,6 +1,7 @@
 # agentctl, part `govusage`: a job's cores: its class's default, else what its recorded runs measured; each run's usage recorded
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 import json
 import os
 import time
@@ -42,12 +43,16 @@ def gov_usage(days=GOV_USAGE_DAYS, now=None):
     return out
 
 
+def uncontended_run(r: Any, job: Any) -> bool:
+    """Whether usage record r is a run of `job` that measured cores, long enough, with the load at its end within the cores."""
+    return bool(r.get("job") == job and r.get("cores") is not None and float(r.get("wall") or 0) >= GOV_USAGE_MIN_WALL
+                and r.get("load1") is not None and float(r["load1"]) <= float(r.get("machine_cores") or machine_cores()))
+
+
 def gov_measured_cores(job, usage=None):
     """The job's p75 cores over its uncontended runs (the load at its end no more than the cores: a starved run uses
     fewer cores than it wants), to the half core; None under GOV_USAGE_MIN such runs."""
-    runs = [float(r["cores"]) for r in (gov_usage() if usage is None else usage)
-            if r.get("job") == job and r.get("cores") is not None and float(r.get("wall") or 0) >= GOV_USAGE_MIN_WALL
-            and r.get("load1") is not None and float(r["load1"]) <= float(r.get("machine_cores") or machine_cores())]
+    runs = [float(r["cores"]) for r in (gov_usage() if usage is None else usage) if uncontended_run(r, job)]
     if len(runs) < GOV_USAGE_MIN:
         return None
     return min(float(machine_cores()), max(0.5, round(2 * pct(runs, .75)) / 2))

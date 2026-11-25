@@ -121,13 +121,20 @@ def internal_tree(path):
         or p.startswith(os.path.realpath(waiting_dir()).rstrip("/") + "/")
 
 
+def agent_worktrees(repo: Any) -> list[Any] | None:
+    """repo's existing worktrees but agentctl's internal ones; None when git cannot list them."""
+    try:
+        return [w for w in worktrees(repo) if isinstance(w.get("worktree"), str) and os.path.isdir(w["worktree"])
+                and not internal_tree(w["worktree"])]
+    except (RuntimeError, OSError):
+        return None
+
+
 def worktree_holding(repo, sha):
     """The worktree whose HEAD is sha, else the one whose HEAD reflog holds it (the agent's own commit, since rebased).
     Never one of agentctl's internal trees."""
-    try:
-        trees = [w for w in worktrees(repo) if isinstance(w.get("worktree"), str) and os.path.isdir(w["worktree"])
-                 and not internal_tree(w["worktree"])]
-    except (RuntimeError, OSError):
+    trees = agent_worktrees(repo)
+    if trees is None:
         return None
     trees = trees[1:] + trees[:1]  # an agent's worktree before the root checkout (often on main itself)
     for w in trees:
@@ -219,6 +226,11 @@ def commit_on_main(repo, base):
         return None
 
 
+def owner_gone_why(rec: Any) -> str:
+    return ("its worktree removed" if rec and rec.get("worktree") and not os.path.isdir(rec["worktree"])
+            else "its process ended")
+
+
 def orphan_why(repo, rec, base, main_runs_it=True, main_since=None):
     """Why a branch red is an ORPHAN, else None: no LIVE owner (no record, or its worktree removed / pid dead -- 2026-11-02:
     eight reds sat on the status line naming worktrees removed days before) and no worktree holding its commit, AND nothing on main
@@ -231,9 +243,7 @@ def orphan_why(repo, rec, base, main_runs_it=True, main_since=None):
     if on is None:
         return None
     sha = str(base)[:9]
-    why_gone = ("its worktree removed" if rec and rec.get("worktree") and not os.path.isdir(rec["worktree"])
-                else "its process ended")
-    who = (f"its owner {owner_text(rec, short=True)} is gone ({why_gone})" if gone else "no owner record") \
+    who = (f"its owner {owner_text(rec, short=True)} is gone ({owner_gone_why(rec)})" if gone else "no owner record") \
         + f", no worktree holds its commit {sha}"
     if not on:
         return f"{who}, and it is not on main"

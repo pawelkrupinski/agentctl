@@ -139,9 +139,8 @@ def queue_change(st, d, fields, entry_id=None):
     return e, max(len(queued_entries(d)) - 1, 0)
 
 
-def submit_change(st, body, repo=None):
-    """POST /v1/changes: a change the laptop pushed to refs/heads/land/<id> becomes a queued entry of the server's queue."""
-    repo = repo or server_repo()
+def check_submission(repo: str, body: dict[str, Any]) -> None:
+    """Raise ValueError unless body is a well-formed change submission and repo is cloned."""
     if not os.path.isdir(repo):
         raise ValueError(f"the reconciler has not cloned {repo} yet")
     missing = [k for k in ("worktree", "head", "commits") if not body.get(k)]
@@ -149,12 +148,14 @@ def submit_change(st, body, repo=None):
         raise ValueError(f"a change needs worktree, head (a full sha) and commits; missing or bad: {missing or ['head']}")
     if body.get("id") and not re.fullmatch(r"[\w.-]{1,120}", body["id"]):
         raise ValueError("a bad change id")
-    why = do_not_land(repo, body["commits"] if isinstance(body["commits"], list) else str(body["commits"]).split(),
-                      body.get("branch") or "")
-    if why:
-        raise ValueError(f"NOT LANDED: {why}")
-    why = blame_land_refusal(repo, body["commits"] if isinstance(body["commits"], list) else
-                             str(body["commits"]).split(), st, body.get("worktree"))
+
+
+def submit_change(st, body, repo=None):
+    """POST /v1/changes: a change the laptop pushed to refs/heads/land/<id> becomes a queued entry of the server's queue."""
+    repo = repo or server_repo()
+    check_submission(repo, body)
+    commits = body["commits"] if isinstance(body["commits"], list) else str(body["commits"]).split()
+    why = do_not_land(repo, commits, body.get("branch") or "") or blame_land_refusal(repo, commits, st, body.get("worktree"))
     if why:
         raise ValueError(f"NOT LANDED: {why}")
     d = waiting_state(repo)[0]

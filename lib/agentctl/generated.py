@@ -324,10 +324,13 @@ def run_regen(wt, g):
         return f"`{cmd}` ran past {limit:.0f} s"
     except OSError as ex:
         return f"`{cmd}` could not run ({ex.strerror or ex})"
-    if r.returncode != 0:
-        last = ((r.stderr or r.stdout or "").strip().splitlines() or [""])[-1][:200]
-        return f"`{cmd}` exited {r.returncode}" + (f": {last}" if last else "")
-    return None
+    return None if r.returncode == 0 else regen_exit_text(cmd, r)
+
+
+def regen_exit_text(cmd: str, r: Any) -> str:
+    """A regen command's non-zero exit, in words: its code and the last line of its stderr (else stdout)."""
+    last = ((r.stderr or r.stdout or "").strip().splitlines() or [""])[-1][:200]
+    return f"`{cmd}` exited {r.returncode}" + (f": {last}" if last else "")
 
 
 def regenerate(wt, files, regenerated=None, provisional=None, sides=None):
@@ -461,10 +464,17 @@ def snapshots_both_changed(wt, commit, before):
     for f in mine:
         if not any(generated_entry(wt, f) is g for g in reg):
             continue
-        if git(wt, "diff", "--quiet", f"{commit}^", before, "--", f, check=False).returncode == 0:
-            continue  # only this side changed it: its own regenerated snapshot stands
-        got = {n: git(wt, "show", f"{ref}:{f}", check=False) for n, ref in ((1, f"{commit}^"), (2, before), (3, commit))}
-        if any(r.returncode != 0 for r in got.values()):
-            continue  # added or deleted on a side: git's pick decided it
-        out[f] = {n: r.stdout for n, r in got.items()}
+        stages = both_sides_stages(wt, commit, before, f)
+        if stages:
+            out[f] = stages
     return out
+
+
+def both_sides_stages(wt: Any, commit: str, before: str, f: str) -> dict[int, str] | None:
+    """{1: base, 2: ours, 3: theirs} of file f when both sides changed it, else None."""
+    if git(wt, "diff", "--quiet", f"{commit}^", before, "--", f, check=False).returncode == 0:
+        return None  # only this side changed it: its own regenerated snapshot stands
+    got = {n: git(wt, "show", f"{ref}:{f}", check=False) for n, ref in ((1, f"{commit}^"), (2, before), (3, commit))}
+    if any(r.returncode != 0 for r in got.values()):
+        return None  # added or deleted on a side: git's pick decided it
+    return {n: r.stdout for n, r in got.items()}

@@ -393,26 +393,36 @@ def wait_all(waiters, timeout, floor, cap):
             w.release()
 
 
+def run_ids_of(a: Any) -> tuple[Any, list[str]]:
+    """(repo, run ids) of `wait run`: the legacy form `wait run <repo> <id>...` names the repo first. Exits on a non-numeric id."""
+    ids, repo = list(a.ids), a.repo
+    if ids and not ids[0].isdigit():  # legacy form: wait run <repo> <id>...
+        repo = repo or ids[0]
+        ids = ids[1:]
+    if not ids or not all(i.isdigit() for i in ids):
+        raise SystemExit("agentctl: wait run needs numeric run ids (action_run.id, the GITHUB_RUN_ID)")
+    return repo, ids
+
+
+def wait_run(a: Any, floor: float, cap: float) -> Any:
+    """`wait run`: one waiter per run id, each its own verdict, all waited on together."""
+    repo, ids = run_ids_of(a)
+    o_r = slug(repo) if repo else default_repo()
+    waiters = []
+    for i in dict.fromkeys(ids):
+        others = foreign_loops_on(i)
+        if others:
+            err(f"note: other loops already poll run {i}: pids {others} (see `agentctl orphans`)")
+        key = f"run-{o_r.replace('/', '_')}-{i}" + ("-landable" if a.until == "landable" else "")
+        waiters.append(Waiter(key, (lambda i=i: run_verdict(o_r, int(i), a.until, a.tail))))
+    return wait_all(waiters, a.timeout, floor, cap)
+
+
 def cmd_wait(a):
     floor = env_num("AGENTCTL_MIN_INTERVAL", 60)
     cap = max(floor, min(300, a.interval))
     if a.kind == "run":
-        ids = list(a.ids)
-        repo = a.repo
-        if ids and not ids[0].isdigit():  # legacy form: wait run <repo> <id>...
-            repo = repo or ids[0]
-            ids = ids[1:]
-        if not ids or not all(i.isdigit() for i in ids):
-            raise SystemExit("agentctl: wait run needs numeric run ids (action_run.id, the GITHUB_RUN_ID)")
-        o_r = slug(repo) if repo else default_repo()
-        waiters = []
-        for i in dict.fromkeys(ids):
-            others = foreign_loops_on(i)
-            if others:
-                err(f"note: other loops already poll run {i}: pids {others} (see `agentctl orphans`)")
-            key = f"run-{o_r.replace('/', '_')}-{i}" + ("-landable" if a.until == "landable" else "")
-            waiters.append(Waiter(key, (lambda i=i: run_verdict(o_r, int(i), a.until, a.tail))))
-        return wait_all(waiters, a.timeout, floor, cap)
+        return wait_run(a, floor, cap)
     path = os.path.abspath(a.target)
     key = "file-" + re.sub(r"[^\w.-]", "_", path)[-150:]
     return wait_all([Waiter(key, lambda: file_verdict(path, a.contains))], a.timeout, min(floor, a.interval), max(min(floor, a.interval), min(300, a.interval)))

@@ -103,7 +103,32 @@ def hunks_resolve(base, ours, theirs):
     return (text if ours.endswith("\n") or not ours else text.rstrip("\n")), how
 
 
-def first_hunk(base, ours, theirs):
+def conflict_file_versions(repo: Any, older: Any, younger: Any, f: str) -> list[Any]:
+    """`git show` of file f at the merge base, the older and the younger head; [] when any is missing or git fails."""
+    try:
+        mb = git(repo, "merge-base", older["head"], younger["head"], check=False).stdout.strip()
+        got = [git(repo, "show", f"{x}:{f}", check=False) for x in (mb, older["head"], younger["head"])] if mb else []
+    except Exception:  # noqa: BLE001 -- a hint, never a reason the author is not told
+        return []
+    return [] if any(r.returncode != 0 for r in got) else got
+
+
+def conflict_hunks(repo: Any, older: Any, younger: Any, files: Any, limit: int = 3) -> list[str]:
+    """The first conflicting hunk of each of the files (at most `limit`), in words -- `F line N: <older's line> vs
+    <this change's line>` -- for the author told CONFLICTS (THE BATCH TIERS, tier 4); [] when git cannot tell."""
+    out = []
+    for f in [x for x in files if " (" not in x][:limit]:
+        got = conflict_file_versions(repo, older, younger, f)
+        if not got:
+            continue
+        hunk = first_hunk(*(r.stdout for r in got))
+        if hunk:
+            n, theirs, mine = hunk
+            out.append(f"{f} line {n}: {older['id']} has `{theirs[:80]}`, this change `{mine[:80]}`")
+    return out
+
+
+def first_hunk(base: str, ours: str, theirs: str) -> tuple[int, str, str] | None:
     """(line number, ours' first line, theirs' first line) of the first conflicting hunk of a three-way merge (diff3),
     or None when it merges cleanly or git cannot tell."""
     r = merge_diff3(base, ours, theirs)

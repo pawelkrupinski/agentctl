@@ -1,6 +1,7 @@
 # agentctl, part `orphanreap`: orphaned work reaped: a red's holder no longer at work loses its leases, an idle agentctl-launched session is stopped
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 import glob
 import os
 from agentctl.core import env_num, fmt_age, on_ci_runner, pid_alive, reds_dir
@@ -131,14 +132,23 @@ def red_reap_orphans(store, t):
         ok, why = holder_work(row, t, cache)
         if ok is not False:
             continue
-        if store.revoke(row["name"], f"ORPHANED: {row['holder']} holds it with no work ({why})"):
-            m = lease_meta(row)
-            if "wrapper" in why and "gone" in why and m.get("bg_id"):
-                bg_stop(claude_cli(), m["bg_id"])
-            line = f"RED ORPHANED LEASE: {row['name']} ({row['holder']}): {why}: revoked, offered again"
-            inbox_write("red", line, [line], [], 1)
+        line = revoke_orphan(store, row, why)
+        if line:
             acts.append(line)
     return acts + bg_reap_spent(t)
+
+
+def revoke_orphan(store: Any, row: Any, why: str) -> str | None:
+    """Revoke the orphaned lease `row` (stopping its background session when its wrapper is gone) and tell the inbox;
+    the line told, or None when the store did not revoke it."""
+    if not store.revoke(row["name"], f"ORPHANED: {row['holder']} holds it with no work ({why})"):
+        return None
+    m = lease_meta(row)
+    if "wrapper" in why and "gone" in why and m.get("bg_id"):
+        bg_stop(claude_cli(), m["bg_id"])
+    line = f"RED ORPHANED LEASE: {row['name']} ({row['holder']}): {why}: revoked, offered again"
+    inbox_write("red", line, [line], [], 1)
+    return line
 
 
 # ---------------------------------------------------------------- SPENT SESSIONS (2026-11-02)

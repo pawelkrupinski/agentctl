@@ -1,6 +1,7 @@
 # agentctl, part `maintain`: `agentctl maintain`: the periodic pass -- the iOS simulators' sweep, the caches' expiry, the orphans' duty
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 import argparse
 import datetime as dt
 import glob
@@ -32,18 +33,29 @@ IOS_SWEEP_TIMEOUT = 120  # seconds: one `scripts/ios-simulators sweep` (it calls
 IOS_SWEPT = re.compile(r"(\d+) agent Simulator\(s\) shut down")
 
 
+def sweep_skip_reason(script: str) -> str | None:
+    """Why the iOS sweep does not run here, or None."""
+    if sys.platform != "darwin":
+        return "laptop only"
+    if not os.access(script, os.X_OK):
+        return "no scripts/ios-simulators in the movies checkout"
+    return None if shutil_which("xcrun") else "no xcrun"
+
+
+def swept_for_real(r: Any, dry_run: bool, count: int) -> bool:
+    """Whether a sweep run r (not a dry run, exit 0) shut `count` > 0 Simulators down."""
+    return not dry_run and r.returncode == 0 and count > 0
+
+
 def ios_simulator_sweep(root=None, dry_run=False):
     """Shut down the iOS Simulators agents left booted (2026-11-07: three booted for days pushed the laptop to load 368):
     movies' `scripts/ios-simulators sweep`, run from the movies root checkout, bounded, laptop only, skipped when the
     script is absent or xcrun is missing. Its output goes to the maintain log; an inbox info entry when it shut any down."""
     root = root or REPOS[-1]
     script = os.path.join(root, "scripts", "ios-simulators")
-    if sys.platform != "darwin":
-        return print("  skipped (laptop only)")
-    if not os.access(script, os.X_OK):
-        return print("  skipped (no scripts/ios-simulators in the movies checkout)")
-    if not shutil_which("xcrun"):
-        return print("  skipped (no xcrun)")
+    skipped = sweep_skip_reason(script)
+    if skipped:
+        return print(f"  skipped ({skipped})")
     try:
         r = process_runner().run([script, "sweep"] + (["--dry-run"] if dry_run else []), cwd=root, capture_output=True,
                            text=True, timeout=IOS_SWEEP_TIMEOUT)
@@ -54,7 +66,7 @@ def ios_simulator_sweep(root=None, dry_run=False):
     for line in (r.stdout + r.stderr).splitlines():
         print(f"  {line}")
     m = IOS_SWEPT.search(r.stdout)
-    if not dry_run and r.returncode == 0 and m and int(m.group(1)) > 0:
+    if m and swept_for_real(r, dry_run, int(m.group(1))):
         inbox_write("maintain", f"INFO: shut down {m.group(1)} iOS Simulator(s) agents left booted "
                                 "(scripts/ios-simulators sweep)", [], [], 0)
 

@@ -119,18 +119,22 @@ def owner_cmd_unsafe(cmd):
     return None
 
 
+def tried_summary(its: list[Any]) -> str:
+    """What was tried on the red items `its`: the fixes refuted and the last fixers' outcomes."""
+    hist = [h for it in its for h in it["data"].get("history") or []]
+    verdicts = [f"{h.get('holder')}: {str(h.get('outcome'))[:90]}" for h in hist]
+    refuted = sorted({x[:9] for it in its for x in it["data"].get("refuted") or []})
+    return (f"{len(refuted)} fix(es) refuted ({', '.join(refuted)})" if refuted else "no fix landed") + \
+        (f"; fixers: {' | '.join(verdicts[-4:])}" if verdicts else "; no fixer dispatched")
+
+
 def owner_details(o_r, n, name, units, cmd, words, owner_cause, store):
     """The owner's whole picture, one line each part: what fails, what was tried, why only the owner, the command, how
     it clears (the owner, 2026-10-28: "more details in the future pls")."""
     u = units[0] if units else {}
     failing = f"{u.get('job') or '?'}: {str(u.get('line') or 'no error line read')[:160]}"
     its: list[Any] = attempt(lambda: red_item_of_run(store, n, name), [], catch=(Exception,))
-    hist = [h for it in its for h in it["data"].get("history") or []]
-    verdicts = [f"{h.get('holder')}: {str(h.get('outcome'))[:90]}" for h in hist]
-    refuted = sorted({x[:9] for it in its for x in it["data"].get("refuted") or []})
-    tried = (f"{len(refuted)} fix(es) refuted ({', '.join(refuted)})" if refuted else "no fix landed") + \
-        (f"; fixers: {' | '.join(verdicts[-4:])}" if verdicts else "; no fixer dispatched")
-    return (f"failing: {failing}. tried: {tried}. only the owner: {OWNER_CAUSES[owner_cause]}. run: `! {cmd}`. "
+    return (f"failing: {failing}. tried: {tried_summary(its)}. only the owner: {OWNER_CAUSES[owner_cause]}. run: `! {cmd}`. "
             f"auto-clears when {words}")
 
 

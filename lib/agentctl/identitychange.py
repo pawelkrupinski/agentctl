@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import fnmatch
+from typing import Any
 from agentctl.statefile import read_text_or
 from agentctl.core import git, git_ok, process_cache, remote
 from agentctl.repos import precheck_hook
@@ -14,11 +15,16 @@ def fetch_entry_commits(repo, e):
         git(repo, "fetch", "--quiet", remote(), f"refs/heads/land/{e['id']}", check=False)
 
 
-def change_paths_of(repo, e, commits=None):
+def shared_paths(repo: Any, older: Any, younger: Any) -> list[str]:
+    """The files both heads change, sorted."""
+    return sorted(set(change_paths_of(repo, older) or []) & set(change_paths_of(repo, younger) or []))
+
+
+def change_paths_of(repo: Any, e: Any, commits: Any = None) -> list[str] | None:
     """The paths the entry's commits (or those of them in `commits`) touch (their commits fetched from
     refs/heads/land/<id> when this clone has none); None when they cannot be read."""
     fetch_entry_commits(repo, e)
-    paths = set()
+    paths: set[str] = set()
     for c in (e.get("commits") or []) if commits is None else commits:
         r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c, check=False)
         if r.returncode != 0:

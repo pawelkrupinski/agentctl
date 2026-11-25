@@ -1,6 +1,7 @@
 # agentctl, part `redfamilies`: RED FAMILIES: the reds of one family (by workflow, job, or outside the gate) go to one fixer; the family config
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 import json
 import os
 import re
@@ -30,15 +31,19 @@ def red_families():
         return []
     hit = _families_cache.get(path)
     if not hit or hit[0] != m:
-        try:
-            with open(path) as f:
-                fams = json.load(f).get("families") or []
-            fams = [dict(x, _jobs=[re.compile(j) for j in x.get("jobs") or []]) for x in fams if x.get("name")]
-        except (OSError, ValueError, re.error) as e:
-            err(f"red families: {path} unreadable ({e}): none apply")
-            fams = []
-        hit = _families_cache[path] = (m, fams)
+        hit = _families_cache[path] = (m, load_families(path))
     return hit[1]
+
+
+def load_families(path: str) -> list[dict[str, Any]]:
+    """The families of the config file at path, their job patterns compiled; none when it is unreadable."""
+    try:
+        with open(path) as f:
+            fams = json.load(f).get("families") or []
+        return [dict(x, _jobs=[re.compile(j) for j in x.get("jobs") or []]) for x in fams if x.get("name")]
+    except (OSError, ValueError, re.error) as e:
+        err(f"red families: {path} unreadable ({e}): none apply")
+        return []
 
 
 def red_family(d):

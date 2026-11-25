@@ -1,6 +1,7 @@
 # agentctl, part `rundispatch`: a workflow run dispatched on main (red_verify_dispatch), and the inputs a dispatched run carries, read back
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 import json
 import os
 import re
@@ -15,6 +16,13 @@ from agentctl.redworkflows import RED_WORKFLOWS_FILE, verify_dispatchable
 from agentctl.red import workflow_crons
 
 
+def verify_inputs(o_r: Any, run_id: Any, workflow_text: str) -> Any:
+    """The inputs a verify dispatch repeats: the failing run's own ({} with no run)."""
+    if not run_id:
+        return {}
+    return run_dispatch_inputs(o_r, run_id) or run_title_inputs(o_r, run_id, workflow_text)
+
+
 def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
     """The red's workflow dispatched on main to verify a landed fix (no wait: the next tick reads its run), with the
     failing run's own inputs (run_id's) so the verifying run repeats it. Archive recording #823 (2026-10-29): dispatched
@@ -27,7 +35,7 @@ def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
     if workflow_crons(txt) and not verify_dispatchable(repo, workflow):  # A VERIFY DISPATCH IS PER WORKFLOW
         return (f"FIX UNVERIFIED until {workflow}'s next scheduled run (scheduled, and {RED_WORKFLOWS_FILE} says "
                 f"verify_dispatch no: never dispatched to verify)")
-    inputs = (run_dispatch_inputs(o_r, run_id) or run_title_inputs(o_r, run_id, txt)) if run_id else {}
+    inputs = verify_inputs(o_r, run_id, txt)
     try:
         api(o_r, "POST", f"actions/workflows/{os.path.basename(path)}/dispatches", body={"ref": "main", "inputs": inputs})
         record_dispatch(branch="main", workflow=workflow, sha=sha, agent="red verify", pid=os.getpid(), inputs=inputs,

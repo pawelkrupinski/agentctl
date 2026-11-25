@@ -69,16 +69,21 @@ def red_family_tell(row, pic, fam):
     wt = lease_meta(row).get("worktree")
     if not wt or not os.path.isdir(wt) or not allowed_path(wt):
         return False
-    jobs = ", ".join(str(j) for j in pic.get("jobs") or [pic.get("job")] if j)
     with open(os.path.join(wt, "RED-INBOX.md"), "a") as f:
-        f.write(f"{ts()} RED FAMILY {fam}: {pic.get('workflow')} #{(pic.get('run') or {}).get('number')} [{jobs}] "
+        f.write(family_tell_text(pic, fam))
+    return True
+
+
+def family_tell_text(pic: Any, fam: Any) -> str:
+    """The RED-INBOX.md line telling a family's fixer red `pic` is its too."""
+    jobs = ", ".join(str(j) for j in pic.get("jobs") or [pic.get("job")] if j)
+    return (f"{ts()} RED FAMILY {fam}: {pic.get('workflow')} #{(pic.get('run') or {}).get('number')} [{jobs}] "
                 f"(red {pic.get('key')}) is YOURS too, held under your lease: {str(pic.get('line') or '')[:300]} -- "
                 f"`agentctl ci-why {(pic.get('run') or {}).get('databaseId')}`; land its fix with `Fixes-Red: "
                 f"{(pic.get('run') or {}).get('number')}`. Show progress on it within "
                 f"{fmt_age(env_num('AGENTCTL_RED_JOIN_IDLE', RED_JOIN_IDLE))} (a commit carrying that trailer, or "
                 f"`agentctl red claim {(pic.get('run') or {}).get('number')} --note \"<what>\"`), or it goes to a fixer "
                 f"of its own.\n")
-    return True
 
 
 def red_open(store, ob, repo, t, o_r=None):
@@ -152,6 +157,14 @@ def red_attach_obs(store, it, ob):
     return store.item("red", it["id"])
 
 
+def stamp_author(store: Any, it: Any, author: Any, run: Any) -> Any:
+    """The red item `it`, its author recorded from the run's head when it is a red one without any."""
+    if not (author and it["state"] == "red" and not it["data"].get("author")):
+        return it
+    store.update_item("red", it["id"], it["version"], {"author": dict(author, shas=[run.get("headSha")])})
+    return store.item("red", it["id"])
+
+
 def red_attach(store, workflow, run, author=None, o_r=None):
     """WATCH RED (the landed watch): the run's failures opened or attached, its author offered first. run: the run (a
     dict), or its number."""
@@ -169,10 +182,7 @@ def red_attach(store, workflow, run, author=None, o_r=None):
     for key, ob in obs.items():
         it = active.get(key) or red_open(store, ob, None, store.clock(), o_r)
         it = red_attach_obs(store, it, ob)
-        if author and it["state"] == "red" and not it["data"].get("author"):
-            store.update_item("red", it["id"], it["version"], {"author": dict(author, shas=[run.get("headSha")])})
-            it = store.item("red", it["id"])
-        out.append(it)
+        out.append(stamp_author(store, it, author, run))
     return out
 
 
@@ -227,12 +237,18 @@ def red_diagnosis_step(store, it, row, snap, repo, o_r, t):
     return did
 
 
-def red_history(row, t):
-    m = lease_meta(row)
+def lease_worktree_and_log(m: Any) -> tuple[Any, Any]:
+    """(worktree, log) of a lease's meta m; a family owner's, from its record when the lease names none."""
     wt, log = m.get("worktree"), m.get("log")
     if m.get("kind") == "owned" and m.get("family"):  # a family owner's: its worktree and its wrapper's log (stderr)
         rec = read_record(owner_record_path(m["family"])) or {}
         wt, log = wt or rec.get("worktree"), log or rec.get("log")
+    return wt, log
+
+
+def red_history(row, t):
+    m = lease_meta(row)
+    wt, log = lease_worktree_and_log(m)
     notes = m.get("notes") or m.get("note") or ""
     if not notes and log and not str(log).endswith(".jsonl"):  # a lapse says nothing: its wrapper's last words do
         notes = "\n".join(tail_lines(log, 4))

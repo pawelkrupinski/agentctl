@@ -87,12 +87,16 @@ class HeldLease:
     def triple(self):
         return self.name, self.epoch, self.secret
 
+    def holds(self, row: Any, now: float) -> bool:
+        """Whether `row` is this lease, live, under the same epoch and holder."""
+        return bool(row and row.get("epoch") == self.epoch and row.get("holder") == self.holder and lease_is_live(row, now))
+
     def check(self, st, row=None, progress="retaken"):
         row = st.get(self.name) if row is None else row
         now = st.clock()
         if self.holder is None and row and row.get("epoch") == self.epoch:  # its holder learnt from its own epoch
             self.holder = row.get("holder") or None
-        if row and row.get("epoch") == self.epoch and row.get("holder") == self.holder and lease_is_live(row, now):
+        if self.holds(row, now):
             return None
         kind, why = lease_loss(row, self.epoch, self.holder, now)
         if kind == "lapsed":

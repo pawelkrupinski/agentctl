@@ -132,12 +132,12 @@ def projected_transition(e, w, frm, to):
     reads them there (2026-11-16: ...-ac68b8 got only `waiting -> landed`, its batch's LANDED went to the waiting
     entry's id)."""
     verdict = joined_verdict(e, w, to) if w and machine_state("change", to).terminal else None
-    if verdict:
-        sha = {"landed_sha": w["landed_sha"]} if to == "landed" and w.get("landed_sha") else {}
-        at = {"pushed_at": w["pushed_at"]} if sha and w.get("pushed_at") else {}
-        return ({"why": verdict, **({"tip": sha["landed_sha"]} if sha else {}), **sha, **at},
-                change_event(e, verdict, code=0 if to in ("landed", "superseded") else 1, **sha))
-    return None, {"text": f"{e['id']}: {frm} -> {to}", "refs": {"entry": e["id"]}}
+    if not verdict:
+        return None, {"text": f"{e['id']}: {frm} -> {to}", "refs": {"entry": e["id"]}}
+    sha = {"landed_sha": w["landed_sha"]} if to == "landed" and w.get("landed_sha") else {}
+    at = {"pushed_at": w["pushed_at"]} if sha and w.get("pushed_at") else {}
+    return ({"why": verdict, **({"tip": sha["landed_sha"]} if sha else {}), **sha, **at},
+            change_event(e, verdict, code=0 if to in ("landed", "superseded") else 1, **sha))
 
 
 # A CHANGE NEVER LEAVES THE QUEUE SILENTLY (2026-10-30: `…-76336e`'s NOT LANDED reached the inbox without its item id,

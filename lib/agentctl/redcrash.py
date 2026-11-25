@@ -362,6 +362,12 @@ def red_ask_route(store: Any, it: Any, upd: dict[str, Any], why: str, words: obj
     return [f"routed {red_what(d)}'s ask back to its fixer: {why[:120]}"]
 
 
+def decision_look_command(d: Any) -> str:
+    """The command that shows the owner a red's state: `red status -v`, and the family's notebook when it has one."""
+    nb = (read_record(owner_record_path(red_queue_family(d))) or {}).get("notebook")
+    return "~/bin/agentctl red status -v" + (f"; less {nb}" if nb else "")
+
+
 def red_decision_block(store, it, upd, decide, t, category=None):
     """The red waits on the owner's decision: its block carries the diagnosis and the decision, clears itself. Only
     in an owner-only category (`[<category>] <decision>`, ask_split): any other ask is routed back (red_ask_route)."""
@@ -375,8 +381,7 @@ def red_decision_block(store, it, upd, decide, t, category=None):
     d = {**it["data"], **upd}
     key, run = d["key"], (d.get("last_run") or {}).get("number")
     diag = RED_DECIDE.sub("", str(d.get("diagnosis") or "")).strip()
-    nb = (read_record(owner_record_path(red_queue_family(d))) or {}).get("notebook")
-    cmd = f"~/bin/agentctl red status -v" + (f"; less {nb}" if nb else "")
+    cmd = decision_look_command(d)
     until = f"a newer {d.get('workflow')} run than #{run} no longer fails this way"
     maxh = env_num("AGENTCTL_RED_DECISION_BLOCK_MAX", RED_DECISION_BLOCK_MAX)
     text = (f"WAITING ON YOU: {decide[:400]} -- {red_what(d)} waits on it. Answer: `! {decide_cmd(key)}` (its fixer "

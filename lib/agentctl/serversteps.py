@@ -80,13 +80,17 @@ def tick_quiet_deadlines(st, now_=None):
     return did
 
 
+def clone_health_step(repo: str, d: str, store: Any) -> Any:
+    """The clone-health step: its heal tick's line logged, or None when healing is off for the repo."""
+    return [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo, store)] if x] if heal_enabled(repo) else None
+
+
 def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callable[[], Any]],
                  clock: Clock, store: Any) -> Sequence[tuple[str, Callable[[], Any]]]:
     """The reconciler's tick on ci-runner (the one writer): the changes, the batch, the watches, the gate, the reds,
     the recovery registry. Never the laptop's duties (events -> inbox, the notifier, the network and tunnel watches, the
     fixers, upkeep): those are sync_steps. clock and store: the process's (cli's), every step's time and store."""
-    return (("clone health", lambda: [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo, store)] if x]
-             if heal_enabled(repo) else None),
+    return (("clone health", lambda: clone_health_step(repo, d, store)),
             ("change items", lambda: project_changes(d, store)),
             ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, clock, store,
                                                                                                   d)])),

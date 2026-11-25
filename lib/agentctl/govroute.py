@@ -1,6 +1,7 @@
 # agentctl, part `govroute`: where heavy work runs: here when it fits, else ci-runner's measure lane when free; replayed admissions
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 from agentctl.core import pct
 from agentctl.forge import runner_queue
 from agentctl.govtickets import gov_tickets
@@ -54,10 +55,19 @@ def gov_route(job, cls="agent", mem=None, kind="job", q=None):
 def replay_cores(r):
     if r.get("cores") is not None:
         return float(r["cores"])
+    return GOV_JOB_CORES[replay_job(r)]
+
+
+def replay_job(r: dict[str, Any]) -> str:
+    """The GOV_JOB_CORES key of an admission record without its own cores: its job by label, class and kind."""
     label, cls = r.get("label") or "", r.get("class")
-    job = ("what-if" if "what-if" in label else "slice" if "identity-slice" in label else "measure" if cls == "measure"
-           else "check" if r.get("kind") == "check" or cls == "check" else "job")
-    return GOV_JOB_CORES[job]
+    if "what-if" in label:
+        return "what-if"
+    if "identity-slice" in label:
+        return "slice"
+    if cls == "measure":
+        return "measure"
+    return "check" if r.get("kind") == "check" or cls == "check" else "job"
 
 
 def gov_replay(rows, cap, at, hold=30 * 60):

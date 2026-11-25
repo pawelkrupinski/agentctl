@@ -94,6 +94,12 @@ def write_inbox_entry(rec: dict[str, Any]) -> Any:
     return rec["id"]
 
 
+def claude_pid_env() -> int | None:
+    """$CLAUDE_PID as a number, or None when unset or not one."""
+    pid = os.environ.get("CLAUDE_PID") or ""
+    return int(pid) if pid.isdigit() else None
+
+
 def inbox_write(command: str, verdict: Any, verdicts: Any, tail: Any, exit_code: Any, final: bool = True,
                 cwd: str | None = None, reply: bool = False, item: Any = None) -> Any:
     """One inbox entry, written atomically; returns its id (None when the inbox cannot be written: never fatal).
@@ -111,7 +117,7 @@ def inbox_write(command: str, verdict: Any, verdicts: Any, tail: Any, exit_code:
            "cwd": cwd or here, "pid": os.getpid(), "final": final, "exit": exit_code, "verdict": verdict,
            "kind": inbox_kind(verdict, final),
            "owner": caller_owner(here),
-           "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
+           "claude_pid": claude_pid_env(),
            "agent": agent_name(), "verdicts": verdicts, "tail": tail, "reply": bool(reply)}
     if item:
         rec["alert_item"] = item

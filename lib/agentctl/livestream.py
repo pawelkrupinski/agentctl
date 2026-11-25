@@ -1,6 +1,7 @@
 # agentctl, part `livestream`: an agent's live stream: its transcript tailed, its secrets masked, served as server-sent events
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 import json
 import os
 import re
@@ -95,10 +96,15 @@ def live_mask_text(s):
     return LIVE_MASK_URL.sub(lambda m: m.group(1) + LIVE_MASKED + m.group(3), s)
 
 
+def masked_whole(v: str, key: Any) -> bool:
+    """Whether string v is masked wholly: under a secret-ish key, 8+ characters, no `$` reference."""
+    return bool(key and LIVE_SECRET_KEY.search(key) and len(v) >= 8 and not v.startswith("$"))
+
+
 def live_mask(v, key=None):
     """v with every credential-looking string masked (a JSON value under a secret-ish key of 8+ characters wholly)."""
     if isinstance(v, str):
-        if key and LIVE_SECRET_KEY.search(key) and len(v) >= 8 and not v.startswith("$"):
+        if masked_whole(v, key):
             return LIVE_MASKED
         return live_mask_text(v)
     if isinstance(v, dict):
@@ -106,6 +112,13 @@ def live_mask(v, key=None):
     if isinstance(v, list):
         return [live_mask(x) for x in v]
     return v
+
+
+def kept_message(m: Any) -> dict[str, Any]:
+    """{"message": ...} of a transcript entry's message m: a dict's role, content, model and stop_reason; {} for none."""
+    if isinstance(m, dict):
+        return {"message": {k: m[k] for k in ("role", "content", "model", "stop_reason") if k in m}}
+    return {} if m is None else {"message": m}
 
 
 def live_entry(line):
@@ -117,11 +130,7 @@ def live_entry(line):
     if rec.get("type") in LIVE_HIDDEN:
         return None
     out = {k: rec[k] for k in LIVE_KEEP if k in rec}
-    m = rec.get("message")
-    if isinstance(m, dict):
-        out["message"] = {k: m[k] for k in ("role", "content", "model", "stop_reason") if k in m}
-    elif m is not None:
-        out["message"] = m
+    out.update(kept_message(rec.get("message")))
     if rec.get("type") not in ("user", "assistant", "system", "queue-operation", "attachment"):
         out = rec  # an entry this page does not know: all of it
     return live_mask(out)

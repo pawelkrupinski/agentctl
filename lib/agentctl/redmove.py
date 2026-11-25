@@ -101,12 +101,16 @@ def red_stop_holder(store, key, why, outcome, force=False):
         return row["holder"]                    # one permanent worktree, which would stop every later turn too
     if any(lease_is_live(r, store.clock()) and r["holder"] == row["holder"] for r in store.list("red/")):
         return None  # it still holds other reds of its run: only this lease goes, never its work
-    wt = lease_meta(row).get("worktree")
+    write_red_stop(lease_meta(row).get("worktree"), why)
+    return row["holder"]
+
+
+def write_red_stop(wt: Any, why: str) -> None:
+    """RED-STOP.md in the holder's worktree wt (when it is an allowed, existing one): the STOP its session reads."""
     if wt and os.path.isdir(wt) and allowed_path(wt):
         with suppress(OSError):
             with open(os.path.join(wt, "RED-STOP.md"), "w") as f:
                 f.write(f"STOP: {why} (agentctl red, {ts()}); remove this file with your worktree.\n")
-    return row["holder"]
 
 
 def tail_lines(path, n):

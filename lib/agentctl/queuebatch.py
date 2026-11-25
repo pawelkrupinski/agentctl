@@ -17,10 +17,10 @@ from agentctl.land import run_watched, tool_env
 from agentctl.queueslots import checker_alive, set_change
 from agentctl.queue import VERIFY_MODE
 from agentctl.generated import generated_entry, order_sensitive, without_derived, without_generated
-from agentctl.conflicts import first_hunk, hunks_resolve, own_commits_conflict, union_safe
+from agentctl.conflicts import conflict_hunks, hunks_resolve, own_commits_conflict, union_safe
 from agentctl.queuerecheck import queued_entries, same_change_source
 from agentctl.redfixes import fixes_of
-from agentctl.identitychange import change_paths_of
+from agentctl.identitychange import shared_paths
 from agentctl.changekind import classify_change, queue_facts
 from agentctl.gov import GovTimeout
 from agentctl.waiting import note_waiting, supersede_older_waiting, waiting_commits
@@ -118,7 +118,7 @@ def overlap_of(repo, older, younger, strict=False):
     then its order-sensitive generated files are shared ones, and every textual conflict but a derived file's is one."""
     key = (*overlap_key(older), *overlap_key(younger), strict)
     if key not in _overlap_known:
-        shared = sorted(set(change_paths_of(repo, older) or []) & set(change_paths_of(repo, younger) or []))
+        shared = shared_paths(repo, older, younger)
         shared = held_files(repo, shared, strict)
         conflict = conflicting(repo, pair_conflict(repo, older, younger), strict) if shared else None
         resolvable = [] if strict or not conflict else pair_resolvable(repo, older, younger, conflict)
@@ -139,7 +139,7 @@ IN_FLIGHT = ("checking", "checked", "pushing")
 def ordered_overlap(repo: Optional[str], older: dict[str, Any], younger: dict[str, Any]) -> list[str]:
     """The generated files both changes change whose registry entry is declared ORDER-SENSITIVE (ONLY A VOIDED CHECK
     HOLDS): they hold the younger behind a check in flight."""
-    both = sorted(set(change_paths_of(repo, older) or []) & set(change_paths_of(repo, younger) or []))
+    both = shared_paths(repo, older, younger)
     return [f for f in both if order_sensitive(repo, f)]
 
 
@@ -327,25 +327,6 @@ def stuck_recovery(hold, stuck):
     return hk.recovery if hk else "escalate"
 
 
-def conflict_hunks(repo, older, younger, files, limit=3):
-    """The first conflicting hunk of each of the files (at most `limit`), in words -- `F line N: <older's line> vs
-    <this change's line>` -- for the author told CONFLICTS (THE BATCH TIERS, tier 4); [] when git cannot tell."""
-    out = []
-    for f in [x for x in files if " (" not in x][:limit]:
-        try:
-            mb = git(repo, "merge-base", older["head"], younger["head"], check=False).stdout.strip()
-            got = [git(repo, "show", f"{x}:{f}", check=False) for x in (mb, older["head"], younger["head"])] if mb else []
-        except Exception:  # noqa: BLE001 -- a hint, never a reason the author is not told
-            got = []
-        if not got or any(r.returncode != 0 for r in got):
-            continue
-        hunk = first_hunk(*(r.stdout for r in got))
-        if hunk:
-            n, theirs, mine = hunk
-            out.append(f"{f} line {n}: {older['id']} has `{theirs[:80]}`, this change `{mine[:80]}`")
-    return out
-
-
 def hold_for_overlap(st, d, e, o, shared, conflict, waits=True, repo=None):
     """The change tick's lines for a change held behind an older one it overlaps (waits; a red fix's: not held); its
     author told once of a conflict."""
@@ -424,19 +405,33 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, s
     """(ok, output, where) of the change's checks: on the CI tier when the repo has the remote check workflow (owner
     decision 1; the reconciler is ci-runner's, the laptop runs no checks since its tick went), else in the tree,
     admitted by the governor. ok None: stalled."""
+    got = remote_entry_checks(repo, d, e, tree, base, head, mode, cls, clock, st, own)
+    return got if got is not None else local_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path)
+
+
+def remote_entry_checks(repo: Any, d: Any, e: Any, tree: Any, base: Any, head: Any, mode: Any, cls: Any, clock: Any, st: Any,
+                        own: Any) -> Any:
+    """run_entry_checks' answer from the CI tier, or None when the checks run here (no remote workflow, or its run gave
+    no verdict and this machine may check)."""
     adopted = remote_matches(e, base, head, mode)
     why = "its remote run, adopted" if adopted else "the CI tier (owner decision 1)"
-    if adopted or remote_checks_supported(tree):
-        wlog(d, f"{e['id']}: checks on {why}")
-        ok, out = remote_check(repo, e, base, head, mode, clock, st, own, red=cls == "red")
-        if ok is not None:
-            return ok, out, f"on ci-runner ({why})"
-        if not checks_here():
-            # NOT CHECKED HERE: ci-runner's check trees are no checking machine (no perl, shellcheck or sbt there; the
-            # rate-limit agent's issue, 2026-11-01) -- a remote check without a verdict is no verdict, re-queued as infra
-            wlog(d, f"{e['id']}: the remote check gave no verdict ({out.splitlines()[-1] if out else '?'}): re-queued")
-            return None, out, "on ci-runner (no verdict)"
-        wlog(d, f"{e['id']}: the remote check gave no verdict ({out.splitlines()[-1] if out else '?'}): checking here")
+    if not (adopted or remote_checks_supported(tree)):
+        return None
+    wlog(d, f"{e['id']}: checks on {why}")
+    ok, out = remote_check(repo, e, base, head, mode, clock, st, own, red=cls == "red")
+    if ok is not None:
+        return ok, out, f"on ci-runner ({why})"
+    if not checks_here():
+        # NOT CHECKED HERE: ci-runner's check trees are no checking machine (no perl, shellcheck or sbt there; the
+        # rate-limit agent's issue, 2026-11-01) -- a remote check without a verdict is no verdict, re-queued as infra
+        wlog(d, f"{e['id']}: the remote check gave no verdict ({out.splitlines()[-1] if out else '?'}): re-queued")
+        return None, out, "on ci-runner (no verdict)"
+    wlog(d, f"{e['id']}: the remote check gave no verdict ({out.splitlines()[-1] if out else '?'}): checking here")
+    return None
+
+
+def local_entry_checks(repo: Any, d: Any, e: Any, tree: Any, base: Any, head: Any, mode: Any, cls: Any, log_path: Any) -> Any:
+    """run_entry_checks' answer from the pre-push hook in the tree, admitted by the governor."""
     # the range through the remote's ref (origin/main is `base` now, fetched just before): the hook finds the remote, and
     # with it the forge's red gate, from it -- given bare shas it fell back to the wrong forge: the gate unread
     rng = f"{remote()}/main..{head}" if git(tree, "rev-parse", f"{remote()}/main").strip() == base else f"{base}..{head}"

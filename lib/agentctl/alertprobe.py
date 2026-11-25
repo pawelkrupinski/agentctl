@@ -1,6 +1,7 @@
 # agentctl, part `alertprobe`: whether an open alert still stands: its red, condition or gate probed, cleared when what it said is over
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 import os
 import re
 from agentctl.core import cherry_landed, env_num, remote
@@ -105,6 +106,11 @@ def alert_open_reds(st):
     return st.items("red", [s for s, spec in MACHINES["red"].items() if not spec.terminal])
 
 
+def red_run_numbers(d: Any) -> set[str]:
+    """The run numbers (as text) red data d carries: its last run's and every run it spans."""
+    return {str((d.get("last_run") or {}).get("number") or "")} | {str(r) for r in d.get("runs") or []}
+
+
 def alert_red_named(d, verdict):
     """Does verdict name red d: its `decide <key>`, or `<workflow> #<run>` for ANY run the red carries -- one red item
     spans every run failing its way (red_attach_obs moves last_run on), and an alert names the run it was written
@@ -113,8 +119,7 @@ def alert_red_named(d, verdict):
     if key and re.search(r"\bdecide " + re.escape(key) + r"\b", verdict):
         return True
     prefix = red_what(d).split(" [", 1)[0].rsplit(" #", 1)[0]  # '[<repo> ]<workflow>'
-    nums = {str((d.get("last_run") or {}).get("number") or "")} | {str(r) for r in d.get("runs") or []}
-    return any(re.search(re.escape(f"{prefix} #{n}") + r"(?!\d)", verdict) for n in nums if n and n != "None")
+    return any(re.search(re.escape(f"{prefix} #{n}") + r"(?!\d)", verdict) for n in red_run_numbers(d) if n and n != "None")
 
 
 def alert_gate():

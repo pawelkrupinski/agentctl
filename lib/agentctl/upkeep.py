@@ -1,6 +1,7 @@
 # agentctl, part `upkeep`: upkeep.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from collections.abc import Iterator
 import glob
 import os
 import subprocess
@@ -72,13 +73,18 @@ LOG_ROTATE_KEEP = 3  # rotated parts kept per log (<log>.1 newest .. <log>.N old
 LOG_ROTATE_PRUNE = ("work", "target", ".git")
 
 
+def logs_under(root: str) -> Iterator[str]:
+    """The `.log` files below root, leaving out the pruned directories (work trees, targets, `.git`, `*.d`)."""
+    for d, dirs, files in os.walk(root):
+        dirs[:] = [x for x in dirs if x not in LOG_ROTATE_PRUNE and not x.endswith(".d")]
+        yield from (os.path.join(d, f) for f in files if f.endswith(".log"))
+
+
 def agentctl_logs():
     """Every agentctl log (see above), by real path."""
     out = set()
     for root in {os.path.realpath(state_root()), os.path.realpath(reds_dir())}:
-        for d, dirs, files in os.walk(root):
-            dirs[:] = [x for x in dirs if x not in LOG_ROTATE_PRUNE and not x.endswith(".d")]
-            out |= {os.path.join(d, f) for f in files if f.endswith(".log")}
+        out |= set(logs_under(root))
     out |= set(glob.glob(os.path.join(HOME, "Library", "Logs", "agentctl-*.log")))
     return sorted(p for p in out if os.path.isfile(p) and not os.path.islink(p))
 

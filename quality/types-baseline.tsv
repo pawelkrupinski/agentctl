@@ -29,7 +29,7 @@ mypy-errors	clones	1
 mypy-errors	conditions	40
 mypy-errors	config	19
 mypy-errors	configfile	8
-mypy-errors	conflicts	31
+mypy-errors	conflicts	30
 mypy-errors	core	24
 mypy-errors	culpritfix	35
 mypy-errors	dispatchblock	13
@@ -50,7 +50,7 @@ mypy-errors	govbudget	12
 mypy-errors	govcmd	34
 mypy-errors	govroute	18
 mypy-errors	govusage	6
-mypy-errors	identitychange	13
+mypy-errors	identitychange	11
 mypy-errors	inbox	17
 mypy-errors	invariants	36
 mypy-errors	issues	6
@@ -89,7 +89,7 @@ mypy-errors	processorlink	17
 mypy-errors	procwatch	2
 mypy-errors	projector	25
 mypy-errors	queue	28
-mypy-errors	queuebatch	62
+mypy-errors	queuebatch	57
 mypy-errors	queuecheck	39
 mypy-errors	queueclose	37
 mypy-errors	queuediff	73
@@ -151,7 +151,7 @@ mypy-errors	snapshot	9
 mypy-errors	statemachines	32
 mypy-errors	stats	50
 mypy-errors	statsrecords	89
-mypy-errors	status	99
+mypy-errors	status	86
 mypy-errors	statusagents	39
 mypy-errors	statusline	4
 mypy-errors	statuspage	55
@@ -166,7 +166,7 @@ mypy-errors	tickrun	6
 mypy-errors	tickservice	8
 mypy-errors	tools	56
 mypy-errors	trailers	2
-mypy-errors	tunnel	5
+mypy-errors	tunnel	4
 mypy-errors	upkeep	14
 mypy-errors	wait	66
 mypy-errors	waiting	33

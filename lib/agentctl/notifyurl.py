@@ -4,6 +4,7 @@
 # A red -> the failing JOB's page anchored at the failing step (GitHub highlights it); else the run; an ask with no run
 # -> a local HTML page of the question, its section highlighted by :target; anything else -> None (a plain notification).
 
+from typing import Any
 import os
 import re
 from agentctl.core import attempt, process_cache, state_root
@@ -26,11 +27,15 @@ def job_step_url(o_r, run_id, job_id, step=None, line=1):
 def failing_job_step(jobs, names=None):
     """(job_id, step number) of the first failed job (one of `names` first, when given) and its first failed step."""
     bad = [j for j in jobs or [] if j.get("conclusion") in ("failure", "timed_out", "cancelled")]
-    pick = next((j for j in bad if names and j.get("name") in names), None) or (bad[0] if bad else None)
+    pick = next((j for j in bad if names and j.get("name") in names), None) or next(iter(bad), None)
     if not pick:
         return None, None
-    step = next((s.get("number") for s in pick.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")), None)
-    return pick.get("databaseId"), step
+    return pick.get("databaseId"), first_failed_step(pick)
+
+
+def first_failed_step(job: Any) -> Any:
+    """The number of the job's first failed step, or None."""
+    return next((s.get("number") for s in job.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")), None)
 
 
 # A decided run's jobs never change: read once per process (2026-11-03: a `gh run view` per notification, 10-20 s each
@@ -72,17 +77,19 @@ def ask_page(key, title, text, how=None):
     return f"file://{p}#question"
 
 
+def item_red_url(key: Any, store: Any) -> Any:
+    """The click target of the red item `key` of the store, or None (no key, no store, no such red, no target)."""
+    it = attempt(lambda: store.item("red", key), None, catch=(Exception,)) if key and store is not None else None
+    return red_url(it["data"]) if it else None
+
+
 def notification_url(ev, store):
     """The URL a notification of event ev opens, or None."""
     refs = ev.get("refs") or {}
     key = refs.get("key")
-    it = None
-    if key and store is not None:
-        it = attempt(lambda: store.item("red", key), None, catch=(Exception,))
-    if it:
-        u = red_url(it["data"])
-        if u:
-            return u
+    u = item_red_url(key, store)
+    if u:
+        return u
     if refs.get("run_url"):
         return refs["run_url"]
     if str(ev.get("kind", "")).startswith(("red.ask", "red.remind")) and key:

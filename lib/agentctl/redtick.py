@@ -247,6 +247,27 @@ RED_OTHERS_EVERY = 60        # seconds between the other watched repos' red tick
 _last_others_tick = [0.0]
 
 
+def tick_other_repo(store: Any, o_r: str, now_: Any, dispatch: bool) -> list[str]:
+    """One other watched repo's red tick: its lines, prefixed with the repo; none (its skip said) when it fails."""
+    try:
+        snap = red_gate_snap(o_r, store)
+        clone = red_repo_clone(o_r)
+        with _red_lock:
+            acts = [f"{red_repo_short(o_r)}: {x}" for x in red_tick(store, o_r, clone, snap, now_=now_, dispatch=dispatch)]
+        _others_said.pop(o_r, None)
+        return acts
+    except (Exception, SystemExit) as e:
+        red_others_skipped(o_r, str(e).replace('agentctl: ', '')[:200])
+        return []
+
+
+def note_no_read_access(unread: list[str], store: Any) -> None:
+    try:
+        red_no_read_access(unread, store)
+    except (Exception, SystemExit) as e:
+        err(f"red tick: could not note the missing read access ({str(e)[:120]})")
+
+
 def red_tick_others(store, now_=None, dispatch=False, force=True):
     """The red tick of every watched repo but the primary (red-repos.json): its gate read, its reds observed and
     stepped, each repo inside its own try (one unreadable repo never stops the others or the primary). Its clone is
@@ -266,20 +287,9 @@ def red_tick_others(store, now_=None, dispatch=False, force=True):
         except NoReadAccess:
             unread.append(o_r)  # one condition for all of them, below: no line per tick
             continue
-        try:
-            snap = red_gate_snap(o_r, store)
-            clone = red_repo_clone(o_r)
-            with _red_lock:
-                acts += [f"{red_repo_short(o_r)}: {x}" for x in
-                         red_tick(store, o_r, clone, snap, now_=now_, dispatch=dispatch)]
-            _others_said.pop(o_r, None)
-        except (Exception, SystemExit) as e:
-            red_others_skipped(o_r, str(e).replace('agentctl: ', '')[:200])
+        acts += tick_other_repo(store, o_r, now_, dispatch)
     if unread:
-        try:
-            red_no_read_access(unread, store)
-        except (Exception, SystemExit) as e:
-            err(f"red tick: could not note the missing read access ({str(e)[:120]})")
+        note_no_read_access(unread, store)
     for line in acts:
         err(f"red: {line}")
     return acts
@@ -365,6 +375,32 @@ def cmd_red(a, clock, st):
     return handlers[a.rcmd](a, st, o_r) if a.rcmd in handlers else 2
 
 
+def gate_publish_cycle(repo: str, store: Any) -> None:
+    """One publish: the gate read once, the red tick on that snapshot, the summary line published, the branch reds
+    settled and routed."""
+    try:
+        o_r = slug(repo)
+        snap = ci_state_refresh(o_r, write=False)  # ONE read of GitHub per cycle; everything below reads it
+        refresh_pinned_recording(o_r, repo, store)  # what PREDICTS MAIN RED compares a branch run's recording with
+        ci_state_write(snap)
+        # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or
+        # held (never NOBODY). Bounded: a dispatch's worktree checkout finishes on the tick's own thread
+        if not run_bounded("red-tick", lambda: red_tick_repo(repo, store, snap), env_num("AGENTCTL_ASSIGN_BOUND", 20)):
+            err("red tick: still running; the gate line is published meanwhile")
+        _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo, store=store)
+        publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
+    except (Exception, SystemExit) as e:
+        err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")
+        return
+    for failed, lines in (("not settled", lambda: settle_branch_reds(o_r, snap, store)),
+                          ("not routed", lambda: route_branch_reds(o_r, snap))):
+        try:
+            for text in lines():
+                err(f"branch reds: {text}")
+        except (Exception, SystemExit) as e:
+            err(f"branch reds: {failed} ({str(e).replace('agentctl: ', '')[:200]})")
+
+
 def maybe_publish_gate(repo, store):
     """The processor's loop, at most every GATE_PUBLISH_INTERVAL s: read the gate (it holds the token) and publish the
     summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
@@ -374,30 +410,5 @@ def maybe_publish_gate(repo, store):
         return
     _last_gate_publish[0] = time.time()
 
-    def work():
-        try:
-            o_r = slug(repo)
-            snap = ci_state_refresh(o_r, write=False)  # ONE read of GitHub per cycle; everything below reads it
-            refresh_pinned_recording(o_r, repo, store)  # what PREDICTS MAIN RED compares a branch run's recording with
-            ci_state_write(snap)
-            # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or
-            # held (never NOBODY). Bounded: a dispatch's worktree checkout finishes on the tick's own thread
-            if not run_bounded("red-tick", lambda: red_tick_repo(repo, store, snap), env_num("AGENTCTL_ASSIGN_BOUND", 20)):
-                err("red tick: still running; the gate line is published meanwhile")
-            _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo, store=store)
-            publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
-        except (Exception, SystemExit) as e:
-            err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")
-            return
-        try:
-            for text in settle_branch_reds(o_r, snap, store):
-                err(f"branch reds: {text}")
-        except (Exception, SystemExit) as e:
-            err(f"branch reds: not settled ({str(e).replace('agentctl: ', '')[:200]})")
-        try:
-            for routed in route_branch_reds(o_r, snap):
-                err(f"branch reds: {routed}")
-        except (Exception, SystemExit) as e:
-            err(f"branch reds: not routed ({str(e).replace('agentctl: ', '')[:200]})")
-    if not run_bounded("gate-publish", work, env_num("AGENTCTL_STEP_BOUND", 120)):
+    if not run_bounded("gate-publish", lambda: gate_publish_cycle(repo, store), env_num("AGENTCTL_STEP_BOUND", 120)):
         err("gate summary: still reading from an earlier cycle (the loop goes on)")

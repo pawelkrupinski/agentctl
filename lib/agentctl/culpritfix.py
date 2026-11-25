@@ -77,7 +77,8 @@ def blame_revert_commit(wt, u, b, g, rec, num):
 def blame_reland(o_r, repo, u, b):
     """The revert did not clear the red, so the culprit was wrong: its revert reverted (`Relands-Change:`), landed by
     `agentctl land` (no Fixes-Red: a production change, it lands at the next green). {ok, msg, worktree, at}."""
-    rv = (b.get("revert") or {}).get("landed") or (b.get("revert") or {}).get("sha")
+    revert = b.get("revert") or {}
+    rv = revert.get("landed") or revert.get("sha")
     num = u["run"].get("number")
     g = blame_culprit(b) or {}
     if not rv:

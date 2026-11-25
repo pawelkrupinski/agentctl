@@ -71,6 +71,12 @@ def scala_code(text):
     return "".join(out)
 
 
+def starts_statement(depth: int, ind: int, col: Any, stripped: str, cur: Any) -> bool:
+    """Whether a line (stripped, at indentation ind) starts a new statement: outside any bracket, at or left of the
+    statement column, no continuation, and a statement already open."""
+    return bool(depth == 0 and ind <= col and not re.match(r"[.)}\]+\-*/|&=<>:,]", stripped) and cur)
+
+
 def scala_statements(code, first=None):
     """The top-level statements of comment-free code: a statement starts on a line at the indentation of the block's
     first line, outside any bracket, that is no continuation (`.`, `)`, `}`, `]`, an operator). first: the column a
@@ -83,8 +89,7 @@ def scala_statements(code, first=None):
         ind = len(line) - len(line.lstrip())
         if col is None:
             col = ind
-        starts = depth == 0 and ind <= col and not re.match(r"[.)}\]+\-*/|&=<>:,]", stripped) and cur
-        if starts:
+        if starts_statement(depth, ind, col, stripped, cur):
             stmts.append("\n".join(cur))
             cur = []
         cur.append(line)

@@ -377,7 +377,7 @@ def hook_lines(o_r, run_id, job, tail):
     if not any("blocked by:" in l or re.search(r"pre-push\S* .*FAILED", l) for l in clean):
         return []
     hits = [l[:300] for l in clean if HOOK_BLOCK.search(l)]
-    return hits[:tail * 4] if hits else []
+    return hits[:tail * 4]
 
 
 def failure_detail(o_r, run_id, failed, tail):

@@ -364,25 +364,19 @@ def status_events(st, n=STATUS_EVENTS):
             for e in reversed(evs)]
 
 
-def status_data(store=None, now_=None, bound=None, keep=False, only=None):
-    """THE STATUS MODEL (/api/status): every section from its own bounded source; a failing one is {"error": ...} in
-    its place. only: just these sections (a renderer's)."""
-    t = now_ if now_ is not None else time.time()
-    b = bound if bound is not None else env_num("AGENTCTL_STATUS_BOUND", STATUS_SOURCE_BOUND)
-    d = state_read()
-    repo = (d.get("ci") or {}).get("repo") or SHORT["movies"]
-    st, st_err = None, None
-    if not only or set(only) - {"header"}:
-        try:
-            st = store if store is not None else status_store()
-        except (Exception, SystemExit) as e:
-            st_err = status_err(e)
+def open_status_store(store: Any, only: Any) -> tuple[Any, Any]:
+    """(the store the sections read, None) or (None, the error that kept it from opening); no store for a header-only read."""
+    if only and not set(only) - {"header"}:
+        return None, None
+    try:
+        return (store if store is not None else status_store()), None
+    except (Exception, SystemExit) as e:
+        return None, status_err(e)
 
-    def need():
-        if st is None:
-            raise RuntimeError(st_err["error"])
-        return st
-    sources = (("header", lambda: status_header(t), 1),
+
+def status_section_sources(t: float, repo: str, need: Any) -> tuple[Any, ...]:
+    """The status model's sections: (name, producer, weight) each, every producer reading the store through `need`."""
+    return (("header", lambda: status_header(t), 1),
                ("store", lambda: status_store_probe(need(), t), 1),
                ("dispatcher", lambda: status_dispatcher(need(), t), 1),
                ("reds", lambda: status_reds(need(), t, repo), 1),
@@ -395,6 +389,22 @@ def status_data(store=None, now_=None, bound=None, keep=False, only=None):
                ("issues", lambda: status_issues(need(), t), 1),
                ("reverts", lambda: [revert_brief(i) for i in need().items("revert", REVERT_OPEN)], 1),
                ("events", lambda: status_events(need()), 1))
+
+
+def status_data(store=None, now_=None, bound=None, keep=False, only=None):
+    """THE STATUS MODEL (/api/status): every section from its own bounded source; a failing one is {"error": ...} in
+    its place. only: just these sections (a renderer's)."""
+    t = now_ if now_ is not None else time.time()
+    b = bound if bound is not None else env_num("AGENTCTL_STATUS_BOUND", STATUS_SOURCE_BOUND)
+    d = state_read()
+    repo = (d.get("ci") or {}).get("repo") or SHORT["movies"]
+    st, st_err = open_status_store(store, only)
+
+    def need():
+        if st is None:
+            raise RuntimeError(st_err["error"])
+        return st
+    sources = status_section_sources(t, repo, need)
     res, meta = status_sources(tuple(x for x in sources if not only or x[0] in only), b, keep=keep)
     if "error" in res.get("store", {}):
         res["store"] = {**res["store"], "remote": store_url(), "reachable": False}
@@ -413,20 +423,25 @@ def status_cached():
         return _status_cache["data"]
 
 
+def ci_why_cached(o_r: str, a: argparse.Namespace, target: Any) -> int:
+    """`ci-why --cached --summary`: the gate line as the processor last published it."""
+    if not getattr(a, "summary", False) or target:
+        raise SystemExit("agentctl: ci-why --cached goes with --summary and main")
+    # NEVER LIVE WORK (2026-10-28: a stale file sent the status line's 15 s refresh into a 60 s live read): the
+    # processor's published line, or -- stale or missing -- what it last said, marked with its age. Live reads
+    # belong to the processor's publish step only.
+    text = status_gate_text(state_read(), time.time(), o_r)  # the status model's gate text, for this repo
+    print(text)
+    return 1 if text.startswith("gate RED") else 0 if GATE_LINE.match(text) else 2  # 2: UNREAD / ? / NETWORK
+
+
 def cmd_ci_why(a: argparse.Namespace, store: Any) -> int:
     o_r = slug(a.repo) if a.repo else default_repo()
     target = None if a.target in (None, "main") else a.target.lstrip("#")
     if target is not None and not target.isdigit():
         raise SystemExit("agentctl: ci-why takes a run id, a run number (#N) or `main`")
     if getattr(a, "cached", False):
-        if not getattr(a, "summary", False) or target:
-            raise SystemExit("agentctl: ci-why --cached goes with --summary and main")
-        # NEVER LIVE WORK (2026-10-28: a stale file sent the status line's 15 s refresh into a 60 s live read): the
-        # processor's published line, or -- stale or missing -- what it last said, marked with its age. Live reads
-        # belong to the processor's publish step only.
-        text = status_gate_text(state_read(), time.time(), o_r)  # the status model's gate text, for this repo
-        print(text)
-        return 1 if text.startswith("gate RED") else 0 if GATE_LINE.match(text) else 2  # 2: UNREAD / ? / NETWORK
+        return ci_why_cached(o_r, a, target)
     red, text = ci_why(o_r, a.tail, target, summary=getattr(a, "summary", False), store=store)
     print(text)
     return 1 if red else 0

@@ -1,6 +1,7 @@
 # agentctl, part `cleanup`: cleanup and the lifecycle.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 import argparse
 import contextlib
 import datetime as dt
@@ -221,6 +222,16 @@ def process_session(pid):
     return m.group(1) if m else None
 
 
+def stop_session_holders(held: dict[int, str], out: Any) -> None:
+    """SIGTERM the holders {pid: command} that belong to this Claude session (never a NEVER_SIGNAL one)."""
+    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    for pid, cmd in sorted(held.items()):
+        if sid and not NEVER_SIGNAL.search(cmd) and process_session(pid) == sid:
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGTERM)
+                out(f"stopped pid {pid} of this session: {cmd[:120]}", flush=True)
+
+
 def free_worktree(wt, out=print):
     """Stop the caller's processes in worktree wt (FREEING A LANDED WORKTREE above), then wait for it to be free.
     Returns {pid: command} of what still holds it (empty: free)."""
@@ -233,12 +244,7 @@ def free_worktree(wt, out=print):
         r = run_cmd([warm, "--stop"], timeout=90, cwd=wt, env=env)
         out(f"scripts/sbt-warm --stop in {wt}: exit {r.returncode}", flush=True)
         held = worktree_holders(wt)
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
-    for pid, cmd in sorted(held.items()):
-        if sid and not NEVER_SIGNAL.search(cmd) and process_session(pid) == sid:
-            with contextlib.suppress(OSError):
-                os.kill(pid, signal.SIGTERM)
-                out(f"stopped pid {pid} of this session: {cmd[:120]}", flush=True)
+    stop_session_holders(held, out)
     deadline = time.time() + env_num("AGENTCTL_FREE_WAIT", FREE_WAIT)
     while held and time.time() < deadline:
         time.sleep(0.5)

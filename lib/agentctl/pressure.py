@@ -35,22 +35,21 @@ def ps_busy_cores(probe=None):
     """ps's %CPU summed (the machine's own ticks unreadable, or the tests' $AGENTCTL_GOV_PS_PROBE rows), less the
     governor's waiters and idle Claude sessions."""
     out = run_cmd(probe, shell=True).stdout if probe else run_cmd(["ps", "-A", "-o", "pcpu=,args="]).stdout
-    total = 0.0
-    for line in out.splitlines():
-        parts = line.split(None, 1)
-        if len(parts) != 2:
-            continue
-        try:
-            pct = float(parts[0])
-        except ValueError:
-            continue
-        args = parts[1]
-        if "agentctl gov admit" in args:
-            continue
-        if os.path.basename(args.split()[0]) == "claude" and pct < GOV_IDLE_CLAUDE:
-            continue
-        total += pct
-    return total / 100.0
+    return sum(ps_row_percent(line) for line in out.splitlines()) / 100.0
+
+
+def ps_row_percent(line: str) -> float:
+    """The %CPU a `ps` row counts: 0 for a row that is not `<pcpu> <args>`, a governor waiter or an idle Claude session."""
+    parts = line.split(None, 1)
+    if len(parts) != 2:
+        return 0.0
+    pct = attempt(lambda: float(parts[0]), None, catch=(ValueError,))
+    args = parts[1]
+    if pct is None or "agentctl gov admit" in args:
+        return 0.0
+    if os.path.basename(args.split()[0]) == "claude" and pct < GOV_IDLE_CLAUDE:
+        return 0.0
+    return pct
 
 
 # THE LAPTOP'S PRESSURE, read as it is NOW. Two movies reds sat `waiting: laptop pressure (swap 17.7 of 19.0 GB used)`

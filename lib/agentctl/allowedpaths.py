@@ -26,6 +26,11 @@ def allowed_dir(path: str | None) -> bool:
     return bool(path) and os.path.isdir(str(path)) and allowed_path(path)
 
 
+def under_bin(n: str) -> bool:
+    """n (normalised) is ~/bin, below it, or a sibling worktree ~/bin-wt-*."""
+    return n == f"{HOME}/bin" or n.startswith(f"{HOME}/bin/") or n.startswith(f"{HOME}/bin-wt-")
+
+
 def allowed_path(path: str | None) -> bool:
     """True when path (a string; never stat'ed here) is under an allowed root, or a sibling worktree of ~/bin
     (~/bin, ~/bin-wt-*). Otherwise False, logged once."""
@@ -34,8 +39,7 @@ def allowed_path(path: str | None) -> bool:
     n = os.path.normpath(path)
     h = HOME
     protected = any(n == f"{h}/{d}" or n.startswith(f"{h}/{d}/") for d in PROTECTED_DIRS)  # whatever root holds it
-    ok = not protected and (n == f"{h}/bin" or n.startswith(f"{h}/bin/") or n.startswith(f"{h}/bin-wt-")
-                            or any(n == r or n.startswith(r.rstrip("/") + "/") for r in allowed_roots()))
+    ok = not protected and (under_bin(n) or any(n == r or n.startswith(r.rstrip("/") + "/") for r in allowed_roots()))
     if not ok and n not in _skipped_paths:
         _skipped_paths.add(n)
         err(f"skipped {n}: outside the roots background code may touch")
