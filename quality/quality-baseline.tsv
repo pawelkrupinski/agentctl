@@ -83,7 +83,6 @@ cognitive	recovery_tick	26
 cognitive	red_attach_obs	17
 cognitive	red_authors	22
 cognitive	red_callable_evidence	15
-cognitive	red_diagnosis_step	27
 cognitive	red_dispatch	27
 cognitive	red_failed_steps	14
 cognitive	red_family	16
@@ -91,7 +90,7 @@ cognitive	red_fix_held	35
 cognitive	red_flake_check	15
 cognitive	red_joined_idle	18
 cognitive	red_main_verify	14
-cognitive	red_offer	31
+cognitive	red_offer	17
 cognitive	red_renew_blocks	26
 cognitive	red_repos_parse	26
 cognitive	red_spawn	28
@@ -210,7 +209,7 @@ cyclomatic	red_attach_obs	18
 cyclomatic	red_authors	23
 cyclomatic	red_callable_evidence	20
 cyclomatic	red_claim	13
-cyclomatic	red_diagnosis_step	32
+cyclomatic	red_diagnosis_step	14
 cyclomatic	red_dispatch	30
 cyclomatic	red_failed_steps	22
 cyclomatic	red_family	23
@@ -218,7 +217,7 @@ cyclomatic	red_fix_held	38
 cyclomatic	red_flake_check	17
 cyclomatic	red_joined_idle	18
 cyclomatic	red_main_verify	20
-cyclomatic	red_offer	38
+cyclomatic	red_offer	19
 cyclomatic	red_renew_blocks	25
 cyclomatic	red_repos_parse	26
 cyclomatic	red_spawn	25

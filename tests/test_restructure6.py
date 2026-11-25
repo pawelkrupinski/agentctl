@@ -340,6 +340,19 @@ class RedBlockTest(unittest.TestCase):
         check(self, "red_renew_blocks", build, lambda A: A.red_renew_blocks, 8000)
 
 
+class Stamp:
+    """A parsed time with a stable repr."""
+
+    def __init__(self, value):
+        self.value = value
+
+    def timestamp(self):
+        return self.value
+
+    def __repr__(self):
+        return f"Stamp({self.value})"
+
+
 class RedOpenTest(unittest.TestCase):
     def test_red_offer(self):
         def build(case):
@@ -375,7 +388,7 @@ class RedOpenTest(unittest.TestCase):
             case.fake("red_what", lambda rng, d: "R")
             case.fake("red_verify_dispatch", lambda rng, *a: rng.choice(["dispatched x", "none: no", "dispatched y"]))
             case.fake("red_keep_holder", lambda rng, row, text: None)
-            case.fake("parse_time", lambda rng, s: types.SimpleNamespace(timestamp=lambda: float(s)))
+            case.fake("parse_time", lambda rng, s: Stamp(float(s)))
             changes = [{"id": f"c{i}", "entered_at": r.choice([0, 500, 9000]), "data": maybe(r, {"diagnoses": r.choice([[1], ["2"], [3], None]),
                         **({"landed_sha": "s"} if r.random() < 0.5 else {"tip": "t"} if r.random() < 0.5 else {})}, 0.9)} for i in range(r.randint(0, 3))]
 

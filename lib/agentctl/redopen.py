@@ -27,6 +27,36 @@ from agentctl.redauthors import red_authors
 from agentctl.outsideflows import main_flow_meta
 
 
+def _offer_deadline(store: Any, d: dict[str, Any], tier: str) -> Any:
+    """Seconds an offer of this tier waits for a taker."""
+    deadline = RED_OFFER["author"] if tier == "author" else RED_OFFER[red_offer_class(d)]
+    if tier == "blame":  # waits for its culprit, at most BLAME_MAX: never escalated UNCLAIMED meanwhile
+        return max(60, float((d.get("blame") or {}).get("since") or 0) + env_num("AGENTCTL_BLAME_MAX", BLAME_MAX)
+                   - store.clock() + 60)
+    return deadline
+
+
+def _author_verdict(d: dict[str, Any], deadline: Any) -> str:
+    """The line addressed to the change's recorded author (the projector writes it to their inbox)."""
+    a = d["author"]
+    return (f"RED AUTHOR: {red_what(d)} contains your {', '.join(s[:9] for s in a.get('shas') or [])} "
+            f"({str(a.get('worktree')).replace(HOME, '~')}): offered to you for {deadline // 60} min -- "
+            f"`~/bin/agentctl red claim {d['key']} --worktree .` and fix it "
+            f"(`Fixes-Red: {(d.get('last_run') or {}).get('number')}`); else a fixer takes it")
+
+
+def _deep_offer(d: dict[str, Any], sev: dict[str, Any], verdict: str | None, escalate: bool,
+                data: dict[str, Any] | None) -> tuple[dict[str, Any], str | None, dict[str, Any] | None]:
+    """(severity, verdict, data) of an offer at the deep tier: an escalation, unless the owner decided the red or this
+    attempt was already told (ESCALATED ONCE PER ATTEMPT: a re-offer with no new attempt -- a lease lost to infra, a red
+    back from a block -- is no new escalation; 2026-11-02, #728: 58 RED ESCALATE in a day)."""
+    if not verdict and not escalate:
+        if red_decision(d) or d.get("deep_told") == int(d.get("attempts") or 0):
+            return {"severity": "info"}, verdict, data
+    verdict = verdict or f"RED ESCALATE: {red_what(d)} still red after {d.get('attempts')} attempts: a deep investigation is offered"
+    return sev, verdict, {**(data or {}), "deep_told": int(d.get("attempts") or 0)}
+
+
 def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=None, tail=None, quiet=False):
     """Into `offered`, with its tier from the ladder, its deadline and its offer (the picture a taker gets). quiet: a
     re-offer that is no escalation (its culprit decided: blame.py)."""
@@ -35,27 +65,14 @@ def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=Non
     if tier == "revert" and not d.get("culprit"):  # the owner's decided revert (decided_revert): its commit is the culprit
         d["culprit"] = decided_revert(d, store.clock())
         data = {**(data or {}), "culprit": d["culprit"]}
-    deadline = RED_OFFER["author"] if tier == "author" else RED_OFFER[red_offer_class(d)]
-    if tier == "blame":  # waits for its culprit, at most BLAME_MAX: never escalated UNCLAIMED meanwhile
-        deadline = max(60, float((d.get("blame") or {}).get("since") or 0) + env_num("AGENTCTL_BLAME_MAX", BLAME_MAX)
-                       - store.clock() + 60)
+    deadline = _offer_deadline(store, d, tier)
     sev = {"severity": "escalate"} if escalate or tier == "deep" else {"severity": "info"} if quiet else {}
     aud = {"audience": {k: v for k, v in (d.get("author") or {}).items() if k in ("worktree", "session")}} \
         if tier == "author" else {}
-    if tier == "author":  # addressed to the change's recorded author (the projector writes it to their inbox)
-        a = d["author"]
-        verdict = (f"RED AUTHOR: {red_what(d)} contains your {', '.join(s[:9] for s in a.get('shas') or [])} "
-                   f"({str(a.get('worktree')).replace(HOME, '~')}): offered to you for {deadline // 60} min -- "
-                   f"`~/bin/agentctl red claim {d['key']} --worktree .` and fix it "
-                   f"(`Fixes-Red: {(d.get('last_run') or {}).get('number')}`); else a fixer takes it")
-    if tier == "deep" and not verdict and not escalate and red_decision(d):  # the owner decided it: no escalation
-        sev = {"severity": "info"}
-    elif tier == "deep" and not verdict and not escalate and d.get("deep_told") == int(d.get("attempts") or 0):
-        sev = {"severity": "info"}  # ESCALATED ONCE PER ATTEMPT: a re-offer with no new attempt (a lease lost to infra,
-        # a red back from a block) at the deep tier is no new escalation -- 2026-11-02, #728: 58 RED ESCALATE in a day
+    if tier == "author":
+        verdict = _author_verdict(d, deadline)
     elif tier == "deep":
-        verdict = verdict or f"RED ESCALATE: {red_what(d)} still red after {d.get('attempts')} attempts: a deep investigation is offered"
-        data = {**(data or {}), "deep_told": int(d.get("attempts") or 0)}
+        sev, verdict, data = _deep_offer(d, sev, verdict, escalate, data)
     if verdict:
         sev["refs"] = {"key": d.get("key"), "run": (d.get("last_run") or {}).get("number"), "workflow": d.get("workflow"),
                        "verdict": verdict, "tail": tail or [d.get("line") or ""], "command": "red"}
@@ -202,18 +219,10 @@ def red_author(repo, ob, t):
 # kept). Once it lands, its red's workflow -- when dispatchable (workflow_dispatch, no `verify_dispatch no` row) -- is
 # dispatched on main to collect the new evidence, once per change, and the run's verdict goes back to the same holder
 # (RED-NOTE.md in its worktree), never to a new fixer.
-def red_diagnosis_step(store, it, row, snap, repo, o_r, t):
-    """A leased red's landed `Diagnoses-Red:` changes: each dispatched once to collect its evidence, and the first
-    decided run after that dispatch told to the holder. The lines it did."""
-    d = it["data"]
-    names = {str(x) for x in red_names(d) if x is not None}
-    done = dict(d.get("diagnosis_runs") or {})
+def _dispatch_diagnoses(landed: list[Any], done: dict[str, Any], d: dict[str, Any], row: Any, repo: Any, o_r: Any,
+                        t: float) -> list[str]:
+    """Dispatch each landed diagnosing change not yet in `done` once (recorded in it), the holder told."""
     did = []
-    try:
-        landed = [c for c in store.items("change", ["landed"]) if names & {str(x) for x in (c.get("data") or {}).get(
-            "diagnoses") or []} and float(c.get("entered_at") or 0) >= float(d.get("opened_at") or 0) - 3600]
-    except Exception:  # an unread store decides nothing
-        return []
     for c in landed:
         if c["id"] in done:
             continue
@@ -222,16 +231,43 @@ def red_diagnosis_step(store, it, row, snap, repo, o_r, t):
         done[c["id"]] = {"at": t, "dispatch": line}
         red_keep_holder(row, f"your diagnostics {c['id']} landed: {line}; its verdict comes here")
         did.append(f"{red_what(d)}: diagnostics {c['id']}: {line}")
+    return did
+
+
+def _awaits_verdict(rec: dict[str, Any], last: dict[str, Any]) -> bool:
+    """A dispatched, untold diagnosis whose workflow has a decided run since the dispatch."""
+    if rec.get("told") or not last.get("updatedAt") or not str(rec.get("dispatch") or "").startswith("dispatched"):
+        return False
+    return bool(parse_time(last["updatedAt"]).timestamp() > float(rec["at"]) and last.get("status", "completed") == "completed")
+
+
+def _tell_verdicts(done: dict[str, Any], d: dict[str, Any], row: Any, snap: Any, t: float) -> list[str]:
+    """Tell the holder the first decided run after each diagnosis' dispatch (marking the diagnosis told)."""
     last = ((snap or {}).get("latest") or {}).get(d.get("workflow")) or {}
+    did = []
     for cid, rec in done.items():
-        if rec.get("told") or not last.get("updatedAt") or not str(rec.get("dispatch") or "").startswith("dispatched"):
+        if not _awaits_verdict(rec, last):
             continue
-        if parse_time(last["updatedAt"]).timestamp() > float(rec["at"]) and last.get("status", "completed") == "completed":
-            text = (f"{d.get('workflow')} #{last.get('number')} after your diagnostics {cid}: "
-                    f"{last.get('conclusion') or 'decided'} (run {last.get('databaseId')})")
-            red_keep_holder(row, text)
-            rec["told"] = t
-            did.append(f"{red_what(d)}: {text}")
+        text = (f"{d.get('workflow')} #{last.get('number')} after your diagnostics {cid}: "
+                f"{last.get('conclusion') or 'decided'} (run {last.get('databaseId')})")
+        red_keep_holder(row, text)
+        rec["told"] = t
+        did.append(f"{red_what(d)}: {text}")
+    return did
+
+
+def red_diagnosis_step(store, it, row, snap, repo, o_r, t):
+    """A leased red's landed `Diagnoses-Red:` changes: each dispatched once to collect its evidence, and the first
+    decided run after that dispatch told to the holder. The lines it did."""
+    d = it["data"]
+    names = {str(x) for x in red_names(d) if x is not None}
+    done = dict(d.get("diagnosis_runs") or {})
+    try:
+        landed = [c for c in store.items("change", ["landed"]) if names & {str(x) for x in (c.get("data") or {}).get(
+            "diagnoses") or []} and float(c.get("entered_at") or 0) >= float(d.get("opened_at") or 0) - 3600]
+    except Exception:  # an unread store decides nothing
+        return []
+    did = _dispatch_diagnoses(landed, done, d, row, repo, o_r, t) + _tell_verdicts(done, d, row, snap, t)
     if did:
         store.update_item("red", it["id"], it["version"], {"diagnosis_runs": done})
     return did
