@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import time
+from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import err, host_role, run_cmd
 from agentctl.statefile import read_json_file, write_json_file
@@ -108,53 +109,89 @@ def network_watch(store, route=None, kick=None):
     return "changed"
 
 
+class TunnelCycle:
+    """One processor cycle of the tunnel's health probe, a method per outcome: it answers (`healthy`), the laptop's own
+    uplink is at fault (`network_fault`), or the tunnel is (`kickstart`, then `escalate`). The tunnel's state file is
+    read once and written back by whichever outcome changed it."""
+
+    def __init__(self, store: Any, t: float, probe: Any, kick: Any, uplink: Any) -> None:
+        self.store, self.t, self.probe, self.kick, self.uplink = store, t, probe, kick, uplink
+        self.res = run_probe("tunnel") if probe is None else None  # the registry's probe: the one that will clear what it opens
+        self.r = (self.res.detail.rsplit(" ", 1)[-1] if self.res else probe())
+        self.st = read_json_file(tunnel_state_path())
+
+    def run(self) -> str:
+        if self.r == "ok":
+            return self.healthy()
+        self.st["fails"] = self.st.get("fails", 0) + 1
+        loss = (self.uplink or (uplink_loss if self.probe is None else (lambda: 0.0)))()
+        if loss >= UPLINK_LOSS_MAX or (self.st.get("network") and loss > UPLINK_LOSS_CLEAR):
+            return self.network_fault(loss)
+        clear_network_note()  # the uplink is fine: a dead forward is the tunnel's (the kickstart below)
+        did = self.escalate(self.kickstart())
+        write_json_file(tunnel_state_path(), self.st)
+        return did
+
+    def healthy(self) -> str:
+        """The tunnel answers: 'restored' when it had been down (or blamed on the network), else 'ok'; its failures forgotten."""
+        st = self.st
+        was_down = bool(st.get("pending_since") or st.get("network"))
+        if was_down:
+            err("the tunnel answers again: the gate is read at once")
+            mark_gate_dirty()  # the status line leaves `gate UNREAD` at the next duties tick, not at the 45 s mark
+        if st.get("fails") or was_down:
+            st.update(fails=0, pending_since=None, escalated=False, network=False)
+            write_json_file(tunnel_state_path(), st)
+        clear_network_note()
+        return "restored" if was_down else "ok"
+
+    def network_fault(self, loss: float) -> str:
+        """The uplink loses packets, so the tunnel's failure is the network's: one NETWORK note per outage, no kickstart."""
+        st = self.st
+        if not st.get("network"):
+            msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so the tunnel (localhost:{tunnel_ports()[0][0]}) "
+                   f"{self.r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")
+            err(msg)
+            open_outage(self.store, "NETWORK", msg, self.res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel",
+                        command="tunnel")
+        st.update(network=True, pending_since=None, escalated=False)  # the kick/escalation clock starts on a good uplink
+        write_json_file(tunnel_state_path(), st)
+        state_update(network={"loss": loss, "at": self.t, "tunnel": self.r})  # the status line says NETWORK, not a bare UNREAD
+        return "network"
+
+    def kickstart(self) -> str:
+        """'kicked' once the tunnel failed twice in a row (and not within TUNNEL_KICK_MIN_GAP of the last kick), else 'down'."""
+        st = self.st
+        if st["fails"] < 2 or self.t - st.get("last_kick", 0) < TUNNEL_KICK_MIN_GAP:
+            return "down"
+        err(f"the tunnel {self.r} {st['fails']} probes in a row; kickstarting {TUNNEL_LABEL}")
+        (self.kick or launchctl_kick)()
+        st["last_kick"] = self.t
+        st["pending_since"] = st.get("pending_since") or self.t
+        return "kicked"
+
+    def escalate(self, did: str) -> str:
+        """'escalated' once, when the tunnel still fails TUNNEL_RESTORE_WAIT s after a kickstart; else what `did` was."""
+        st = self.st
+        if not st.get("pending_since") or self.t - st["pending_since"] < TUNNEL_RESTORE_WAIT or st.get("escalated"):
+            return did
+        msg = (f"STALLED: the tunnel (localhost:{tunnel_ports()[0][0]}) still {self.r} {int((self.t - st['pending_since']) // 60)} min after a "
+               f"kickstart; run `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}` and check {TUNNEL_LOG}")
+        open_outage(self.store, "STALLED", msg, self.res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel-stalled",
+                    command="tunnel", exit_code=2)
+        st["escalated"] = True
+        return "escalated"
+
+
+def clear_network_note() -> None:
+    """Drop the status line's NETWORK note, when one is set."""
+    if (state_read().get("network") or {}).get("at"):
+        state_update(network=None)
+
+
 def tunnel_watch(store, now_=None, probe=None, kick=None, uplink=None):
     """One processor cycle of the health probe. Returns what it did: ok, down, kicked, restored, escalated, network, or
     ''. A tunnel that fails while the laptop's own uplink loses packets is the network's fault: no kickstart (it only
     churns the tunnel), no STALLED escalation, one NETWORK note per outage."""
     t = now_ if now_ is not None else time.time()
-    res = run_probe("tunnel") if probe is None else None  # the registry's probe: the one that will clear what it opens
-    r = (res.detail.rsplit(" ", 1)[-1] if res else probe())
-    st = read_json_file(tunnel_state_path())
-    if r == "ok":
-        did = "restored" if st.get("pending_since") or st.get("network") else "ok"
-        if did == "restored":
-            err("the tunnel answers again: the gate is read at once")
-            mark_gate_dirty()  # the status line leaves `gate UNREAD` at the next duties tick, not at the 45 s mark
-        if st.get("fails") or st.get("pending_since") or st.get("network"):
-            st.update(fails=0, pending_since=None, escalated=False, network=False)
-            write_json_file(tunnel_state_path(), st)
-        if (state_read().get("network") or {}).get("at"):
-            state_update(network=None)
-        return did
-    st["fails"] = st.get("fails", 0) + 1
-    loss = (uplink or (uplink_loss if probe is None else (lambda: 0.0)))()
-    if loss >= UPLINK_LOSS_MAX or (st.get("network") and loss > UPLINK_LOSS_CLEAR):
-        if not st.get("network"):
-            msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so the tunnel (localhost:{tunnel_ports()[0][0]}) "
-                   f"{r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")
-            err(msg)
-            open_outage(store, "NETWORK", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel",
-                           command="tunnel")
-        st.update(network=True, pending_since=None, escalated=False)  # the kick/escalation clock starts on a good uplink
-        write_json_file(tunnel_state_path(), st)
-        state_update(network={"loss": loss, "at": t, "tunnel": r})  # the status line says NETWORK, not a bare UNREAD
-        return "network"
-    if (state_read().get("network") or {}).get("at"):
-        state_update(network=None)  # the uplink is fine: a dead forward is the tunnel's (the kickstart below)
-    did = "down"
-    if st["fails"] >= 2 and t - st.get("last_kick", 0) >= TUNNEL_KICK_MIN_GAP:
-        err(f"the tunnel {r} {st['fails']} probes in a row; kickstarting {TUNNEL_LABEL}")
-        (kick or launchctl_kick)()
-        st["last_kick"] = t
-        st["pending_since"] = st.get("pending_since") or t
-        did = "kicked"
-    if st.get("pending_since") and t - st["pending_since"] >= TUNNEL_RESTORE_WAIT and not st.get("escalated"):
-        msg = (f"STALLED: the tunnel (localhost:{tunnel_ports()[0][0]}) still {r} {int((t - st['pending_since']) // 60)} min after a "
-               f"kickstart; run `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}` and check {TUNNEL_LOG}")
-        open_outage(store, "STALLED", msg, res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel-stalled",
-                       command="tunnel", exit_code=2)
-        st["escalated"] = True
-        did = "escalated"
-    write_json_file(tunnel_state_path(), st)
-    return did
+    return TunnelCycle(store, t, probe, kick, uplink).run()
