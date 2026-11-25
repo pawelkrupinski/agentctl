@@ -1,6 +1,7 @@
 # agentctl, part `statuspage`: the read-only status page: its HTTP server on a daemon thread, its URL, `agentctl status` and `--open`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import http.server
 import json
 import os
 import re
@@ -93,107 +94,132 @@ def status_log_path(p):
     return None
 
 
+PLAIN = "text/plain; charset=utf-8"
+
+
+NO_SUCH_AGENT = "no such agent: an id from the page's Agents section\n"
+
+
+class StatusHandler(http.server.BaseHTTPRequestHandler):
+    """One request of the status page: read-only, GET (and HEAD) alone, each route a method."""
+    server_version = "agentctl-status"
+    ROUTES = {"/": "page", "/api/status": "api", "/stream": "stream", "/log": "log"}
+
+    def log_message(self, *_a: Any) -> None:
+        pass
+
+    def send(self, code: int, body: str | bytes, ctype: str) -> None:
+        data = body.encode() if isinstance(body, str) else body
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(data)))
+        self.guard_headers()
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
+    def guard_headers(self) -> None:
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; "
+                         "style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'")
+
+    def do_POST(self) -> None:  # read-only: GET (and HEAD) alone, so no request can change anything (no CSRF to guard)
+        self.send(405, "read-only: GET only\n", PLAIN)
+    do_PUT = do_DELETE = do_PATCH = do_POST
+
+    def do_HEAD(self) -> None:
+        self.do_GET()
+
+    def do_GET(self) -> None:
+        try:
+            self.route()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:  # never the processor's: one request's error is that request's
+            with suppress(OSError):
+                self.send(500, f"error: {type(e).__name__}: {str(e)[:300]}\n", PLAIN)
+
+    def route(self) -> None:
+        if not status_host_ok(self.headers.get("Host")):
+            return self.send(403, "forbidden host\n", PLAIN)
+        u = urllib.parse.urlsplit(self.path)
+        if u.path in self.ROUTES:
+            getattr(self, self.ROUTES[u.path])(u)
+        elif u.path.startswith("/agent/"):
+            self.agent_page(u)
+        else:
+            self.send(404, "not found\n", PLAIN)
+
+    def page(self, _u: Any) -> None:
+        self.send(200, STATUS_PAGE_HTML, "text/html; charset=utf-8")
+
+    def api(self, _u: Any) -> None:
+        self.send(200, json.dumps(status_cached(), default=str), "application/json")
+
+    def agent_page(self, u: Any) -> None:
+        if not live_lookup(urllib.parse.unquote(u.path[len("/agent/"):])):
+            return self.send(404, NO_SUCH_AGENT, PLAIN)
+        self.send(200, AGENT_PAGE_HTML, "text/html; charset=utf-8")
+
+    def log(self, u: Any) -> None:
+        real = status_log_path((urllib.parse.parse_qs(u.query).get("path") or [""])[0])
+        if not real:
+            return self.send(403, "only a .log/.out/.txt file under ~/.cache/agentctl\n", PLAIN)
+        body, size = status_log_body(real)
+        body = live_mask_text(body.decode("utf-8", "replace")).encode()
+        head = f"{real} ({size} bytes" + (f"; the last {STATUS_LOG_MAX} shown" if size > STATUS_LOG_MAX else "") + ")\n\n"
+        self.send(200, head.encode() + body, PLAIN)
+
+    def stream(self, u: Any) -> None:
+        q = urllib.parse.parse_qs(u.query)
+        e = live_lookup((q.get("agent") or [""])[0])
+        if not e:
+            return self.send(404, NO_SUCH_AGENT, PLAIN)
+        start = self.stream_offset(q)
+        if start is None:
+            return self.send(400, "from: a byte offset\n", PLAIN)
+        if self.command == "HEAD":
+            return self.send(200, "", "text/event-stream")
+        if not _live_streams.acquire(blocking=False):
+            return self.send(503, f"{LIVE_STREAMS} live streams already open\n", PLAIN)
+        try:
+            self.pump(e, start)
+        except OSError:  # gone, or too slow to take a frame
+            pass
+        finally:
+            _live_streams.release()
+
+    def stream_offset(self, q: dict[str, list[str]]) -> str | None:
+        """The byte offset a stream starts at (Last-Event-ID, else ?from=, else 0), digits; None when it is no offset."""
+        start = (self.headers.get("Last-Event-ID") or (q.get("from") or ["0"])[0] or "0").strip()
+        return start if start.isdigit() and len(start) <= 15 else None
+
+    def pump(self, e: Any, start: str) -> None:
+        """The event stream of agent e from byte offset `start` (digits), until the peer is gone."""
+        self.close_connection = True
+        self.connection.settimeout(LIVE_SEND_TIMEOUT)  # a client that does not take a frame is dropped
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("X-Accel-Buffering", "no")
+        self.guard_headers()
+        self.end_headers()
+
+        def write(b: bytes) -> None:
+            self.wfile.write(b)
+            self.wfile.flush()
+        live_stream(e, int(start), write, closed=lambda: live_peer_closed(self.connection))
+
+
+class StatusServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
 def status_page_server(host, port):
     """The page's HTTP server (not started)."""
-    import http.server
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        server_version = "agentctl-status"
-
-        def log_message(self, *_a):
-            pass
-
-        def send(self, code, body, ctype):
-            data = body.encode() if isinstance(body, str) else body
-            self.send_response(code)
-            self.send_header("Content-Type", ctype)
-            self.send_header("Content-Length", str(len(data)))
-            self.guard_headers()
-            self.end_headers()
-            if self.command != "HEAD":
-                self.wfile.write(data)
-
-        def guard_headers(self):
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("X-Frame-Options", "DENY")
-            self.send_header("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; "
-                             "style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'")
-
-        def do_POST(self):  # read-only: GET (and HEAD) alone, so no request can change anything (no CSRF to guard)
-            self.send(405, "read-only: GET only\n", "text/plain; charset=utf-8")
-        do_PUT = do_DELETE = do_PATCH = do_POST
-
-        def stream(self, u):
-            q = urllib.parse.parse_qs(u.query)
-            e = live_lookup((q.get("agent") or [""])[0])
-            if not e:
-                return self.send(404, "no such agent: an id from the page's Agents section\n", "text/plain; charset=utf-8")
-            start = (self.headers.get("Last-Event-ID") or (q.get("from") or ["0"])[0] or "0").strip()
-            if not start.isdigit() or len(start) > 15:
-                return self.send(400, "from: a byte offset\n", "text/plain; charset=utf-8")
-            if self.command == "HEAD":
-                return self.send(200, "", "text/event-stream")
-            if not _live_streams.acquire(blocking=False):
-                return self.send(503, f"{LIVE_STREAMS} live streams already open\n", "text/plain; charset=utf-8")
-            try:
-                self.close_connection = True
-                self.connection.settimeout(LIVE_SEND_TIMEOUT)  # a client that does not take a frame is dropped
-                self.send_response(200)
-                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-                self.send_header("X-Accel-Buffering", "no")
-                self.guard_headers()
-                self.end_headers()
-
-                def write(b):
-                    self.wfile.write(b)
-                    self.wfile.flush()
-                live_stream(e, int(start), write, closed=lambda: live_peer_closed(self.connection))
-            except OSError:  # gone, or too slow to take a frame
-                pass
-            finally:
-                _live_streams.release()
-
-        def do_HEAD(self):
-            self.do_GET()
-
-        def do_GET(self):
-            try:
-                if not status_host_ok(self.headers.get("Host")):
-                    return self.send(403, "forbidden host\n", "text/plain; charset=utf-8")
-                u = urllib.parse.urlsplit(self.path)
-                if u.path == "/":
-                    return self.send(200, STATUS_PAGE_HTML, "text/html; charset=utf-8")
-                if u.path == "/api/status":
-                    return self.send(200, json.dumps(status_cached(), default=str), "application/json")
-                if u.path == "/stream":
-                    return self.stream(u)
-                if u.path.startswith("/agent/"):
-                    if not live_lookup(urllib.parse.unquote(u.path[len("/agent/"):])):
-                        return self.send(404, "no such agent: an id from the page's Agents section\n",
-                                         "text/plain; charset=utf-8")
-                    return self.send(200, AGENT_PAGE_HTML, "text/html; charset=utf-8")
-                if u.path == "/log":
-                    q = urllib.parse.parse_qs(u.query).get("path") or [""]
-                    real = status_log_path(q[0])
-                    if not real:
-                        return self.send(403, "only a .log/.out/.txt file under ~/.cache/agentctl\n",
-                                         "text/plain; charset=utf-8")
-                    body, size = status_log_body(real)
-                    body = live_mask_text(body.decode("utf-8", "replace")).encode()
-                    head = f"{real} ({size} bytes" + (f"; the last {STATUS_LOG_MAX} shown" if size > STATUS_LOG_MAX else "") + ")\n\n"
-                    return self.send(200, head.encode() + body, "text/plain; charset=utf-8")
-                return self.send(404, "not found\n", "text/plain; charset=utf-8")
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-            except Exception as e:  # never the processor's: one request's error is that request's
-                with suppress(OSError):
-                    self.send(500, f"error: {type(e).__name__}: {str(e)[:300]}\n", "text/plain; charset=utf-8")
-
-    class Server(http.server.ThreadingHTTPServer):
-        daemon_threads = True
-        allow_reuse_address = True
-    return Server((host, port), Handler)
+    return StatusServer((host, port), StatusHandler)
 
 
 _status_page = process_cache({})

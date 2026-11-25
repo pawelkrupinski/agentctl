@@ -412,6 +412,45 @@ class ServerTest(Base):
         self.assertEqual((code, json.loads(body)["at"]), (200, T))
         self.assertEqual(self.get("/nope")[0], 404)
 
+    def request(self, method, path, headers=None):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", method=method,
+                                     headers={"Host": "agentctl.localhost", **(headers or {})})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, r.read().decode(), r.headers
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, e.read().decode(), e.headers
+
+    def test_every_other_method_is_refused_and_head_has_no_body(self):
+        for m in ("POST", "PUT", "DELETE", "PATCH"):
+            code, body, _ = self.request(m, "/api/status")
+            self.assertEqual((code, body), (405, "read-only: GET only\n"), m)
+        code, body, hd = self.request("HEAD", "/")
+        self.assertEqual((code, body, hd["Content-Type"]), (200, "", "text/html; charset=utf-8"))
+
+    def test_agent_and_stream_routes_name_what_is_wrong(self):
+        saved = A.live_lookup
+        A.live_lookup = lambda ident: {"id": ident} if ident == "77" else None
+        try:
+            self.assertEqual(self.get("/agent/nobody")[0:2], (404, "no such agent: an id from the page's Agents section\n"))
+            self.assertEqual(self.get("/agent/77")[0], 200)
+            self.assertEqual(self.get("/stream?agent=nobody")[0], 404)
+            self.assertEqual(self.get("/stream?agent=77&from=x1")[0:2], (400, "from: a byte offset\n"))
+            code, body, hd = self.request("HEAD", "/stream?agent=77")
+            self.assertEqual((code, body, hd["Content-Type"]), (200, "", "text/event-stream"))
+        finally:
+            A.live_lookup = saved
+
+    def test_a_failing_route_is_that_requests_500_alone(self):
+        saved = A.status_cached
+        A.status_cached = lambda: 1 / 0
+        try:
+            self.assertEqual(self.get("/api/status")[0:2], (500, "error: ZeroDivisionError: division by zero\n"))
+        finally:
+            A.status_cached = saved
+        self.assertEqual(self.get("/api/status")[0], 200)
+
     def test_other_hosts_are_refused(self):
         self.assertEqual(self.get("/api/status", host="rebind.example.com")[0], 403)
 

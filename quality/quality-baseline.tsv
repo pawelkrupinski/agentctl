@@ -176,7 +176,6 @@ cognitive	set_change	16
 cognitive	spotlight_exclude	19
 cognitive	stats_pass	50
 cognitive	status_agents	29
-cognitive	status_page_server	44
 cognitive	status_page_start	15
 cognitive	status_worktree	15
 cognitive	successor_state	33
@@ -419,7 +418,6 @@ cyclomatic	workflow_jobs	19
 cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
 cyclomatic	write_snapshot	23
-inner-defs	status_page_server	8
 inner-defs	sync_steps	7
 method-lines	_push_batch_item	72
 method-lines	_tick_changes_pass	86
@@ -447,7 +445,6 @@ method-lines	red_view_state	85
 method-lines	regenerate	63
 method-lines	retire_jobs_of	55
 method-lines	stats_pass	71
-method-lines	status_page_server	101
 method-lines	sweep_repo	61
 method-lines	sync_onto_main	61
 method-lines	sync_steps	57
