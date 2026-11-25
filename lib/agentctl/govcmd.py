@@ -44,7 +44,7 @@ def cmd_gov(a):
                       force=a.force, pid=a.pid, cwd=a.cwd, cores=a.cores, job=a.job)
         return 0 if t else 1
     if a.gcmd == "usage":
-        rec = gov_record_usage(a.job, a.wall, a.cpu, a.load1, a.label or "", a.meter or "")
+        rec = gov_record_usage(a.job, a.wall, a.cpu, a.load1, a.label or "", a.meter)
         print(f"{a.job}: {rec['cores']:g} cores over {a.wall:g} s" if rec else f"{a.job}: under {GOV_USAGE_MIN_WALL} s, not recorded")
         return 0
     if a.gcmd == "cores":
