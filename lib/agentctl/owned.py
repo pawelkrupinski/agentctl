@@ -352,45 +352,89 @@ class Waiter:
             self.owned = False
 
 
-def wait_all(waiters, timeout, floor, cap):
+class WaitLoop:
+    """`wait`'s loop over its waiters, a method per step of a round: the owned waiters' polls (on the backoff's schedule),
+    the attached ones' reads of their owner's verdict, the end (every verdict in, or the timeout), the pause. Each verdict
+    is printed as it lands."""
+
+    def __init__(self, waiters: list[Any], timeout: float, floor: float, cap: float) -> None:
+        self.waiters, self.timeout = waiters, timeout
+        self.deadline = time.time() + timeout
+        self.attach_poll = env_num("AGENTCTL_ATTACH_POLL", 15)
+        self.delays = backoff(floor, cap)
+        self.next_check = 0.0
+        self.last: dict[str, Any] = {}
+
+    def pending(self) -> list[Any]:
+        return [w for w in self.waiters if w.result is None]
+
+    @staticmethod
+    def announce(w: Any) -> None:
+        if w.result:
+            print(w.result[1], flush=True)
+
+    def attach(self) -> None:
+        """Take each target, or attach to the live waiter that holds it (said once, so nobody polls GitHub twice)."""
+        for w in self.waiters:
+            if not w.acquire():
+                err(f"{w.key}: attached to existing waiter pid {w.holder.get('pid')} (since {w.holder.get('started')}); not polling GitHub")
+
+    def poll_owned(self, pending: list[Any]) -> None:
+        """The checks of the waiters this process owns, when the backoff's next one is due."""
+        if time.time() < self.next_check:
+            return
+        for w in pending:
+            if w.owned:
+                self.last[w.key] = w.poll_owned()
+                self.announce(w)
+        self.next_check = time.time() + next(self.delays)
+
+    def poll_attached(self, pending: list[Any]) -> None:
+        """The waiters another process owns: its verdict when it is in (or the target taken over when it left none)."""
+        for w in pending:
+            if w.result is None and not w.owned:
+                w.poll_attached()
+                self.announce(w)
+
+    def verdict(self) -> int:
+        """0 when every waiter's verdict is ok, else 1."""
+        return 0 if all(w.result[0] for w in self.waiters) else 1
+
+    def timeout_report(self, pending: list[Any]) -> int:
+        for w in pending:
+            print(f"TIMEOUT after {self.timeout}s; last: {self.last.get(w.key, 'attached to another waiter')}", flush=True)
+        return 2
+
+    def pause(self, pending: list[Any]) -> None:
+        """Sleep to the next poll, never past the deadline (an attached waiter is read every ATTACH_POLL s)."""
+        step = self.next_check - time.time()
+        if any(not w.owned for w in pending):
+            step = min(step, self.attach_poll)
+        time.sleep(max(0.05, min(step, self.deadline - time.time())))
+
+    def run(self) -> int:
+        """Block until every waiter has a verdict. Exit 0 all ok, 1 any failed, 2 timeout."""
+        self.attach()
+        try:
+            while True:
+                pending = self.pending()
+                self.poll_owned(pending)
+                self.poll_attached(pending)
+                pending = self.pending()
+                if not pending:
+                    return self.verdict()
+                restart_if_changed([w.own for w in self.waiters if w.owned])
+                if time.time() >= self.deadline:
+                    return self.timeout_report(pending)
+                self.pause(pending)
+        finally:
+            for w in self.waiters:
+                w.release()
+
+
+def wait_all(waiters: list[Any], timeout: float, floor: float, cap: float) -> int:
     """Block until every waiter has a verdict. Prints each verdict as it lands. Exit 0 all ok, 1 any failed, 2 timeout."""
-    deadline = time.time() + timeout
-    attach_poll = env_num("AGENTCTL_ATTACH_POLL", 15)
-    for w in waiters:
-        if not w.acquire():
-            err(f"{w.key}: attached to existing waiter pid {w.holder.get('pid')} (since {w.holder.get('started')}); not polling GitHub")
-    delays = backoff(floor, cap)
-    next_check, last = 0.0, {}
-    try:
-        while True:
-            pending = [w for w in waiters if w.result is None]
-            if time.time() >= next_check:
-                for w in pending:
-                    if w.owned:
-                        last[w.key] = w.poll_owned()
-                        if w.result:
-                            print(w.result[1], flush=True)
-                next_check = time.time() + next(delays)
-            for w in pending:
-                if w.result is None and not w.owned:
-                    w.poll_attached()
-                    if w.result:
-                        print(w.result[1], flush=True)
-            pending = [w for w in waiters if w.result is None]
-            if not pending:
-                return 0 if all(w.result[0] for w in waiters) else 1
-            restart_if_changed([w.own for w in waiters if w.owned])
-            if time.time() >= deadline:
-                for w in pending:
-                    print(f"TIMEOUT after {timeout}s; last: {last.get(w.key, 'attached to another waiter')}", flush=True)
-                return 2
-            step = next_check - time.time()
-            if any(not w.owned for w in pending):
-                step = min(step, attach_poll)
-            time.sleep(max(0.05, min(step, deadline - time.time())))
-    finally:
-        for w in waiters:
-            w.release()
+    return WaitLoop(waiters, timeout, floor, cap).run()
 
 
 def run_ids_of(a: Any) -> tuple[Any, list[str]]:
