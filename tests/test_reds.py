@@ -1823,6 +1823,28 @@ class QuickExitTest(RedsBase):
         self.assertIn("never got going", self.st.offer_of(f"red:{it['id']}")["reason"])
 
 
+    def test_a_fixer_that_meets_a_spent_usage_limit_waits_for_its_reset_and_says_so(self):
+        """2026-11-23..24: three launches in a row ended on `You've hit your weekly limit` and were held as a harness
+        fault; the limit is an outside wait -- no attempt, no crash, and the offer names it until it resets."""
+        os.environ["FAKE_CLAUDE_RESULT"] = "You've hit your weekly limit · resets 2am (UTC)"
+        try:
+            self.tick(dispatch=True)
+            it = self.only()
+            t0 = time.time()
+            while A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), time.time()) and time.time() - t0 < 60:
+                time.sleep(0.2)
+            self.t[0] = time.time()
+            self.tick(dispatch=True)
+            self.tick(dispatch=True)
+        finally:
+            os.environ.pop("FAKE_CLAUDE_RESULT")
+        it = self.only()
+        self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 0))
+        self.assertTrue(it["data"]["history"][-1]["outcome"].startswith("LIMITED: "), it["data"]["history"][-1])
+        self.assertEqual(len(A.fixer_records()), 1)
+        self.assertGreater(it["data"]["dispatch_after"], self.t[0])
+        self.assertIn("usage limit is spent", self.st.offer_of(f"red:{it['id']}")["reason"])
+
 class WorkspaceTrustTest(RedsBase):
     """2026-10-31, core #277: 9 fixers in a row ended `claude --bg` exit 1 "Workspace not trusted" (a core worktree; claude
     trusts a worktree through its repo's MAIN checkout, and ~/bitcashier/core never was). No launch is burnt on an

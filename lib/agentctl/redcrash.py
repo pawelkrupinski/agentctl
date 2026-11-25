@@ -8,6 +8,7 @@ import subprocess
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
+from agentctl.claudefiles import claude_limit
 from agentctl.core import HOME, SHORT, env_num, fmt_age, remote, spawn_detached
 from agentctl.timefmt import iso_epoch, parse_time, ts
 from agentctl.statefile import read_record
@@ -40,7 +41,7 @@ RED_CRASH_LOOP = 3                 # $AGENTCTL_RED_CRASH_LOOP
 RED_CRASH_BLOCK_MAX = 24 * 3600    # $AGENTCTL_RED_CRASH_BLOCK_MAX
 RED_CRASH_OUTCOME = re.compile(r"(NOT STARTED|ended with no|exit -?\d+ with no|TIMED OUT|lease expired|"
                                r"STOPPED: the red's lease was lost|STALLED|ORPHANED|store auth failed)")
-RED_CRASH_NEUTRAL = re.compile(r"(RELEASED|STOPPED: the fixer's wrapper was stopped)")
+RED_CRASH_NEUTRAL = re.compile(r"(RELEASED|STOPPED: the fixer's wrapper was stopped|LIMITED: )")
 CRASH_LOOP_CAUSE = "fixer-crash-loop"
 
 
@@ -122,12 +123,14 @@ def lapse_in_sleep(h):
 
 def red_crash_streak(d):
     """The newest fixer launches (newest first) since the red's last crash-loop step that ended with no result -- up to
-    the first launch (or fix) with one. A lease lapse while the host slept is no launch (host_slept)."""
+    the first launch (or fix) with one. A lease lapse while the host slept is no launch (host_slept), nor one that ended
+    on the account's spent usage limit (claude_limit: an outside wait, never the harness)."""
     hist = d.get("history") or []
     out = []
     for h in reversed(hist[int((d.get("crash_loop") or {}).get("mark") or 0):]):
         o = str(h.get("outcome") or "")
-        if RED_CRASH_NEUTRAL.match(o) or (h.get("dispatched") and lapse_in_sleep(h)):
+        if RED_CRASH_NEUTRAL.match(o) or claude_limit(f"{o}\n{h.get('notes') or ''}") \
+                or (h.get("dispatched") and lapse_in_sleep(h)):
             continue
         if not h.get("dispatched") or not RED_CRASH_OUTCOME.match(o):
             break

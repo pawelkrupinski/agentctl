@@ -323,6 +323,8 @@ def red_dispatcher(store, o_r, repo, t):
             why = f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
         elif off["tier"] == "blame":
             why = blame_waiting(pic.get("blame"))
+        elif after > t and str((item["data"].get("history") or [{}])[-1].get("outcome")).startswith("LIMITED"):
+            why = f"claude's usage limit is spent: the next fixer at {time.strftime('%H:%M', time.localtime(after))}"
         elif after > t:
             last = next((str(h.get("outcome") or "") for h in reversed(item["data"].get("history") or [])
                          if str(h.get("outcome") or "").startswith("NOT STARTED")), "")

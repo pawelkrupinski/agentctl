@@ -4,6 +4,7 @@
 import os
 import re
 from typing import Any
+from agentctl.claudefiles import claude_limit, claude_limit_reset
 from agentctl.core import cherry_landed, env_num, fmt_age, remote
 from agentctl.timefmt import iso_at, ts
 from agentctl.forge import forge_actions_run
@@ -309,17 +310,22 @@ def red_lease_ended(store, it, row, block, t, repo=None):
     h = red_history(row, t)
     m = lease_meta(row)
     quick = float(m.get("released_at") or t) - float((row or {}).get("acquired_at") or 0) < RED_QUICK_EXIT
-    if quick and re.match(r"(exit -?\d+|ended) with no|NOT STARTED", str(h["outcome"])):  # it never got going (a crash at start): not an
+    limit = claude_limit(f"{h['outcome']}\n{h.get('notes') or ''}")
+    if limit:  # THE ACCOUNT'S USAGE LIMIT IS SPENT: no attempt, no crash -- dispatched again once it resets
+        h["outcome"] = f"LIMITED: claude's usage limit is spent ({limit}); the fixer launches again when it resets"
+    elif quick and re.match(r"(exit -?\d+|ended) with no|NOT STARTED", str(h["outcome"])):  # it never got going (a crash at start): not an
         h["outcome"] = re.sub(r"^(NOT STARTED: )*", "NOT STARTED: ", str(h["outcome"]))  # attempt, nor an instant re-dispatch
     out = str(h["outcome"])
     infra = bool(h.get("dispatched") and LEASE_INFRA.match(out))  # a wrapper's lease renews by its beat: a lapse is
     # the wrapper or its machine gone (an interactive claim lapses by its own inactivity: that one counts)
-    counted = not (out.startswith(("NOT STARTED", "RELEASED")) or infra or GAVE_UP_FIXED.match(out)
+    counted = not (out.startswith(("NOT STARTED", "RELEASED", "LIMITED")) or infra or GAVE_UP_FIXED.match(out)
                    or GAVE_UP_DECIDE.match(out))
     upd = {"history": (d.get("history") or []) + [h], "holder": None,
            "attempts": int(d.get("attempts") or 0) + (1 if counted else 0),
            "ended_lease": (row or {}).get("epoch")}
-    if str(h["outcome"]).startswith("NOT STARTED") and m.get("tier") == "lander" and d.get("blame"):
+    if limit:
+        upd["dispatch_after"] = claude_limit_reset(limit, float(m.get("released_at") or t))
+    elif str(h["outcome"]).startswith("NOT STARTED") and m.get("tier") == "lander" and d.get("blame"):
         # THE LANDER COULD NOT BE REVIVED (LAUNCH FAILED): a fresh fixer at once, briefed with the change -- no backoff
         upd["blame"] = dict(d["blame"], revive_failed=str(h["outcome"])[:300])
     elif str(h["outcome"]).startswith("NOT STARTED"):

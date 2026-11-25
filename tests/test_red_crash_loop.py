@@ -437,3 +437,38 @@ class OneEndOneAttemptTest(CrashLoopBase):
             it, _acts = self.launch(it, outcome=out, notes="dispatched: tier deep")
         self.assertEqual(it["state"], "blocked-external")
         self.assertEqual(A.red_block_of(it, self.st)["text"].count(words), 3)
+
+
+LIMIT = "You've hit your weekly limit · resets Jan 15 at 10am (UTC)"   # t0 + 2 h: the clock starts 2027-01-15 08:00Z
+
+
+class UsageLimitTest(CrashLoopBase):
+    """A SPENT ACCOUNT LIMIT IS NO CRASH (2026-11-23..24: Main #2877, Tool self-tests #533 and Alert backtest #26 each
+    held on a HARNESS FAULT issue after three launches ended at once on `You've hit your weekly limit · resets ...`):
+    the launch is no attempt and no crash, and the red is dispatched again once the limit resets."""
+
+    def test_the_reset_time_is_read_from_claudes_line(self):
+        t0 = 1_800_000_000.0
+        self.assertEqual(A.claude_limit_reset(LIMIT, t0), t0 + 2 * 3600)
+        self.assertEqual(A.claude_limit_reset("You've hit your limit · resets 2am (UTC)", t0), t0 + 18 * 3600)
+        self.assertEqual(A.claude_limit_reset("You've hit your limit · resets 9:30am (UTC)", t0), t0 + 5400)
+        self.assertEqual(A.claude_limit_reset("You've hit your limit", t0), t0 + A.CLAUDE_LIMIT_FALLBACK)
+        self.assertEqual(A.claude_limit("Prompt is too long · automatic compaction failed: " + LIMIT),
+                         LIMIT)
+        self.assertIsNone(A.claude_limit("java.lang.OutOfMemoryError: the limit of the heap"))
+
+    def test_a_launch_ended_on_the_limit_is_no_crash_and_waits_for_the_reset(self):
+        it = self.red(tier="deep")
+        for _ in range(3):
+            it, _acts = self.launch(it, outcome=f"NOT STARTED: {CRASH} (session 83d32130: blocked)", notes=LIMIT,
+                                    minutes=1)
+        self.assertNotIn("crash_loop", it["data"])
+        self.assertEqual(self.escalations(), [])
+        self.assertEqual(it["data"]["attempts"], 0)
+        self.assertEqual(it["data"]["dispatch_after"], 1_800_000_000.0 + 2 * 3600)
+        self.assertTrue(it["data"]["history"][-1]["outcome"].startswith("LIMITED: "), it["data"]["history"][-1])
+        self.assertEqual(len(A.red_crash_streak(it["data"])), 0)
+
+    def test_an_older_history_of_limit_launches_is_no_streak(self):
+        h = {"outcome": f"NOT STARTED: {CRASH} (session e34ac4f8: blocked)", "notes": LIMIT, "dispatched": True}
+        self.assertEqual(A.red_crash_streak({"history": [h] * 3}), [])
