@@ -63,6 +63,12 @@ class QueueTest(WaitingTest):
         self.assertIn("END YOUR TURN", out)
         return eid, out
 
+    def no_batch(self, wt):
+        """The change in wt queued with `land --no-batch`: its id."""
+        rc, out = self.land(wt, "--no-batch")
+        self.assertEqual(rc, 0, out)
+        return out.split("QUEUED ", 1)[1].split()[0]
+
     def check(self, eid, rounds=6):
         """The change to its outcome, as the processor drives it: the executor's checks, then the tick's push
         (step 6: they are two steps now), round after round while main moves. 1 when it ends rejected."""
@@ -127,7 +133,7 @@ class QueueTest(WaitingTest):
         finally:
             A.spawn_batch_executor = saved
         wb, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: solo")
-        eb, _ = self.queued(wb)
+        eb = self.no_batch(wb)  # no push batch takes it with c: it is pushed alone
         A.check_entry(self.r.path, eb, *on_clock(self.clock))
         self.assertEqual(entry(eb)["status"], "checked")
         did, _started = tick()
@@ -170,8 +176,10 @@ class QueueTest(WaitingTest):
             finally:
                 A.spawn_executor = saved
         d, _c, _w = A.waiting_state(self.r.path)
+        # each --no-batch: no push batch takes them together (A LONE VERIFICATION HOLDS NO BATCH, queuepush.py); the
+        # hold below is for a change no batch takes
         wz, _ = self.agent("z", "web/src/main/Z.scala", "z\n", msg="z: oldest, its full check not begun")
-        ez, _ = self.queued(wz)
+        ez = self.no_batch(wz)
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: older")
         ea, _ = self.queued(wa)
         A.check_entry(self.r.path, ea, *on_clock(self.clock))
@@ -180,7 +188,7 @@ class QueueTest(WaitingTest):
         tick()  # a: main moved, no file overlap: its combined tree verified
         self.assertEqual((entry(ea)["status"], entry(ea)["verify"]), ("queued", True))
         wb, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: younger")
-        eb, _ = self.queued(wb)
+        eb = self.no_batch(wb)
         A.check_entry(self.r.path, eb, *on_clock(self.clock))
         self.assertEqual(entry(eb)["status"], "checked")
         did, started = tick()

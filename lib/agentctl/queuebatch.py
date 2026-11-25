@@ -459,7 +459,7 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, o
     return (None if rc is None else rc == 0), out, f"locally, check tree {os.path.basename(tree)}"
 
 
-def backlog_batchable(repo, d, e, t, facts=None):
+def backlog_batchable(repo: str, d: str, e: dict[str, Any], t: float, facts: dict[str, Any] | None = None) -> bool:
     """Whether queued entry e may join a backlog batch now (THE BACKLOG BATCH, above): its KIND lets it (no red fix,
     no --no-batch, no batch_alone, no identity change it cannot tell: changekind.py) and its state does (queued, no verify round, no
     retry due, no own run or live checker)."""
@@ -471,6 +471,14 @@ def backlog_batchable(repo, d, e, t, facts=None):
     if checker_alive(e["id"]):
         return False
     return kind_of(repo, e, facts, t)["backlog_batch"] is None
+
+
+def batch_queued(repo: str, d: str, entries: list[dict[str, Any]], facts: dict[str, Any] | None,
+                 t: float) -> list[dict[str, Any]]:
+    """The queued, not-yet-checked entries a batch may take now (backlog_batchable, held behind no change outside it),
+    oldest first."""
+    return sorted((e for e in entries if backlog_batchable(repo, d, e, t, facts)
+                   and not overlap_hold(repo, d, e, entries, facts, t)), key=lambda e: e["seq"])
 
 
 def kind_of(repo, e, facts, t):

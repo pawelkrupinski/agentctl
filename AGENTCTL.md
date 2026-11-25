@@ -1607,8 +1607,9 @@ The reconciler then takes it, a step per tick:
   push, OLDER ones too (2026-11-19: ratchet-diff, queued before 08010c, pushed at 10:11Z under the fix's 09:34-10:18Z
   round; the fix verified again until 10:36Z, with 100213 and 102400 held behind it), and NO PUSH BATCH forms while a
   red fix is in flight (queued..pushing: batch #48 formed 13 s before 08010c pushed, and its passed verify round was
-  thrown away). queuepush.py `older_verifying`, batch.py `push_candidates`. With two or more changes owing a verify
-  round, THE PUSH BATCH (below) verifies and pushes them together instead. Pushing a disjoint checked change first is
+  thrown away). queuepush.py `older_verifying`, batch.py `push_candidates`. With two or more changes owing a round,
+  THE PUSH BATCH (below) checks and pushes them together instead -- also while a head's own round runs (A LONE
+  VERIFICATION HOLDS NO BATCH): the hold above is only for a change no batch takes. Pushing a disjoint checked change first is
   NOT done: any push moves main, and THE RULE then sends the verification round again (queue simulator, 50 seeds of
   an outside red's fix verifying while an older change is checked: the fix re-verified in 14 seeds before, 9 after;
   over 120 random seeds the mean wait fell 6.47 -> 6.24 ticks, a red fix's 6.79 -> 6.30; the older change itself
@@ -1633,8 +1634,8 @@ The reconciler then takes it, a step per tick:
   change it cannot tell (no plan to ask), a change landed with `land --no-batch`, a red fix, a combined-tree verification round, one in an
   infra backoff or holding its own unread remote run. At most 8 members (`$AGENTCTL_BACKLOG_BATCH_MAX`; 4 before 2026-11-20), queue order,
   Fixes-Red first; a member that does not apply is left out (`batch_alone`) and checked alone; fewer than 2 kept: no
-  batch. None forms while a change verifies its combined tree or a checked change's push is due (THE OLDEST
-  VERIFICATION PUSHES FIRST holds it too), and while one waits for a tree, a younger lone change never takes the
+  batch. None forms while a checked change's push is due; a change whose own verify round RUNS holds none (A LONE
+  VERIFICATION HOLDS NO BATCH, 2026-11-23, below), and while one waits for a tree, a younger lone change never takes the
   LAST free tree (review 2026-11-18: lone changes otherwise took every freed tree first). The change tick PUSHES
   FIRST, THEN READS THE HOLDS (queue simulator, 2026-11-18): a checked change's push due holds every backlog batch back,
   and the holds were read before the tick's pushes, so the tree a finished check had freed went to the oldest lone
@@ -1913,15 +1914,22 @@ The reconciler then takes it, a step per tick:
   pushed alone: each on a main that moved since its full check paid a verify round of its own, and THE OLDEST
   VERIFICATION PUSHES FIRST held the younger ones meanwhile, so N checked changes landed serially (ref-scrapers
   verifying while pr274 and postlanding, both checked, waited to verify again after it). Now, at green with no batch
-  open and no change's own verify round running, 2 or more changes that would each need a verify round on the current
+  open, 2 or more changes that would each need a round on the current
   main (`$AGENTCTL_PUSH_BATCH_MIN`) -- checked on an older main, or queued for their verify round with no checker on
   them; never a red fix (it pushes alone, first, even while a push batch verifies), a `land --no-batch` change, one
   with a known red or in a backoff -- are held by the change tick (`its push waits for the next push batch`) and made
   ONE batch item with depth `verify`, the backlog batch's machine: assembled oldest first on the current main, at most
   4 (`$AGENTCTL_BACKLOG_BATCH_MAX`), each member judged by THE RULE (`recheck_reason`) against main plus the members
-  before it. A member that needs a FULL round is left out: re-checked alone at once when what landed on main demands
-  it (`left out of the push batch`), else (only a member before it overlaps) marked `push_alone` and pushed alone
-  after the batch, its own push judging it. ONE verify round over the union -- `--verify-only <the oldest member's
+  before it. With one such change at least, the QUEUED changes a backlog batch would take join it too (they share
+  its one check: queuepush.py `batch_queued`). ONE ROUND, THE DEEPEST A MEMBER OWES (2026-11-23, batch #109: five of
+  seven members left out for a FULL round each -- main had changed what selects their checks -- were checked alone,
+  then verified one at a time behind each other, `batch: 0` for hours): a member THE RULE sends to a full round, a
+  queued member with no check of its own, or a conflict resolved in the assembly makes the batch's one round the FULL
+  landing check (depth `full`, the backlog batch's); nobody is left out (batch.py `push_batch_full_round`). A LONE
+  VERIFICATION HOLDS NO BATCH (2026-11-23: ~8 checked tools-only changes each `held: its push waits for X's
+  combined-tree verification`, one head after another; no push batch formed while any change's own verify round
+  ran): a change whose own round runs (its checker alive) is no member, and the others form the batch beside it; THE
+  BATCH GOES FIRST, so the head's push waits for it and joins the next round. Else ONE verify round over the union -- `--verify-only <the oldest member's
   full base>..<tip>`, on ci-runner `check/verify-<base>-batch-<tip>` -- then ONE push (`PREPUSH_SKIP`: the plan the
   members' full checks passed; the hook judges the red gate), every member `checking` -> `checked` (`verified ... in
   push batch <id>`) -> `pushing` -> LANDED with its own watch and landing record (`batch_id`, `batch`; its round counts
@@ -1931,7 +1939,7 @@ The reconciler then takes it, a step per tick:
   members but not its assembled tip, and landed with the others; now the batch is assembled again without it. More than
   one identity-model commit in it: G5's drift check of its tip, and after a drift split one identity change per batch
   (`drift_serialize`). A change checked while a push batch verifies is no member of it: its push waits for the batch
-  (`its push waits for batch <id>`) and it joins the next one. batch.py `push_candidates`, `push_batch_select`,
+  (`its push waits for batch <id>`) and it joins the next one. batch.py `push_candidates`, `push_batch_full_round`,
   `union_base`; tests: `tests/test_backlog_batch.py` `PushBatchTest`.
 - **THE BATCH IS THE MECHANISM (the owner, 2026-11-20: "is anyone working on batching waiting changes ... structurally,
   not just now").** Every change goes through a batch: at green the backlog batch (above: queued changes, identity ones

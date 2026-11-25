@@ -20,7 +20,7 @@ from agentctl.waiting import supersede
 from agentctl.redseen import gate_reds
 from agentctl.holdgraph import OPEN_PARENT_STATES, push_due, stack_map, waiting_on_changes
 from agentctl.queuebatch import (
-    _behind_said, backlog_batchable, batch_round, break_hold_cycles, change_hold_stuck, hold_for_overlap, kind_of, main_conflict, note_hold,
+    _behind_said, batch_queued, batch_round, break_hold_cycles, change_hold_stuck, hold_for_overlap, kind_of, main_conflict, note_hold,
     overlap_hold, restart_hold, spawn_executor, stuck_recovery)
 from agentctl.queuediff import push_change
 from agentctl.queueclose import regen_hold_overdue
@@ -159,11 +159,11 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
             note_hold(st, e, "batch", f"its check waits for batch {first['id']} ({first['state']})", t,
                       batch=first["id"])
             continue
-        if not fix and e["id"] in pheld:  # THE PUSH BATCH verifies it with others
+        if not fix and e["id"] in pheld:  # THE PUSH BATCH checks it with others (its verify round, or its check)
             if not _behind_said.get((e["id"], "push batch")):
                 _behind_said[(e["id"], "push batch")] = True
-                did.append(f"{e['id']}: its verify round waits for the next push batch")
-            note_hold(st, e, "push-batch", "its verify round waits for the next push batch", t)
+                did.append(f"{e['id']}: its round waits for the next push batch")
+            note_hold(st, e, "push-batch", "its round waits for the next push batch", t)
             continue
         if not fix and e["id"] in held:  # THE BACKLOG BATCH checks it with others
             if not _behind_said.get((e["id"], "backlog")):
@@ -357,13 +357,17 @@ def backlog_candidates(repo, d, reds, st, t=None, facts=None):
     # it and it verified again -- behind the next backlog batch, and the next. No backlog batch while one verifies, or
     # while a checked change's push is due (its verification may have ended since the change tick).
     # A HELD VERIFICATION HOLDS NOTHING (holdgraph.py): nor a push that waits for one
-    if any((verifying(e, t, waiting_on_changes(st, [e])) or push_due(st, e, t)) and not e.get("backlog_batch")
-           for e in entries):  # a checked change's push is due at the next change tick
+    # A LONE VERIFICATION HOLDS NO BATCH (2026-11-23): one whose round RUNS (its checker alive) is no reason to wait --
+    # the batch goes first, and the verified change's push waits for it (batch_goes_first) -- or a head verifying
+    # slowly serialises every change behind it. One whose round has not started is a push batch member instead.
+    if any(push_due(st, e, t) and not e.get("backlog_batch") for e in entries):  # its push is due at the next tick
         return []
-    ok = [e for e in entries if backlog_batchable(repo, d, e, t, facts)
-          and not overlap_hold(repo, d, e, entries, facts, t)]
-    out = sorted(ok, key=lambda e: e["seq"])[:int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))]
+    out = batch_queued(repo, d, entries, facts, t)[:batch_max()]
     return out if len(out) >= backlog_min() else []
+
+
+def batch_max() -> int:
+    return int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))
 
 
 def backlog_held(repo, d, reds, st, t=None, facts=None):
@@ -378,12 +382,12 @@ def backlog_held(repo, d, reds, st, t=None, facts=None):
 # OLDEST VERIFICATION PUSHES FIRST held every younger checked change meanwhile -- so N checked changes landed serially,
 # each paying a check-runner wait plus a ~10-min verify round after the previous push moved main (ref-scrapers
 # verifying while pr274 and postlanding held their pushes behind it, each to verify again after it pushed). Now, at
-# green with no batch open and no verify round running, PUSH_BATCH_MIN or more changes that would each need a verify
+# green with no batch open (a change's own verify round running holds none: A LONE VERIFICATION HOLDS NO BATCH), PUSH_BATCH_MIN or more changes that would each need a verify
 # round on the current main (push_batchable: checked on an older main, or queued for a verify round; no red fix, no
 # `land --no-batch`, no known red, none in a backoff) are THE BATCH ABOVE with depth `verify`, the backlog batch's
 # machine: assembled oldest first on the current main, each member judged by THE RULE against main plus the members
-# before it (push_batch_select: one that needs a FULL round is left out -- checked again alone now when what landed on
-# main demands it, else pushed alone after the batch, push_alone), the union verified ONCE (the hook's --verify-only
+# before it (batch.py push_batch_full_round: ONE ROUND, THE DEEPEST A MEMBER OWES -- one needing a FULL round, or a
+# queued member never checked, makes it the full landing check; nobody is left out), else the union verified ONCE (the hook's --verify-only
 # over <the oldest member's full base>..<tip>: every test config compiled, the lints, the fast specs and the unit
 # tests of every module a member or what landed meanwhile touches; on ci-runner check/verify-<base>-batch-<tip>), and
 # pushed ONCE (the hook skipping the plan the members' full checks passed, as a lone verified change's push does).
@@ -414,14 +418,12 @@ def push_batchable(repo, d, e, t, main, facts=None):
 
 
 def push_candidates(repo, d, reds, st, t=None, facts=None):
-    """The changes a push batch takes now, oldest first, at most BACKLOG_BATCH_MAX; [] while the gate is red, while a
-    change's own verify round runs (it pushes first), or when fewer than PUSH_BATCH_MIN may go. A fix of an open red
-    (its kind under facts: queue_facts, read from the store when None) pushes alone."""
+    """The changes a push batch takes now, oldest first, at most BACKLOG_BATCH_MAX: every change owing a round on main
+    (push_batchable) and, with one at least, the queued ones a backlog batch would take (batch_queued); [] at red,
+    under a red fix in flight (a fix of an open red, its kind under facts, pushes alone), or below PUSH_BATCH_MIN."""
     if reds:
         return []
     t, facts, entries = batch_round(d, reds, st, t, facts)
-    if any(e.get("status") == "checking" and e.get("verify") and not e.get("backlog_batch") for e in entries):
-        return []
     # NO PUSH BATCH UNDER A RED FIX IN FLIGHT (2026-11-19 10:37:14Z: push batch #48 formed 13 s before 08010c, a red
     # fix just verified, pushed; its push moved main under the batch's verify round, which passed at 10:46 and was
     # thrown away -- "main moved during its check: assembled again"). A red fix goes first and pushes alone, so a push
@@ -430,9 +432,13 @@ def push_candidates(repo, d, reds, st, t=None, facts=None):
            and classify_change(e, facts, t)["red_fix"] for e in entries):
         return []
     main = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
-    out = [e for e in sorted(entries, key=lambda e: e["seq"])
-           if push_batchable(repo, d, e, t, main, facts)]
-    out = drift_serialize(repo, out)[:int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))]
+    owing = [e for e in entries if push_batchable(repo, d, e, t, main, facts)]
+    if not owing:
+        return []
+    ids = {e["id"] for e in owing}
+    out = sorted(owing + [e for e in batch_queued(repo, d, entries, facts, t) if e["id"] not in ids],
+                 key=lambda e: e["seq"])
+    out = drift_serialize(repo, out)[:batch_max()]
     return out if len(out) >= max(2, int(env_num("AGENTCTL_PUSH_BATCH_MIN", PUSH_BATCH_MIN))) else []
 
 

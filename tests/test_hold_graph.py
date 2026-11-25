@@ -137,13 +137,18 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         for x in (el, ek, eg):
             self.assertIn(x, line)
         self.assertIn(f"{ek}, the oldest, proceeds (its wait on {eg} dropped)", line)
-        self.assertIn(ek, self.started, "the oldest change proceeds")
+        self.assertTrue(ek in self.started or self.hold_of(ek).get("kind") == "push-batch",
+                        f"the oldest change proceeds: checked now, or in the next push batch ({self.hold_of(ek)})")
         self.assertEqual(self.entry(ek)["cycle_ignore"], [eg])
         rows = A.status_landing(A.open_store(), self.clock.time())["changes"]
         self.assertIn("HOLD CYCLE", next(r for r in rows if r["id"] == ek)["cycle"] or "", "status says so")
         self.assertNotIn("HOLD CYCLE", " ".join(A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))), "broken once, not every tick")
         final = self.drive_to_rest([el, ek, eg])
-        self.assertTrue(all(v == "landed" for v in final.values()), final)
+        self.assertEqual((final[ek], final[eg]), ("landed", "landed"), final)
+        # landing's commits are kick's too: landed as itself, or -- the two in one batch -- superseded by kick, which
+        # carries them onto main
+        self.assertIn(final[el], ("landed", "superseded"), final)
+        self.assertIn("landing-check: in Python", self.remote_log())
 
 
 for _name in dir(test_backlog_batch.BacklogBatchTest):

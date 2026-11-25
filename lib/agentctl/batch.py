@@ -78,45 +78,47 @@ def backlog_reconcile(d, st):
     return did
 
 
-def push_batch_select(st, repo, d, tree, kept, base, tips):
-    """(members, tip): the assembled push batch less every member THE RULE (recheck_reason) sends to a FULL round,
-    judged against main plus the members before it; the rest assembled again without it. One left out for what landed
-    on main is queued for its full round now (as its own push would queue it); one left out only for a member before it
-    is marked push_alone (it pushes alone after the batch, its own push judging it). tips: each member's own tip, from
-    before the assembly (a checked one left out keeps it)."""
-    hook = precheck_hook(tree)
-    while kept:
-        prev, out = base, None
-        for e in kept:
-            git(tree, "checkout", "-q", "--force", "--detach", e["tip"])
-            full_base = e.get("full_base") or e.get("checked_base") or base
-            paths = range_paths(tree, prev, e["tip"])
-            why = recheck_reason(tree, full_base, prev, e["tip"], paths, full_tip=e.get("full_tip"))[1]
-            if why is None and not verify_supported(hook):
-                why = f"the hook has no {VERIFY_MODE} for the combined tree"
-            if why is not None:
-                main_why = why if prev == base else \
-                    recheck_reason(tree, full_base, base, e["tip"], paths, full_tip=e.get("full_tip"))[1]
-                out = (e, why, main_why)
-                break
-            prev = e["tip"]
-        if out is None:
-            return kept, prev
-        e, why, main_why = out
-        if e.get("status") == "checked":
-            e["tip"] = tips.get(e["id"]) or e["tip"]  # its own tip again, never the batch's
-        if main_why is not None:
-            set_change(st, d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
-                       event={"text": f"{e['id']}: main moved since its checks, {main_why}: checked again "
-                                      "(left out of the push batch)"},
-                       rounds=e.get("rounds", 0) + 1, retry_after=0, verify=False)
-        else:
-            e["push_alone"] = why
-            save_entry(d, e)
-        wlog(d, f"{e['id']}: left out of the push batch ({why}): "
-                + ("its full round now" if main_why is not None else "it pushes alone after the batch"))
-        kept = assemble(st, repo, d, tree, [k for k in kept if k["id"] != e["id"]], base, alone=True)
-    return [], base
+# ONE ROUND, THE DEEPEST A MEMBER OWES (2026-11-23, batch #109: five of its seven changes were left out for a FULL
+# round each -- main had changed what selects their checks -- and checked alone, one at a time, then verified one at a
+# time behind each other: batch: 0 for hours). A push batch takes every change owing a round; when THE RULE sends one
+# of them to a full round (against main plus the members before it), one is a queued change with no check of its own,
+# or the assembly resolved a member's conflict, the batch's ONE round is the full landing check instead of the verify
+# round -- nobody is left out, and every member lands in its one push.
+def push_batch_full_round(tree: str, kept: list[dict[str, Any]], base: str) -> str | None:
+    """Why the assembled push batch's one round must be the FULL landing check (member_full_round of each member
+    against main plus the members before it), or None when the verify round suffices. Leaves the tree at its tip."""
+    hook, prev, why = precheck_hook(tree), base, None
+    for e in kept:
+        why = member_full_round(tree, hook, e, prev, base)
+        if why:
+            break
+        prev = e["tip"]
+    git(tree, "checkout", "-q", "--force", "--detach", kept[-1]["tip"] if kept else base)
+    return why
+
+
+def member_full_round(tree: str, hook: str | None, e: dict[str, Any], prev: str, base: str) -> str | None:
+    """Why push batch member e owes a FULL round on prev (main plus the members before it): never checked, its
+    conflict resolved in the batch, or THE RULE (recheck_reason); None when its verify round suffices."""
+    if e.get("status") == "queued" and not e.get("verify"):
+        return f"{e['id']} has no check of its own"
+    if e.get("autoresolved"):
+        return f"{e['id']}'s conflict was resolved in the batch"
+    git(tree, "checkout", "-q", "--force", "--detach", e["tip"])
+    why = recheck_reason(tree, e.get("full_base") or e.get("checked_base") or base, prev, e["tip"],
+                         range_paths(tree, prev, e["tip"]), full_tip=e.get("full_tip"))[1]
+    if why is None and not verify_supported(hook):
+        why = f"the hook has no {VERIFY_MODE} for the combined tree"
+    return why and f"{e['id']}: {why}"
+
+
+def batch_round_depth(tree: str, kept: list[dict[str, Any]], base: str, depth: str) -> tuple[str, str]:
+    """(the batch's depth, what its full round is) once assembled: a push batch (`verify`) whose member owes a full
+    round becomes `full` (ONE ROUND, THE DEEPEST A MEMBER OWES); a backlog batch's full round is its own."""
+    why = push_batch_full_round(tree, kept, base) if depth == "verify" else None
+    if why:
+        return "full", f"a push batch, the full landing check: {why}"
+    return depth, "a backlog: the full landing check"
 
 
 def union_base(tree, members, base):
@@ -394,9 +396,8 @@ def batch_step(repo, d, seen, st):
             git(repo, "fetch", "--quiet", remote(), "main", check=False)
             base = git(repo, "rev-parse", f"{remote()}/main").strip()
             tree = check_tree(repo, i, base)
-            kept = assemble(st, repo, d, tree, batch, base, alone=full, autoresolve=depth == "full")
-            if depth == "verify":
-                kept, _tip = push_batch_select(st, repo, d, tree, kept, base, tips)
+            kept = assemble(st, repo, d, tree, batch, base, alone=full, autoresolve=full)
+            depth, full_round = batch_round_depth(tree, kept, base, depth)
             tip = git(tree, "rev-parse", "HEAD").strip()
             range_base = union_base(tree, kept, base) if depth == "verify" else None
         finally:
@@ -428,7 +429,7 @@ def batch_step(repo, d, seen, st):
                                         "cls": "red" if fix_waits else "check", "depth": depth,
                                         **({"range_base": range_base} if range_base else {})},
                    text=f"batch {it['id']}: checking {len(kept)} change(s) at {tip[:10]} on {base[:10]}"
-                        + {"full": " (a backlog: the full landing check)",
+                        + {"full": f" ({full_round})",
                            "verify": f" (a push batch: one verify round over {(range_base or base)[:10]}..{tip[:10]})"}
                         .get(depth, ""))
         for e in kept if full else ():  # its members are the batch's until it lands them or lets them go

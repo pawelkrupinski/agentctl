@@ -214,11 +214,12 @@ class BacklogBatchTest(test_queue.QueueTest):
         self.assertIn("checking", " ".join(did), "the backlog batch takes the freed tree")
         self.assertEqual(self.batch()["data"]["members"], [ea, eb])
 
-    def test_an_older_verification_pushes_before_a_backlog_batch_forms(self):
+    def test_a_verification_not_yet_started_and_queued_changes_share_one_batch(self):
         """Review 2026-11-18 (THE OLDEST VERIFICATION PUSHES FIRST, queuepush.py): a backlog batch formed while an older
-        change verified its combined tree, so that change's push waited behind the batch's 30-40 min check (THE BATCH
-        GOES FIRST), the batch's push moved main under it, and it verified again -- behind the next backlog batch, and
-        the next: workermem's 10 h again. A verification in flight forms no backlog batch until it pushed."""
+        change verified its combined tree, so that change's push waited behind the batch's check, its push moved main
+        under it, and it verified again -- workermem's 10 h. 2026-11-23: forming NO batch instead made every change wait
+        behind one head's verification after another. A verification not yet started is a member: the older change
+        and the queued ones share ONE round (the full landing check: a and b have none of their own) and ONE push."""
         wv, _ = self.agent("v", "scripts/v.sh", "v\n", msg="v: scripts/v.sh")
         ev = self.queued(wv)[0]
         A.check_entry(self.r.path, ev, *on_clock(self.clock))
@@ -230,17 +231,15 @@ class BacklogBatchTest(test_queue.QueueTest):
                      full_tip=e["tip"], retry_after=0)
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "worker/src/main/B.scala")
-        self.assertEqual(A.backlog_candidates(self.r.path, self.d, set(), A.CurrentStore()), [], "no batch while v verifies")
-        self.assertEqual(self.drive(), [])
-        self.assertIsNone(self.batch())
-        A.check_entry(self.r.path, ev, *on_clock(self.clock))  # its verify round, ended between the change tick and the batch tick
-        self.assertEqual(self.entry(ev)["status"], "checked")
-        self.assertEqual(self.drive(), [], "nor while its push is due")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
-        self.assertEqual(self.entry(ev)["status"], "landed", "the older verification pushes first")
+        self.assertEqual([x["id"] for x in A.push_candidates(self.r.path, self.d, set(), A.CurrentStore())], [ev, ea, eb])
+        os.remove(self.calls)
         self.drive()
-        for eid in (ea, eb):
-            self.assertEqual(self.entry(eid)["status"], "landed", "then the backlog batch, on the main it moved")
+        st = A.open_store()
+        for eid in (ev, ea, eb):
+            self.assertEqual((self.entry(eid)["status"], st.item("change", eid)["data"].get("batch")), ("landed", 3), eid)
+        self.assertEqual(len(self.calls_of("--range")), 1, "one full round")
+        self.assertEqual(self.calls_of("--verify-only"), [], "no verify round of v's own")
+        self.assertEqual(self.started, [], "no lone check")
 
     def test_a_red_fix_is_never_delayed_behind_a_checking_batch(self):
         self.queue("a", "web/src/main/A.scala")
@@ -336,7 +335,10 @@ class PushBatchTest(test_queue.QueueTest):
         self.assertEqual(len(self.watches), 3, "each member its own watch")
         self.assertEqual(len([x for x in self.inbox() if x["kind"] == "LANDED"]), 3, "each author told")
 
-    def test_a_member_that_needs_a_full_round_is_left_out_and_checked_again_alone(self):
+    def test_a_member_that_needs_a_full_round_makes_the_batch_one_full_round_and_one_push(self):
+        """2026-11-23 (batch #109): five of seven checked changes were left out of the push batch for a FULL round
+        each (main changed what selects their checks), checked alone, then verified one at a time behind each other.
+        A member owing a full round now makes the batch's ONE round the full landing check: nobody is left out."""
         self.r.write("docs/notes.md", "".join(f"line {i}\n" for i in range(12)))
         self.r.commit("notes")
         self.r.push()
@@ -346,13 +348,101 @@ class PushBatchTest(test_queue.QueueTest):
         self.main_moves("docs/notes.md", "".join(f"line {i}\n" for i in range(11)) + "theirs\n")  # a's file too
         self.run_queue([ea, eb, ec])
         st = A.open_store()
-        for eid in (eb, ec):
-            self.assertEqual((self.entry(eid)["status"], st.item("change", eid)["data"].get("batch")), ("landed", 2), eid)
-        self.assertEqual(self.entry(ea)["status"], "landed")
-        self.assertIsNone(st.item("change", ea)["data"].get("batch"), "a landed alone")
-        modes = [m for m, _r in self.verified()]
-        self.assertEqual(sorted(modes), ["--range", "--verify-only"],
-                         "the batch's verify round, and a's own full round (both touch docs/notes.md)")
+        bids = set()
+        for eid in (ea, eb, ec):
+            it = st.item("change", eid)
+            self.assertEqual((self.entry(eid)["status"], it["data"].get("batch")), ("landed", 3), eid)
+            bids.add(it["data"]["batch_id"])
+        self.assertEqual(len(bids), 1, "one batch")
+        self.assertEqual(st.item("batch", bids.pop())["data"]["depth"], "full")
+        self.assertEqual([m for m, _r in self.verified()], ["--range"], "ONE full round for the three, no verify round")
+        self.assertEqual(len(self.pushed()), 1, "one push")
+
+    def head_verifying_alone(self, name="v", path="scripts/v.sh"):
+        """A checked change whose own combined-tree verification runs now (its checker alive, its round slow), main
+        moved under it: the head all the others waited behind on 2026-11-23 (py-touched-tree, py-store-screenshots)."""
+        ev = self.checked(name, path)
+        real = A.spawn_executor
+        A.spawn_executor = lambda repo, d_, eid: None if eid == ev else real(repo, d_, eid)
+        lease = A.checker_lease(ev)
+        self.assertTrue(lease.acquire())
+        self.addCleanup(lease.release)
+        return ev, lease, real
+
+    def start_head_round(self, ev):
+        e = self.entry(ev)  # its verify round, as its push queued it (main moved), now under its live checker
+        A.set_change(A.CurrentStore(), self.d, e, "checking", event={"text": "verify"}, verify=True,
+                     full_base=e["checked_base"], full_tip=e["tip"], retry_after=0)
+
+    def test_checked_changes_behind_a_slow_head_verification_form_one_batch_and_land_in_one_push(self):
+        """2026-11-23: ~8 checked tools-only changes each held `its push waits for X's combined-tree verification`, one
+        head after another, batch: 0 -- a push batch formed only while no change's own verify round ran. Now the
+        others are ONE push batch beside it: one verify round, one push; the head's push waits for that batch."""
+        ev = self.head_verifying_alone()[0]
+        ea = self.checked("a", "scripts/a.sh")
+        eb = self.checked("b", "scripts/b.sh")
+        ec = self.checked("c", "scripts/c.sh")
+        self.main_moves()
+        self.start_head_round(ev)
+        did = self.run_queue([ea, eb, ec])
+        st = A.open_store()
+        for eid in (ea, eb, ec):
+            self.assertEqual((self.entry(eid)["status"], st.item("change", eid)["data"].get("batch")), ("landed", 3),
+                             f"{eid}: {did}")
+        self.assertEqual(len(self.pushed()), 1, "one push for the three")
+        self.assertEqual([m for m, _r in self.verified()], ["--verify-only"], "one verify round")
+        self.assertEqual(self.entry(ev)["status"], "checking", "the head's own round still runs")
+
+    def test_a_failing_member_behind_a_slow_head_verification_is_bisected_out(self):
+        ev, lease, real = self.head_verifying_alone()
+        ea = self.checked("a", "scripts/a.sh")
+        eb = self.checked("b", "web/src/main/PartA.scala")
+        ec = self.checked("c", "scripts/c.sh")
+        self.main_moves("worker/src/main/PartB.scala", "b\n")  # the fake hook fails on PartA beside PartB
+        self.start_head_round(ev)
+        self.run_queue([ea, eb, ec])
+        self.assertEqual(self.entry(ea)["status"], "landed", "the passing prefix lands")
+        self.assertEqual(self.entry(eb)["status"], "rejected", "the confirmed culprit")
+        self.assertEqual(self.entry(ev)["status"], "checking", "none of it waited for the head")
+        self.assertEqual(self.entry(ec)["status"], "checked", "the rest verified again: alone now, its push waits for "
+                         "the head's round (THE OLDEST VERIFICATION PUSHES FIRST)")
+        lease.release()
+        A.spawn_executor = real
+        self.run_queue([ev, ec])
+        self.assertEqual([self.entry(x)["status"] for x in (ev, ec)], ["landed", "landed"])
+
+    def test_a_red_fix_behind_a_slow_head_verification_still_lands_first_and_alone(self):
+        ev = self.head_verifying_alone()[0]
+        ea = self.checked("a", "scripts/a.sh")
+        eb = self.checked("b", "scripts/b.sh")
+        self.main_moves()
+        self.start_head_round(ev)
+        self.reds = {"7"}
+        ef = self.checked("fix", "web/src/main/Fix.scala", msg="fix: the red\n\nFixes-Red: 7")
+        did = A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        self.assertEqual(self.entry(ef)["status"], "landed", f"the red fix pushes first, alone: {did}")
+        self.assertEqual(self.remote_log()[0], "fix: the red")
+        self.assertEqual([self.entry(x)["status"] for x in (ea, eb)], ["checked", "checked"], "nothing pushed under it")
+        self.reds = set()
+        self.run_queue([ea, eb])
+        st = A.open_store()
+        self.assertEqual([st.item("change", x)["data"].get("batch") for x in (ea, eb)], [2, 2], "then one batch")
+
+    def test_a_queued_unchecked_change_shares_the_push_batchs_one_full_round(self):
+        """Queued, not-yet-checked changes join the checked ones owing a round: ONE full landing check of all of them
+        on the current main, one push -- not a lone full check, then a verify round behind the batch."""
+        ea = self.checked("a", "scripts/a.sh")
+        eb = self.checked("b", "scripts/b.sh")
+        self.main_moves()
+        A.spawn_executor = lambda repo, d_, eid: self.fail(f"no lone check: {eid}")
+        wc, _ = self.agent("c", "scripts/c.sh", "c\n", msg="c: scripts/c.sh")
+        ec, _ = self.queued(wc)
+        self.run_queue([ea, eb, ec])
+        st = A.open_store()
+        for eid in (ea, eb, ec):
+            self.assertEqual((self.entry(eid)["status"], st.item("change", eid)["data"].get("batch")), ("landed", 3), eid)
+        self.assertEqual([m for m, _r in self.verified()], ["--range"], "one full round")
+        self.assertEqual(len(self.pushed()), 1, "one push")
 
     def test_a_failing_push_batch_lands_its_passing_prefix_and_verifies_the_rest_again(self):
         ea = self.checked("a", "web/src/main/A.scala")
