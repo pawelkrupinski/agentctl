@@ -1734,7 +1734,9 @@ class BackgroundSessionTest(RedsBase):
             self.assertTrue(self.wait(lambda: rec().get("transcript")))
             [s] = self.sessions()
             self.assertEqual((s["name"], s["state"]), ("red fixer #20 · main test (rest)", "working"))
-            self.assertEqual(A.lease_meta(self.st.get(name))["session"], s["sessionId"])  # a resume goes back to it
+            # the record names the session before the wrapper's next renewal sends the meta to the lease (adopt_transcript
+            # sets meta_due; AGENTCTL_RED_RENEW apart), so wait for the lease to carry it: 2026-11-25 run 45702726773 read None
+            self.assertTrue(self.wait(lambda: A.lease_meta(self.st.get(name)).get("session") == s["sessionId"]))  # a resume goes back to it
             argv = json.load(open(os.path.join(os.environ["FAKE_CLAUDE_OUT"], f"{s['id']}.json")))["argv"]
             self.assertNotIn("-p", argv)
             self.assertIn("Bash(git push:*)", argv)
