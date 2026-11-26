@@ -266,54 +266,71 @@ def sync(repo, main_ref, sh, clock, store, release_hold=False):
         return sync_onto_main(repo, main_ref, sh, clock, store, release_hold)
 
 
-def sync_onto_main(repo, main_ref, sh, clock, store, release_hold=False):
-    """Fetch, rebase onto origin/main, the squash guard: (rc, None) when land is decided here, else (None, head).
-    A commit with a `Hold: <why>` trailer is refused unless release_hold (`land --release-hold`: the owner's go)."""
+def fetch_for_land(sh: Any, clock: Any) -> Any:
+    """Fetch origin/main: None, or the NOT LANDED line of a fetch that failed twice (a tunnel restart is seconds long:
+    one more try after 15 s)."""
     r = sh("git", "fetch", "--quiet", remote(), "main")
-    if r.returncode:  # a tunnel restart is seconds long: one more try before giving up
+    if r.returncode:
         err(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
         clock.sleep(15)
         r = sh("git", "fetch", "--quiet", remote(), "main")
     if r.returncode:
-        print(f"NOT LANDED: git fetch {remote()} main failed: {r.stderr.strip()[:300]} (tunnel? `agentctl env --check`)")
-        return 1, None
-    head = git(repo, "rev-parse", "HEAD").strip()
-    if landed(repo, head, main_ref):
-        print(f"LANDED {head} (already on {remote()}/main)")
-        return 0, None
+        return f"NOT LANDED: git fetch {remote()} main failed: {r.stderr.strip()[:300]} (tunnel? `agentctl env --check`)"
+    return None
+
+
+def landing_refusal(repo: Any, head: Any, store: Any, release_hold: bool) -> Any:
+    """The NOT LANDED line of the first policy refusing the change (do-not-land, hold-trailer, blame-dead), or None."""
     why = do_not_land(repo, waiting_commits(repo, f"{remote()}/main", head), branch_of(repo))
     if why:
-        print(f"NOT LANDED: {why}. Throwaway work never lands; remove the marker (rename the branch, reword the commit, "
-              "drop the Do-Not-Land: trailer) only if the owner wants it landed.")
-        return 1, None
-    # policy: hold-trailer
-    why = None if release_hold else held_commit(repo, waiting_commits(repo, f"{remote()}/main", head))
+        return (f"NOT LANDED: {why}. Throwaway work never lands; remove the marker (rename the branch, reword the commit, "
+                "drop the Do-Not-Land: trailer) only if the owner wants it landed.")
+    why = None if release_hold else held_commit(repo, waiting_commits(repo, f"{remote()}/main", head))  # policy: hold-trailer
     if why:
-        print(f"NOT LANDED: {why}. Held work lands only on the owner's go: `agentctl land --release-hold` then (or "
-              "drop the trailer).")
-        return 1, None
-    # policy: blame-dead
-    why = blame_land_refusal(repo, waiting_commits(repo, f"{remote()}/main", head), store, repo,
+        return (f"NOT LANDED: {why}. Held work lands only on the owner's go: `agentctl land --release-hold` then (or "
+                "drop the trailer).")
+    why = blame_land_refusal(repo, waiting_commits(repo, f"{remote()}/main", head), store, repo,  # policy: blame-dead
                              records=blame_records_quiet(store))
     if why:
-        print(f"NOT LANDED: {why}. A withdrawn or refuted blame revert is dead: drop this worktree "
-              "(`git worktree remove`), never land it.")
-        return 1, None
-    # agentctl's own rewrites never sign (issue 20261115T112749-d27361): main's commits are unsigned, and a global
-    # commit.gpgsign=true with an empty ssh-agent (an unattended fixer) failed every rebase behind main
+        return (f"NOT LANDED: {why}. A withdrawn or refuted blame revert is dead: drop this worktree "
+                "(`git worktree remove`), never land it.")
+    return None
+
+
+def rebase_onto_main(repo: Any, sh: Any) -> Any:
+    """Rebase onto origin/main: None, or the NOT LANDED line of one that failed (aborted: none is left in progress).
+    agentctl's own rewrites never sign (issue 20261115T112749-d27361): main's commits are unsigned, and a global
+    commit.gpgsign=true with an empty ssh-agent (an unattended fixer) failed every rebase behind main."""
     r = sh("git", *NO_SIGN, "rebase", "--quiet", f"{remote()}/main")
     for _ in range(50):  # each stop whose conflicts are docs or generated files only: resolved (conflict_resolve), and on
         if not r.returncode or not conflict_resolve(repo):
             break
         r = sh("git", *NO_SIGN, "-c", "core.editor=true", "rebase", "--continue")
-    if r.returncode:
-        conflicts = git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
-        sh("git", "rebase", "--abort")
-        if conflicts:
-            print(f"NOT LANDED: rebase onto {remote()}/main conflicts in: {', '.join(conflicts)}. "
-                  f"Resolve by hand (git rebase {remote()}/main), then land again.")
-        else:  # no conflicted file: git itself failed (a hook, signing, a lock), never told as a conflict
-            print(f"NOT LANDED: rebase onto {remote()}/main failed (no conflict): {r.stderr.strip()[:300]}")
+    if not r.returncode:
+        return None
+    conflicts = git(repo, "diff", "--name-only", "--diff-filter=U", check=False).stdout.split()
+    sh("git", "rebase", "--abort")
+    if conflicts:
+        return (f"NOT LANDED: rebase onto {remote()}/main conflicts in: {', '.join(conflicts)}. "
+                f"Resolve by hand (git rebase {remote()}/main), then land again.")
+    # no conflicted file: git itself failed (a hook, signing, a lock), never told as a conflict
+    return f"NOT LANDED: rebase onto {remote()}/main failed (no conflict): {r.stderr.strip()[:300]}"
+
+
+def sync_onto_main(repo, main_ref, sh, clock, store, release_hold=False):
+    """Fetch, rebase onto origin/main, the squash guard: (rc, None) when land is decided here, else (None, head).
+    A commit with a `Hold: <why>` trailer is refused unless release_hold (`land --release-hold`: the owner's go)."""
+    failed = fetch_for_land(sh, clock)
+    if failed:
+        print(failed)
+        return 1, None
+    head = git(repo, "rev-parse", "HEAD").strip()
+    if landed(repo, head, main_ref):
+        print(f"LANDED {head} (already on {remote()}/main)")
+        return 0, None
+    failed = landing_refusal(repo, head, store, release_hold) or rebase_onto_main(repo, sh)
+    if failed:
+        print(failed)
         return 1, None
     head = git(repo, "rev-parse", "HEAD").strip()
     if landed(repo, head, main_ref):

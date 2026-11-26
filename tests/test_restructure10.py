@@ -255,5 +255,50 @@ class ApplyEntryTest(unittest.TestCase):
         check(self, "apply_entry", self.build, run, 6000)
 
 
+# ------------------------------------------------------------------------------------------------ queueenter
+def printing(holder, fn):
+    """fn with its stdout in the case's log (the case is holder["case"])."""
+    def run(*args):
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                return fn(*args)
+        finally:
+            holder["case"].log.append(["output", out.getvalue()])
+    return run
+
+
+class SyncOntoMainTest(unittest.TestCase):
+    def build(self, case):
+        r = case.rng
+        holder = {"case": case}
+        for name, gen in (("remote", lambda rng: "origin"), ("err", lambda rng, m: None), ("branch_of", lambda rng, repo: "br"),
+                          ("waiting_commits", lambda rng, repo, base, head: ["w1", "w2"][:rng.randint(0, 2)]),
+                          ("blame_records_quiet", lambda rng, st: ["rec"]),
+                          ("land_before_queue", lambda rng, repo, head: rng.choice([head, head + "+"])),
+                          ("env_num", lambda rng, name, default: default),
+                          ("landed", lambda rng, repo, head, main_ref: rng.random() < 0.12),
+                          ("do_not_land", lambda rng, repo, commits, branch: maybe(rng, "marked", 0.1)),
+                          ("held_commit", lambda rng, repo, commits: maybe(rng, "held", 0.1)),
+                          ("blame_land_refusal", lambda rng, *a, **k: maybe(rng, "dead blame", 0.1)),
+                          ("conflict_resolve", lambda rng, repo: rng.random() < 0.6),
+                          ("fix_replay_blocks", lambda rng, repo, head, store: rng.random() < 0.1),
+                          ("check_range", lambda rng, *a: rng.choice([[], [], ["p1"], ["p1", "p2"]]))):
+            case.fake(name, gen)
+        case.fake("git", lambda rng, repo, *a, **k: proc(rng, 0, rng.choice(["f.py g.py", "f.py", ""]) if "diff" in a else "h" + str(rng.randint(1, 3)) + "\n")
+                  if k.get("check") is False else "h" + str(rng.randint(1, 3)) + "\n")
+        bad = r.choice([0.0, 0.2, 0.5])
+
+        def sh(*argv, **k):
+            return proc(r, 1 if r.random() < bad else 0, "", r.choice(["", "fatal: x", "e" * 400]))
+        sh_probe = Named(case, "sh", lambda rng, *a, **k: sh(*a, **k))
+        return ((r.choice(["/repo"]), "origin/main", sh_probe, Probe(case, "clock"), Probe(case, "store"), r.choice([False, True])), holder)
+
+    def test_sync_onto_main(self):
+        def run(A):
+            return lambda args, holder: printing(holder, A.sync_onto_main)(*args)
+        check(self, "sync_onto_main", self.build, run, 6000)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -71,7 +71,6 @@ cognitive	set_change	16
 cognitive	spotlight_exclude	19
 cognitive	status_page_start	15
 cognitive	sweep_land_refs	20
-cognitive	sync_onto_main	18
 cognitive	sync_steps	11
 cognitive	token	34
 cognitive	transcript_paths	26
@@ -159,7 +158,6 @@ cyclomatic	set_change	18
 cyclomatic	spotlight_exclude	15
 cyclomatic	status_page_start	11
 cyclomatic	sweep_land_refs	17
-cyclomatic	sync_onto_main	16
 cyclomatic	token	16
 cyclomatic	transcript_paths	19
 cyclomatic	workflow_jobs	19
@@ -167,5 +165,4 @@ cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
 cyclomatic	write_snapshot	23
 inner-defs	sync_steps	7
-method-lines	sync_onto_main	61
 method-lines	sync_steps	57
