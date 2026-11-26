@@ -55,7 +55,7 @@ def run_registry(module, script):
 
 
 def run_state(module, script):
-    with mock.patch.object(module, "proc_alive", lambda pid, start: script["alive"]):
+    with mock.patch.object(module, "record_alive", lambda rec: script["alive"]):
         return module.live_state(script["e"], script.get("info", {}), T0)
 
 
@@ -69,7 +69,7 @@ def run_annotate(module, script):
             "live_transcript_ok": lambda p: p if p in ok else None, "_live_leased": leased,
             "live_registry": lambda fresh=False: copy.deepcopy(script["reg"]),
             "mtime": lambda p: T0 - script.get("age", {}).get(p, 0), "live_tail_info": lambda p: dict(script.get("infos", {}).get(p, {})),
-            "proc_alive": lambda pid, start: script.get("alive", {}).get(pid),
+            "record_alive": lambda rec: script.get("alive", {}).get(rec.get("pid")),
         }
         for name, fake in patches.items():
             stack.enter_context(mock.patch.object(module, name, fake))
