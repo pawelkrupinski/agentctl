@@ -18,6 +18,7 @@ from agentctl.laptoprole import laptop_role_holder
 from agentctl.core import state_root
 from agentctl.storeknobs import knob_store_retries, knob_store_retry_base
 from agentctl.storeknobs import knob_store_url
+from agentctl.storecalls import STORE_CALLS, StoreCall
 
 
 def contact_machine():
@@ -40,16 +41,6 @@ class _StoreTransient(Exception):
 def http_client_errors():
     import http.client
     return http.client.HTTPException
-
-
-# THE STORE'S CALLS: what the store API serves (server.StoreAPI) and RemoteStore calls by name. RemoteStore takes them
-# here, where it is defined (review 2026-11-26: server.py set them on the class, so a process importing remotestore
-# alone had a RemoteStore with no `events` or `item_events`). The call table itself is a later lane.
-STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer", "offers", "offer_of", "offer_reason",
-             "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
-             "meta_get", "meta_set", "next_seq", "open_singleton", "events", "item_events", "derived", "record_events", "archive_free_leases", "list")
-STORE_RPC_SAFE = ("get", "item", "items", "offers", "offer_of", "meta_get", "events", "item_events", "list", "renew", "note",
-                  "set_meta", "release", "close_offer", "offer_reason", "mark_notified", "meta_set", "record_events")
 
 
 LACKING_RECHECK = 600  # s a call the store said it lacks is answered from memory (StoreLacksCall) before it is asked again
@@ -94,9 +85,24 @@ def _raise_http_error(e: urllib.error.HTTPError, method: str, path: str, url: st
     raise StoreUnavailable(said) from None
 
 
-class RemoteStore:
-    """Store's methods over the phase-2 API (`POST /v1/store/<method>`), plus the §6.3 calls the sync needs. The token
-    is the caller's own store token ($AGENTCTL_STORE_TOKEN, else the one agentctl reads for movies)."""
+def _remote_call(call: StoreCall) -> Any:
+    """RemoteStore's method for one call of the table: Store's method of that name, over the API."""
+    def method(self: Any, *args: Any, **kwargs: Any) -> Any:
+        return self._rpc(call, args, kwargs)
+    method.__name__ = method.__qualname__ = call.name
+    method.__doc__ = f"Store.{call.name}({call.args.replace(' ', ', ')}) over the API ({call.kind}, since v{call.since})."
+    return method
+
+
+# THE STORE'S CALLS AS METHODS, made from the table where the client is defined (storecalls.py): a process importing
+# this module alone has every one (2026-11-26: server.py set them on the class, so it had no `events`)
+RemoteCalls = type("RemoteCalls", (), {c.name: _remote_call(c) for c in STORE_CALLS})
+
+
+class RemoteStore(RemoteCalls):  # type: ignore[misc,valid-type]
+    """Store's methods over the phase-2 API (`POST /v1/store/<method>`: every call of storecalls.STORE_CALLS), plus the
+    §6.3 calls the sync needs. The token is the caller's own store token ($AGENTCTL_STORE_TOKEN, else the one agentctl
+    reads for movies)."""
 
     needs_token = True  # a call goes out with the caller's token (the file store reads a local database: Store.needs_token)
 
@@ -151,8 +157,9 @@ class RemoteStore:
             reason = getattr(e, "reason", e)
             raise _StoreTransient(f"{method} {path}: {e}", isinstance(reason, ConnectionRefusedError)) from None
 
-    def _rpc(self, m, args, kwargs):
-        return self.call("POST", f"/v1/store/{m}", {"args": list(args), "kwargs": kwargs}, safe=m in STORE_RPC_SAFE)["result"]
+    def _rpc(self, call: StoreCall, args: Any, kwargs: Any) -> Any:
+        return self.call("POST", f"/v1/store/{call.name}", {"args": list(args), "kwargs": kwargs},
+                         safe=call.retry_safe)["result"]
 
     def state(self):
         return self.call("GET", "/v1/state")
@@ -165,10 +172,6 @@ class RemoteStore:
 
     def nudge(self):
         return self.call("POST", "/v1/tick", {}, safe=True)
-
-
-for _m in STORE_RPC:
-    setattr(RemoteStore, _m, (lambda m: lambda self, *a, **k: self._rpc(m, a, k))(_m))
 
 
 STORE_PORT = 3014

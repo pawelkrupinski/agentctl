@@ -64,7 +64,7 @@ Counts are per part (lib/agentctl/<part>.py), from grep, rounded. A dash means n
 
 The seams that already exist:
 
-- `Store(path, clock)` already takes a clock, and `RemoteStore(url, tok, clock)` has the same methods (`STORE_RPC`).
+- `Store(path, clock)` already takes a clock, and `RemoteStore(url, tok, clock)` has the same methods (`storecalls.STORE_CALLS`).
   Store is already an interface in practice. Only the way callers obtain one is global.
 - `run_cmd` is a bounded runner for short commands, and `git` and `git_ok` are bounded wrappers. They are the natural
   Runner, but they are not passed in.
@@ -98,7 +98,7 @@ class Forgejo:          # the real one: gh_json + api + token, with tunnel_retry
     def api(self, repo, method, path, params=None, body=None): ...          # the escape hatch, as today
     def token(self, repo) -> str: ...
 
-# Store: no new class. Store and RemoteStore already share STORE_RPC; a `StorePort` Protocol lists those methods so
+# Store: no new class. Store and RemoteStore already share storecalls.STORE_CALLS; a `StorePort` Protocol lists those methods so
 # the fake can be checked against it.
 
 class Env:              # the knobs, read once per process (config.py already lists them)

@@ -427,6 +427,14 @@ laptop's duties; each revoked the other's "orphans" (a pid not among its own pro
 holder names of fixers, owners and claims are kept: with one role holder they name one machine (their meta carries
 `host`).
 
+THE CALLS (`lib/agentctl/storecalls.py`, 2026-11-27): one table, `STORE_CALLS`, names each store call, its parameters,
+its kind (`read`, `idempotent`, `write`: a call that may have reached the store is sent again only when it is not a
+`write`) and the API version that added it. The server serves exactly those calls (`POST /v1/store/<name>`; any other
+name is a 404 `UnknownCall`), RemoteStore's methods are made from it where the class is defined, and
+`tests/test_storecalls.py` holds it to Store's methods and their parameters. A client asking a store older than its
+call gets `StoreLacksCall` (remembered 10 min) and falls back where it can; a row is never removed while a pinned
+revision may still send it. Adding a call: its Store method, then its row with the next version.
+
 There is no laptop store any more (`store use --local`, `store import` and the laptop's own tick were removed
 2026-10-29, docs/simplification-2026-10.md item 2). Disaster recovery needs no laptop copy: ci-runner keeps 24 hourly
 backups (`agentctl-store-backup`), and a lost store.db is rebuilt from the land/* refs and GitHub's runs (design §16).

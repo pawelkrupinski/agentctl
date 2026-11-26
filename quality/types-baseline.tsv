@@ -146,7 +146,7 @@ mypy-errors	redview	25
 mypy-errors	redwaits	6
 mypy-errors	remote	42
 mypy-errors	remotejobs	28
-mypy-errors	remotestore	26
+mypy-errors	remotestore	25
 mypy-errors	repos	26
 mypy-errors	reverts	46
 mypy-errors	rundispatch	10

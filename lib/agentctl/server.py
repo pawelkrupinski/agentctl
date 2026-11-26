@@ -29,7 +29,8 @@ from agentctl.cistate import state_read
 from agentctl.laptoprole import laptop_role_refusal, laptop_role_speaks
 from agentctl.waiting import cancel_submitted, supersede
 from agentctl.queuesubmit import SUBMIT_FIELDS
-from agentctl.remotestore import STORE_RPC, RemoteStore, STORE_PORT, STORE_WAITED_TIMEOUT, store_url
+from agentctl.remotestore import RemoteStore, STORE_PORT, STORE_WAITED_TIMEOUT, store_url
+from agentctl.storecalls import served_calls
 from agentctl.storeauth import (
     store_secret, store_secret_path, store_token_issue, store_token_revoke, store_token_user, store_tokens_load)
 from agentctl.blamerecords import blame_land_refusal
@@ -245,8 +246,9 @@ def items_past_deadline(st: Any, t: float, two: float) -> int:
 class StoreAPI:
     """The HTTP API's logic, apart from the socket (tests call handle() directly too)."""
 
-    def __init__(self, store, allow=(), metrics=(), user_of=None, repo=None):
+    def __init__(self, store, allow=(), metrics=(), user_of=None, repo=None, calls=None):
         self.store = store
+        self.calls = served_calls() if calls is None else calls  # what it serves (storecalls.py; a test: an older store's)
         self.allow, self.metrics = set(allow), set(metrics)
         self.user_of = user_of or store_token_user
         self.repo = repo
@@ -353,7 +355,7 @@ class StoreAPI:
             return self._json(200, {"result": "ok"})
         if p.startswith("/v1/store/"):
             m = p[len("/v1/store/"):]
-            if m not in STORE_RPC:
+            if m not in self.calls:
                 raise UnknownCall(m)
             args, kwargs = legacy_cause(m, b.get("args", []), b.get("kwargs", {}), getattr(st, m))
             return self._json(200, {"result": getattr(st, m)(*args, **kwargs)})
@@ -361,7 +363,7 @@ class StoreAPI:
 
 
 class UnknownCall(KeyError):
-    """A store method this server does not serve (STORE_RPC): a newer client's (404 `UnknownCall`)."""
+    """A store call this server does not serve (storecalls.served_calls): a newer client's (404 `UnknownCall`)."""
 
 
 class StoreRequestHandler(BaseHTTPRequestHandler):

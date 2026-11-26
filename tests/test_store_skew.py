@@ -73,10 +73,8 @@ class LacksCallTest(Phase2Base):
         self.assertFalse(A.lacks_call(500, "/v1/store/record_events", {"message": "'record_events'"}))
 
     def older_store(self):
-        """This store as one from before record_events: its STORE_RPC without it, its requests counted."""
-        saved = A.STORE_RPC
-        A.STORE_RPC = tuple(m for m in saved if m != "record_events")
-        self.addCleanup(setattr, A, "STORE_RPC", saved)
+        """This store as one from before record_events: its calls without it, its requests counted."""
+        self.api.calls = {n: c for n, c in A.served_calls().items() if n != "record_events"}
         seen, handle = [], self.api.handle
         self.api.handle = lambda method, path, *a, **k: (seen.append(path), handle(method, path, *a, **k))[1]
         return seen
