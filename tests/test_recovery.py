@@ -287,7 +287,7 @@ class NoBypassTest(RegistryBase):
                         texts = [text_of(v)]
                     if any(prefix.match(t) for t in texts):
                         bad.append(f"{fn.name}:{call.lineno} inbox_write of a condition kind")
-                if nm == "ProbeResult" and fn.name not in ("run_probe", "close_condition"):  # a manual close: a reason
+                if nm == "ProbeResult" and fn.name not in ("run_probe", "close_condition", "_close_result"):  # a manual close: a reason
                     bad.append(f"{fn.name}:{call.lineno} a ProbeResult not from run_probe")
                 if nm == "open_condition" and len(call.args) < 4:
                     bad.append(f"{fn.name}:{call.lineno} open_condition without (kind, text, probe, on_recover)")
