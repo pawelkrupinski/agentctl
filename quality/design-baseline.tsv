@@ -78,7 +78,7 @@ effect	lib/agentctl/jvmreap.py	3
 effect	lib/agentctl/land.py	2
 effect	lib/agentctl/lander.py	1
 effect	lib/agentctl/landhold.py	1
-effect	lib/agentctl/landqueue.py	2
+effect	lib/agentctl/landqueue.py	1
 effect	lib/agentctl/laptoprole.py	1
 effect	lib/agentctl/launchd.py	1
 effect	lib/agentctl/livestream.py	1
@@ -215,7 +215,7 @@ fanout	lib/agentctl/invariants.py	21
 fanout	lib/agentctl/land.py	11
 fanout	lib/agentctl/landdryrun.py	23
 fanout	lib/agentctl/lander.py	12
-fanout	lib/agentctl/landqueue.py	28
+fanout	lib/agentctl/landqueue.py	27
 fanout	lib/agentctl/localrecheck.py	15
 fanout	lib/agentctl/maintain.py	16
 fanout	lib/agentctl/netwatch.py	11

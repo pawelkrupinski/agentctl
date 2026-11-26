@@ -22,7 +22,7 @@ mypy-errors	changekind	19
 mypy-errors	checkslot	24
 mypy-errors	cidispatches	44
 mypy-errors	cireport	37
-mypy-errors	ciwhy	48
+mypy-errors	ciwhy	45
 mypy-errors	cleanup	12
 mypy-errors	cleanuppass	3
 mypy-errors	cli	15
