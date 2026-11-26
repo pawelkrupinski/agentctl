@@ -616,6 +616,8 @@ on main is one `maincontain.MainContainment` (a clone's git, or the forge's comp
 `landed`, `carrying` -- "cannot tell" is None, never "not on main". `land hold` makes its hold in one store transaction
 (`Store.open_singleton`): two holders at once make one hold.
 
+**A tools-only change failing only as main's gate fails lands (the owner, 2026-11-26: "let it through"; policy `known-red-tools`).** In the history 13 such changes waited 102 h on `waiting` behind a red they did not cause. `redland.may_land_on_red` now also says `tools_only_known_red`: the gate is red, the change's commits are read and none touches production, and its entry's `known_red` is `gate_only` (every failing key is one main's newest decided gate run fails; `queuefailure.on_gate_run`, never one only another queued change showed). `queuediff.wait_or_push` then pushes it, the move naming the cause `tools-only-known-red`. An extra failure is the change's own (rejected, as before); a production change still waits unless it names the red (IR). Simulator invariant IK; scenario `KNOWN_RED_TOOLS`.
+
 **WR self-heals, and an episode counts by signature (2026-11-25, the owner: "fix the class").** Three more pieces, so a
 fix of the open red never waits on bookkeeping again:
 - *Episode names* (`redepisode.py`, read by `queue_facts`): besides the red item's own names, a gate red's names include

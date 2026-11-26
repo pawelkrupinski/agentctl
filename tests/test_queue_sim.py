@@ -349,6 +349,27 @@ class CrashLoopsTest(unittest.TestCase):
         self.assertIn("IL", {k for sim in self.run_all() for k in sim.kinds_seen})
 
 
+class KnownRedToolsTest(unittest.TestCase):
+    """queue_sim.KNOWN_RED_TOOLS (the owner's "let it through", 2026-11-26): tools-only changes failing only in the open
+    gate red's own test land on it (IK), the production one waits and never lands on it unnamed (IR); IK catches the
+    rule with its tools-only exception undone."""
+
+    def run_all(self):
+        return [queue_sim.Sim(seed, calm=True, trees=2, script=list(queue_sim.KNOWN_RED_TOOLS)).run(stop=False) for seed in range(2)]
+
+    def test_ik_and_ir_hold_and_every_change_lands(self):
+        sims = self.run_all()
+        self.assertEqual(failures(sims), [])
+        for sim in sims:
+            self.assertEqual(set(queue_sim.landing_waits(sim)), {"tools", "prod", "docs", "late"})
+
+    def test_the_exception_undone_breaks_ik(self):
+        saved = queue_sim.A.tools_only_known_red
+        queue_sim.A.tools_only_known_red = lambda *a, **k: False
+        self.addCleanup(setattr, queue_sim.A, "tools_only_known_red", saved)
+        self.assertIn("IK", {k for sim in self.run_all() for k in sim.kinds_seen})
+
+
 class EscalationsTest(unittest.TestCase):
     """THE ESCALATION DISPATCHER (queue_sim.ESCALATIONS, 2026-11-26) beside the queue: agent kinds whose fixer clears,
     fails then clears, never clears, or hangs past its wall time, two subjects of one kind, more agent kinds than the

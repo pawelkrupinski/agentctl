@@ -46,6 +46,7 @@ INVARIANT_KINDS = {
     "Id": "executors start in the documented priority order within a tick",
     "IX": "no executor for a decided change",
     "IW": "a red fix of an open gate red the store names never waits for green past N ticks",
+    "IK": "a tools-only change failing only as the open gate red fails never waits for green past N ticks",
     "IR": "the queue never lands on a red gate a production commit naming no run of the open red",
     "IH": "two holders reading no hold at once make exactly one hold, both report it and both moves are said",
     "IT": "no overlap hold outlives its TTL while its holder is not in flight",
@@ -54,6 +55,7 @@ INVARIANT_KINDS = {
     "IG": "every dispatched escalation ends cleared or handed to the owner within its budget",
     "IL": "a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer",
 }
+MAIN_FAILS_LINE = "[info] - main already fails *** FAILED ***"  # the test the open gate red's run fails (main_fails)
 VIOLATIONS_MAX = 50  # lines one scenario keeps in the gate's count mode
 ROOT = "0" * 40
 HOOK_TEXT = """#!/bin/sh
@@ -273,6 +275,7 @@ class Patch:
         self.regen_fails = False  # its generated files' resolution fails (no JVM where the queue runs, a timeout)
         self.resolvable = set()  # the patches it conflicts with in source a batch's assembly resolves (both only add)
         self.resolve_bad = False  # resolved, the combined tree fails its checks (the resolution is wrong)
+        self.main_fails = False  # while the gate is red its check fails ONLY in the test main's red run fails too
 
 
 class Change:
@@ -353,6 +356,7 @@ class Sim:
         # same red is named only by its red item in the store (red_item_runs: what the store holds, learned later by
         # `learn-run`), and a run of another failure by no item at all
         self.red_older, self.red_item, self.red_item_runs, self.fix_waits = None, None, set(), {}
+        self.known_red_waits = {}  # ticks each tools-only change failing only as the red fails has waited (IK)
         self.green_ticks = []  # the ticks the gate went green (the forge's)
         self.episode_runs, self.episode_snap = set(), None  # the open red's runs only its episode names (stale_episode)
         self.outside, self.outside_run, self.outside_clears = {}, 5000, {}  # reds outside the gate: {run: red id}
@@ -671,8 +675,15 @@ class Sim:
         if bad:
             lines = [f"[info] - sim {letters(self.patches[p].cid)} works *** FAILED ***" for p in bad]
             return False, "\n".join(lines + ["! pre-push sbt FAILED (3s)"]) + "\n"
+        if self.reds and any(self.patches[p].main_fails for p in on - self.patches_of(ROOT)):
+            self.verified.add(frozenset(on))  # its failure is main's own: judged known, the checks' verdict stands
+            return False, MAIN_FAILS_LINE + "\n! pre-push sbt FAILED (3s)\n"  # the red's own failing test, nothing else
         self.verified.add(frozenset(self.patches_of(tip)))
         return True, f"checks passed {where}\n"
+
+    def base_failure_keys(self, repo, d, e, base, now):
+        """What fails on the change's base: the open gate red's own test, in the gate's newest run (queuefailure)."""
+        return {k: f"Main #{self.red_run}{A.GATE_RUN_WHERE}" for k in A.test_keys([MAIN_FAILS_LINE])} if self.reds else {}
 
     def run_entry_checks(self, repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
         open_ = set(self.reds) | set(self.outside)
@@ -797,7 +808,7 @@ class Sim:
     # ---------------------------------------------------------------- set up / tear down
     FAKES = ("git", "git_ok", "fetch_main", "apply_entry", "check_tree", "range_paths", "named_reader", "cherry_landed",
              "change_landed", "hook_query", "commit_fixes", "gate_reds", "gov_class_of", "blame_land_refusal",
-             "fix_replay_refusal", "run_entry_checks", "batch_check", "batch_drift_check", "run_watched", "start_watch", "mark_gate_dirty",
+             "fix_replay_refusal", "run_entry_checks", "base_failure_keys", "batch_check", "batch_drift_check", "run_watched", "start_watch", "mark_gate_dirty",
              "spawn_executor", "spawn_batch_executor", "precheck_hook", "verify_areas_supported", "remote_matches",
              "remote_checks_supported", "slug", "cancel_entry_remote", "stats_post", "check_runs_of", "gate_runs_pass",
              "clone_shared", "spawn_waiting_processor", "offer_token", "tool_env", "stats_echo", "pair_conflict", "pair_resolvable",
@@ -857,6 +868,7 @@ class Sim:
         A.blame_land_refusal = lambda *a, **k: None
         A.fix_replay_refusal = lambda *a, **k: None  # the sim's reds register no replay (red-workflows.tsv)
         A.run_entry_checks = self.run_entry_checks
+        A.base_failure_keys = self.base_failure_keys
         A.batch_check = self.batch_check
         A.batch_drift_check = lambda *a, **k: (None, "")
         A.run_watched = self.run_watched
@@ -1021,6 +1033,7 @@ class Sim:
             pid = f"p{cid}{letters(k)}"
             self.patches[pid] = Patch(pid, cid, paths if k == 0 else [paths[0]], fixes if k == 0 else (),
                                       bad=bad and k == 0, conflicts=conflicts)
+            self.patches[pid].main_fails = bool(spec.get("main_fails")) and k == 0
             pids.append(pid)
             head = self.child(head, pid)
         for c in ([target] if target else waiting_for_me):
@@ -1504,6 +1517,17 @@ class Sim:
                                  f"though the store names it a run of the open red {sorted(known)}")
             else:
                 self.fix_waits.pop(eid, None)
+        # K. A TOOLS-ONLY CHANGE FAILING ONLY AS THE GATE RED FAILS NEVER WAITS FOR GREEN (the owner, 2026-11-26: "let it
+        # through"): the simulation's own truth, the patches' paths and flag, never the rule under test (redland.py)
+        for eid, e in entries.items():
+            ch = self.by_eid.get(eid)
+            if e.get("status") == "waiting" and self.reds and ch and self.lets_through(ch):
+                n = self.known_red_waits[eid] = self.known_red_waits.get(eid, 0) + 1
+                if n > self.profile.get("heal_bound", 3):
+                    self.violate("IK", f"tools-only change {eid} failing only as the red {sorted(self.reds)} fails waiting "
+                                 f"for green {n} ticks")
+            else:
+                self.known_red_waits.pop(eid, None)
         # 4. A BATCH REACHES LANDED, BISECTING OR HELD WITHIN N TICKS (counted in its assembling/checking/pushing ticks)
         for bt in st.items("batch"):
             # a red pre-check round ended (batch.py THE BATCH IS THE MECHANISM): the bound counts the way to landing
@@ -1557,6 +1581,11 @@ class Sim:
                 on = self.patches_of(self.main)
                 if not set(ch.patches) <= on:
                     self.violate("I6", f"change {ch.eid} LANDED but {sorted(set(ch.patches) - on)} not on main: lost")
+
+    def lets_through(self, ch):
+        """Whether change ch is tools-only and its checks fail only in the red's own test (the simulation's truth)."""
+        ps = [self.patches[p] for p in ch.patches]
+        return any(p.main_fails for p in ps) and not any(sim_production(x) for p in ps for x in p.paths)
 
     def names_the_red(self, eid, known):
         """Whether EVERY commit of change eid carries a Fixes-Red naming one of `known` (the hook's rule: a production
@@ -1777,6 +1806,16 @@ REDFIX_BESIDE_BARE = [
     (1, {"label": "fix", "worktree": "fix", "kind": "redfix-older", "two_commits": True, "paths": ["worker/src/main/Fix.scala"]}),
     (2, {"label": "tools", "worktree": "tools", "paths": ["scripts/tools.sh"]}),
     (3, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
+    (20, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]}),
+]
+# A TOOLS-ONLY CHANGE FAILING ONLY AS THE GATE RED FAILS (2026-11-26, the owner's "let it through"): its checks fail in
+# the red's own test only, so it lands on the red at once (IK); a production change failing the same way still waits for
+# green and never lands on the red without naming it (IR).
+KNOWN_RED_TOOLS = [
+    (0, {"kind": "open-red"}),
+    (1, {"label": "tools", "worktree": "tools", "one_commit": True, "main_fails": True, "paths": ["scripts/tools.sh"]}),
+    (2, {"label": "prod", "worktree": "prod", "one_commit": True, "main_fails": True, "paths": ["web/src/main/A.scala"]}),
+    (3, {"label": "docs", "worktree": "docs", "one_commit": True, "main_fails": True, "paths": [".github/ci.yml"]}),
     (20, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]}),
 ]
 # AN EPISODE READ FROM A STALE SIGNATURE (2026-11-26, one RedEpisode): the fix names the red's older run, which only the
