@@ -7,6 +7,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL, code_source  # noqa: E402
 from test_red import RedBase, MOVIES  # noqa: E402
+from test_reds import TickClock  # noqa: E402
 
 
 class Recorder:
@@ -329,7 +330,11 @@ class UntilGreenTest(RedBase):
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
         self.addCleanup(lambda: os.environ.__setitem__("AGENTCTL_STATE_ROOT", saved) if saved is not None
                         else os.environ.pop("AGENTCTL_STATE_ROOT", None))
-        self.st = A.process_store()
+        self.t = [time.time()]  # the test's one time: the command stamps its lease with it, the tick reads it
+        self.st = A.process_store(clock=lambda: self.t[0])
+
+    def tool(self, *argv, cwd=None, clock=None):
+        return super().tool(*argv, cwd=cwd, clock=clock or TickClock(self.t))
 
     def snap(self, conclusion):
         A._gate_lists.clear()
@@ -340,7 +345,7 @@ class UntilGreenTest(RedBase):
         return s
 
     def tick(self, snap):
-        return A.red_tick(self.st, MOVIES, self.r.path, snap, dispatch=False)
+        return A.red_tick(self.st, MOVIES, self.r.path, snap, now_=self.t[0], dispatch=False)
 
     def test_the_block_lapses_when_the_probe_workflow_goes_green_and_the_red_is_verified(self):
         self.tick(self.snap("failure"))
@@ -358,7 +363,7 @@ class UntilGreenTest(RedBase):
         meta = json.loads(lease[0]["meta"])
         self.st.set_meta(lease[0]["name"], lease[0]["epoch"], lease[0]["secret"], {"probed_at": 0})
         self.tick(self.snap("success"))  # the probe passes: the lease lapses
-        self.assertFalse(A.lease_is_live(self.st.get(lease[0]["name"]), time.time()), meta)
+        self.assertFalse(A.lease_is_live(self.st.get(lease[0]["name"]), self.t[0]), meta)
         self.tick(self.snap("success"))
         it = self.st.item("red", it["id"])
         self.assertEqual((it["state"], it["data"]["fix"]["status"]), ("fix-pending", "verify"))

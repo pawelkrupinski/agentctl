@@ -12,7 +12,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, SHORT, _tokens, err, git, remote, run_cmd, spawn_detached
+from agentctl.core import HOME, SHORT, _tokens, err, git, remote, run_cmd, spawn_detached, tilde
 from agentctl.timefmt import iso_at, ts
 from agentctl.statefile import read_json_file, read_record, write_json_file
 from agentctl.selfcode import TOOL_PATH
@@ -182,7 +182,7 @@ def reland_worktree(cond, a, store):
         spawn_detached([sys.executable, TOOL_PATH, "land"], stdin=subprocess.DEVNULL, stdout=f,
                        stderr=f, start_new_session=True, cwd=tree,
                        env={**os.environ, "AGENTCTL_NO_SECRETS": "1"})
-    return f"landing {wt.replace(HOME, '~')} again from a throwaway tree {tree.replace(HOME, '~')} (attempt {a.get('attempt')})"
+    return f"landing {tilde(wt)} again from a throwaway tree {tilde(tree)} (attempt {a.get('attempt')})"
 
 
 def recover_clear_hold(cond: dict[str, Any] | None, a: dict[str, Any], st: Any) -> str:
