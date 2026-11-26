@@ -26,7 +26,7 @@ mypy-errors	cleanuppass	3
 mypy-errors	cli	15
 mypy-errors	clones	1
 mypy-errors	conditions	40
-mypy-errors	config	19
+mypy-errors	config	17
 mypy-errors	configfile	8
 mypy-errors	conflicts	27
 mypy-errors	core	24

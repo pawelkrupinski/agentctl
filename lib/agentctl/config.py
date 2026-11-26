@@ -134,32 +134,50 @@ def config_default(expr: str | None, constants: dict[str, Any]) -> Any:
     return constants.get(e, e) if re.fullmatch(r"[A-Z_][A-Z0-9_]*", e) else e
 
 
+KNOB_READ = re.compile(r'(?:env_num|os\.environ\.get)\(\s*"AGENTCTL_([A-Z0-9_]+)"\s*(?:,\s*([^)\n]+?))?\s*\)')
+CONSTANT_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
+
+
+def _constant_docs(texts: list[tuple[str, str]]) -> dict[str, str]:
+    """NAME -> the comment on the line of each top-level constant's assignment (the first one found)."""
+    docs: dict[str, str] = {}
+    for _rel, text in texts:
+        for m in re.finditer(r"^([A-Z_][A-Z0-9_]*) = [^\n#]*#\s*(.+)$", text, re.M):
+            docs.setdefault(m.group(1), m.group(2).strip())
+    return docs
+
+
+def _knob_doc(docs: dict[str, str], expr: str | None, line: str) -> str | None:
+    """A read's doc: the comment on its default constant's line, else the comment on the line that reads it."""
+    doc = docs.get(expr.strip()) if expr and CONSTANT_NAME.fullmatch(expr.strip()) else None
+    if not doc and "#" in line:
+        doc = line.split("#", 1)[1].strip()
+    return doc
+
+
+def _note_knob_read(knobs: dict[str, dict[str, Any]], constants: dict[str, Any], docs: dict[str, str], rel: str, text: str,
+                    m: re.Match[str]) -> None:
+    """Adds one read of a knob (the regex match m in text of file rel) to knobs: its first default and its first doc."""
+    key, expr = m.group(1), m.group(2)
+    line = text[text.rfind("\n", 0, m.start()) + 1:text.find("\n", m.end())]
+    doc = _knob_doc(docs, expr, line)
+    k = knobs.setdefault(key, {"name": f"AGENTCTL_{key}", "key": key.lower(), "default": None, "doc": "", "where": rel})
+    if k["default"] is None and expr is not None:
+        k["default"] = config_default(expr, constants)
+    if not k["doc"] and doc:
+        k["doc"] = re.sub(r"\(\$AGENTCTL_[A-Z0-9_]+\)", "", doc).strip(" ;,")
+
+
 def config_knobs():
     """[{name, key, default, doc, where}] of every knob the code reads, sorted by name."""
     texts = config_source_text()
     constants = config_constants(texts)
-    consts = {}  # NAME -> its line's comment
-    for _rel, text in texts:
-        for m in re.finditer(r"^([A-Z_][A-Z0-9_]*) = [^\n#]*#\s*(.+)$", text, re.M):
-            consts.setdefault(m.group(1), m.group(2).strip())
-    reads = re.compile(r'(?:env_num|os\.environ\.get)\(\s*"AGENTCTL_([A-Z0-9_]+)"\s*(?:,\s*([^)\n]+?))?\s*\)')
-    knobs = {}
+    docs = _constant_docs(texts)
+    knobs: dict[str, dict[str, Any]] = {}
     for rel, text in texts:
-        for m in reads.finditer(text):
-            key = m.group(1)
-            if key in CONFIG_INTERNAL:
-                continue
-            expr = m.group(2)
-            line = text[text.rfind("\n", 0, m.start()) + 1:text.find("\n", m.end())]
-            doc = consts.get(expr.strip()) if expr and re.fullmatch(r"[A-Z_][A-Z0-9_]*", expr.strip()) else None
-            if not doc and "#" in line:
-                doc = line.split("#", 1)[1].strip()
-            k = knobs.setdefault(key, {"name": f"AGENTCTL_{key}", "key": key.lower(), "default": None, "doc": "",
-                                       "where": rel})
-            if k["default"] is None and expr is not None:
-                k["default"] = config_default(expr, constants)
-            if not k["doc"] and doc:
-                k["doc"] = re.sub(r"\(\$AGENTCTL_[A-Z0-9_]+\)", "", doc).strip(" ;,")
+        for m in KNOB_READ.finditer(text):
+            if m.group(1) not in CONFIG_INTERNAL:
+                _note_knob_read(knobs, constants, docs, rel, text, m)
     return sorted(knobs.values(), key=lambda k: k["name"])
 
 
@@ -209,22 +227,43 @@ def config_doc_write(path=None):
     return new != text
 
 
-def cmd_config(a):
-    if a.ccmd == "defaults":
-        print(config_defaults_text(), end="")
-        return 0
-    if a.ccmd == "doc":
-        if a.write:
-            print("AGENTCTL.md: the config reference " + ("regenerated" if config_doc_write() else "is current"))
-        else:
-            print(config_doc_text())
-        return 0
-    print("files: " + (", ".join(f"{p}{'' if os.path.exists(p) else ' (none)'}" for p in config_files()) or "none"))
+def _config_defaults(a: Any) -> int:
+    print(config_defaults_text(), end="")
+    return 0
+
+
+def _config_doc(a: Any) -> int:
+    if a.write:
+        print("AGENTCTL.md: the config reference " + ("regenerated" if config_doc_write() else "is current"))
+    else:
+        print(config_doc_text())
+    return 0
+
+
+def _config_files_line() -> str:
+    return "files: " + (", ".join(f"{p}{'' if os.path.exists(p) else ' (none)'}" for p in config_files()) or "none")
+
+
+def _knob_line(k: dict[str, Any], every: bool) -> str | None:
+    """A knob's line (its value and where that comes from) when it is set in the environment (every: or not)."""
+    v = os.environ.get(k["name"])
+    if not (every or v is not None):
+        return None
+    src = CONFIG_SOURCE.get(k["name"]) or ("environment" if v is not None else "default")
+    return f"  {k['key']:<28} = {v if v is not None else k['default']}  ({src})"
+
+
+def _config_show(a: Any) -> int:
+    """The files read, their unreadable ones, and each knob set (every knob with --all) with where its value comes from."""
+    print(_config_files_line())
     for e in CONFIG_ERRORS:
         print(f"  UNREADABLE {e}")
     for k in config_knobs():
-        v = os.environ.get(k["name"])
-        src = CONFIG_SOURCE.get(k["name"]) or ("environment" if v is not None else "default")
-        if a.all or v is not None:
-            print(f"  {k['key']:<28} = {v if v is not None else k['default']}  ({src})")
+        line = _knob_line(k, a.all)
+        if line is not None:
+            print(line)
     return 0
+
+
+def cmd_config(a):
+    return {"defaults": _config_defaults, "doc": _config_doc}.get(a.ccmd, _config_show)(a)

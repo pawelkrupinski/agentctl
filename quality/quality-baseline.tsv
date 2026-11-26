@@ -11,11 +11,9 @@ cognitive	batch_check	19
 cognitive	bg_spent	16
 cognitive	close_condition	19
 cognitive	close_landed_changes	19
-cognitive	cmd_config	21
 cognitive	cmd_issue	19
 cognitive	cmd_lease	17
 cognitive	cmd_recover	15
-cognitive	config_knobs	25
 cognitive	conflict_resolve	17
 cognitive	explorer_tick	19
 cognitive	fix_between	21
@@ -65,11 +63,9 @@ cyclomatic	bg_spent	15
 cyclomatic	build_view_change	15
 cyclomatic	close_condition	15
 cyclomatic	close_landed_changes	15
-cyclomatic	cmd_config	15
 cyclomatic	cmd_issue	13
 cyclomatic	cmd_lease	20
 cyclomatic	cmd_recover	16
-cyclomatic	config_knobs	14
 cyclomatic	conflict_resolve	21
 cyclomatic	explorer_tick	19
 cyclomatic	fix_between	22
