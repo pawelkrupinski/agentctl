@@ -158,53 +158,61 @@ class LiveTail:
     def _restart(self):
         self.offset, self.buf, self.skip = 0, b"", 0
 
-    def poll(self):
+    def poll(self) -> Any:
         """(lines, reset, more): lines = [(end offset, bytes)] or [(end offset, int skipped bytes)] for a line over
         line_max; reset = "truncated"/"rotated"/None; more = a full chunk was read (call again at once)."""
-        reset = None
         st = attempt(lambda: os.stat(self.path), None, catch=(OSError,))
-        if self.f is None:
-            if st is None:
-                return [], None, False
-            self._open()
-        elif st is not None and (st.st_dev, st.st_ino) != self.ino:
-            self.close()
-            self._open()
-            self._restart()
-            reset = "rotated"
+        if self.f is None and st is None:
+            return [], None, False
+        reset = self._follow(st)
         pos = self.offset + len(self.buf) + self.skip
         if os.fstat(self.f.fileno()).st_size < pos:
             self._restart()
             reset, pos = reset or "truncated", 0
         self.f.seek(pos)
-        data = self.f.read(self.chunk)
+        out = self._lines(self.f.read(self.chunk))
+        return out, reset, pos + self.chunk <= os.fstat(self.f.fileno()).st_size
+
+    def _follow(self, st: Any) -> Any:
+        """Open the file (st: its stat now) on the first look; a file replaced by another is opened again from 0
+        ("rotated"). The reset to report, or None."""
+        if self.f is None:
+            self._open()
+        elif st is not None and (st.st_dev, st.st_ino) != self.ino:
+            self.close()
+            self._open()
+            self._restart()
+            return "rotated"
+        return None
+
+    def _lines(self, data: Any) -> Any:
+        """[(end offset, line)] of the complete lines of data, the rest held in buf (or counted in skip once it is over line_max)."""
         out = []
         while data:
             i = data.find(b"\n")
             if i < 0:
-                if self.skip:
-                    self.skip += len(data)
-                else:
-                    self.buf += data
-                    if len(self.buf) > self.line_max:
-                        self.skip, self.buf = len(self.buf), b""
+                self._hold(data)
                 break
             part, data = data[:i], data[i + 1:]
-            if self.skip:
-                n = self.skip + len(part) + 1
-                self.offset += n
-                self.skip = 0
-                out.append((self.offset, n))
-                continue
-            line = self.buf + part
-            self.buf = b""
-            if len(line) > self.line_max:
-                self.offset += len(line) + 1
-                out.append((self.offset, len(line) + 1))
-                continue
-            self.offset += len(line) + 1
-            out.append((self.offset, line))
-        return out, reset, pos + self.chunk <= os.fstat(self.f.fileno()).st_size
+            out.append(self._end_line(part))
+        return out
+
+    def _hold(self, data: Any) -> Any:
+        """The end of a chunk with no newline: part of the line being read, or of the over-long one being skipped."""
+        if self.skip:
+            self.skip += len(data)
+            return
+        self.buf += data
+        if len(self.buf) > self.line_max:
+            self.skip, self.buf = len(self.buf), b""
+
+    def _end_line(self, part: Any) -> Any:
+        """(end offset, the line's bytes -- its size in bytes when it was over line_max, skipped) of the line `part` ends."""
+        skipped, self.skip = self.skip, 0
+        line, self.buf = self.buf + part, b""
+        size = skipped + len(line) + 1
+        self.offset += size
+        return self.offset, line if not skipped and len(line) <= self.line_max else size
 
 
 def sse_frame(event, data, eid=None):
@@ -225,54 +233,83 @@ def live_peer_closed(conn):
         return True
 
 
-def live_stream(e, start, write, closed=lambda: False, poll=None, ping=LIVE_PING, max_secs=LIVE_STREAM_MAX):
+def _blank_info() -> Any:
+    return {"stop": None, "last_ts": None, "api_error": False}
+
+
+def live_stream(e: Any, start: Any, write: Any, closed: Any = lambda: False, poll: Any = None, ping: Any = LIVE_PING,
+                max_secs: Any = LIVE_STREAM_MAX) -> Any:
     """Write the transcript of entry e from `start` as SSE frames through write() until closed(), max_secs, or a write
     raises (a gone or slow client)."""
     poll = poll if poll is not None else env_num("AGENTCTL_LIVE_POLL", LIVE_POLL)
-    tail = LiveTail(e["transcript"], start)
-    info = {"stop": None, "last_ts": None, "api_error": False}
-    if start:
-        info.update({k: v for k, v in live_tail_info(e["transcript"]).items() if k in ("stop", "last_ts", "api_error")})
-    write(b"retry: 3000\n\n" + sse_frame("meta", {"id": e["id"], "kind": e.get("kind"), "label": e.get("label"),
-                                                  "transcript": e["transcript"], "from": start}))
-    t0 = last_out = time.time()
-    synced, said, refreshed = False, None, time.time()
+    stream = LiveStream(e, start, write, ping)
+    t0 = time.time()
     try:
         while not closed() and time.time() - t0 < max_secs:
-            lines, reset, more = tail.poll()
-            frames = []
-            if reset:
-                info = {"stop": None, "last_ts": None, "api_error": False}
-                frames.append(sse_frame("reset", {"why": reset}, 0))
-            for off, line in lines:
-                if isinstance(line, int):
-                    frames.append(sse_frame("entry", {"type": "oversize", "bytes": line}, off))
-                    continue
-                ent = live_entry(line)
-                if ent is None:
-                    continue
-                live_track(info, ent)
-                frames.append(sse_frame("entry", ent, off))
-            if not more and not synced:
-                synced = True
-                frames.append(sse_frame("synced", {"offset": tail.offset}, tail.offset))
-            if synced and (frames or time.time() - refreshed >= 5 or said is None):
-                if time.time() - refreshed >= 5:
-                    with suppress(Exception, SystemExit):
-                        e = live_registry().get(e["id"], e)
-                refreshed = time.time()
-                info["mtime"] = mtime(e["transcript"]) or time.time()
-                st = live_state(e, info)
-                if st != said:
-                    said = st
-                    frames.append(sse_frame("state", {"state": st[0], "why": st[1], "last_ts": info.get("last_ts")}))
-            if frames:
-                write(b"".join(frames))
-                last_out = time.time()
-            elif time.time() - last_out >= ping:
-                write(b": ping\n\n")
-                last_out = time.time()
-            if not more:
+            if not stream.step():
                 time.sleep(poll)
     finally:
-        tail.close()
+        stream.tail.close()
+
+
+class LiveStream:
+    """One stream of an agent's transcript: its tail, what is known of the agent (info), the frames of each step."""
+
+    def __init__(self, e: Any, start: Any, write: Any, ping: Any) -> None:
+        self.e, self.write, self.ping = e, write, ping
+        self.tail = LiveTail(e["transcript"], start)
+        self.info = _blank_info()
+        if start:
+            self.info.update({k: v for k, v in live_tail_info(e["transcript"]).items() if k in ("stop", "last_ts", "api_error")})
+        write(b"retry: 3000\n\n" + sse_frame("meta", {"id": e["id"], "kind": e.get("kind"), "label": e.get("label"),
+                                                      "transcript": e["transcript"], "from": start}))
+        self.last_out = self.refreshed = time.time()
+        self.synced, self.said = False, None
+
+    def step(self) -> Any:
+        """One look at the transcript: its new lines as frames, `synced` once the history is sent, the state when it
+        changed, a ping when nothing was sent for `ping` seconds. True when a full chunk was read (look again at once)."""
+        lines, reset, more = self.tail.poll()
+        frames = self._entries(lines, reset)
+        if not more and not self.synced:
+            self.synced = True
+            frames.append(sse_frame("synced", {"offset": self.tail.offset}, self.tail.offset))
+        if self.synced and (frames or time.time() - self.refreshed >= 5 or self.said is None):
+            frames += self._state()
+        if frames:
+            self.write(b"".join(frames))
+            self.last_out = time.time()
+        elif time.time() - self.last_out >= self.ping:
+            self.write(b": ping\n\n")
+            self.last_out = time.time()
+        return more
+
+    def _entries(self, lines: Any, reset: Any) -> Any:
+        """The frames of one poll: a reset, then an entry per line (an over-long one as `oversize`)."""
+        frames = []
+        if reset:
+            self.info = _blank_info()
+            frames.append(sse_frame("reset", {"why": reset}, 0))
+        for off, line in lines:
+            if isinstance(line, int):
+                frames.append(sse_frame("entry", {"type": "oversize", "bytes": line}, off))
+                continue
+            ent = live_entry(line)
+            if ent is None:
+                continue
+            live_track(self.info, ent)
+            frames.append(sse_frame("entry", ent, off))
+        return frames
+
+    def _state(self) -> Any:
+        """The `state` frame when the agent's state changed since it was last said (the registry entry re-read every 5 s)."""
+        if time.time() - self.refreshed >= 5:
+            with suppress(Exception, SystemExit):
+                self.e = live_registry().get(self.e["id"], self.e)
+        self.refreshed = time.time()
+        self.info["mtime"] = mtime(self.e["transcript"]) or time.time()
+        st = live_state(self.e, self.info)
+        if st == self.said:
+            return []
+        self.said = st
+        return [sse_frame("state", {"state": st[0], "why": st[1], "last_ts": self.info.get("last_ts")})]
