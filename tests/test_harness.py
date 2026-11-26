@@ -106,6 +106,31 @@ class TimeoutAndClockTest(unittest.TestCase):
         stamped = A._inbox_times[0]()
         self.assertLess(abs(stamped - harness.default_clock().time()), 60, "the inbox still reads the finished test's clock")
 
+    def test_a_thread_left_running_fails_the_test_that_started_it(self):
+        """2026-11-26 (tests #289 / #285): test_real_elapsed's status reads slept on after it ended and called
+        epoch_now() inside the next test in the worker -- a golden faking it, whose digest moved. A thread a test leaves
+        running past the grace fails that test; one its cleanup ends passes."""
+        import threading
+        gone = threading.Event()
+
+        class Leaky(unittest.TestCase):
+            def runTest(self):
+                threading.Thread(target=gone.wait, args=(harness.THREAD_GRACE + 3,), daemon=True, name="stray").start()
+
+        class Tidy(unittest.TestCase):
+            def runTest(self):
+                done = threading.Event()
+                threading.Thread(target=done.wait, args=(30,), daemon=True, name="tidy").start()
+                self.addCleanup(done.set)
+        self.addCleanup(gone.set)
+        res = unittest.TestResult()
+        Leaky().run(res)
+        self.assertEqual(len(res.failures), 1)
+        self.assertIn("stray", res.failures[0][1])
+        res = unittest.TestResult()
+        Tidy().run(res)
+        self.assertEqual(res.failures, [])
+
     def test_an_agentctl_function_left_faked_fails_the_test_and_is_undone(self):
         """2026-11-18: RecoveryTest (test_red_crash_loop) faked ci_state_load twice in one test and its tearDown put
         the first fake back; the next test in that worker, test_cistate's snapshot test, read a snapshot without a

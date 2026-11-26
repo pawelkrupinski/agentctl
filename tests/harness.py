@@ -17,7 +17,10 @@ No test depends on the machine it runs on (docs/simplification-2026-10.md, Agent
   stdlib's time or subprocess patched fails. agentctl's process-wide flags (_IN_PROCESSOR, the token cache) are reset
   per test too: a leaked processor flag failed test_token at random.
 - ONE ENVIRONMENT: every test ends with os.environ as it found it, and a test that changed a token variable
-  ($GH_TOKEN, $AGENTCTL_STORE_TOKEN, any *_TOKEN) fails, naming it."""
+  ($GH_TOKEN, $AGENTCTL_STORE_TOKEN, any *_TOKEN) fails, naming it.
+- NO THREAD OUTLIVES ITS TEST: a test that leaves a thread it started running (past THREAD_GRACE s after it ends)
+  fails, naming it. 2026-11-26 (tests #289 / #285): status reads left sleeping by test_real_elapsed called epoch_now()
+  seconds later inside the next test in the worker, a golden faking it, and its digest moved."""
 import os, shutil, signal, subprocess, sys, tempfile, threading, time, types, unittest
 
 REAL_HOME = os.path.expanduser("~")
@@ -237,8 +240,21 @@ def _restore_patches(before):
     return sorted(set(leaked))
 
 
+THREAD_GRACE = 2.0  # s a test's threads get to end once it has (a join's own bound: real time)
+
+
+def _threads_left(before):
+    """The threads started during a test still running THREAD_GRACE s after it: their names."""
+    deadline = time.monotonic() + THREAD_GRACE  # wall: a join's bound is real time
+    left = [t for t in threading.enumerate() if t not in before and t is not threading.current_thread()]
+    for t in left:
+        t.join(max(0.0, deadline - time.monotonic()))
+    return sorted(t.name for t in left if t.is_alive())
+
+
 def _run(self, result=None):
     main = threading.current_thread() is threading.main_thread()
+    threads_before = set(threading.enumerate())
     env_before = dict(os.environ)
     patches_before = [(m, _patchable(m)) for m in _agentctl_modules()]
     _reset_process_state()
@@ -264,6 +280,13 @@ def _run(self, result=None):
         try:
             raise AssertionError(f"the test left agentctl's {', '.join(patched)} replaced (restored now): restore what "
                                  "it fakes -- the next test in this worker would run against the fake")
+        except AssertionError:
+            result.addFailure(self, sys.exc_info())
+    stray = _threads_left(threads_before) if main else []
+    if stray and result is not None:
+        try:
+            raise AssertionError(f"the test left thread(s) {', '.join(stray)} running: end what it starts with it (an "
+                                 "Event its cleanup sets, then a join) -- a stray thread's calls land in the next test")
         except AssertionError:
             result.addFailure(self, sys.exc_info())
     bad = _stdlib_patched()

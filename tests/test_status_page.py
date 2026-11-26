@@ -215,7 +215,9 @@ class DataTest(Base):
     def test_a_hanging_source_is_cut_at_its_bound(self):
         st, _wt = self.world()
         orig = st.events
-        st.events = lambda after=0, limit=500: time.sleep(3) or orig(after, limit)
+        hang = __import__("threading").Event()  # set at its end: the read ends with the test (harness: no stray thread)
+        self.addCleanup(hang.set)
+        st.events = lambda after=0, limit=500: hang.wait(3) or orig(after, limit)
         t0 = time.time()
         d = A.status_data(store=st, now_=T, bound=0.5)
         self.assertLess(time.time() - t0, 2.5)
