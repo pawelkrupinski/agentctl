@@ -7,8 +7,6 @@ cognitive	RemoteStore._call_once	18
 cognitive	_await_entry	35
 cognitive	_gh_api_once	19
 cognitive	_watch_group	28
-cognitive	alert_item	30
-cognitive	alert_route	20
 cognitive	apply_entry	20
 cognitive	assemble	24
 cognitive	batch_check	19
@@ -106,8 +104,6 @@ cyclomatic	RemoteStore._call_once	16
 cyclomatic	_await_entry	20
 cyclomatic	_gh_api_once	18
 cyclomatic	_watch_group	21
-cyclomatic	alert_item	27
-cyclomatic	alert_route	21
 cyclomatic	apply_entry	31
 cyclomatic	assemble	15
 cyclomatic	batch_check	17
