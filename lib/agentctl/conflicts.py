@@ -213,6 +213,22 @@ def source_resolve(wt, files, resolved):
     return True
 
 
+def _conflict_kinds(wt: Any, files: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """(generated, union-safe prose, source) files of the conflicted ones."""
+    gen = [f for f in files if generated_entry(wt, f)]
+    prose = [f for f in files if f not in gen and union_safe(f)]
+    source = [f for f in files if f not in gen and f not in prose]
+    return gen, prose, source
+
+
+def _regenerated(wt: Any, gen: list[str], regenerated: Any, provisional: Any, notes: Any) -> bool:
+    """The generated files regenerated; False (and (files, why) noted) when that failed."""
+    why = regenerate(wt, gen, regenerated, provisional)
+    if why and notes is not None:
+        notes.append((gen, why))
+    return not why
+
+
 def conflict_resolve(wt, regen=True, notes=None, regenerated=None, provisional=None, resolved=None):
     """Resolve wt's conflicted files when each is UNION_SAFE prose (both sides kept), a registered generated file
     (regenerate; only with regen) or -- with `resolved` a list, a backlog batch's assembly -- a source file whose
@@ -221,21 +237,15 @@ def conflict_resolve(wt, regen=True, notes=None, regenerated=None, provisional=N
     files = unmerged(wt)
     if not files:
         return None
-    gen = [f for f in files if generated_entry(wt, f)]
-    prose = [f for f in files if f not in gen and union_safe(f)]
-    source = [f for f in files if f not in gen and f not in prose]
+    gen, prose, source = _conflict_kinds(wt, files)
     if (source and resolved is None) or (gen and not regen):
         return None
     if source and not source_resolve(wt, source, resolved):
         return None
     if prose and union_resolve(wt, prose) is None:
         return None
-    if gen:
-        why = regenerate(wt, gen, regenerated, provisional)
-        if why:
-            if notes is not None:
-                notes.append((gen, why))
-            return None
+    if gen and not _regenerated(wt, gen, regenerated, provisional, notes):
+        return None
     return files
 
 
