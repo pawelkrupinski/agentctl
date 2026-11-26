@@ -8,7 +8,7 @@ import re
 from agentctl.core import process_cache
 from agentctl.statefile import json_object
 from agentctl.timefmt import ts
-from agentctl.store import LeaseLost
+from agentctl.leasetable import LeaseLost
 from agentctl.procs import socket_host
 from agentctl.redrecord import lease_is_live
 

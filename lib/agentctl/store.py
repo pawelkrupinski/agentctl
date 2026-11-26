@@ -9,10 +9,10 @@ import sqlite3
 from agentctl.clock import epoch_now, stopwatch
 import time
 from typing import Any, Callable, cast
-from agentctl.knobs import knob_contact_gap, knob_contact_pause_max
 from agentctl.core import state_root
 from agentctl.statefile import json_object
 from agentctl.offers import OfferTable
+from agentctl.leasetable import LeaseLost
 from agentctl.backfill import backfill_store, derived_rows
 from agentctl.eventrows import insert_event, migrate_events, move_event, opened_event
 from agentctl.statemachines import (
@@ -22,20 +22,6 @@ from agentctl.statemachines import (
 # ---------------------------------------------------------------- the store (design §3, §6; phase 1 step 1)
 # ONE sqlite database at the state root ($AGENTCTL_STATE_ROOT/store.db, WAL, BEGIN IMMEDIATE for writers): leases now;
 # items, events and offers as the later steps move into it. Its clock is the only clock leases use.
-class LeaseLost(RuntimeError):
-    """A lease this process held is gone (expired and taken, past its max hold, or released): stop its work."""
-
-
-CONTACT_WRITE_EVERY = 10       # s: a machine's contact is written at most this often
-CONTACT_MACHINE = re.compile(r"[a-z][a-z0-9-]{0,31}")
-
-
-def lease_machine(holder):
-    """The machine a holder names (`laptop:owner:x` -> laptop), or None."""
-    m = str(holder or "").split(":", 1)[0]
-    return m if ":" in str(holder or "") and CONTACT_MACHINE.fullmatch(m) else None
-
-
 # THE FIRST OPENERS OF A NEW DATABASE RACE ITS WAL SWITCH (2026-11-26, tests/test_seq_atomic.py, 20 of 200 fresh stores
 # opened by 4 threads at once): `PRAGMA journal_mode=WAL` takes the file's exclusive lock and answers `database is
 # locked` at once -- the connection's busy timeout does not cover it -- so a writer died before its first statement.
@@ -96,171 +82,6 @@ class Store(OfferTable):
         for q in cls.SCHEMA:
             c.execute(q)
         migrate_events(c)
-
-    def _row(self, c, name):
-        r = c.execute("SELECT * FROM leases WHERE name=?", (name,)).fetchone()
-        return self._paused(c, dict(r)) if r else None
-
-    def _pause_of(self, c, machine, now_):
-        """(seconds the machine's lease clocks are paused now, the instant the pause began) -- (0, None) when it is
-        in contact or never made one."""
-        if not machine:
-            return 0.0, None
-        r = c.execute("SELECT v FROM meta WHERE k=?", (f"contact:{machine}",)).fetchone()
-        if not r:
-            return 0.0, None
-        since = float(r["v"]) + knob_contact_gap()
-        if now_ <= since:
-            return 0.0, None
-        return min(now_ - since, knob_contact_pause_max()), since
-
-    def _paused(self, c, row, now_=None):
-        """The row as its paused clock reads it (A SILENT MACHINE'S LEASE CLOCKS PAUSE): a lease live when its
-        machine's pause began is extended by the pause so far."""
-        if not row or not row.get("holder"):
-            return row
-        p, since = self._pause_of(c, lease_machine(row["holder"]), self.clock() if now_ is None else now_)
-        if p and row["expires_at"] > since:
-            row = dict(row, expires_at=row["expires_at"] + p, max_until=row["max_until"] + p, paused=p)
-        return row
-
-    def contact(self, machine):
-        """The machine talks to the store: a pause of its leases' clocks ends, each lease it covered extended by it
-        for real. The seconds applied (0 when there was none)."""
-        if not CONTACT_MACHINE.fullmatch(str(machine or "")):
-            return 0
-        c = self.db()
-        try:
-            r = c.execute("SELECT v FROM meta WHERE k=?", (f"contact:{machine}",)).fetchone()
-            if r and 0 <= self.clock() - float(r["v"]) < CONTACT_WRITE_EVERY:  # heard lately: no write per RPC
-                return 0
-            c.execute("BEGIN IMMEDIATE")
-            now_ = self.clock()
-            p, since = self._pause_of(c, machine, now_)
-            if p:
-                c.execute("UPDATE leases SET expires_at=expires_at+?, max_until=max_until+? "
-                          "WHERE holder LIKE ? AND expires_at>?", (p, p, f"{machine}:%", since))
-            c.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (f"contact:{machine}", str(now_)))
-            c.execute("COMMIT")
-            return p
-        finally:
-            c.close()
-
-    def acquire(self, name, holder, ttl, max_hold, progress="", item=None, meta=None):
-        """{'epoch', 'secret', 'expires_at', 'max_until'} when acquired, else {'held': the live lease}."""
-        c = self.db()
-        try:
-            c.execute("BEGIN IMMEDIATE")
-            r = self._acquire_in(c, name, holder, ttl, max_hold, progress, item, meta)
-            c.execute("COMMIT")
-            return r
-        finally:
-            c.close()
-
-    def _acquire_in(self, c, name, holder, ttl, max_hold, progress="", item=None, meta=None):
-        import secrets as _secrets
-        now_ = self.clock()
-        row = self._row(c, name)
-        if row and row["holder"] and row["expires_at"] > now_:
-            return {"held": {k: row[k] for k in ("holder", "epoch", "expires_at", "max_until", "progress", "meta")}}
-        epoch = (row["epoch"] if row else 0) + 1
-        secret = _secrets.token_hex(16)
-        max_until = now_ + max_hold
-        exp = min(now_ + ttl, max_until)
-        c.execute("INSERT OR REPLACE INTO leases VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                  (name, holder, epoch, secret, now_, now_, exp, max_until, progress, item, json.dumps(meta or {})))
-        return {"epoch": epoch, "secret": secret, "expires_at": exp, "max_until": max_until, "ttl": ttl}
-
-    def renew(self, name, epoch, secret, progress, ttl, note=None):
-        """'ok' (extended: the progress mark changed), 'no_progress' (not extended), or 'lost'."""
-        c = self.db()
-        try:
-            c.execute("BEGIN IMMEDIATE")
-            now_ = self.clock()
-            row = self._row(c, name)
-            if not row or row["epoch"] != epoch or row["secret"] != secret or not row["holder"] \
-                    or row["expires_at"] <= now_ or now_ >= row["max_until"]:
-                c.execute("COMMIT")
-                return "lost"
-            if progress == row["progress"]:
-                c.execute("COMMIT")
-                return "no_progress"
-            meta = json_object(row["meta"])
-            if note is not None:
-                meta["note"] = note
-            c.execute("UPDATE leases SET progress=?, renewed_at=?, expires_at=?, meta=? WHERE name=?",
-                      (progress, now_, min(now_ + ttl, row["max_until"]), json.dumps(meta), name))
-            c.execute("COMMIT")
-            return "ok"
-        finally:
-            c.close()
-
-    def note(self, name, epoch, secret, note):
-        """Say what the holder does now (waiters print it); no renewal."""
-        c = self.db()
-        try:
-            row = self._row(c, name)
-            if row and row["epoch"] == epoch and row["secret"] == secret:
-                meta = json.dumps({**json_object(row["meta"]), "note": note})
-                c.execute("UPDATE leases SET meta=? WHERE name=? AND epoch=?", (meta, name, epoch))
-        finally:
-            c.close()
-
-    def release(self, name, epoch, secret, outcome=None, notes=None):
-        """'ok' (the lease is free; its outcome and notes stay in its meta for the tick), or 'lost'."""
-        c = self.db()
-        try:
-            c.execute("BEGIN IMMEDIATE")
-            row = self._row(c, name)
-            ok = bool(row and row["epoch"] == epoch and row["secret"] == secret and row["holder"])
-            if ok:
-                meta = json_object(row["meta"])
-                if outcome is not None:
-                    meta.update(outcome=outcome, notes=notes or "", released_at=self.clock())
-                c.execute("UPDATE leases SET holder='', expires_at=?, meta=? WHERE name=?",
-                          (self.clock(), json.dumps(meta), name))
-            c.execute("COMMIT")
-            return "ok" if ok else "lost"
-        finally:
-            c.close()
-
-    def revoke(self, name, outcome):
-        """The reconciler takes a lease back (a refuted fix, a cleared red, a fix submitted): free now, its holder's next
-        renewal answers lost. True when it was live."""
-        c = self.db()
-        try:
-            c.execute("BEGIN IMMEDIATE")
-            row = self._row(c, name)
-            live = bool(row and row["holder"] and row["expires_at"] > self.clock())
-            if live:
-                meta = json_object(row["meta"])
-                meta.update(outcome=outcome, revoked=True, released_at=self.clock())
-                c.execute("UPDATE leases SET holder='', expires_at=?, meta=? WHERE name=?",
-                          (self.clock(), json.dumps(meta), name))
-            c.execute("COMMIT")
-            return live
-        finally:
-            c.close()
-
-    def set_meta(self, name, epoch, secret, meta):
-        """Merge into the holder's lease meta (its worktree, session, pid): no renewal."""
-        c = self.db()
-        try:
-            c.execute("BEGIN IMMEDIATE")
-            row = self._row(c, name)
-            if row and row["epoch"] == epoch and row["secret"] == secret:
-                c.execute("UPDATE leases SET meta=? WHERE name=? AND epoch=?",
-                          (json.dumps({**json_object(row["meta"]), **meta}), name, epoch))
-            c.execute("COMMIT")
-        finally:
-            c.close()
-
-    def get(self, name):
-        c = self.db()
-        try:
-            return self._row(c, name)
-        finally:
-            c.close()
 
     # -- items and their transitions (design §5; phase 1 step 5) -----------------------------------------------------
     def _item(self, c: Any, typ: str, iid: str) -> dict[str, Any] | None:
@@ -467,13 +288,6 @@ class Store(OfferTable):
         finally:
             c.close()
 
-    def list(self, prefix=""):
-        c = self.db()
-        try:
-            return [self._paused(c, dict(r))
-                    for r in c.execute("SELECT * FROM leases WHERE name LIKE ? ORDER BY name", (prefix + "%",))]
-        finally:
-            c.close()
 
 class CurrentStore:
     """THE STORE IS PASSED IN (CLAUDE.md, "Design"): cli, the composition root, hands it to each command, tick and

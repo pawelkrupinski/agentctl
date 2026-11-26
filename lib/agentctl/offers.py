@@ -3,24 +3,16 @@
 
 import json
 import sqlite3
-from typing import Any, Callable
+from typing import Any
+from agentctl.leasetable import LeaseTable
 
 
 Offer = dict[str, Any]  # an offers row, its picture decoded
 
 
-class OfferTable:
+class OfferTable(LeaseTable):
     """The offers table (design §6.2; step 10), mixed into Store, which owns the database (its schema holds the table),
-    the clock and the leases: db(), clock and _acquire_in come from it."""
-
-    clock: Callable[[], float]
-
-    def db(self) -> sqlite3.Connection:
-        raise NotImplementedError
-
-    def _acquire_in(self, c: sqlite3.Connection, name: str, holder: str, ttl: float, max_hold: float,
-                    progress: str = "", item: str | None = None, meta: Any = None) -> dict[str, Any]:
-        raise NotImplementedError
+    the clock and the leases (LeaseTable: take() acquires the lease its offer names): db() and clock come from it."""
 
     def _offer_row(self, r: sqlite3.Row | None) -> Offer | None:
         if not r:
