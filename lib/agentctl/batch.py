@@ -21,7 +21,7 @@ from agentctl.conditions import open_condition, run_probe
 from agentctl.queue import VERIFY_MODE, forces_full_recheck, range_paths, verify_supported
 from agentctl.generated import without_generated
 from agentctl.queuerecheck import read_overlap, recheck_reason
-from agentctl.changekind import classify_change, kind_text, queue_facts
+from agentctl.changekind import classify_change, kind_text, facts_for
 from agentctl.waiting import batch_order, must_wait, must_wait_why
 from agentctl.batchrun import assemble
 from agentctl.recovery import batch_key, batch_move
@@ -323,7 +323,7 @@ def green_batch_depth(tree, it, kept, base, tip):
 # first and alone, and a batch is left to the changes that may wait. One the rule still holds is told what holds it
 # (`wait_rule` on its item: WR and the liveness line print it), the one escalation left.
 def release_red_fixes(repo: Any, d: Any, st: Any, reds: Any, waiting: Any, t: float) -> list[str]:
-    facts = queue_facts(reds, st)
+    facts = facts_for(reds, st)
     out = []
     for e in waiting:
         k = classify_change(e, facts, t)

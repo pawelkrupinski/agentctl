@@ -20,7 +20,7 @@ from agentctl.generated import regen_owed, without_generated
 from agentctl.conflicts import conflict_cause, conflict_paths, union_safe
 from agentctl.queuerecheck import own_diff_changed, read_overlap, recheck_logged, recheck_reason
 from agentctl.redfixes import fixes_of
-from agentctl.changekind import queue_facts
+from agentctl.changekind import facts_for
 from agentctl.redland import may_land_on_red
 from agentctl.waiting import already_landed, apply_entry, must_wait, tail_of, waiting_commits
 from agentctl.landwatch import start_watch
@@ -198,7 +198,7 @@ class ChangePush:
         commits = waiting_commits(self.tree, self.base, self.head)
         reds = gate_reds(self.repo) if waiting_supported(self.repo) else set()
         # a gate red's fix failing only as main fails lands: no wait
-        kr = None if may_land_on_red(queue_facts(reds, self.st), self.e, self.repo, commits, self.st).gate_fix else self.e.get("known_red")
+        kr = None if may_land_on_red(facts_for(reds, self.st), self.e, self.repo, commits, self.st).gate_fix else self.e.get("known_red")
         if kr or (reds and must_wait(self.repo, commits, reds, self.st)):
             queue_join(self.st, self.repo, self.d, self.e, self.tree, self.head, known_red_words(kr))
             return "joined"

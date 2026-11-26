@@ -21,7 +21,7 @@ from agentctl.conflicts import conflict_hunks, hunks_resolve, own_commits_confli
 from agentctl.queuerecheck import queued_entries, same_change_source
 from agentctl.redfixes import fixes_of
 from agentctl.identitychange import shared_paths
-from agentctl.changekind import classify_change, queue_facts
+from agentctl.changekind import classify_change, facts_for
 from agentctl.gov import GovTimeout
 from agentctl.waiting import note_waiting, supersede_older_waiting, waiting_commits
 from agentctl.checkslot import check_slot
@@ -404,7 +404,7 @@ def batch_queued(st: Any, repo: str, d: str, entries: list[dict[str, Any]], fact
 def kind_of(st, repo, e, facts, t):
     """Entry e's kind (changekind.py classify_change) under facts (queue_facts of the gate's reds when None), read as
     it is now: a flag set since the tick began (push_alone, batch_alone, known_red) counts."""
-    return classify_change(e, facts if facts is not None else queue_facts(gate_reds(repo), st), t, repo)
+    return classify_change(e, facts if facts is not None else facts_for(gate_reds(repo), st), t, repo)
 
 
 _behind_said = process_cache({})  # (entry id, what) -> batch id: said once per batch
@@ -414,4 +414,4 @@ def batch_round(d: str, reds: set[str], st: Any, t: float | None,
                 facts: dict[str, Any] | None) -> tuple[float, Any, list[dict[str, Any]]]:
     """What a backlog or push batch's round reads at a green gate: (now, the queue's facts -- queue_facts, read from
     the store when None --, its queued entries)."""
-    return (t if t is not None else epoch_now()), (queue_facts(reds, st) if facts is None else facts), queued_entries(d)
+    return (t if t is not None else epoch_now()), (facts_for(reds, st) if facts is None else facts), queued_entries(d)

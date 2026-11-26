@@ -21,7 +21,7 @@ from agentctl.fixchange import CHANGE_ENDED, red_change, red_change_read
 from agentctl.redfixes import red_fix_of
 from agentctl.red import red_fix_giveup
 from agentctl.redmove import red_put_offer
-from agentctl.changekind import HOLD_SHOWN, change_hold_visible, classify_change, kind_text, queue_facts
+from agentctl.changekind import HOLD_SHOWN, change_hold_visible, classify_change, kind_text, facts_for
 from agentctl.redopen import red_offer
 from agentctl.redverify import red_fix_since, red_fix_unverifiable
 from agentctl.reddispatch import repo_dispatch_off
@@ -88,7 +88,7 @@ def inv_wr(clock, st, reds = None):
     a violation that is left names the rule that holds the fix (`wait_rule`)."""
     if reds is None:
         reds = snap_reds(ci_state_load(SHORT["movies"]))
-    facts = queue_facts(reds or set(), st)
+    facts = facts_for(reds or set(), st)
     if not reds and not facts["open"]:
         return True, "main green (or its gate unread) and no red open: no red fix to hold"
     bad = red_fix_stalls(st, clock.time(), facts)
@@ -149,7 +149,7 @@ def red_fix_liveness(st: Any, t: float, snap: Any = None) -> str | None:
     red_for = t - min(parse_time(g["since"]).timestamp() for g in rows)
     if red_for <= env_num("AGENTCTL_RED_LIVENESS_MAX", RED_LIVENESS_MAX):
         return None
-    stalls = red_fix_stalls(st, t, queue_facts(snap_reds(snap), st))
+    stalls = red_fix_stalls(st, t, facts_for(snap_reds(snap), st))
     if not stalls:
         return None
     return (f"RED FIX STALLED: the gate has been red {fmt_age(red_for)}; {stalls[0]}"

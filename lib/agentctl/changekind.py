@@ -3,8 +3,9 @@
 
 from agentctl.clock import epoch_now
 from typing import Any
-from contextlib import suppress
-from agentctl.core import fmt_age
+from contextlib import contextmanager, suppress
+from collections.abc import Iterator
+from agentctl.core import fmt_age, process_cache
 from agentctl.redrecord import RED_TERMINAL, red_names
 from agentctl.redepisode import episode_unread, red_episode_names
 from agentctl.queueslots import checker_alive
@@ -75,6 +76,38 @@ def queue_facts(gate, st):
         for n in sorted(str(x) for x in red_names(d) | red_episode_names(d) if x):
             open_.setdefault(n.lstrip("#"), [it["id"], red_kind_of(d)])
     return {"gate": {str(x) for x in gate or ()}, "open": open_, "episode_unread": dict(episode_unread)}
+
+
+# THE QUEUE FACTS ARE READ ONCE PER TICK (2026-11-26; the review found them recomputed per call: every must_wait_why,
+# batch order, classification and push read the store's red items and each red's episode again -- per waiting entry).
+# tick_changes and tick_batch each run inside facts_tick(); facts_for(reds, st) answers from that tick's read, one per
+# database and gate reading. Outside a tick (a checker, `land`, the status page, a test) every call reads afresh. Nothing
+# in a queue tick moves a red item (the red tick, later in the pass, does), so the tick's facts stay true through it.
+_tick_memo: dict[str, dict[Any, Any] | None] = process_cache({})
+
+
+@contextmanager
+def facts_tick() -> Iterator[None]:
+    """The scope of one tick's facts (nested scopes share the outer one's)."""
+    outer = "memo" in _tick_memo and _tick_memo["memo"] is not None
+    if not outer:
+        _tick_memo["memo"] = {}
+    try:
+        yield
+    finally:
+        if not outer:
+            _tick_memo["memo"] = None
+
+
+def facts_for(reds: Any, st: Any) -> dict[str, Any]:
+    """queue_facts(reds, st), read once per tick (facts_tick); afresh outside one. Never mutate the answer: it is shared."""
+    memo = _tick_memo.get("memo")
+    if memo is None:
+        return queue_facts(reds, st)
+    key = (getattr(st, "path", None) or id(st), frozenset(str(x) for x in reds or ()))  # one database, one read
+    if key not in memo:
+        memo[key] = queue_facts(reds, st)
+    return memo[key]
 
 
 def gate_facts(gate):

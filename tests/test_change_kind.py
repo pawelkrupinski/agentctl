@@ -119,6 +119,54 @@ class ChangeKindTest(unittest.TestCase):
             A.commit_fixes, A.touches_production = saved
 
 
+class FactsPerTickTest(unittest.TestCase):
+    """THE QUEUE FACTS ARE READ ONCE PER TICK (changekind.py facts_tick): the review found queue_facts recomputed per
+    call -- every must_wait_why, batch order, classification and push read the store's red items again."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.st = A.Store(path=os.path.join(self.tmp.name, "store.db"))
+        self.st.put_item("red", "k7", "leased", {"key": "k7", "workflow": "Main", "gate": True, "runs": ["7", "8"]})
+        self.reads = 0
+        real = self.st.items
+
+        def counted(typ, *a, **k):
+            self.reads += typ == "red"
+            return real(typ, *a, **k)
+        self.st.items = counted
+
+    def test_inside_a_tick_one_read_per_gate_reading_outside_every_call_reads(self):
+        with A.facts_tick():
+            for _ in range(5):
+                self.assertIn("7", A.facts_for({"8"}, self.st)["open"])
+            A.facts_for({"9"}, self.st)  # another gate reading: its own read
+            with A.facts_tick():  # a nested scope shares the tick's
+                A.facts_for({"8"}, self.st)
+        self.assertEqual(self.reads, 2)
+        A.facts_for({"8"}, self.st)
+        A.facts_for({"8"}, self.st)
+        self.assertEqual(self.reads, 4, "outside a tick, afresh")
+
+    def test_the_queue_ticks_read_the_facts_once_each(self):
+        """Over a simulated red with a waiting fix (queue_sim.REDFIX_OLDER_RUN), each tick's change and batch ticks
+        read the facts at most once each: before, up to 8 reads a tick."""
+        import queue_sim
+        per_tick, real, sim = {}, A.queue_facts, {}
+
+        def counting(gate, st):
+            if A._tick_memo.get("memo") is not None:  # inside a queue tick
+                per_tick[sim["it"].tick] = per_tick.get(sim["it"].tick, 0) + 1
+            return real(gate, st)
+        A.queue_facts = counting
+        self.addCleanup(setattr, A, "queue_facts", real)
+        s = queue_sim.Sim(0, calm=True, trees=2, script=list(queue_sim.REDFIX_OLDER_RUN))
+        sim["it"] = s
+        s.run()
+        self.assertTrue(per_tick)
+        self.assertLessEqual(max(per_tick.values()), 2, per_tick)
+
+
 class WatchdogKindTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

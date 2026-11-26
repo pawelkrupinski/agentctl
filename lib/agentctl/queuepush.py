@@ -15,7 +15,7 @@ from agentctl.queueslots import change_item_fields, check_tree_slot, checker_ali
 from agentctl.queue import requeue_infra
 from agentctl.conflicts import conflict_cause, conflict_paths
 from agentctl.queuerecheck import queued_entries, same_change_source
-from agentctl.changekind import classify_change, classify_queue, kind_order, queue_facts, record_change_kind
+from agentctl.changekind import classify_change, classify_queue, kind_order, facts_for, facts_tick, record_change_kind
 from agentctl.waiting import supersede
 from agentctl.redseen import gate_reds
 from agentctl.queuebatch import _behind_said, hold_for_overlap, main_conflict, overlap_hold, spawn_executor
@@ -56,14 +56,20 @@ def older_verifying(todo, e, t, kinds=None, waits=frozenset()):
                  and verifying(o, t, waits)), None)
 
 
-def tick_changes(repo, d, clock, st):
+def tick_changes(repo: str, d: str, clock: Any, st: Any) -> list[str]:
+    """One tick over the change items (_tick_changes), the queue facts read once for it (changekind.py facts_tick)."""
+    with facts_tick():
+        return _tick_changes(repo, d, clock, st)
+
+
+def _tick_changes(repo, d, clock, st):
     """One tick over the change items: re-queueing re-derived (only the newest entry per worktree and branch runs), an
     executor started for each queued or lease-less checking change (red fixes first, while a slot is free), a
     checking change past its deadline back to queued (infra), a queued one past its deadline escalated, and each
     checked change pushed. Returns what it did."""
     t = clock.time()
     reds = attempt(lambda: gate_reds(repo), set(), catch=(Exception,))
-    facts = queue_facts(reds, st)  # A FIX OF ANY OPEN RED GOES FIRST (above): each change's KIND, recorded on its item
+    facts = facts_for(reds, st)  # A FIX OF ANY OPEN RED GOES FIRST (above): each change's KIND, recorded on its item
     entries = queued_entries(d)
     kinds = classify_queue(repo, d, entries, facts, t, st)
     todo = sorted(entries, key=lambda e: kind_order(kinds, e))  # THE PRIORITY ORDER (changekind.py PRIORITY)

@@ -10,7 +10,7 @@ from agentctl.leases import lease_live
 from agentctl.queueslots import check_tree, check_tree_slot, set_change
 from agentctl.queue import land_hold
 from agentctl.queuerecheck import queued_entries, recheck_logged
-from agentctl.changekind import queue_facts
+from agentctl.changekind import facts_for, facts_tick
 from agentctl.redland import may_land_on_red
 from agentctl.redseen import gate_reds
 from agentctl.batchrun import assemble, unread_note
@@ -27,7 +27,8 @@ from agentctl.batch import (
 def tick_batch(repo: str, d: str, clock: Any, st: Any) -> list[str]:
     """One tick of the repository's batch, then its stall count (note_batch_progress). Returns what it did."""
     seen: dict[str, Any] = {}
-    did = _tick_batch(repo, d, st, seen)
+    with facts_tick():  # the queue facts read once for the tick (changekind.py)
+        did = _tick_batch(repo, d, st, seen)
     try:
         seen["last"] = did[-1] if did else None
         if seen.get("waiting"):  # the batch as this tick left it (assembled -> checking is no stall)
@@ -140,7 +141,7 @@ def batch_forming(it: Any, depth: Any, waiting: Any) -> bool:
 def gate_fix_waits(repo: str, st: Any, reds: Any, waiting: Any) -> bool:
     """Whether the gate is red and a waiting change names its red (THE RED-LANDING RULE: one that may land on it is
     released to the queue; one that waits beside a production commit naming no red stays)."""
-    facts = queue_facts(reds, st)
+    facts = facts_for(reds, st)
     return bool(reds) and any(may_land_on_red(facts, e, repo, store=st).names_gate_red for e in waiting)
 
 
@@ -180,7 +181,7 @@ def batch_formed(repo: str, d: str, st: Any, t: float, it: Any, reds: Any, depth
 def batch_candidates(repo: str, d: str, st: Any, t: float, it: Any, reds: Any, depth: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(the push batch's candidates, what is ready): the checked changes owing a verify round, else the queued ones a
     backlog batch would take -- each asked only when the batch is new or of that depth."""
-    facts = queue_facts(reds, st)
+    facts = facts_for(reds, st)
     push = push_candidates(repo, d, reds, st, t, facts) if not it or depth == "verify" else []
     return push, push or (backlog_candidates(repo, d, reds, st, t, facts) if not it or depth == "full" else [])
 
