@@ -2431,8 +2431,9 @@ agentctl suite [run.py args]       # agentctl's own tests (tests/run.py) under a
   asked -- and every suite waited behind it). `gov admit --min-cores M` marks a pool that can run narrower: it is
   admitted once M cores fit and granted (and charged) what is free now -- `GOV_CPU_FACTOR` x the cores less the busy
   ones -- at most `$AGENTCTL_GOV_POOL_SHARE` (0.5) of the machine, never under M; the grant is the `cores` of the
-  ticket's record (`<ticket>.json`), and the pool runs that wide. agentctl's governed() asks with `--min-cores 1`;
-  `gov probe` lists `grant`. A fixed ask (no `--min-cores`) is charged what it asked, as before. MOVIES' SIDE (not yet
+  ticket's record (`<ticket>.json`), and the pool runs that wide (govpool.governed's `floor`). A TIME-BOUNDED runner
+  asks a fixed width: agentctl's own suite and simulator gate do (granted 1 core at load 17, the pre-push suite only
+  timed out). `gov probe` lists `grant`. A fixed ask (no `--min-cores`) is charged what it asked, as before. MOVIES' SIDE (not yet
   done; its run-script-tests is being migrated): jvm-gate.sh `gov_take`, called from `gov_width`, passes `--min-cores
   1` when `governor_has grant` and then sets `GOV_WIDTH` and `AGENTCTL_GOV_WIDTH` from the ticket record's `cores`
   instead of its ask; run-script-tests' `govern_run` counts its wide tests' extra only when the grant covers them.

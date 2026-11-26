@@ -17,8 +17,8 @@ from typing import Callable, Iterator, Mapping, Optional
 #
 # - NOT UNDER A TICKET: it takes one (`agentctl gov admit`, the CLI movies' scripts/jvm-gate.sh and bitcashier's
 #   bin/gov-sbt call too), held on a descriptor this process keeps open until the pool ends (the kernel frees it however
-#   the process ends). It asks with --min-cores 1 (THE GRANTED WIDTH, govknobs.py): admitted once one core fits, it is
-#   granted and charged what the free cores allow up to what it wants, and runs that wide.
+#   the process ends). Its width is what it asked for -- or, a pool that can run narrower (`floor`), what the governor
+#   granted it (THE GRANTED WIDTH, govknobs.py: --min-cores; the free cores up to what it wants), read from its ticket.
 # - UNDER A TICKET ($AGENTCTL_GOV_WIDTH, set by whoever holds one: a check's hook, a governed pool for its workers): it
 #   takes NONE -- a nested call never waits on its own parent, so it never deadlocks -- and its width is the smaller of
 #   what it asks and what the ticket above it allows.
@@ -91,9 +91,11 @@ def default_governor() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "agentctl")
 
 
-def admit_args(gov: str, fd: int, ticket: str, cls: str, want: int, job: str, label: str) -> list[str]:
+def admit_args(gov: str, fd: int, ticket: str, cls: str, want: int, job: str, label: str,
+               floor: Optional[int] = None) -> list[str]:
     return [gov, "gov", "admit", "--fd", str(fd), "--ticket", ticket, "--class", cls, "--mem", "1", "--cores",
-            str(want), "--min-cores", "1", "--job", job, "--label", label, "--pid", str(os.getpid())]
+            str(want), *(["--min-cores", str(floor)] if floor is not None else []), "--job", job, "--label", label,
+            "--pid", str(os.getpid())]
 
 
 def granted_width(ticket: str, want: int) -> int:
@@ -115,13 +117,14 @@ def gov_dir_path(env: Mapping[str, str] = os.environ) -> str:
 
 
 def take_ticket(gov: str, gov_dir: str, cls: str, want: int, job: str, label: str, wait: float,
-                run: Callable[..., "subprocess.CompletedProcess[bytes]"], env: Mapping[str, str]) -> Optional[tuple[int, str]]:
+                run: Callable[..., "subprocess.CompletedProcess[bytes]"], env: Mapping[str, str],
+                floor: Optional[int] = None) -> Optional[tuple[int, str]]:
     """(descriptor, ticket path) once the governor admits the pool, or None (refused or failed); GovernorBusy past `wait`."""
     os.makedirs(gov_dir, exist_ok=True)
     ticket = os.path.join(gov_dir, f"t-{job}-{os.getpid()}-{time.monotonic_ns()}.lock")  # wall: waits on and times real processes and threads
     fd = os.open(ticket, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
     try:
-        if run(admit_args(gov, fd, ticket, cls, want, job, label), pass_fds=(fd,), timeout=wait,
+        if run(admit_args(gov, fd, ticket, cls, want, job, label, floor), pass_fds=(fd,), timeout=wait,
                env=dict(env)).returncode == 0:
             return fd, ticket
     except subprocess.TimeoutExpired:
@@ -145,8 +148,10 @@ def give_back(held: Optional[tuple[int, str]]) -> None:
 @contextlib.contextmanager
 def governed(job: str, want: int, label: str, cls: str = "suite", env: Optional[Mapping[str, str]] = None,
              wait: Optional[float] = None, run: Callable[..., "subprocess.CompletedProcess[bytes]"] = subprocess.run,
-             say: Callable[[str], object] = sys.stderr.write) -> Iterator[Fanout]:
-    """A parallel runner's width for `want` workers, under a ticket of the governor for as long as it runs."""
+             say: Callable[[str], object] = sys.stderr.write, floor: Optional[int] = None) -> Iterator[Fanout]:
+    """A parallel runner's width for `want` workers, under a ticket of the governor for as long as it runs. floor: a
+    pool that can run narrower (THE GRANTED WIDTH) -- never a time-bounded one, like the suite (its bound is set for its
+    full width: granted 1 core at load 17, the pre-push suite would only time out)."""
     env = os.environ if env is None else env
     want = max(1, want)
     above = held_width(env)
@@ -157,7 +162,8 @@ def governed(job: str, want: int, label: str, cls: str = "suite", env: Optional[
     if gov == "-" or not os.access(gov, os.X_OK):
         yield Fanout(want, None, "no governor here")
         return
-    held = take_ticket(gov, gov_dir_path(env), cls, want, job, label, gov_wait(env) if wait is None else wait, run, env)
+    held = take_ticket(gov, gov_dir_path(env), cls, want, job, label, gov_wait(env) if wait is None else wait, run, env,
+                       floor)
     if held is None:
         say(f"{job}: the governor refused or failed: no ticket for {want} cores, running one wide\n")
     try:
