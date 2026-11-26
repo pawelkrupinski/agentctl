@@ -26,7 +26,7 @@ from agentctl.branches import branch_reds, entry_predicts
 # -- what is red now: one observation per key, from the CI-state snapshot
 def red_units(o_r, name, decided, runs, sigs, gate, budget=None):
     """The failing jobs of one red run as units: [{workflow, job, kind, line, run, runs, names, gate}]. budget: the
-    tick's re-reads of stale streak signatures (a one-element list; default STREAK_REREADS)."""
+    tick's re-reads of stale streak signatures (a one-element list; default knobs.STREAK_REREADS)."""
     episode = RedEpisode(o_r, name, runs, budget if budget is not None else streak_budget())
     sigs = [s for s in sigs if s.get("kind") != "incomplete"]  # a `verdict complete` beside a real failure is no red
     # (job_is_verdict_report: reporting only)
@@ -45,7 +45,7 @@ def sigs_no_verdict(sigs):
 
 def gate_red_units(o_r, rows, others=(), rereads=None):
     """The red units of ci-why's rows: [(name, decided, runs, gate)] -> units (signatures read, cached; at most
-    `rereads` (STREAK_REREADS) stale streak runs read again per call -- the tick's; the status line's summary none)."""
+    `rereads` (knobs.STREAK_REREADS) stale streak runs read again per call -- the tick's; the status line's summary none)."""
     units = []
     budget = streak_budget() if rereads is None else [rereads]
     for name, decided, runs, gate in list(rows) + list(others):

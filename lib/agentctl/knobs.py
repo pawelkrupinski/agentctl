@@ -418,5 +418,13 @@ def knob_contact_gap() -> float:
     return env_num("AGENTCTL_CONTACT_GAP", CONTACT_GAP)
 
 
+STREAK_REREADS = 3  # stale or missing streak run signatures read again per tick ($AGENTCTL_STREAK_REREADS)
+
+
+def knob_streak_rereads() -> int:
+    """The tick's re-reads of stale streak run signatures (redepisode.streak_budget)."""
+    return int(env_num("AGENTCTL_STREAK_REREADS", STREAK_REREADS))
+
+
 def knob_contact_pause_max() -> float:
     return env_num("AGENTCTL_CONTACT_PAUSE_MAX", CONTACT_PAUSE_MAX)

@@ -3,7 +3,8 @@
 
 from dataclasses import dataclass
 from typing import Any
-from agentctl.core import SHORT, env_num, err, process_cache, reds_dir
+from agentctl.core import SHORT, err, process_cache, reds_dir
+from agentctl.knobs import knob_streak_rereads
 from agentctl.statefile import read_record
 from agentctl.classify import norm_line
 from agentctl.forge import RED_CONCLUSIONS
@@ -27,7 +28,6 @@ from agentctl.runsigs import classifier_version, run_names, run_sigs
 # counted. For the episode's own reference -- the newest red run's failing jobs (the gate) or the red item's job and
 # line (the queue facts) -- an unreadable reference is SURFACED: Episode.unread says why, and `episode_unread` keeps it
 # per workflow, which the queue facts carry into a waiting fix's words (redland.red_wait), until a read succeeds.
-STREAK_REREADS = 3  # stale or missing streak run signatures read again per tick ($AGENTCTL_STREAK_REREADS)
 Sig = dict[str, Any]
 episode_unread: dict[str, str] = process_cache({})  # workflow -> why its episode's reference could not be read
 
@@ -40,7 +40,7 @@ class Episode:
 
 def streak_budget() -> list[int]:
     """The tick's re-reads of stale streak signatures (a one-element list, spent across a pass)."""
-    return [int(env_num("AGENTCTL_STREAK_REREADS", STREAK_REREADS))]
+    return [knob_streak_rereads()]
 
 
 class RedEpisode:

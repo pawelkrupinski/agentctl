@@ -147,7 +147,6 @@ redprobe	AGENTCTL_DRIFT_CI	batch 2: not yet behind a configfile accessor
 redreplay	AGENTCTL_BRIEF	batch 2: not yet behind a configfile accessor
 redreplay	AGENTCTL_FIX_REPLAY_TIMEOUT	batch 2: not yet behind a configfile accessor
 redretired	AGENTCTL_RED_STALE_DAYS	batch 2: not yet behind a configfile accessor
-redseen	AGENTCTL_STREAK_REREADS	batch 2: not yet behind a configfile accessor
 redseen	AGENTCTL_UNKICKED_AFTER	batch 2: not yet behind a configfile accessor
 redtick	AGENTCTL_ASSIGN_BOUND	batch 2: not yet behind a configfile accessor
 redtick	AGENTCTL_GATE_PUBLISH	batch 2: not yet behind a configfile accessor
