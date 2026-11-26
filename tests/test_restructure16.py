@@ -768,6 +768,32 @@ class RedClaimTest(unittest.TestCase):
         check(self, "red_claim", self.build, lambda A: A.red_claim, 4000)
 
 
+class PinnedZoneTest(unittest.TestCase):
+    """RED 282: red_claim's golden line reads local time; a UTC runner read another hour than the CET laptop."""
+
+    def test_local_time_reads_the_same_in_any_outer_zone(self):
+        import time
+        from golden_cases import pinned_zone
+        seen = set()
+        for zone in ("UTC", "America/New_York", "Asia/Tokyo"):
+            with mock_tz(zone), pinned_zone():
+                seen.add(time.strftime("%H:%M", time.localtime(86400 * 3)))
+        self.assertEqual(seen, {"01:00"})
+        self.assertNotIn("TZ", os.environ)
+
+
+@contextlib.contextmanager
+def mock_tz(zone):
+    import time
+    os.environ["TZ"] = zone
+    time.tzset()
+    try:
+        yield
+    finally:
+        os.environ.pop("TZ", None)
+        time.tzset()
+
+
 # ------------------------------------------------------------------------------------------------ gating
 class GateFlowNamesTest(unittest.TestCase):
     def build(self, case):

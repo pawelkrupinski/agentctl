@@ -5,7 +5,7 @@ call and the result digested. A restructure that changes ANY call, its order or 
 
 The fakes patch the name in every module binding it (tests' view `A`), and are restored afterwards. A fake returns what
 its generator draws from the case's own random stream, so the same calls in the same order see the same values."""
-import hashlib, json, os, random
+import contextlib, hashlib, json, os, random, time
 from unittest import mock
 
 DIGESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "restructure4-digests.json")
@@ -91,10 +91,28 @@ def outcome(A, seed, build, fn_of):
         case.restore()
 
 
+@contextlib.contextmanager
+def pinned_zone(zone="CET-1"):
+    """The digests were recorded on a CET laptop: a local-time line (`time.strftime('%H:%M', localtime(..))`) must read the
+    same on a UTC runner. A fixed POSIX zone (UTC+1, no DST, no tzdata), os.environ and the C library restored after."""
+    before = os.environ.get("TZ")
+    os.environ["TZ"] = zone
+    time.tzset()
+    try:
+        yield
+    finally:
+        if before is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = before
+        time.tzset()
+
+
 def digest(A, name, build, fn_of, n=1500):
     h = hashlib.sha256()
-    for seed in range(n):
-        h.update(outcome(A, seed, build, fn_of).encode())
+    with pinned_zone():
+        for seed in range(n):
+            h.update(outcome(A, seed, build, fn_of).encode())
     return h.hexdigest()
 
 
