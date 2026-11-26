@@ -17,29 +17,39 @@ import subprocess
 import sys
 import time
 
+REPORT_EVERY = 30  # s between "waiting for the push lock" lines
 LOCK = os.environ.get("AGENTCTL_PUSH_LOCK") or os.path.expanduser("~/.cache/agentctl/selfpush.lock")
 
 
-def git(*args: str, check: bool = False) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], text=True, check=check)
+def git(*args: str, check: bool = False, capture: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], text=True, check=check, capture_output=capture)
+
+
+def rebase_in_progress() -> bool:
+    """A rebase stopped on a conflict (and so can be aborted); a rebase git refused to start has nothing to abort."""
+    paths = [subprocess.run(["git", "rev-parse", "--git-path", p], capture_output=True, text=True).stdout.strip()
+             for p in ("rebase-merge", "rebase-apply")]
+    return any(os.path.isdir(p) for p in paths)
 
 
 def take_lock(wait: float):
     """The lock file, held (LOCK_EX), or None after `wait` seconds; prints who it waits behind every 30 s."""
     os.makedirs(os.path.dirname(LOCK), exist_ok=True)
     f = open(LOCK, "a+")
-    start = time.time()
+    start = time.monotonic()  # wall: a wait on a lock another process holds is real time
+    next_report = 0.0
     while True:
         try:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return f
         except OSError:
-            waited = time.time() - start
+            waited = time.monotonic() - start  # wall: as above
             if waited >= wait:
                 f.close()
                 return None
-            if int(waited) % 30 == 0:
+            if waited >= next_report:  # once per REPORT_EVERY, never skipped for the loop's drift, never repeated
                 print(f"selfpush: waiting for the push lock ({int(waited)} s; another push holds it)", flush=True)
+                next_report = waited + REPORT_EVERY
             time.sleep(1)
 
 
@@ -47,8 +57,13 @@ def push_under_lock() -> int:
     if git("fetch", "-q", "origin", "main").returncode:
         print("selfpush: NOT PUSHED -- git fetch origin main failed")
         return 1
+    if git("status", "--porcelain", "--untracked-files=no", capture=True).stdout.strip():
+        print("selfpush: NOT PUSHED -- the tree has uncommitted changes (a rebase refuses them): commit or stash "
+              "them, then run this again")
+        return 1
     if git("rebase", "origin/main").returncode:
-        git("rebase", "--abort")
+        if rebase_in_progress():
+            git("rebase", "--abort")
         print("selfpush: NOT PUSHED -- the rebase onto origin/main conflicts (aborted, the tree is as it was); "
               "rebase by hand, then run this again")
         return 1

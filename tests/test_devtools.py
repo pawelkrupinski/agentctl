@@ -476,6 +476,35 @@ class SelfPushTest(unittest.TestCase):
         with open(self.env["AGENTCTL_PUSH_LOCK"], "a+") as f:
             fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises when still held
 
+    def test_a_dirty_tree_is_reported_as_dirty_not_as_a_conflict(self):
+        a, other = self.clone("a"), self.clone("other")
+        self.commit(other, "o.txt", "o")
+        self.git(other, "push", "-q", "origin", "HEAD:main")
+        self.commit(a, "a.txt", "a")
+        with open(os.path.join(a, "base.txt"), "w") as f:
+            f.write("edited, uncommitted")
+        p = self.start(a)
+        out = p.communicate(timeout=60)[0]
+        self.assertEqual(p.returncode, 1, out)
+        self.assertIn("uncommitted", out)
+        self.assertNotIn("conflict", out)
+        self.assertNotIn("no rebase in progress", out)  # no failing --abort
+
+    def test_the_wait_line_is_printed_once_per_interval(self):
+        import importlib.util, io, fcntl, contextlib
+        spec = importlib.util.spec_from_file_location("selfpush", os.path.join(DEV, "selfpush.py"))
+        sp = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sp)
+        sp.LOCK, sp.REPORT_EVERY = os.path.join(self.tmp, "held"), 1
+        with open(sp.LOCK, "a+") as holder:
+            fcntl.flock(holder, fcntl.LOCK_EX)
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                self.assertIsNone(sp.take_lock(3.5))
+        stamps = [int(l.split("(")[1].split(" s")[0]) for l in buf.getvalue().splitlines()]
+        self.assertEqual(len(stamps), len(set(stamps)), stamps)  # never repeated
+        self.assertGreaterEqual(len(stamps), 3)
+
     def test_a_direct_push_hook_prints_the_hint(self):
         r = subprocess.run(["sh", os.path.join(ROOT, "hooks", "pre-push")], input="x " + "0" * 40 + " y " + "0" * 40 + "\n",
                            capture_output=True, text=True, env=self.env, cwd=self.tmp)
