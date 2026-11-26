@@ -34,11 +34,10 @@ from agentctl.orphanreap import red_reap_orphans
 from agentctl.queueclose import close_landed_changes, migrate_local_queue
 from agentctl.reddispatch import red_renew_holders
 from agentctl.netwatch import network_watch, tunnel_watch
-from agentctl.redstatus import write_red_status_snapshot
+from agentctl.redcli import write_red_status_snapshot
 from agentctl.offerdispatch import red_dispatcher
 from agentctl.escalationsession import escalation_step
-from agentctl.tickknobs import knob_step_bound
-from agentctl.tickknobs import knob_sync_mirror
+from agentctl.tickknobs import knob_step_bound, knob_sync_mirror
 
 
 # ---- the laptop's sync (role "sync")

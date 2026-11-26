@@ -20,7 +20,7 @@ from agentctl.redrecord import lease_is_live, red_lease, red_of_key, red_what
 from agentctl.leases import block_lease, lease_meta, red_block_of
 from agentctl.conditions import probe_words, run_probe
 from agentctl.redask import OWNER_CAUSES, OWNER_CAUSE_CATEGORY, red_decision, vault_decide_cmd
-from agentctl.redmove import red_move
+from agentctl.red import red_move
 from agentctl.redblock import BLOCK_MAX, BLOCK_TTL, owner_cmd_unsafe, owner_details, red_run_units
 from agentctl.redopen import red_offer
 from agentctl.redclaim import red_targets

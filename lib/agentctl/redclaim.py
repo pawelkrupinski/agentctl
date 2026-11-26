@@ -12,18 +12,16 @@ from agentctl.procs import safe_cwd
 from agentctl.repos import RED_PRIMARY, movies_repo_path, red_repo_of, repo_path_for, scan_repo_for
 from agentctl.leases import LeaseKinds, lease_meta, red_block_of
 from agentctl.fixerrecords import fixer_session_path, own_fixer_record_path, record_session_is
-from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
+from agentctl.redrecord import lease_is_live, red_active, red_item_of_run, red_lease, red_obs_for, red_what
 from agentctl.allowedpaths import allowed_dir
 from agentctl.worktrees import claimant, worktree_of
 from agentctl.redrepos import red_is_other, red_owner_only
-from agentctl.red import RED_CLAIM_MAX, RED_CLAIM_TTL
-from agentctl.redrecord import red_item_of_run, red_obs_for
+from agentctl.red import RED_CLAIM_MAX, RED_CLAIM_TTL, red_move
 from agentctl.redseen import red_obs_of_units
 from agentctl.redblock import red_run_units
 from agentctl.redopen import red_attach_obs, red_open
 from agentctl.inboxentry import inbox_write
 from agentctl.fixerland import unlanded_commits
-from agentctl.redmove import red_move
 
 
 # -- interactive: claim, beat, release

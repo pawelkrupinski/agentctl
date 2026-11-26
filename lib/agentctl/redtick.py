@@ -5,8 +5,8 @@ from agentctl.clock import epoch_now
 import functools
 import threading
 from typing import Any
-from agentctl.statemachines import is_terminal, open_items, StaleVersion
-from agentctl.core import err, NoReadAccess, process_cache, run_bounded, slug
+from agentctl.statemachines import StaleVersion, open_items, is_terminal
+from agentctl.core import NoReadAccess, err, process_cache, run_bounded, slug
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
 from agentctl.redretired import red_retired
@@ -14,13 +14,12 @@ from agentctl.storetoken import red_read_token
 from agentctl.redrepos import red_gate_flows, red_is_other
 from agentctl.ciwhy import gate_from_snap, gate_runs, gate_snap_rows, main_runs_of
 from agentctl.cistate import ci_state_load
-from agentctl.redrecord import red_what
+from agentctl.redrecord import red_active_of, red_obs_for, red_what
 from agentctl.lander import lander_note_landed
 from agentctl.redfixread import red_main_current
 from agentctl.redfixes import red_fix_facts
-from agentctl.redrecord import red_active_of, red_obs_for
 from agentctl.redknobs import knob_red_others_every, knob_red_skip_say, knob_red_tick, RED_TICK_INTERVAL
-from agentctl.redmove import red_settled_runs
+from agentctl.red import red_settled_runs
 from agentctl.redseen import gate_red_units, red_merge_rekeyed, red_obs_of_units, red_observe, stuck_obs
 from agentctl.reduntracked import red_active_untracked, red_note_untracked, red_split_untracked, red_untrack
 from agentctl.redblock import gate_unread_spell, red_renew_blocks

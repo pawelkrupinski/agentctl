@@ -12,9 +12,9 @@ from agentctl.leases import red_block_of
 from agentctl.owned import default_repo
 from agentctl.redask import ask_held_until, ask_interval, ask_refusal, ask_split, red_ask, red_decision
 from agentctl.alerts import alert_close_naming
-from agentctl.redmove import red_move
+from agentctl.red import red_move
 from agentctl.redclaim import red_targets
-from agentctl.reddecision import RED_DECIDE, red_ask_route, red_decision_block
+from agentctl.redcrash import RED_DECIDE, red_ask_route, red_decision_block
 from agentctl.redvault import VAULT_TARGET, red_vault_decide
 from agentctl.statemachines import StaleVersion, is_terminal
 

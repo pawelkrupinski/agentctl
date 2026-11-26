@@ -59,7 +59,7 @@ HOLD_CAUSE = {"trees": "check-slot", "starting": "check-slot", "governor": "chec
               "push-batch": "batch"}
 
 # A RED'S MOVE SAYS WHY (causes.py): a caller's `cause=` names it; else the red machine's own states are the reasons
-# (red_move_cause, redmove.py): a lease taken is its agent's, a fix pending or refuted is the fix's, a block the owner's, a dispatch
+# (red_move_cause, red.py): a lease taken is its agent's, a fix pending or refuted is the fix's, a block the owner's, a dispatch
 # switched off a rule's, a red opened or cleared a CI run's verdict.
 RED_CAUSE = {"leased": "agent", "fix-pending": "red-fix", "blocked-external": "owner", "dispatch-off": "policy",
              "cleared": "ci-verdict", "verified": "ci-verdict", "red": "ci-verdict"}

@@ -18,7 +18,7 @@ from agentctl.redask import red_ask, red_decision
 from agentctl.culpritfix import blame_status
 from agentctl.runsigs import run_names
 from agentctl.redfixes import red_refuted
-from agentctl.redmove import red_settled_runs
+from agentctl.red import red_settled_runs
 from agentctl.redseen import red_obs_of_units
 from agentctl.ask import red_decided_view, trim_words
 from agentctl.reddispatch import REPO_DISPATCH_OFF, red_owned_progress_at, repo_dispatch_off_all
@@ -110,7 +110,7 @@ class RedViewer:
     def fix_pending(self) -> tuple[str, str]:
         d, rec = self.d, self.rec
         f = d.get("fix") or {}
-        if f.get("unproven"):  # A FIX WITH NO REPLAY KEEPS ITS FIXER (redmove.py)
+        if f.get("unproven"):  # A FIX WITH NO REPLAY KEEPS ITS FIXER (red.py)
             return (f"fix-unproven: {f.get('entry') or str(f.get('sha'))[:9]} ({f.get('status')}) carries no replay; "
                     f"{d.get('holder') or 'its holder'} keeps it until a {d.get('workflow')} run decides it{rec}",
                     f"fix-unproven {str(f.get('sha') or f.get('entry') or '')[:7]}")

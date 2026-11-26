@@ -6,8 +6,7 @@ from typing import Any
 from contextlib import contextmanager, suppress
 from collections.abc import Iterator
 from agentctl.core import fmt_age, process_cache
-from agentctl.redrecord import red_names
-from agentctl.redepisode import episode_unread, red_episode_names
+from agentctl.redrecord import episode_unread, red_episode_names, red_names
 from agentctl.queueslots import checker_alive
 from agentctl.redland import may_land_on_red, red_kind_of
 from agentctl.issues import issue_open

@@ -2,7 +2,7 @@
 
 Before RedEpisode, two copies decided it: redseen.episode_names (the gate's: the newest red run's signatures read
 through run_sigs, each streak run's by red_units -- cached, re-read within the tick's budget, else its stale record --
-and on an error only the newest run, said in a line and gone) and redepisode.red_episode_names (the queue facts': the
+and on an error only the newest run, said in a line and gone) and redrecord.red_episode_names (the queue facts': the
 red item's job and line against each streak run's signature CACHED under this classifier, nothing else). MATRIX is what
 each answered before the consolidation; the test holds the one source to it, but for the disagreements resolved
 deliberately (RESOLVED, each with its own test below)."""
@@ -118,7 +118,7 @@ MATRIX = {
     ('stale-A', 'stale-oldline', 'cur-A', '0'): ((6, 8), (6,)),
 }
 
-# THE DISAGREEMENT, resolved (redepisode.py's header): ONE FALLBACK ORDER for a streak run's signatures -- this
+# THE DISAGREEMENT, resolved (redrecord.py's header): ONE FALLBACK ORDER for a streak run's signatures -- this
 # classifier's record, a read again within the budget, the stale record -- so the queue facts count a stale record that
 # names the red's job and line, as the gate did (their budget is 0: they never read the forge, so a stale record whose
 # LINE moved still counts for the gate only once a tick re-reads it). The facts' episode, by that order:

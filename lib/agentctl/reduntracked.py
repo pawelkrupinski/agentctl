@@ -8,10 +8,10 @@ import time
 from typing import Any
 from agentctl.core import attempt, err, process_cache
 from agentctl.forge import RUN_FIELDS, gh_json
+from agentctl.redrecord import canon_job, red_obs_for
 from agentctl.gating import main_workflow_files
 from agentctl.redrepos import red_is_other
-from agentctl.redrecord import canon_job, red_obs_for
-from agentctl.redmove import red_move, red_stop_holder
+from agentctl.red import red_move, red_stop_holder
 from agentctl.ciwhy import decided_runs, main_runs_of, registry_name
 from agentctl.redseen import red_obs_of_units
 from agentctl.redknobs import knob_ever_green_recheck

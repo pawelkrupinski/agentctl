@@ -11,18 +11,16 @@ from agentctl.watchknobs import knob_wr_max
 from agentctl.redknobs import RED_FIX_REQUEUE_GRACE, knob_red_fix_requeue_grace, knob_red_liveness_max
 from agentctl.core import SHORT, fmt_age
 from agentctl.repos import red_repo_of
-from agentctl.cistate import snapshot_gate_reds
-from agentctl.cistate import ci_state_load
+from agentctl.cistate import ci_state_load, snapshot_gate_reds
 from agentctl.policy import HOLDS
 from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.leases import red_block_of
 from agentctl.redfixread import FIX_OPEN
-from agentctl.red import red_fix_giveup
+from agentctl.red import red_fix_giveup, red_put_offer
 from agentctl.queuehold import change_hold_stuck
 from agentctl.queueslots import checker_alive
 from agentctl.fixchange import CHANGE_ENDED, red_change, red_change_read
 from agentctl.redfixes import red_fix_of
-from agentctl.redmove import red_put_offer
 from agentctl.changekind import HOLD_SHOWN, change_hold_visible, classify_change, facts_for, kind_text
 from agentctl.redopen import red_offer
 from agentctl.redverify import red_fix_since, red_fix_unverifiable

@@ -1,4 +1,4 @@
-"""`agentctl red status`'s text (redstatus.render_red_status), characterised over the status model's shapes: reds with and
+"""`agentctl red status`'s text (redcli.render_red_status), characterised over the status model's shapes: reds with and
 without a family and history, reverts unread or unacked, sections unread, never-green workflows (verbose only), a
 family with its fixer, an orphaned lease or none, owners (verbose adds their context and rollovers), the dispatcher
 on, off, unread, a repo switched off, the laptop's pressure."""
@@ -57,7 +57,7 @@ def render_all(module):
 
 class RedStatusRenderTest(unittest.TestCase):
     def test_every_scenario_renders_as_it_did(self):
-        got = render_all(importlib.import_module("agentctl.redstatus"))
+        got = render_all(importlib.import_module("agentctl.redcli"))
         for name in SCENARIOS:
             with self.subTest(name):
                 self.assertEqual(got[name], EXPECTED[name], name)

@@ -6,24 +6,21 @@ from typing import Any
 import os
 from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.statefile import read_record
-from agentctl.core import git, reds_dir, remote
+from agentctl.core import err, git, pct, process_cache, reds_dir, remote
 from agentctl.trailers import trailer_values
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_what
-from agentctl.redmove import red_move
-from agentctl.rundispatch import red_verify_dispatch
+from agentctl.red import red_move
+from agentctl.rundispatch import red_verify_dispatch, workflow_crons
 from agentctl.blameopen import PATHISH
 from agentctl.runsigs import cause_of, name_causes
 from agentctl.redopen import red_offer, red_open
 from agentctl.redfixcheck import fix_reaches_red
-from agentctl.redknobs import knob_red_main_verify_every
+from agentctl.redknobs import knob_red_main_verify_every, knob_red_verify_slack
 from agentctl.clock import epoch_now
-from agentctl.redknobs import knob_red_verify_slack
-from agentctl.core import err, pct, process_cache
 from agentctl.workflows import workflow_file_of
 from agentctl.ancestry import contains_local
 from agentctl.forge import RUN_FIELDS, gh_json, is_cancelled, stuck_durations
-from agentctl.rundispatch import workflow_crons
 from agentctl.workflowcron import cron_next
 
 

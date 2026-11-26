@@ -149,7 +149,7 @@ moves it forward; nothing is a detached process that can die with its state in i
     **A MISSED DEADLINE IS NEVER SILENT:** a fix-pending (or fix-unproven) red past its `verified by` deadline with no
     run that decides it -- the slot passed, or its verifying dispatch never produced a run -- is offered again,
     escalated (`red_fix_unverifiable`): its live holder takes it back, else the offer's own escalation (RED UNCLAIMED)
-    reaches the owner. red.py `red_workflow_policy`, redmove.py `red_fix_proven`, `red_keep_holder`, `red_diagnosis_step`,
+    reaches the owner. redrepos.py `red_workflow_policy`, red.py `red_fix_proven`, `red_keep_holder`, `red_diagnosis_step`,
     redverify.py `red_verify_scheduled`; tests: `tests/test_red_in_hand.py`, `tests/test_verify_wait.py`. THE REPO'S STEP AFTER THE REBASE (2026-11-20): a repo's executable
     `scripts/land-before-queue <origin/main> <head>` runs on the rebased change before its checks, and may commit onto it
     (movies: the identity stamp carry's rows); the commit rides the same push. It never refuses a land: a failure or a
@@ -628,7 +628,7 @@ on main is one `maincontain.MainContainment` (a clone's git, or the forge's comp
 
 **WR self-heals, and an episode counts by signature (2026-11-25, the owner: "fix the class").** Three more pieces, so a
 fix of the open red never waits on bookkeeping again:
-- *Episode names* (`redepisode.py`, read by `queue_facts`): besides the red item's own names, a gate red's names include
+- *Episode names* (`redrecord.py`, read by `queue_facts`): besides the red item's own names, a gate red's names include
   every run of its workflow's red streak since the last green whose CACHED run signature has the red's failing job and
   line -- a run the item dropped (or never attached) still counts for a fix naming it; a run failing another way, or one
   before the green, does not (it waits as before). No forge read. ONE SOURCE (2026-11-26, `RedEpisode`): the gate's

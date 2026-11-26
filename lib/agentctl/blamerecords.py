@@ -16,7 +16,7 @@ from agentctl.worktrees import worktrees
 from agentctl.deletions import log_deletion
 from agentctl.cleanup import own_ancestry
 from agentctl.fixerland import red_dispatch_log
-from agentctl.redmove import red_stop_holder
+from agentctl.red import red_stop_holder
 from agentctl.waiting import cancel_submitted
 from agentctl.redopen import red_offer
 from agentctl.culpritfix import blame_culprit

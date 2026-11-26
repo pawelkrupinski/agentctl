@@ -10,10 +10,9 @@ from agentctl.statefile import read_json_file, write_json_file, note_failure
 from agentctl.forge import RED_CONCLUSIONS, api
 from agentctl.allowedpaths import allowed_path
 from agentctl.inboxentry import inbox_write
-from agentctl.redrecord import lease_is_live, red_lease, red_what
+from agentctl.redrecord import lease_is_live, red_active_of, red_lease, red_obs_for, red_what
 from agentctl.leases import lease_meta
-from agentctl.redrecord import red_active_of, red_obs_for
-from agentctl.redmove import red_close
+from agentctl.red import red_close
 from agentctl.redseen import red_obs_of_units, red_units
 from agentctl.redopen import red_culprit_search
 from agentctl.runexplain import explain_run_jobs

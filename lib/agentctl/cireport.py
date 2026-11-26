@@ -21,8 +21,7 @@ from agentctl.branches import branch_lines, branch_state, branch_summary
 from agentctl.redseen import gate_red_units, local_red, local_stale, local_units, predict_units
 from agentctl.stuckruns import stuck_runs
 from agentctl.reduntracked import red_untracked_runs
-from agentctl.redcrash import CRASH_LOOP_CAUSE
-from agentctl.reddecision import DECISION_CAUSE
+from agentctl.redcrash import CRASH_LOOP_CAUSE, DECISION_CAUSE
 from agentctl.ask import trim_words
 from agentctl.redview import red_lines, red_view, red_view_of_units
 from agentctl.runexplain import explain_run, explain_run_jobs

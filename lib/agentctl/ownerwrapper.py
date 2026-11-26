@@ -13,24 +13,21 @@ from agentctl.claudefiles import bg_transcript, fixer_verdict
 from agentctl.procs import process_start
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import SESSION_DENIED_TOOLS, bg_failure, bg_session, bg_start, bg_stop, bg_turn, bg_turn_over
-from agentctl.redknobs import RED_STALL
+from agentctl.redknobs import knob_red_fixer_wall, knob_red_renew, knob_red_stall, RED_FIXER_WALL, RED_STALL
 from agentctl.inbox import INBOX_TAIL
 from agentctl.fixerblockers import claude_cli, interactive_mode
 from agentctl.store import StoreAuthFailed, StoreUnavailable
 from agentctl.owners import OWNER_TTL, owner_lease, owner_record_path
 from agentctl.laptoprole import laptop_role_standby
 from agentctl.fixer import FIXER_IDENTITY_ENV
-from agentctl.redknobs import RED_FIXER_WALL
 from agentctl.redclaim import bind_fixer_session
 from agentctl.hostsleep import keep_awake
-from agentctl.reddecision import verdict_cut
+from agentctl.redcrash import verdict_cut
 from agentctl.ownerleases import owner_drop, owner_hand, owner_holder, owner_leases, owner_tell_leases
 from agentctl.sessionroll import owner_rollover, owner_turn_line, session_seen
 from agentctl.fixerlife import HeldLease, TurnProgress, store_failure_stop
 from agentctl.owner import owner_meta, owner_resume_target, owner_take_heartbeat, owner_turn_prompt
-from agentctl.fixerknobs import knob_bg_poll
-from agentctl.redknobs import knob_red_fixer_wall, knob_red_renew, knob_red_stall
-from agentctl.fixerknobs import knob_owner_idle
+from agentctl.fixerknobs import knob_bg_poll, knob_owner_idle
 
 
 OWNER_EMPTY_TURNS = 2        # turns in a row ending with no verdict line: the owner ends (its reds are offered again)

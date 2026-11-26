@@ -4,8 +4,8 @@
 import re
 from typing import Any
 from agentctl.statemachines import is_terminal
-from agentctl.timefmt import ts
-from agentctl.core import fmt_age
+from agentctl.timefmt import iso_at, ts
+from agentctl.core import attempt, fmt_age
 from agentctl.repos import red_repo_of
 from agentctl.redretired import red_retired
 from agentctl.inboxentry import inbox_write
@@ -13,7 +13,7 @@ from agentctl.redrecord import lease_is_live, red_lease, red_what
 from agentctl.leases import block_lease, lease_meta, red_block_of
 from agentctl.redfixes import red_fix_of, red_run_on_way
 from agentctl.redask import red_decision
-from agentctl.redmove import red_close, red_fix_proven, red_keep_holder, red_move, red_put_offer, red_stop_holder
+from agentctl.red import red_close, red_fix_proven, red_keep_holder, red_move, red_put_offer, red_stop_holder
 from agentctl.redseen import red_gone, red_gone_why
 from agentctl.redopen import red_callable_evidence, red_diagnosis_step, red_offer
 from agentctl.redverify import red_flake_check, red_main_verify
@@ -22,8 +22,6 @@ from agentctl.reddispatch import repo_dispatch_off
 from agentctl.blame import blame_step
 from agentctl.redlease import red_lease_ended, red_lift_block
 from agentctl.redpending import red_fix_pending
-from agentctl.timefmt import iso_at
-from agentctl.core import attempt
 from agentctl.forge import forge_actions_run
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.gating import main_workflow_files

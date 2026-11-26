@@ -15,7 +15,7 @@ from agentctl.fixerblockers import claude_cli
 from agentctl.redrecord import lease_is_live
 from agentctl.leases import lease_meta
 from agentctl.owners import owner_record_path
-from agentctl.redmove import tail_lines
+from agentctl.red import tail_lines
 from agentctl.redknobs import knob_red_orphan_grace, knob_red_stall
 from agentctl.fixerknobs import knob_bg_spent_grace
 

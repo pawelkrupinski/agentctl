@@ -31,7 +31,7 @@ from agentctl.fixer import FIXER_IDENTITY_ENV, OWNER_ONLY_DENIED, fixer_prompt
 from agentctl.red import RED_FIXER_MAX, RED_FIXER_TTL, RED_RELEASE_ASKS
 from agentctl.redclaim import bind_fixer_session
 from agentctl.hostsleep import keep_awake
-from agentctl.reddecision import verdict_cut
+from agentctl.redcrash import verdict_cut
 from agentctl.fixerblockers import claude_cli, interactive_mode
 from agentctl.sessionroll import fixer_rollover
 from agentctl.fixerknobs import knob_bg_poll, knob_fixer_claim_within

@@ -302,7 +302,7 @@ class RedEpisodeTest(unittest.TestCase):
             self.assertLess(sim.done_at[by["tools"].cid], sim.green_ticks[0], "the tools-only change landed on the red")
 
     def test_a_fix_naming_a_run_only_a_stale_signature_puts_in_the_episode_lands_on_the_red(self):
-        """ONE RedEpisode (redepisode.py): the queue facts count the stale record as the gate does (IW)."""
+        """ONE RedEpisode (redrecord.py): the queue facts count the stale record as the gate does (IW)."""
         for sim in self.sims(queue_sim.REDFIX_STALE_EPISODE):
             self.assertEqual(failures([sim]), [])
             self.assertLessEqual(queue_sim.landing_waits(sim)["fix"], queue_sim.FIX_08010C_BOUND)
