@@ -20,7 +20,6 @@ cognitive	config_knobs	25
 cognitive	conflict_resolve	17
 cognitive	explorer_tick	19
 cognitive	fix_between	21
-cognitive	fix_replay_refusal	12
 cognitive	forge_run_list	22
 cognitive	gate_runs_pass	17
 cognitive	gov_fits	20
@@ -84,7 +83,6 @@ cyclomatic	config_knobs	14
 cyclomatic	conflict_resolve	21
 cyclomatic	explorer_tick	19
 cyclomatic	fix_between	22
-cyclomatic	fix_replay_refusal	11
 cyclomatic	forge_run_list	15
 cyclomatic	gate_flow_names	14
 cyclomatic	gate_runs_pass	21

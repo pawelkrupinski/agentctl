@@ -4,7 +4,7 @@
 import os
 import re
 import subprocess
-from typing import Any
+from typing import Any, Iterator
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, git, remote, state_root
 from agentctl.repos import red_repo_conf, red_repo_of
@@ -222,6 +222,13 @@ def _open_reds(store: Any) -> list[dict[str, Any]] | None:
         return None
 
 
+def _named_reds(items: list[dict[str, Any]], named: set[str]) -> Iterator[dict[str, Any]]:
+    """The data of the reds a Fixes-Red: names, the gate's first (enforced), each read as it is reached."""
+    for it in sorted(items, key=lambda it: not it["data"].get("gate")):
+        if named & {str(x) for x in red_names(it["data"]) if x is not None}:
+            yield it["data"]
+
+
 def _outside_replay_refusal(repo: Any, d: Any, claimed: Any) -> str | None:
     """The warning for a red outside the gate: its registry missing from main, or its workflow's replay command not
     claimed with base=FAIL head=PASS; None when the workflow names no replay or it is claimed."""
@@ -255,10 +262,7 @@ def fix_replay_refusal(repo, commits, store, proofs=None):
     if items is None:
         return None
     outside = None
-    for it in sorted(items, key=lambda it: not it["data"].get("gate")):  # the gate's first: enforced
-        d = it["data"]
-        if not named & {str(x) for x in red_names(d) if x is not None}:
-            continue
+    for d in _named_reds(items, named):
         if d.get("gate"):
             why = gate_fix_replay_refusal(d, claimed, bare, nones, proofs)
             if why:
