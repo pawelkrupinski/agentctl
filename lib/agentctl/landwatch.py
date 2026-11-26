@@ -23,6 +23,7 @@ from agentctl.watchknobs import knob_watch_conv_start
 WATCH = {"pawelkrupinski/movies": {"main": ("Main", "main.yml"),
                                    "convergence": ("Identity model convergence", "identity-model-convergence.yml"),
                                    "takes": ("Identity takes", "identity-takes.yml")}}
+WATCH_MAIN_REFETCH = 300         # a run head the clone lacks fetches main at most this often (ancestry.contains)
 WATCH_SLACK = 120                 # clock skew between the laptop and GitHub's createdAt
 
 
@@ -32,7 +33,7 @@ def pick_main_run(repo, sha, runs):
     own = next((r for r in runs if r.get("headSha") == sha and not is_cancelled(r)), None)
     if own:
         return own
-    later = [r for r in runs if not is_cancelled(r) and contains(repo, sha, r.get("headSha"))]
+    later = [r for r in runs if not is_cancelled(r) and contains(repo, sha, r.get("headSha"), WATCH_MAIN_REFETCH)]
     return max(later, key=lambda r: r["databaseId"]) if later else None
 
 
@@ -41,7 +42,7 @@ def pick_convergence_run(repo, sha, runs, pushed_at, o_r=None):
     push's, or the daily run (the owner, 2026-10-26: never hunt the sha's own kick). A cancelled one (the lane replaced
     it) passes to the next, and so does an incomplete one (run_no_verdict: only `verdict complete` failed; o_r given)."""
     after = [r for r in runs if r.get("createdAt") and parse_time(r["createdAt"]).timestamp() >= pushed_at - WATCH_SLACK]
-    ok = [r for r in sorted(after, key=lambda r: r["databaseId"]) if not is_cancelled(r) and contains(repo, sha, r.get("headSha"))
+    ok = [r for r in sorted(after, key=lambda r: r["databaseId"]) if not is_cancelled(r) and contains(repo, sha, r.get("headSha"), WATCH_MAIN_REFETCH)
           and not (o_r and run_no_verdict(o_r, r))]
     return ok[0] if ok else None
 

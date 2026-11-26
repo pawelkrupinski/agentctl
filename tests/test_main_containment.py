@@ -170,6 +170,28 @@ class MainContainmentMatrixTest(Base):
         self.assertIsNone(main.contains("b" * 40))
         self.assertIs(main.contains("b" * 40), True, "asked again at once: the error was not remembered")
 
+    def test_a_run_head_the_clone_lacks_fetches_main_once_per_window(self):
+        """Review 2026-11-26 (A B1): ancestry.contains fetched main on EVERY call for a run head the clone did not have
+        (a force-pushed-away head refetched each land-watch tick), unlike MainContainment's once per RED_MAIN_REFETCH."""
+        w = World(self)
+        os.utime(os.path.join(w.r.path, sh(w.r.path, "git", "rev-parse", "--git-path", "FETCH_HEAD").strip()), (0, 0))
+        fetches = []
+        real = A.git
+
+        def git(repo, *a, **k):
+            if a[:1] == ("fetch",):
+                fetches.append(a)
+            return real(repo, *a, **k)
+        A.git = git
+        try:
+            gone = "fedcba9876543210fedcba9876543210fedcba98"
+            runs = [{"databaseId": 7, "headSha": gone, "conclusion": "success"}]
+            for _ in range(3):  # three land-watch ticks
+                self.assertIsNone(A.pick_main_run(w.r.path, w.shas["ancestor"], runs))
+            self.assertEqual(len(fetches), 1, fetches)
+        finally:
+            A.git = real
+
 
 if __name__ == "__main__":
     unittest.main()
