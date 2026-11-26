@@ -46,6 +46,22 @@ def load_families(path: str) -> list[dict[str, Any]]:
         return []
 
 
+def _family_names_red(fam: dict[str, Any], d: dict[str, Any], jobs: list[str]) -> bool:
+    """Whether a family's workflows, job patterns or outside_gate flag name the red (its workflow, its jobs)."""
+    return (d.get("workflow") in (fam.get("workflows") or []) or any(rx.search(j) for rx in fam["_jobs"] for j in jobs)
+            or bool(fam.get("outside_gate") and red_outside_gate(d)))
+
+
+def _family_applies(fam: dict[str, Any], d: dict[str, Any], jobs: list[str]) -> bool:
+    """A family naming workflows, jobs or outside_gate applies when one names the red AND its kinds (if any) hold; one
+    naming only kinds, when the red's kind is among them."""
+    kinds = fam.get("kinds")
+    kind_ok = not kinds or d.get("kind") in kinds
+    if fam.get("workflows") or fam["_jobs"] or fam.get("outside_gate"):
+        return _family_names_red(fam, d, jobs) and kind_ok
+    return bool(kinds) and kind_ok
+
+
 def red_family(d):
     """The family of a red (its data, its picture, a fixer record: workflow, job, jobs), or None."""
     if not d:
@@ -54,14 +70,7 @@ def red_family(d):
     if o_r != RED_PRIMARY:  # ANOTHER WATCHED REPO: its red-repos.json family, every red of it (red-families.json's
         return (red_repo_conf(o_r) or {}).get("family") or None  # families are the primary's)
     jobs = [str(j) for j in (d.get("jobs") or []) + [d.get("job")] if j]
-    for fam in red_families():  # the first family that matches: its workflows, jobs or outside_gate (if it names any)
-        named = bool(fam.get("workflows") or fam["_jobs"] or fam.get("outside_gate"))  # AND its kinds
-        by_name = d.get("workflow") in (fam.get("workflows") or []) or any(rx.search(j) for rx in fam["_jobs"] for j in jobs) \
-            or bool(fam.get("outside_gate") and red_outside_gate(d))
-        by_kind = not fam.get("kinds") or d.get("kind") in fam["kinds"]
-        if (by_name or not named) and by_kind and (named or fam.get("kinds")):
-            return fam["name"]
-    return None
+    return next((fam["name"] for fam in red_families() if _family_applies(fam, d, jobs)), None)  # the first that applies
 
 
 def red_outside_gate(d):
