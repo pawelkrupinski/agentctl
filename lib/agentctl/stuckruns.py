@@ -7,7 +7,7 @@ from typing import Any, Callable
 from agentctl.timefmt import parse_time
 from agentctl.core import attempt, pct
 from agentctl.forge import gh_json, runner_queue, stuck_durations
-from agentctl.ciwhy import queue_full
+from agentctl.runqueue import queue_full
 from agentctl.red import STUCK_FACTOR, STUCK_FLOOR
 from agentctl.outsideflows import stuck_history, stuck_timeout
 

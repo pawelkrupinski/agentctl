@@ -16,8 +16,8 @@ from agentctl.gating import gate_dirty_path
 from agentctl.fixerrecords import agent_name, own_fixer_record_path
 from agentctl.owned import default_repo
 from agentctl.redrepos import red_gate_flows, red_is_other
-from agentctl.ciwhy import (
-    ci_state_load, ci_state_write, gate_from_snap, gate_runs, gate_snap_rows, main_runs_of)
+from agentctl.ciwhy import gate_from_snap, gate_runs, gate_snap_rows, main_runs_of
+from agentctl.cistate import ci_state_load, ci_state_write
 from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
 from agentctl.fixerblockers import in_fixer
 from agentctl.redrecord import red_what

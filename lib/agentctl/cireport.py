@@ -11,8 +11,9 @@ from agentctl.redretired import red_run_retired
 from agentctl.gating import GATING_CHECKS_FILE
 from agentctl.cistate import state_read
 from agentctl.ciwhy import (
-    NO_VERDICT_FLOWS, ci_state_load, ci_state_write, gate_from_snap, gate_snap_rows,
-    gate_report_only, gate_runs, main_runs_of, outside_from_snap, red_for, run_no_verdict, run_target)
+    NO_VERDICT_FLOWS, gate_from_snap, gate_snap_rows, gate_report_only, gate_runs, main_runs_of, outside_from_snap,
+    red_for, run_no_verdict, run_target)
+from agentctl.cistate import ci_state_load, ci_state_write
 from agentctl.runsigs import run_sigs, save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
 from agentctl.fixerblockers import short_flow

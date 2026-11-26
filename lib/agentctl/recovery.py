@@ -25,7 +25,7 @@ from agentctl.fixerrecords import agent_name
 from agentctl.inboxentry import inbox_dir, inbox_entries
 from agentctl.worktrees import mark_internal
 from agentctl.inbox import entry_line
-from agentctl.ciwhy import ci_state_load
+from agentctl.cistate import ci_state_load
 from agentctl.statemachines import machine_state
 from agentctl.redrecord import red_what
 from agentctl.conditions import open_condition, recovery_dir, run_probe

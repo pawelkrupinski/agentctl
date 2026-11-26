@@ -12,7 +12,7 @@ from agentctl.repos import movies_repo_path
 from agentctl.procs import process_cwds, ps
 from agentctl.procwatch import inv_wp, inv_wt
 from agentctl.cistate import snapshot_gate_reds
-from agentctl.ciwhy import ci_state_load
+from agentctl.cistate import ci_state_load
 from agentctl.launchd import SERVICE_LABEL, launch_agents_dir
 from agentctl.beats import beat_age
 from agentctl.redrecord import red_what

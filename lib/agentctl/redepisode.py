@@ -8,7 +8,8 @@ from agentctl.redknobs import knob_streak_rereads
 from agentctl.statefile import read_record
 from agentctl.classify import norm_line
 from agentctl.forge import RED_CONCLUSIONS
-from agentctl.ciwhy import Run, ci_state_load, streak_runs
+from agentctl.ciwhy import Run, streak_runs
+from agentctl.cistate import ci_state_load
 from agentctl.runsigs import classifier_version, run_names, run_sigs
 
 

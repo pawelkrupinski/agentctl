@@ -8,6 +8,7 @@ from agentctl.core import state_root
 from agentctl.statefile import read_json_file, write_json
 from agentctl.forge import RED_CONCLUSIONS
 from agentctl.storeknobs import knob_state_file
+from agentctl.clock import epoch_now
 
 
 # THE ONE CI-STATE SNAPSHOT (the owner, 2026-10-27: the watch, the gate summary, ci-why's outside list and the red patrol
@@ -50,3 +51,18 @@ def state_update(**parts: Any) -> dict[str, Any]:
         d.update(parts)
         write_json(path, d, indent=None)
     return d
+
+
+def ci_state_write(snap):
+    state_update(ci=snap)
+    return snap
+
+
+def ci_state_load(o_r: str, now: float | None = None) -> dict[str, Any] | None:
+    """The snapshot when it is for o_r and at most CI_STATE_MAX_AGE old, else None (unread)."""
+    try:
+        snap = state_read().get("ci") or {}
+        age = (now or epoch_now()) - float(snap["at"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return snap if snap.get("repo") == o_r and -5 <= age <= CI_STATE_MAX_AGE else None

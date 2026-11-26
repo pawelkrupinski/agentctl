@@ -15,7 +15,7 @@ from agentctl.issues import issue_open
 from agentctl.redfamilies import red_family
 from agentctl.redask import ask_held_until, red_ask_mark
 from agentctl.redmove import red_move
-from agentctl.ciwhy import ci_state_load
+from agentctl.cistate import ci_state_load
 from agentctl.redblock import BLOCK_TTL
 from agentctl.rundispatch import red_verify_dispatch
 from agentctl.redopen import red_offer
