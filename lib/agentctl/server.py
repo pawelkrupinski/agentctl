@@ -1,8 +1,8 @@
 # agentctl, part `server`: the store over HTTP (`agentctl store serve`): its API, the change submissions it takes, its metrics
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.ids import stamp
 from agentctl.clock import epoch_now
-import datetime as dt
 import fcntl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -126,7 +126,7 @@ def queue_change(st, d, fields, entry_id=None):
         # two submissions of one worktree in the same second got one id, and the second was answered with the first
         # entry: lost. The id's number is the highest ever drawn (`drawn`), whatever seq an entry ends up with.
         seq = max([max(int(e["seq"]), int(e.get("drawn") or 0)) for e in every] + [0]) + 1
-        eid = entry_id or f"{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%d-%H%M%S')}-{os.path.basename(fields['worktree'])}-{seq}"
+        eid = entry_id or f"{stamp('entry')}-{os.path.basename(fields['worktree'])}-{seq}"
         if any(x["id"] == eid for x in every):
             e = next(x for x in every if x["id"] == eid)
             return e, max(len(queued_entries(d)) - 1, 0)

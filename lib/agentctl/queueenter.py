@@ -1,9 +1,9 @@
 # agentctl, part `queueenter`: entering the land queue: enqueue, the server submit, the precheck and land-until-done
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.ids import stamp
 from agentctl.clock import epoch_now
 import argparse
-import datetime as dt
 import os
 import subprocess
 import time
@@ -62,7 +62,7 @@ def submit_to_server(repo, d, fields, store, note="", after_queued=None, waits=F
     which the sync sends). Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code. waits: this land then
     waits for the verdict itself (a red fixer's, fixer_land)."""
     head = fields["head"]
-    e = {**fields, "id": f"{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
+    e = {**fields, "id": f"{stamp('entry')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
     if not submit_ref(repo, d, e, to_server=True):
         print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
               f"{push_failure_why(e.get('push_error'))}: land again")

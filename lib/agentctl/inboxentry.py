@@ -1,6 +1,7 @@
 # agentctl, part `inboxentry`: the inbox's entries: its directory, the kinds a verdict names, who wrote it, the condition kinds only open_condition writes, and inbox_write, which hands a built entry to the writer the composition root wired (the alert router).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.ids import stamp
 from agentctl.clock import epoch_now
 import datetime as dt
 import glob
@@ -111,7 +112,7 @@ def inbox_write(command: str, verdict: Any, verdicts: Any, tail: Any, exit_code:
     if final and not reply and not _OPENING[0] and inbox_kind(verdict, final) in CONDITION_KINDS:
         raise ConditionBypass(f"a {inbox_kind(verdict, final)} inbox entry outside open_condition: {str(verdict)[:160]}")
     now = dt.datetime.fromtimestamp(_inbox_times[0](), dt.timezone.utc)
-    eid = (f"{now.strftime('%Y%m%dT%H%M%S%f')}-{os.getpid()}-{next(_inbox_seq):06d}-{re.sub(r'[^a-z]+', '-', command)}"
+    eid = (f"{stamp('event', now.timestamp())}-{os.getpid()}-{next(_inbox_seq):06d}-{re.sub(r'[^a-z]+', '-', command)}"
            + ("" if final else "-waiting"))
     here = safe_cwd()
     rec = {"id": eid, "time": iso_at(now.timestamp()), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],

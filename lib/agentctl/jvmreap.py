@@ -1,8 +1,7 @@
 # agentctl, part `jvmreap`: stale JVMs: a stuck or idle sbt server, an orphaned sbt or test JVM, and their reap
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
-import datetime as dt
+from agentctl.ids import stamp
 import glob
 import os
 import re
@@ -185,7 +184,7 @@ def sbt_stuck_reasons(pid: int, cwd: str, cpu: float, clients: dict[str, Any], s
 def thread_dump(pid: int, cwd: str) -> str:
     d = state_root("sbt-dumps")
     os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, f"{pid}-{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%dT%H%M%S')}.txt")
+    path = os.path.join(d, f"{pid}-{stamp('file')}.txt")
     try:
         r = process_runner().run(["jcmd", str(pid), "Thread.print"], capture_output=True, text=True, timeout=60)
         with open(path, "w") as f:

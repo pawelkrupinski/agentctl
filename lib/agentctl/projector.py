@@ -1,8 +1,8 @@
 # agentctl, part `projector`: the store's projectors, run by the server's tick: change items from the queue, inbox entries and alerts from the events, one live notification per escalation, the lease archive.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.ids import stamp
 from agentctl.clock import epoch_now
-import datetime as dt
 import json
 import os
 import re
@@ -63,7 +63,7 @@ def project_changes(d, store):
 # the orchestrator's routing and the status line read the inbox as before.
 def _event_id(ev: dict[str, Any]) -> str:
     """The inbox entry id of an event: its time, its seq and its kind, so a repeated pass writes nothing twice."""
-    return (dt.datetime.fromtimestamp(ev["at"], dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+    return (stamp("event", ev["at"])
             + f"-ev{ev['seq']}-{re.sub(r'[^a-z]+', '-', ev['kind'])}")
 
 

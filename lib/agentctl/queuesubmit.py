@@ -1,6 +1,7 @@
 # agentctl, part `queuesubmit`: submitting a change: by ref, without the vault, the queued line, the fast precheck, a red fix's land.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.ids import entry_stamp_epoch
 from agentctl.clock import epoch_now
 import os
 import re
@@ -53,11 +54,9 @@ LAND_REF_UNKNOWN_AGE = 24 * 3600  # s: a ref of a change neither the entries nor
 
 
 def entry_id_age(eid, t):
-    """Seconds since the entry id's YYYYMMDD-HHMMSS stamp (local time), or None when the id carries none."""
-    try:
-        return t - time.mktime(time.strptime(eid[:15], "%Y%m%d-%H%M%S"))
-    except (ValueError, OverflowError):
-        return None
+    """Seconds since the entry id's YYYYMMDD-HHMMSS stamp (UTC), or None when the id carries none."""
+    at = entry_stamp_epoch(eid)
+    return None if at is None else t - at
 
 
 def _ref_sweep_due(t: float) -> bool:

@@ -1,9 +1,9 @@
 # agentctl, part `serverclone`: ci-runner's own clone: cloned into a temp dir and verified, kept healthy, repaired by a swap under its exclusive lock
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.ids import stamp
 from agentctl.clock import epoch_now, stopwatch
 import contextlib
-import datetime as dt
 import fcntl
 import glob
 import os
@@ -138,7 +138,7 @@ def _clone_server_repo(repo: str) -> None:
     if os.path.isdir(repo) and not os.listdir(repo):
         os.rmdir(repo)
     elif os.path.lexists(repo):  # something that is no clone: kept aside, never overwritten
-        os.rename(repo, f"{repo}.broken-{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%d-%H%M%S')}")
+        os.rename(repo, f"{repo}.broken-{stamp('entry')}")
     os.rename(tmp, repo)
 
 
@@ -304,7 +304,7 @@ def repair_clone(repo, why, store):
             err(f"clone repair: the CLONE condition could not be opened ({str(e)[:160]})")
         err(f"clone repair: {repo} is broken ({why.splitlines()[0][:200]}): cloning {url} afresh")
         tmp = clone_into_tmp(repo, url)
-        broken = f"{repo}.broken-{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%d-%H%M%S')}"
+        broken = f"{repo}.broken-{stamp('entry')}"
         with clone_exclusive(repo) as held:
             if not held:
                 shutil.rmtree(tmp, ignore_errors=True)
