@@ -516,10 +516,19 @@ class ReviveBase(BlameBase):
         return cond()
 
     def session_argv(self):
-        out = os.environ["FAKE_CLAUDE_OUT"]
-        self.assertTrue(self.wait(lambda: any(n.endswith(".json") for n in os.listdir(out)) if os.path.isdir(out) else False))
-        [p] = [os.path.join(out, n) for n in os.listdir(out) if n.endswith(".json")]
-        return json.load(open(p))
+        """The launched session's record. fake_claude renames it (os.replace) when it refuses a resume, so a name listed
+        may be gone when opened (push of 2026-11-26: FileNotFoundError on sess-a.json): the listing is read again."""
+        out, got = os.environ["FAKE_CLAUDE_OUT"], []
+
+        def read():
+            names = [n for n in os.listdir(out) if n.endswith(".json")] if os.path.isdir(out) else []
+            try:
+                got[:] = [json.load(open(os.path.join(out, n))) for n in names]
+            except FileNotFoundError:  # renamed between the listing and the open: look again
+                got[:] = []
+            return len(got) == 1
+        self.assertTrue(self.wait(read))
+        return got[0]
 
 
 
