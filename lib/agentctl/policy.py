@@ -21,13 +21,14 @@ from agentctl.statemachines import machine_state
 
 
 class Policy:
-    """A rule: id, effect (hold / reject / delay), the rule in one line, who decided it (None: agent-proposed), whether
+    """A rule: id, effect (hold / reject / delay / alert: tells, blocks nothing), the rule in one line, who decided it (None: agent-proposed), whether
     it is a resource wait (mechanism), and `softens`: the mechanism outcome an unapproved rule only makes milder (a
     hold in place of that reject) -- such a rule acts before it is approved, since switching it off blocks more."""
     __slots__ = ("id", "effect", "rule", "decided", "mechanism", "softens")
 
-    def __init__(self, id, effect, rule, decided=None, mechanism=False, softens=None):
-        assert effect in ("hold", "reject", "delay"), effect
+    def __init__(self, id: str, effect: str, rule: str, decided: str | None = None, mechanism: bool = False,
+                 softens: str | None = None) -> None:
+        assert effect in ("hold", "reject", "delay", "alert"), effect
         self.id, self.effect, self.rule, self.decided, self.mechanism = id, effect, rule, decided, mechanism
         self.softens = softens
 
@@ -81,6 +82,9 @@ POLICIES = {p.id: p for p in (
            "takes) needs `Fix-Replay: <command>`, which agentctl runs to see base=FAIL head=PASS, or `Fix-Replay: none "
            "— <why>` (a specific reason, 30+ characters, listed in the owner's weekly report)",
            decided="the owner, 2026-11-20: \"3 approve and enforce for gate reds\""),
+    Policy("queue-stall", "alert", "open changes and no change moving for 60 min ($AGENTCTL_QUEUE_STALL_AFTER) open "
+           "one STALLED condition naming the head blocker; warn-only, it holds and rejects nothing (queuestall.py)",
+           decided="the owner, 2026-11-26: keep the STALLED alert, warn-only, threshold 90 -> 60 min"),
     # -- rules that WARN, never block: agent-proposed and undecided, or (fix-replay-outside) kept warn-only by the
     # owner's own decision -- 2026-11-20, "enforce for gate reds": a red outside the gate stays warn-only
     Policy("fix-replay-outside", "reject", "a Fixes-Red landing for a red OUTSIDE the gate whose workflow names a "

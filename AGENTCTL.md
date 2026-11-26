@@ -2960,9 +2960,10 @@ store copy: 0% own (the history predates the columns), 56% own-or-exact, ~100% w
 the owner the top 3 time sinks (`TIME SINKS (7 d)`).
 
 QUEUE STALLED (queuestall.py, the server's tick): changes open and no change item moved (a reminder is no move) for
-90 min ($AGENTCTL_QUEUE_STALL_AFTER) opens one STALLED condition naming the head blocker -- the oldest open change, its
-state, age and hold, and the open gate red. An alert, never a hold. Over the 2026-11-26 copy it would have fired 10
-times (65.6 h of stall), the 41.4-h stall of 11-23 at 09:15Z instead of never.
+60 min ($AGENTCTL_QUEUE_STALL_AFTER) opens one STALLED condition naming the head blocker -- the oldest open change, its
+state, age and hold, and the open gate red. An alert, never a hold. The owner, 2026-11-26: kept, warn-only, its bound
+90 -> 60 min (policy `queue-stall`, effect `alert`). Replayed over the 14:00Z copy's change moves: 20 firings at 60 min
+(74.0 h of stall) against 8 at 90 (60.1 h); the 41.4-h stall of 11-23 named at 08:45Z instead of never.
 
 ### stats: the pipeline's records in VictoriaLogs (2026-11-17)
 
@@ -3226,7 +3227,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `push_stall_secs` | `AGENTCTL_PUSH_STALL_SECS` | `180` | - |
 | `push_wall_min` | `AGENTCTL_PUSH_WALL_MIN` | `45` | - |
 | `queue` | `AGENTCTL_QUEUE` | `1` | 0: no batching queue |
-| `queue_stall_after` | `AGENTCTL_QUEUE_STALL_AFTER` | `5400` | s with open changes and no change moving before QUEUE STALLED opens (queuestall.py) |
+| `queue_stall_after` | `AGENTCTL_QUEUE_STALL_AFTER` | `3600` | s with open changes and no change moving before QUEUE STALLED opens (queuestall.py) |
 | `recovery_dir` | `AGENTCTL_RECOVERY_DIR` | - | the recovery notes' directory |
 | `recover_max` | `AGENTCTL_RECOVER_MAX` | `600` | a probe is re-run at most this far apart, however often it failed |
 | `reds_dir` | `AGENTCTL_REDS_DIR` | - | the reds' directory (default reds under the state root) |

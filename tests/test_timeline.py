@@ -106,6 +106,14 @@ class BackfillTest(unittest.TestCase):
 
 
 class QueueStallTest(unittest.TestCase):
+    def test_the_owner_kept_it_warn_only_at_60_minutes(self):
+        """The owner, 2026-11-26: keep the STALLED alert, warn-only, 90 -> 60 min, a knob."""
+        self.assertEqual(A.QUEUE_STALL_AFTER, 3600)
+        self.assertIsNotNone(A.queue_stall([self.change("a", "queued", 0)], [], now=3600))
+        p = A.policy("queue-stall")
+        self.assertEqual(p.effect, "alert")
+        self.assertTrue(p.approved and "the owner, 2026-11-26" in p.decided)
+
     """THE 41-HOUR STALL (2026-11-23): open changes, none moving past the bound, names its head blocker."""
 
     def change(self, iid, state, entered, hold=None):
@@ -116,14 +124,14 @@ class QueueStallTest(unittest.TestCase):
                    self.change("new", "waiting", 600), self.change("done", "landed", 900)]
         reds = [{"id": "fcf7", "state": "leased", "data": {"gate": True, "workflow": "Main",
                                                              "last_run": {"number": 2877}}}]
-        text = A.queue_stall(changes, reds, now=900 + 5401)
+        text = A.queue_stall(changes, reds, now=900 + 3601)
         self.assertTrue(text.startswith("QUEUE STALLED: 2 change(s) open and none moved for"))
         self.assertIn("old queued for", text)
         self.assertIn("held: an older change it overlaps (by x)", text)
         self.assertIn("the gate is red: Main #2877 (fcf7, leased)", text)
 
     def test_moving_or_empty_is_no_stall(self):
-        self.assertIsNone(A.queue_stall([self.change("a", "queued", 0)], [], now=5399))
+        self.assertIsNone(A.queue_stall([self.change("a", "queued", 0)], [], now=3599))
         self.assertIsNone(A.queue_stall([self.change("a", "landed", 0)], [], now=10 ** 6))
 
 

@@ -28,7 +28,8 @@ def knob_max_foreign() -> float:
     return env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)
 
 
-QUEUE_STALL_AFTER = 90 * 60  # s with open changes and no change moving before QUEUE STALLED opens (queuestall.py)
+# the owner, 2026-11-26: keep the STALLED alert, warn-only, at 60 min (policy.py `queue-stall`)
+QUEUE_STALL_AFTER = 60 * 60  # s with open changes and no change moving before QUEUE STALLED opens (queuestall.py)
 
 
 def knob_queue_stall_after() -> float:

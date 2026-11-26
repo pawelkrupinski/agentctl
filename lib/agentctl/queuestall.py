@@ -4,7 +4,7 @@
 # THE 41-HOUR STALL (2026-11-23 07:45 to 11-25 02:11, the transition analysis' sink 1): no change moved at all while 4+
 # changes sat 14-19 h "queued ... held" behind Main #2877, and no condition named it (`waiting-rounds` opened and closed
 # 25 times in 28 days, never for this). Now the server's tick looks every round: changes are open and NO change item
-# moved (entered a state: a reminder does not count) for knobs.QUEUE_STALL_AFTER s ($AGENTCTL_QUEUE_STALL_AFTER) opens ONE condition, `QUEUE STALLED`,
+# moved (entered a state: a reminder does not count) for knobs.QUEUE_STALL_AFTER s (60 min: the owner, 2026-11-26) ($AGENTCTL_QUEUE_STALL_AFTER) opens ONE condition, `QUEUE STALLED`,
 # whose text names the head blocker -- the oldest open change, its state and age, what holds it, and the open gate red
 # -- so the owner is asked once and the stall's time is attributable. Its probe (queue_moving) closes it when a change
 # moves again or none is open. An alert, never a hold: it blocks nothing.
@@ -14,7 +14,7 @@ from typing import Any, Optional
 from agentctl.statemachines import machine_state
 from agentctl.conditions import open_condition, run_probe
 from agentctl.core import fmt_age
-from agentctl.queueknobs import knob_queue_stall_after
+from agentctl.queueknobs import QUEUE_STALL_AFTER, knob_queue_stall_after
 
 def _open_changes(changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [c for c in changes if not machine_state("change", c["state"]).terminal]
@@ -45,7 +45,7 @@ def _red_words(r: dict[str, Any]) -> str:
 
 
 def queue_stall(changes: list[dict[str, Any]], reds: list[dict[str, Any]], now: float,
-                after: float = 90 * 60) -> Optional[str]:
+                after: float = QUEUE_STALL_AFTER) -> Optional[str]:
     """The stall's text when changes are open and none moved for `after` s, else None."""
     if not _open_changes(changes):
         return None
@@ -63,7 +63,9 @@ def probe_queue_moving(store: Any, now: float) -> tuple[bool, str]:
 
 
 def queue_stall_step(store: Any) -> list[str]:
-    """The tick's look: the condition opened (or refreshed) while the queue is stalled; its line, if any."""
+    """The tick's look: the condition opened (or refreshed) while the queue is stalled; its line, if any. An alert
+    only: it holds and rejects nothing."""
+    # policy: queue-stall
     probe = run_probe("queue_moving", {})
     if probe.ok is not False:
         return []
