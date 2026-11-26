@@ -27,6 +27,16 @@ class SegmentsTest(unittest.TestCase):
         tr = A.traces(A.merge([ev(1, 0, None, "queued", "submitted")]), now=50)[("change", "c1")]
         self.assertEqual([(s.state, s.length) for s in tr.segments], [("queued", 50)])
 
+    def test_a_red_still_red_has_its_open_stay(self):
+        """Review 2026-11-26 (C 8.7): TERMINAL was one type-blind set holding `red` (a watch's outcome), so a red item
+        -- whose live state is `red` -- lost its open stay: analyze counted no time red for a red still open. Whether a
+        state ends an item is its own machine's say (MACHINES), the set only for file-held types."""
+        tr = A.traces(A.merge([ev(1, 0, None, "red", "observed", iid="r1", typ="red")]), now=50)[("red", "r1")]
+        self.assertEqual([(s.state, s.length) for s in tr.segments], [("red", 50)])
+        watch = A.traces(A.merge([ev(1, 0, None, "watching", "landed", iid="w1", typ="watch"),
+                                  ev(2, 10, "watching", "red", "run-red", iid="w1", typ="watch")]), now=50)[("watch", "w1")]
+        self.assertEqual([(s.state, s.length) for s in watch.segments], [("watching", 10)], "a watch's red ends it")
+
     def test_coverage_own_and_derived(self):
         raw = [ev(1, 100, "queued", "checking"), ev(2, 200, "checking", "checked", "check-passed"),
                ev(3, 500, "checked", "landed", "landed")]

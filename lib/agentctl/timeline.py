@@ -15,11 +15,21 @@ import re
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterable, Optional
 
+from agentctl.statemachines import MACHINES
 from agentctl.timefmt import iso_at
 
 TERMINAL = {"landed", "rejected", "cancelled", "superseded", "verified", "cleared", "ok", "red", "unknown", "closed",
             "released", "acked", "evicted", "owner"}  # the last four: file-held state (filelog.py; `owner`: an escalation
 # handed to the owner, escalations.py)
+
+
+def ends_item(item_type: str, state: str) -> bool:
+    """Whether `state` ends an item of item_type: its machine's say (MACHINES), else -- a file-held type, or a state its
+    machine does not list -- TERMINAL (review 2026-11-26: a red item's live `red` read as an end)."""
+    spec = MACHINES.get(item_type, {}).get(state)
+    return spec.terminal if spec is not None else state in TERMINAL
+
+
 SKIP_KINDS = re.compile(r"\.illegal$|^policy\.unapproved$")
 
 
@@ -117,7 +127,7 @@ class _Walk:
             self.said = (ev.get("cause"), ev.get("actor"), ev.get("origin", "none"))
 
     def end(self, now: float) -> None:
-        if self.cur and self.cur not in TERMINAL and now > self.start:
+        if self.cur and not ends_item(self.tr.item_type, self.cur) and now > self.start:
             self.tr.segments.append(Segment(self.tr.item_type, self.tr.item_id, self.cur, self.start, now, *self.said))
 
 
@@ -161,7 +171,7 @@ def _to_end_by_kind(trs: list[ItemTrace]) -> dict[str, dict[str, float]]:
     one, by kind and how it ended (`INVARIANT:W2 -> cleared`): an escalation's time to clear, per kind."""
     groups: dict[str, list[float]] = collections.defaultdict(list)
     for t in trs:
-        if "/" in t.item_id and t.path and t.path[-1] in TERMINAL and t.events:
+        if "/" in t.item_id and t.path and ends_item(t.item_type, t.path[-1]) and t.events:
             groups[f"{t.item_id.rsplit('/', 1)[0]} -> {t.path[-1]}"].append(
                 float(t.events[-1]["at"]) - float(t.events[0]["at"]))
     return dict(sorted((k, dist(v)) for k, v in groups.items()))
@@ -182,7 +192,7 @@ def _by(segs: list[Segment], key: Any) -> dict[str, dict[str, float]]:
 
 
 def _variants(trs: list[ItemTrace]) -> list[dict[str, Any]]:
-    c = collections.Counter(" > ".join(t.path) for t in trs if t.path and t.path[-1] in TERMINAL)
+    c = collections.Counter(" > ".join(t.path) for t in trs if t.path and ends_item(t.item_type, t.path[-1]))
     ex: dict[str, str] = {}
     for t in trs:
         ex.setdefault(" > ".join(t.path), t.item_id)
@@ -214,7 +224,7 @@ def _throughput(trs: list[ItemTrace]) -> dict[str, dict[str, int]]:
     out: dict[str, dict[str, int]] = collections.defaultdict(lambda: collections.Counter())
     for t in trs:
         last = t.events[-1]
-        if last.get("to_state") in TERMINAL:
+        if ends_item(t.item_type, str(last.get("to_state") or "")):
             out[iso_at(float(last["at"]))[:10]][last["to_state"]] += 1
     return {d: dict(v) for d, v in sorted(out.items())}
 
