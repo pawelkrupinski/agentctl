@@ -469,7 +469,8 @@ class SyncStepsTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
         for name in ("red_renew_holders", "red_reap_orphans", "reap_children", "project_events", "notify_escalations",
-                     "reconcile_alerts", "network_watch", "tunnel_watch", "maybe_recovery_tick", "mirror_state", "flush_outbox"):
+                     "reconcile_alerts", "network_watch", "tunnel_watch", "maybe_recovery_tick", "mirror_state", "flush_outbox",
+                     "drain_event_log"):
             case.fake(name, lambda rng, *a, **k: rng.choice([None, 1]))
         for name in ("trust_asks", "close_landed_worktrees", "migrate_local_queue", "close_landed_changes", "answer_regen_holds",
                      "revert_notes", "fixers_land_watch", "maybe_upkeep", "root_checkout_ff", "explorer_tick"):
