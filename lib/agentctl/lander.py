@@ -59,18 +59,20 @@ def _tail_lines(path, size=256 * 1024):
     return out
 
 
+def _bash_commands(d: Any) -> Any:
+    """The commands of the tool calls one transcript line makes."""
+    msg = d.get("message") if isinstance(d, dict) else None
+    content = msg.get("content") if isinstance(msg, dict) else None
+    for c in content if isinstance(content, list) else []:
+        cmd = (c.get("input") or {}).get("command") if isinstance(c, dict) and c.get("type") == "tool_use" else None
+        if isinstance(cmd, str):
+            yield cmd
+
+
 def land_calls(path):
     """[(timestamp, command)] of the Bash calls in a transcript's tail that run `agentctl land` (not land status etc.):
     a call, never a mention -- a subagent that only read about land is no lander (2026-11-17)."""
-    out = []
-    for d in _tail_lines(path):
-        msg = d.get("message") if isinstance(d, dict) else None
-        content = msg.get("content") if isinstance(msg, dict) else None
-        for c in content if isinstance(content, list) else []:
-            cmd = (c.get("input") or {}).get("command") if isinstance(c, dict) and c.get("type") == "tool_use" else None
-            if isinstance(cmd, str) and LAND_CALL.search(cmd):
-                out.append((str(d.get("timestamp") or ""), cmd))
-    return out
+    return [(str(d.get("timestamp") or ""), cmd) for d in _tail_lines(path) for cmd in _bash_commands(d) if LAND_CALL.search(cmd)]
 
 
 def shell_args_text(args):
@@ -95,6 +97,37 @@ def process_ancestry(stop_pid=None, depth=8):
     return out
 
 
+def _land_tier(cmd: str, ancestry: Any, wt: str | None, worktree: str | None) -> int:
+    """How surely a land call is THIS land: 2 the call this process runs under (its command in an ancestor's command
+    line), 1 a call naming the land's worktree, 0 any land call."""
+    if any(cmd.strip() and cmd.strip() in a for a in ancestry):
+        return 2
+    return 1 if wt and (wt in cmd or (worktree or "") in cmd) else 0
+
+
+def _land_keys(paths: Any, t: float, ancestry: Any, worktree: str | None) -> Any:
+    """((tier, timestamp, mtime), transcript) of every land call in the transcripts written in the last
+    LANDER_TRANSCRIPT_WINDOW s."""
+    wt = os.path.realpath(worktree) if worktree else None
+    for p in paths:
+        if t - mtime(p) > LANDER_TRANSCRIPT_WINDOW:
+            continue
+        for at, cmd in land_calls(p):
+            yield (_land_tier(cmd, ancestry, wt, worktree), at, mtime(p)), p
+
+
+def _newest_lander(paths: Any, t: float, ancestry: Any, worktree: str | None) -> str | None:
+    """The transcript of the newest land call in the best tier (_land_tier); the first of equal ones."""
+    best = max(_land_keys(paths, t, ancestry, worktree), key=lambda key_path: key_path[0], default=None)
+    return best[1] if best else None
+
+
+def _process_ancestry_of_claude() -> Any:
+    """process_ancestry up to the Claude process ($CLAUDE_PID)."""
+    pid = os.environ.get("CLAUDE_PID") or ""
+    return process_ancestry(int(pid) if pid.isdigit() else None)
+
+
 def lander_transcript(sid, now_=None, worktree=None, ancestry=None):
     """(transcript path, subagent id) of the session `sid`'s agent that runs THIS land: among the session's own
     transcript (<projects>/*/<sid>.jsonl) and its subagents' (<sid>/subagents/agent-<id>.jsonl) written in the last
@@ -111,20 +144,8 @@ def lander_transcript(sid, now_=None, worktree=None, ancestry=None):
     main = glob.glob(os.path.join(root, "*", f"{sid}.jsonl"))
     subs = glob.glob(os.path.join(root, "*", sid, "subagents", "agent-*.jsonl"))
     if ancestry is None:
-        pid = os.environ.get("CLAUDE_PID") or ""
-        ancestry = process_ancestry(int(pid) if pid.isdigit() else None)
-    wt = os.path.realpath(worktree) if worktree else None
-    best = None
-    for p in subs + main:
-        if t - mtime(p) > LANDER_TRANSCRIPT_WINDOW:
-            continue
-        for at, cmd in land_calls(p):
-            tier = 2 if any(cmd.strip() and cmd.strip() in a for a in ancestry) else \
-                1 if wt and (wt in cmd or (worktree or "") in cmd) else 0
-            key = (tier, at, mtime(p))
-            if best is None or key > best[0]:
-                best = (key, p)
-    pick = best[1] if best else (main[0] if main else None)
+        ancestry = _process_ancestry_of_claude()
+    pick = _newest_lander(subs + main, t, ancestry, worktree) or (main[0] if main else None)
     if not pick:
         return None, None
     base = os.path.basename(pick)
@@ -211,29 +232,37 @@ def lander_put(store, change_id, lander, keys, landed_sha=None):
     return store.put_item("lander", change_id, "recorded", data)
 
 
+def _record_items(store: Any, typ: str) -> Any:
+    """The store's items of a type, none when it cannot be read (said, never fatal)."""
+    try:
+        return store.items(typ)
+    except (Exception, SystemExit) as e:
+        err(f"blame: could not read the {typ} items ({str(e)[:120]})")
+        return []
+
+
+def _landing_repo(d: dict[str, Any], lander: Any) -> str:
+    return (lander or {}).get("repo") or d.get("repo") or RED_PRIMARY
+
+
+def _landing_row(it: Any, typ: str, o_r: str | None) -> dict[str, Any] | None:
+    """The landing an item records, or None: it records none, or it is another repo's than o_r."""
+    d = it["data"] or {}
+    lander = d.get("lander")
+    keys = d.get("commit_keys")
+    if not keys and not lander:
+        return None
+    if o_r and _landing_repo(d, lander) != o_r:
+        return None
+    return {"change": d.get("change") or it["id"], "lander": lander, "commit_keys": keys or [],
+            "landed_commits": d.get("landed_commits") or {}, "state": it["state"], "type": typ,
+            "worktree": d.get("worktree"), "branch": d.get("branch")}
+
+
 def lander_records(store, o_r=None):
     """[{change, lander, commit_keys, landed_commits, state}]: every recorded landing of the last LANDER_KEEP s -- the
     change items (queued landings) and the lander items (direct ones) -- for repo o_r (None: all)."""
-    out = []
-    for typ in ("change", "lander"):
-        try:
-            items = store.items(typ)
-        except (Exception, SystemExit) as e:
-            err(f"blame: could not read the {typ} items ({str(e)[:120]})")
-            continue
-        for it in items:
-            d = it["data"] or {}
-            lander = d.get("lander")
-            keys = d.get("commit_keys")
-            if not keys and not lander:
-                continue
-            repo = (lander or {}).get("repo") or d.get("repo") or RED_PRIMARY
-            if o_r and repo != o_r:
-                continue
-            out.append({"change": d.get("change") or it["id"], "lander": lander, "commit_keys": keys or [],
-                        "landed_commits": d.get("landed_commits") or {}, "state": it["state"], "type": typ,
-                        "worktree": d.get("worktree"), "branch": d.get("branch")})
-    return out
+    return [row for typ in ("change", "lander") for it in _record_items(store, typ) if (row := _landing_row(it, typ, o_r))]
 
 
 def _record_index_keys(rec: Any) -> Any:
