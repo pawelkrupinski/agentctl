@@ -334,46 +334,73 @@ def alert_close_naming(pattern, why, d=None):
     return n
 
 
+def _reconciled_at(d: str) -> float:
+    """When the index was last reconciled (0 when never, or unreadable)."""
+    return attempt(lambda: float((read_record(alert_index_path(d)) or {}).get("reconciled_at") or 0), 0,
+                   catch=(TypeError, ValueError))
+
+
+class AlertReconcile:
+    """ONE PASS over the alert index: each live alert's item probed, then closed, re-stamped or left; what it did, a line
+    each. ctx: one read per pass of what several probes ask."""
+
+    def __init__(self, d: str, store: Any, t: float, idx: dict[str, Any]) -> None:
+        self.d, self.store, self.t, self.idx = d, store, t, idx
+        self.ctx = {"probed": idx.get("probed") or {}}
+
+    def run(self) -> list[str]:
+        lines = [self.reconcile(item, eid) for item, eid in list((self.idx.get("items") or {}).items())]
+        return [line for line in lines if line]
+
+    def gone(self, e: Any, eid: str) -> bool:
+        """An alert whose entry is gone, or that was read and has been quiet for a day: nothing live."""
+        return e is None or (alert_acked(self.d, eid) and self.t - float(e.get("at") or 0)
+                             > env_num("AGENTCTL_ALERT_QUIET_MAX", ALERT_QUIET_MAX))
+
+    def reconcile(self, item: str, eid: str) -> str | None:
+        p = os.path.join(self.d, eid + ".json")
+        e = read_record(p)
+        if self.gone(e, eid):
+            self.idx["items"].pop(item, None)
+            return None
+        try:
+            why, aud = alert_probe(self.store, item, e, self.t, self.ctx)
+        except Exception as ex:  # cannot tell now: it stays as it is
+            err(f"alerts: {item}: {str(ex)[:120]}")
+            return None
+        if why:
+            alert_close(self.d, self.idx, item, why)
+            return f"closed {item}: {why}"
+        if aud and aud != e.get("audience"):
+            return self.restamp(p, e, eid, item, aud)
+        return None
+
+    def restamp(self, p: str, e: dict[str, Any], eid: str, item: str, aud: str) -> str:
+        """The alert's audience changed: re-stamped, and surfaced again when it became the owner's."""
+        if aud == "owner":
+            e["surfaced"] = int(e.get("surfaced") or 1) + 1
+        e["audience"] = aud
+        write_json(p, e)
+        if aud == "owner":
+            alert_unack(self.d, eid)
+        return f"{item}: now the {aud}'s"
+
+
 def reconcile_alerts(store, force=False):
     """The processor's pass: every live alert's item probed -- cleared: closed (acked, `closed` recorded); its audience
     changed (a red nobody holds became the owner's; a self-healing condition outlived its bound): re-stamped, surfaced
     again when it became the owner's. Returns what it did."""
     d = inbox_dir()
-    st = store
     t = epoch_now()
-    last = attempt(lambda: float((read_record(alert_index_path(d)) or {}).get("reconciled_at") or 0), 0,
-                   catch=(TypeError, ValueError))
+    last = _reconciled_at(d)
     if not force and t - last < env_num("AGENTCTL_ALERT_RECONCILE", ALERT_RECONCILE_EVERY):
         return []
-    out = []
     with alert_lock(d):
         idx = alert_index(d)
-        ctx = {"probed": idx.get("probed") or {}}  # one read per pass of what several probes ask
-        for item, eid in list((idx.get("items") or {}).items()):
-            p = os.path.join(d, eid + ".json")
-            e = read_record(p)
-            if e is None or (alert_acked(d, eid) and t - float(e.get("at") or 0)
-                             > env_num("AGENTCTL_ALERT_QUIET_MAX", ALERT_QUIET_MAX)):
-                idx["items"].pop(item, None)  # gone, or read and quiet for a day: nothing live
-                continue
-            try:
-                why, aud = alert_probe(st, item, e, t, ctx)
-            except Exception as ex:  # cannot tell now: it stays as it is
-                err(f"alerts: {item}: {str(ex)[:120]}")
-                continue
-            if why:
-                alert_close(d, idx, item, why)
-                out.append(f"closed {item}: {why}")
-            elif aud and aud != e.get("audience"):
-                if aud == "owner":
-                    e["surfaced"] = int(e.get("surfaced") or 1) + 1
-                e["audience"] = aud
-                write_json(p, e)
-                if aud == "owner":
-                    alert_unack(d, eid)
-                out.append(f"{item}: now the {aud}'s")
+        reconcile = AlertReconcile(d, store, t, idx)
+        out = reconcile.run()
         idx["reconciled_at"] = t
-        idx["probed"] = {k: v for k, v in ctx["probed"].items() if k in (idx.get("items") or {})}
+        idx["probed"] = {k: v for k, v in reconcile.ctx["probed"].items() if k in (idx.get("items") or {})}
         alert_index_save(d, idx)
     return out
 

@@ -35,7 +35,6 @@ cognitive	owner_orphans	22
 cognitive	owner_work	21
 cognitive	pressure_reading	23
 cognitive	project_changes	14
-cognitive	reconcile_alerts	26
 cognitive	recovery_tick	26
 cognitive	red_attach_obs	17
 cognitive	red_authors	22
@@ -100,7 +99,6 @@ cyclomatic	owner_orphans	13
 cyclomatic	owner_work	19
 cyclomatic	pressure_reading	18
 cyclomatic	project_changes	11
-cyclomatic	reconcile_alerts	22
 cyclomatic	recovery_tick	17
 cyclomatic	red_attach_obs	18
 cyclomatic	red_authors	23
