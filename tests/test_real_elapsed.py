@@ -1,6 +1,6 @@
 """Real elapsed time (a thread join's bound, a probe's latency, a read's duration) is the wall's, never the process's
 injected clock: on a frozen clock a status read used to wait each source's whole bound in turn and report 0 ms."""
-import os, sys, time, types, unittest
+import os, sys, threading, time, types, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -17,7 +17,11 @@ class FrozenClockTest(unittest.TestCase):
         A.wire_clock(self.was)
 
     def test_status_sources_share_one_deadline_and_time_their_reads(self):
-        slow = [(f"s{i}", lambda: time.sleep(5), 1) for i in range(5)]
+        # the slow reads end with the test: one left reading 5 s ran its epoch_now() inside the next test in the worker
+        # (2026-11-26, tests #289 / #285: a golden faking epoch_now recorded it and its digest moved)
+        done = threading.Event()
+        slow = [(f"s{i}", lambda: done.wait(5), 1) for i in range(5)]
+        self.addCleanup(lambda: [done.set()] + [t.join(5) for t in threading.enumerate() if t.name.startswith("status:s")])
         t0 = time.monotonic()
         A.status_sources(slow, 0.4)
         self.assertLess(time.monotonic() - t0, 1.2)  # one 0.4 s deadline, not 5 of them in turn

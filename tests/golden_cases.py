@@ -4,8 +4,13 @@ call and the result digested. A restructure that changes ANY call, its order or 
   case = Case(seed); case.fake("name", lambda rng, *a, **k: value) ... ; digest(fn, case, args)
 
 The fakes patch the name in every module binding it (tests' view `A`), and are restored afterwards. A fake returns what
-its generator draws from the case's own random stream, so the same calls in the same order see the same values."""
-import contextlib, hashlib, json, os, random, time
+its generator draws from the case's own random stream, so the same calls in the same order see the same values.
+
+ONLY THE CASE'S OWN THREAD IS THE CASE (2026-11-26, tests #289 / #285): a call to a faked name from another thread -- one an
+earlier test left running in the worker, reading a knob or the clock -- is not recorded and draws nothing; it reaches
+the real collaborator (a Probe's: None). Recorded, it moved park_duty's and refresh_pinned_recording's digests in one
+suite run in many."""
+import contextlib, hashlib, json, os, random, threading, time
 from unittest import mock
 
 DIGESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "restructure4-digests.json")
@@ -40,9 +45,12 @@ class Probe:
 class Case:
     def __init__(self, A, seed):
         self.A, self.rng, self.log, self.saved, self.attrs = A, random.Random(seed), [], {}, []
+        self.thread = threading.get_ident()
 
-    def recorded(self, name, gen):
+    def recorded(self, name, gen, real=None):
         def fake(*a, **k):
+            if threading.get_ident() != self.thread:  # not the case's call: the real one (above)
+                return real(*a, **k) if real is not None else None
             try:
                 value = gen(self.rng, *a, **k)
             except Exception as e:
@@ -54,7 +62,7 @@ class Case:
 
     def fake(self, name, gen):
         self.saved.setdefault(name, getattr(self.A, name))
-        setattr(self.A, name, self.recorded(name, gen))
+        setattr(self.A, name, self.recorded(name, gen, self.saved[name]))
 
     def put(self, name, value):
         """A plain replacement (a module, a constant) of the name, restored afterwards."""
@@ -67,8 +75,9 @@ class Case:
     def patch(self, obj, attr, gen):
         """obj.attr (a function of the standard library: os.path.isdir, glob.glob) replaced by a recorded fake, restored
         afterwards."""
-        self.attrs.append((obj, attr, getattr(obj, attr)))
-        setattr(obj, attr, self.recorded(f"{getattr(obj, '__name__', type(obj).__name__)}.{attr}", gen))
+        real = getattr(obj, attr)
+        self.attrs.append((obj, attr, real))
+        setattr(obj, attr, self.recorded(f"{getattr(obj, '__name__', type(obj).__name__)}.{attr}", gen, real))
 
     def restore(self):
         for name, value in self.saved.items():
