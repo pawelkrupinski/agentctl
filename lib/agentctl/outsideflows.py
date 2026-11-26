@@ -4,6 +4,7 @@
 from agentctl.clock import epoch_now
 import re
 import time
+from typing import Any
 from agentctl.core import err, git, process_cache, remote
 from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, gh_json
 from agentctl.repos import scan_repo_for
@@ -42,38 +43,68 @@ def stuck_history(o_r, name):
     return runs
 
 
-def workflow_timeout_bound(txt):
-    """Seconds a run of this workflow file can take at most by its jobs' own `timeout-minutes` (summed: jobs may run
-    one after another). A job setting none counts GitHub's 360-minute default (review 2026-11-07: it counted 0 beside
-    a job that set one); a reusable-workflow call (`uses:`, which takes none) counts 0. None without a jobs section."""
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _jobs_block(txt: str) -> list[str] | None:
+    """The code lines under a workflow file's top-level `jobs:` (to the next top-level key), None without that section."""
     lines = [l for l in txt.splitlines() if l.strip() and not l.lstrip().startswith("#")]
     try:
         i = next(n for n, l in enumerate(lines) if re.match(r"^jobs:\s*$", l))
     except StopIteration:
         return None
-    ind = lambda l: len(l) - len(l.lstrip())  # noqa: E731
-    job_ind = prop_ind = None
-    jobs = []  # per job: [its timeout-minutes in s or None, a reusable call]
+    block = []
     for l in lines[i + 1:]:
-        n = ind(l)
-        if n == 0:
+        if _indent(l) == 0:
             break
-        if job_ind is None:
-            job_ind = n
-        if n == job_ind:
-            prop_ind = None
-            jobs.append([None, False])
-            continue
-        if prop_ind is None and n > job_ind:
-            prop_ind = n
-        if n != prop_ind or not jobs:
-            continue
-        m = re.match(r"^\s*timeout-minutes:\s*(\d+)\s*$", l)
+        block.append(l)
+    return block
+
+
+class _TimeoutScan:
+    """The jobs of a `jobs:` block, each [its timeout-minutes in s or None, a reusable call], fed line by line: a line at
+    the first line's indent starts a job, one at the indent of a job's first property sets that property."""
+
+    def __init__(self) -> None:
+        self.job_ind: int | None = None
+        self.prop_ind: int | None = None
+        self.jobs: list[list[Any]] = []
+
+    def feed(self, line: str) -> None:
+        n = _indent(line)
+        if self.job_ind is None:
+            self.job_ind = n
+        if n == self.job_ind:
+            self.prop_ind = None
+            self.jobs.append([None, False])
+        else:
+            self._property(n, line)
+
+    def _property(self, n: int, line: str) -> None:
+        assert self.job_ind is not None
+        if self.prop_ind is None and n > self.job_ind:
+            self.prop_ind = n
+        if n != self.prop_ind:
+            return
+        m = re.match(r"^\s*timeout-minutes:\s*(\d+)\s*$", line)
         if m:
-            jobs[-1][0] = int(m.group(1)) * 60
-        elif re.match(r"^\s*uses:", l):
-            jobs[-1][1] = True
-    total = sum(t if t is not None else 0 if uses else GITHUB_JOB_TIMEOUT for t, uses in jobs)
+            self.jobs[-1][0] = int(m.group(1)) * 60
+        elif re.match(r"^\s*uses:", line):
+            self.jobs[-1][1] = True
+
+
+def workflow_timeout_bound(txt: str) -> Any:
+    """Seconds a run of this workflow file can take at most by its jobs' own `timeout-minutes` (summed: jobs may run
+    one after another). A job setting none counts GitHub's 360-minute default (review 2026-11-07: it counted 0 beside
+    a job that set one); a reusable-workflow call (`uses:`, which takes none) counts 0. None without a jobs section."""
+    block = _jobs_block(txt)
+    if block is None:
+        return None
+    scan = _TimeoutScan()
+    for line in block:
+        scan.feed(line)
+    total = sum(t if t is not None else 0 if uses else GITHUB_JOB_TIMEOUT for t, uses in scan.jobs)
     return total or GITHUB_JOB_TIMEOUT
 
 
@@ -104,35 +135,47 @@ def main_callable_flows(o_r):
     return main_flow_meta(o_r)["callable"]
 
 
-def outside_gate(o_r):
-    """[(workflow, newest decided run, since, count)] for each workflow on main OUTSIDE the gate whose newest decided
-    run is red: not blocking a push, but red, and for how long (the owner, 2026-10-27: a red nobody is shown is a red
-    that gets ignored). EVERY workflow file on main is read (audit #7): those in the newest 200 runs from that list,
-    the others listed on their own (at most every OUTSIDE_FLOW_RECHECK)."""
-    gated = {n for n, _ in red_gate_flows(o_r)}
+def _own_runs(o_r: Any, wfile: str) -> Any:
+    """The workflow file's own newest 30 runs on main, listed at most every OUTSIDE_FLOW_RECHECK ([] when the list fails)."""
+    at, mine = _flow_runs.get(wfile, (0.0, None))
+    if mine is None or epoch_now() - at >= OUTSIDE_FLOW_RECHECK:
+        try:
+            # listing: the workflow's own newest 30, read because the cross-workflow 200 left it out
+            mine = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
+                           "--json", RUN_FIELDS)
+            _flow_runs[wfile] = (epoch_now(), mine)
+        except Exception as e:  # this workflow unread this time: the others stand
+            err(f"outside the gate: could not list {wfile} ({str(e)[:120]})")
+            mine = mine or []
+    return mine
+
+
+def _outside_runs(o_r: Any, gated: set[str]) -> dict[str, list[Any]]:
+    """{workflow: its runs on main, newest first} of every workflow file on main: the newest 200 runs grouped, the files
+    missing from them (and not gated) listed on their own."""
     # listing: the newest 200 across workflows; a workflow absent from it is listed on its own below
     runs = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)
-    lists = {}
+    lists: dict[str, list[Any]] = {}
     for r in runs:
         if r.get("workflowName"):
             lists.setdefault(r["workflowName"], []).append(r)
     for name, wfile in main_workflow_files(o_r).items():
         if name in lists or name in gated:
             continue
-        at, mine = _flow_runs.get(wfile, (0.0, None))
-        if mine is None or epoch_now() - at >= OUTSIDE_FLOW_RECHECK:
-            try:
-                # listing: the workflow's own newest 30, read because the cross-workflow 200 left it out
-                mine = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
-                               "--json", RUN_FIELDS)
-                _flow_runs[wfile] = (epoch_now(), mine)
-            except Exception as e:  # this workflow unread this time: the others stand
-                err(f"outside the gate: could not list {wfile} ({str(e)[:120]})")
-                mine = mine or []
+        mine = _own_runs(o_r, wfile)
         if mine:
             lists[name] = mine
+    return lists
+
+
+def outside_gate(o_r: Any) -> Any:
+    """[(workflow, newest decided run, since, count)] for each workflow on main OUTSIDE the gate whose newest decided
+    run is red: not blocking a push, but red, and for how long (the owner, 2026-10-27: a red nobody is shown is a red
+    that gets ignored). EVERY workflow file on main is read (audit #7): those in the newest 200 runs from that list,
+    the others listed on their own (at most every OUTSIDE_FLOW_RECHECK)."""
+    gated = {n for n, _ in red_gate_flows(o_r)}
     out = []
-    for name, mine in lists.items():
+    for name, mine in _outside_runs(o_r, gated).items():
         if name in gated:
             continue
         _outside_lists[name] = mine

@@ -19,7 +19,7 @@ mypy-errors	branches	67
 mypy-errors	buildview	14
 mypy-errors	changekind	21
 mypy-errors	checkslot	24
-mypy-errors	cireport	41
+mypy-errors	cireport	39
 mypy-errors	ciwhy	48
 mypy-errors	cleanup	13
 mypy-errors	cleanuppass	3
@@ -76,7 +76,7 @@ mypy-errors	offerdispatch	19
 mypy-errors	orphanpass	7
 mypy-errors	orphanreap	30
 mypy-errors	orphans	17
-mypy-errors	outsideflows	20
+mypy-errors	outsideflows	14
 mypy-errors	owned	39
 mypy-errors	owner	24
 mypy-errors	ownerleases	24
