@@ -106,23 +106,32 @@ def red_block_of(it: dict[str, Any], store: Any) -> Optional[dict[str, Any]]:
 LEASE_LIST_RECENT = 3600         # `lease list` shows the live leases and those free for less than this (--all: every one)
 
 
+def _lease_is_live(r: dict[str, Any], now_: float) -> bool:
+    return bool(r["holder"] and r["expires_at"] > now_)
+
+
+def _lease_recent(r: dict[str, Any], now_: float) -> bool:
+    """Live, or free for no longer than LEASE_LIST_RECENT."""
+    return _lease_is_live(r, now_) or now_ - r["expires_at"] <= LEASE_LIST_RECENT
+
+
+def _lease_line(r: dict[str, Any], now_: float) -> str:
+    meta = json.loads(r["meta"] or "{}")
+    return (f"{r['name']}  {'LIVE' if _lease_is_live(r, now_) else 'free'}  {r['holder'] or '-'}  epoch {r['epoch']}  "
+            f"expires in {int(r['expires_at'] - now_)} s  max {int(r['max_until'] - now_)} s"
+            + (f"  -- {meta.get('note')}" if meta.get("note") else ""))
+
+
 def cmd_lease(a, st):
     """`agentctl lease list [prefix] [--all]` (debugging; the leases' holders, epochs, expiry, notes): the live ones and
     those free for under an hour; --all every one still in the table."""
     now_ = epoch_now()
     rows = st.list(a.prefix or "")
-    hidden = 0 if a.all else sum(1 for r in rows if not (r["holder"] and r["expires_at"] > now_)
-                                 and now_ - r["expires_at"] > LEASE_LIST_RECENT)
-    if not a.all:
-        rows = [r for r in rows if (r["holder"] and r["expires_at"] > now_) or now_ - r["expires_at"] <= LEASE_LIST_RECENT]
-    for r in rows:
-        live = r["holder"] and r["expires_at"] > now_
-        meta = json.loads(r["meta"] or "{}")
-        print(f"{r['name']}  {'LIVE' if live else 'free'}  {r['holder'] or '-'}  epoch {r['epoch']}  "
-              f"expires in {int(r['expires_at'] - now_)} s  max {int(r['max_until'] - now_)} s"
-              + (f"  -- {meta.get('note')}" if meta.get("note") else ""))
-    if not rows:
+    shown = rows if a.all else [r for r in rows if _lease_recent(r, now_)]
+    for r in shown:
+        print(_lease_line(r, now_))
+    if not shown:
         print("no leases")
-    if hidden:
-        print(f"({hidden} free for over {LEASE_LIST_RECENT // 60} min not shown: --all)")
+    if len(rows) > len(shown):
+        print(f"({len(rows) - len(shown)} free for over {LEASE_LIST_RECENT // 60} min not shown: --all)")
     return 0
