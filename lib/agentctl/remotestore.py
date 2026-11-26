@@ -9,7 +9,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any
+from typing import Any, Callable
 from agentctl.statefile import read_json_file, read_text_or, write_json_file
 from agentctl.core import SHORT, attempt, host_role
 from agentctl.store import StoreAuthFailed, StoreLacksCall, StoreUnavailable, store_errors
@@ -85,9 +85,9 @@ def _raise_http_error(e: urllib.error.HTTPError, method: str, path: str, url: st
     raise StoreUnavailable(said) from None
 
 
-def _remote_call(call: StoreCall) -> Any:
+def _remote_call(call: StoreCall) -> Callable[..., object]:
     """RemoteStore's method for one call of the table: Store's method of that name, over the API."""
-    def method(self: Any, *args: Any, **kwargs: Any) -> Any:
+    def method(self: "RemoteStore", *args: object, **kwargs: object) -> object:
         return self._rpc(call, args, kwargs)
     method.__name__ = method.__qualname__ = call.name
     method.__doc__ = f"Store.{call.name}({call.args.replace(' ', ', ')}) over the API ({call.kind}, since v{call.since})."
@@ -157,7 +157,7 @@ class RemoteStore(RemoteCalls):  # type: ignore[misc,valid-type]
             reason = getattr(e, "reason", e)
             raise _StoreTransient(f"{method} {path}: {e}", isinstance(reason, ConnectionRefusedError)) from None
 
-    def _rpc(self, call: StoreCall, args: Any, kwargs: Any) -> Any:
+    def _rpc(self, call: StoreCall, args: tuple[object, ...], kwargs: dict[str, object]) -> object:
         return self.call("POST", f"/v1/store/{call.name}", {"args": list(args), "kwargs": kwargs},
                          safe=call.retry_safe)["result"]
 
