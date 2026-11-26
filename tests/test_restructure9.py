@@ -93,7 +93,7 @@ class StatusAgentsTest(unittest.TestCase):
             rows.append({"name": f"red/{i}", "holder": r.choice(["h1", "h2", None]), "meta": json.dumps(meta),
                          "acquired_at": r.choice([None, 100.0, 50.0]), "renewed_at": r.choice([None, 200.0, 300.0]), "epoch": 1})
         recs = [{"path": f"/r/{i}.json", "pid": r.choice([11, 12, 13, None]), "alive": r.random() < 0.5,
-                 "ended": r.choice([None, iso(NOW - 60), iso(NOW - 4 * 3600), "bad"]), "workflow": r.choice([None, "W2"]),
+                 "ended": r.choice([None, iso(NOW - 60), iso(NOW - 3 * 3600), iso(NOW - 4 * 3600), "bad"]), "workflow": r.choice([None, "W2"]),
                  "run": r.choice([None, 3]), "worktree": r.choice(paths), "transcript": r.choice([None, "/t"]),
                  "why": r.choice([None, "tier deep", "x"]), "started": r.choice([None, 150.0, "2026-11-01T00:00:00Z", 10.0]),
                  "rc": r.choice([None, 0]), "verdict": r.choice([None, "v"]), "label": "l", "key": "k", "jobs": ["j"]}
@@ -101,7 +101,7 @@ class StatusAgentsTest(unittest.TestCase):
         case.fake("lease_is_live", lambda rng, row, t: rng.random() < 0.7)
         case.fake("status_fixer_records", lambda rng, t: recs)
         case.fake("status_enrich_all", lambda rng, agents: agents)
-        case.fake("live_annotate", lambda rng, out, t: raising(rng, 0.2, list(reversed(out))))
+        case.fake("live_annotate", lambda rng, out, t: raising(rng, 0.2, list(reversed(out)), lambda m: RuntimeError(m * 100)))
         case.fake("err", lambda rng, m: None)
         case.put("STATUS_AGENTS_MAX", r.choice([2, 16]))
         st = Probe(case, "st", list=lambda rng, prefix: rows)
@@ -117,8 +117,8 @@ class StatusWorktreeTest(unittest.TestCase):
         state = fixed_time(case)
         wt = "/w/a"
         head = r.choice([None, "h1", "h2"])
-        c = maybe(r, {"head": r.choice(["h1", "h2"]), "commits": maybe(r, ["c"], 0.8) or None, "recent_files": ["f"], "dirty": ["d"],
-                      "dirty_at": r.choice([state[0] - 10, state[0] - 100, 0]), "at": state[0] - 5, "error": r.choice([None, "boom"])}, 0.8)
+        c = maybe(r, {"head": r.choice(["h1", "h2", None]), "commits": maybe(r, ["c"], 0.8) or None, "recent_files": ["f"], "dirty": ["d"],
+                      "dirty_at": r.choice([state[0] - 10, state[0] - 60, state[0] - 100, 0]), "at": state[0] - 5, "error": r.choice([None, "boom"])}, 0.8)
         if c is not None and r.random() < 0.15:
             c.pop("commits")
         case.put("_status_wt", {wt: c} if c else {})
