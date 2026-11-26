@@ -42,6 +42,12 @@ def http_client_errors():
     return http.client.HTTPException
 
 
+# THE STORE'S CALLS: what the store API serves (server.StoreAPI) and RemoteStore calls by name. RemoteStore takes them
+# here, where it is defined (review 2026-11-26: server.py set them on the class, so a process importing remotestore
+# alone had a RemoteStore with no `events` or `item_events`). The call table itself is a later lane.
+STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer", "offers", "offer_of", "offer_reason",
+             "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
+             "meta_get", "meta_set", "next_seq", "open_singleton", "events", "item_events", "derived", "record_events", "archive_free_leases", "list")
 STORE_RPC_SAFE = ("get", "item", "items", "offers", "offer_of", "meta_get", "events", "item_events", "list", "renew", "note",
                   "set_meta", "release", "close_offer", "offer_reason", "mark_notified", "meta_set", "record_events")
 
@@ -159,6 +165,10 @@ class RemoteStore:
 
     def nudge(self):
         return self.call("POST", "/v1/tick", {}, safe=True)
+
+
+for _m in STORE_RPC:
+    setattr(RemoteStore, _m, (lambda m: lambda self, *a, **k: self._rpc(m, a, k))(_m))
 
 
 STORE_PORT = 3014

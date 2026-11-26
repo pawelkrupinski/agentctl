@@ -166,5 +166,18 @@ class TunnelUnresponsiveTest(Phase2Base):
         self.assertIn("WU", A.INVARIANTS)
 
 
+class RemoteStoreAloneTest(unittest.TestCase):
+    def test_remotestore_imported_alone_has_every_store_call(self):
+        """Review 2026-11-26 (C): server.py set the store's calls on RemoteStore, so a process importing remotestore
+        alone had no `events` or `item_events` (AttributeError on its first call). A fresh interpreter, nothing else."""
+        import subprocess
+        lib = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib")
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import agentctl.remotestore as r; "
+                "print(sorted(m for m in ('events', 'item_events', 'items', 'transition', 'list') "
+                "if not callable(getattr(r.RemoteStore, m, None))))")
+        out = subprocess.run([sys.executable, "-I", "-c", code, lib], capture_output=True, text=True, timeout=60)
+        self.assertEqual((out.returncode, out.stdout.strip()), (0, "[]"), out.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

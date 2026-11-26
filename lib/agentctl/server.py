@@ -29,7 +29,7 @@ from agentctl.cistate import state_read
 from agentctl.laptoprole import laptop_role_refusal, laptop_role_speaks
 from agentctl.waiting import cancel_submitted, supersede
 from agentctl.queuesubmit import SUBMIT_FIELDS
-from agentctl.remotestore import RemoteStore, STORE_PORT, STORE_WAITED_TIMEOUT, store_url
+from agentctl.remotestore import STORE_RPC, RemoteStore, STORE_PORT, STORE_WAITED_TIMEOUT, store_url
 from agentctl.storeauth import (
     store_secret, store_secret_path, store_token_issue, store_token_revoke, store_token_user, store_tokens_load)
 from agentctl.blamerecords import blame_land_refusal
@@ -54,14 +54,7 @@ from agentctl.tickknobs import knob_tick
 # claims' activity, the fixer dispatcher; it never ticks and has no database of its own). DISASTER RECOVERY needs no
 # laptop copy: a lost store.db is rebuilt from the land/* refs and GitHub's runs (design §16), the backup timer keeps
 # 24 hourly copies on ci-runner.
-STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer", "offers", "offer_of", "offer_reason",
-             "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
-             "meta_get", "meta_set", "next_seq", "open_singleton", "events", "item_events", "derived", "record_events", "archive_free_leases", "list")
 STORE_BODY_MAX = 4 << 20     # bytes: a larger request body is refused unread (413)
-
-
-for _m in STORE_RPC:
-    setattr(RemoteStore, _m, (lambda m: lambda self, *a, **k: self._rpc(m, a, k))(_m))
 
 
 def process_store(clock: Any = None, waited_on: bool = False) -> Any:
