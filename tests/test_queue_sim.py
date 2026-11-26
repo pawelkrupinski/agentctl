@@ -327,6 +327,27 @@ class TwoHoldersTest(unittest.TestCase):
                 self.assertEqual(set(queue_sim.landing_waits(sim)), {"a", "late"})
 
 
+class CrashLoopsTest(unittest.TestCase):
+    """THE FIXER CRASH LOOP (queue_sim.CRASH_LOOPS, 2026-11-26): launches dying at launch of the vault, of one other cause,
+    or of a different cause each time -- IL (a red whose launches all died of one cause is blocked, never offered to
+    another fixer) holds, and catches the breaker with its cause undone."""
+
+    def run_all(self):
+        return [queue_sim.Sim(seed, calm=True, trees=2, script=list(queue_sim.CRASH_LOOPS)).run(stop=False) for seed in range(2)]
+
+    def test_il_holds_and_the_change_lands(self):
+        sims = self.run_all()
+        self.assertEqual(failures(sims), [])
+        for sim in sims:
+            self.assertEqual(set(queue_sim.landing_waits(sim)), {"a"})
+
+    def test_a_loop_of_one_cause_offered_again_breaks_il(self):
+        saved = queue_sim.A.crash_cause
+        queue_sim.A.crash_cause = lambda streak: None
+        self.addCleanup(setattr, queue_sim.A, "crash_cause", saved)
+        self.assertIn("IL", {k for sim in self.run_all() for k in sim.kinds_seen})
+
+
 class EscalationsTest(unittest.TestCase):
     """THE ESCALATION DISPATCHER (queue_sim.ESCALATIONS, 2026-11-26) beside the queue: agent kinds whose fixer clears,
     fails then clears, never clears, or hangs past its wall time, two subjects of one kind, more agent kinds than the

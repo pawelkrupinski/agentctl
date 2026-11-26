@@ -52,6 +52,7 @@ INVARIANT_KINDS = {
     "IE": "never two escalation fixers of one kind, nor more than the cap in all",
     "IO": "an owner-only escalation kind never dispatches",
     "IG": "every dispatched escalation ends cleared or handed to the owner within its budget",
+    "IL": "a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer",
 }
 VIOLATIONS_MAX = 50  # lines one scenario keeps in the gate's count mode
 ROOT = "0" * 40
@@ -380,6 +381,7 @@ class Sim:
         self.batch_checks = 0  # batch check rounds run (a bisect's prefixes included)
         self.autoresolved = []  # entry ids a batch's assembly auto-resolved a source conflict of (THE BATCH TIERS)
         self.escalations = None  # the escalation world (SimEscalations), made by the first `escalate` arrival
+        self.launch_deaths = {}  # red key -> {"owner": the cause is the vault's, "said": IL was reported}
 
     # ---------------------------------------------------------------- the model's git
     def anc(self, sha):
@@ -1082,6 +1084,9 @@ class Sim:
             if spec.get("kind") in ("escalate", "trust"):
                 self.escalation_arrives(spec)
                 continue
+            if spec.get("kind") == "launch-deaths":
+                self.launch_deaths_arrive(spec)
+                continue
             if spec.get("kind") == "learn-run":
                 self.name_older_run()
                 continue
@@ -1211,6 +1216,35 @@ class Sim:
             self.escalations.gap = None if spec.get("trusted") else "claude does not trust ~/bin (sim)"
         else:
             self.escalations.open_condition(spec)
+
+    def launch_deaths_arrive(self, spec):
+        """A red whose fixers die at launch, one `cause` per launch (a list: one each): the real red_lease_ended reads each
+        death off the simulation's store and clock, as the red tick does for a dead wrapper's lease."""
+        st, key = A.process_store(), spec["key"]
+        causes = spec["causes"]
+        it = st.put_item("red", key, "leased", {"key": key, "workflow": "Sim workflow", "job": "j", "kind": "test", "line": "x",
+                                                "gate": False, "red_kind": "outside", "runs": ["1"], "attempts": 0,
+                                                "history": [], "tier": "fresh", "last_run": {"number": 1, "databaseId": 1}})
+        for n, cause in enumerate(causes):
+            took = st.acquire(A.red_lease(key), f"laptop:fixer:red-{key}-{n}", A.RED_FIXER_TTL, A.RED_FIXER_MAX,
+                              meta={"kind": "fixer", "worktree": f"/w/{key}-{n}"})
+            st.release(A.red_lease(key), took["epoch"], took["secret"], outcome="ended with no LANDED / GAVE UP (session s: blocked)",
+                       notes=cause)
+            it = st.item("red", it["id"])
+            if it["state"] != "leased":
+                it = A.red_move(st, it, "leased", "taken again")
+            A.red_lease_ended(st, it, st.get(A.red_lease(key)), None, self.clock[0])
+        self.launch_deaths[key] = {"same": len(set(causes)) == 1, "said": False}
+
+    def check_launch_deaths(self):
+        """L. IL: the launches of a red all died at launch of one cause: the red waits blocked (on the vault's lease for an
+        owner-only cause, else on the harness), never offered or leased to another fixer."""
+        st = A.process_store()
+        for key, x in self.launch_deaths.items():
+            it = st.item("red", key)
+            if x["same"] and not x["said"] and it["state"] != "blocked-external":
+                x["said"] = True
+                self.violate("IL", f"red {key}: every fixer launch died of one cause, yet the red is {it['state']}")
 
     def check_escalations(self):
         """E. THE ESCALATION DISPATCHER'S INVARIANTS, by the simulation's own truth (the sessions it ran):
@@ -1365,6 +1399,8 @@ class Sim:
         if self.escalations:
             self.escalations.tick()
             self.check_escalations()
+        if self.launch_deaths:
+            self.check_launch_deaths()
         self.check_invariants(before, reds)
         self.tick += 1
         self.clock[0] += TICK
@@ -1897,6 +1933,14 @@ ESCALATIONS = [
     (5, {"kind": "escalate", "condition": "INVARIANT", "key": "invariant-WP", "text": "INVARIANT WP violated: Google "
          "Chrome pid 9: 12 GB -- the owner's to look at (agentctl never stops a process it did not start)", "owner": True}),
     (6, {"label": "b", "worktree": "b", "paths": ["docs/b.md"]}),
+]
+# THE CRASH LOOPS (2026-11-26): fixers dying at launch of the vault (the owner's), of one other cause, and of a different
+# cause each time (climbs the tiers as before)
+CRASH_LOOPS = [
+    (0, {"kind": "launch-deaths", "key": "loop-vault", "causes": ["waiting for Touch ID: secrets unlock movies"] * 3}),
+    (1, {"kind": "launch-deaths", "key": "loop-same", "causes": ["claude: model overloaded"] * 3}),
+    (2, {"kind": "launch-deaths", "key": "loop-mixed", "causes": ["claude: model overloaded", "disk full", "bad config"]}),
+    (0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
 ]
 # the repo untrusted for the first 40 ticks: NOT DISPATCHABLE, no try counted, dispatched once trusted
 ESCALATIONS_UNTRUSTED = [(0, {"kind": "trust", "trusted": False})] + ESCALATIONS + [(40, {"kind": "trust", "trusted": True})]

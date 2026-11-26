@@ -82,6 +82,8 @@ def scenarios():
     out += [(f"escalations-{s}", {"seed": s, "calm": True, "trees": 2, "script": "ESCALATIONS"}) for s in range(4)]
     out += [(f"escalations-untrusted-{s}", {"seed": s, "calm": True, "trees": 2, "script": "ESCALATIONS_UNTRUSTED"})
             for s in range(2)]
+    # v9 (2026-11-26): fixers dying at launch -- of the vault, of one other cause, of a different cause each time (IL)
+    out += [(f"crash-loops-{s}", {"seed": s, "calm": True, "trees": 2, "script": "CRASH_LOOPS"}) for s in range(4)]
     return out
 
 

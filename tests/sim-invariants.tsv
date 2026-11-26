@@ -2,25 +2,26 @@
 # fingerprint, the number of the gate's fixed scenarios violating it (its baseline). A changed
 # definition is a new version, in a commit of its own; a baseline only falls without one.
 # kind	version	fingerprint	baseline	what
-I1	10	9c0d28d4442d	0	one open item per change (worktree + head)
-I2	8	2f9af80894e0	0	never two pushes of one change; never a decided change's commit pushed
-I3	10	bba46668889e	0	a red fix is never behind a batch or a non-red change (its own tree, started and pushed when it may go)
-I4	10	9c0d28d4442d	0	a batch reaches landed, bisecting or held within its bound
-I5	10	9c0d28d4442d	0	the oldest change lands within a bound when nothing fails
-I6	10	0674ed0e7ea1	0	no change lost (entries and items agree, LANDED is on main, every change decided after the drain)
-I7	10	ef7dadefa496	0	exactly one agentctl.landing record per decided change
-I8	8	f6ea00a2f751	0	a change that no longer applies was told at queue time and never checked meanwhile
-I9	8	98183dbe687c	0	no full recheck for a file overlap with a change open when it was queued
-I10	13	4b706ada277e	0	no change held behind a queued one for generated files alone
-I11	8	2f9af80894e0	0	no unverified combined tree reaches main
-Ib	10	afad2cf3f764	0	every queued or checked change past its deadline has a recorded hold
-Ic	10	afad2cf3f764	0	no change past its deadline is silent in `land status`
-Id	10	afad2cf3f764	0	executors start in the documented priority order within a tick
-IX	11	643e931653f9	0	no executor for a decided change
-IW	6	9c0d28d4442d	0	a red fix of an open gate red the store names never waits for green past N ticks
-IR	5	2f58c5ef87ae	0	the queue never lands on a red gate a production commit naming no run of the open red
-IH	3	629d36368875	0	two holders reading no hold at once make exactly one hold, both report it and both moves are said
-IT	2	4b706ada277e	0	no overlap hold outlives its TTL while its holder is not in flight
-IE	1	44a378b66355	0	never two escalation fixers of one kind, nor more than the cap in all
-IO	1	44a378b66355	0	an owner-only escalation kind never dispatches
-IG	1	44a378b66355	0	every dispatched escalation ends cleared or handed to the owner within its budget
+I1	11	7ff73fe36600	0	one open item per change (worktree + head)
+I2	9	30d44f0fd8c2	0	never two pushes of one change; never a decided change's commit pushed
+I3	11	1f395eb92962	0	a red fix is never behind a batch or a non-red change (its own tree, started and pushed when it may go)
+I4	11	7ff73fe36600	0	a batch reaches landed, bisecting or held within its bound
+I5	11	7ff73fe36600	0	the oldest change lands within a bound when nothing fails
+I6	11	504f325a5033	0	no change lost (entries and items agree, LANDED is on main, every change decided after the drain)
+I7	11	c4bf942ce18e	0	exactly one agentctl.landing record per decided change
+I8	9	05522fe1c3ea	0	a change that no longer applies was told at queue time and never checked meanwhile
+I9	9	02cb980eb10a	0	no full recheck for a file overlap with a change open when it was queued
+I10	14	bc9188762a7b	0	no change held behind a queued one for generated files alone
+I11	9	30d44f0fd8c2	0	no unverified combined tree reaches main
+Ib	11	145f81eca9b1	0	every queued or checked change past its deadline has a recorded hold
+Ic	11	145f81eca9b1	0	no change past its deadline is silent in `land status`
+Id	11	145f81eca9b1	0	executors start in the documented priority order within a tick
+IX	12	be2854d75ec7	0	no executor for a decided change
+IW	7	7ff73fe36600	0	a red fix of an open gate red the store names never waits for green past N ticks
+IR	6	1c8fe77d433a	0	the queue never lands on a red gate a production commit naming no run of the open red
+IH	4	0838f3ba5301	0	two holders reading no hold at once make exactly one hold, both report it and both moves are said
+IT	3	bc9188762a7b	0	no overlap hold outlives its TTL while its holder is not in flight
+IE	2	dae82d289b02	0	never two escalation fixers of one kind, nor more than the cap in all
+IO	2	dae82d289b02	0	an owner-only escalation kind never dispatches
+IG	2	dae82d289b02	0	every dispatched escalation ends cleared or handed to the owner within its budget
+IL	1	3903c167e7a8	0	a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer
