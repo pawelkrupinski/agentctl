@@ -11,7 +11,7 @@ from agentctl.procrunner import process_runner
 from agentctl.core import err, fmt_age, git, git_ok, host_role
 from agentctl.timefmt import iso_at
 from agentctl.statefile import read_record, read_text_or
-from agentctl.netretry import credential_failure, redact_credentials
+from agentctl.networksignatures import credential_failure, redact_credentials
 from agentctl.repos import precheck_hook, repo_of_waiting
 from agentctl.waitingdir import waiting_entries, wlog
 from agentctl.land import tool_env
@@ -43,7 +43,7 @@ QUEUE_INFRA_RETRIES = 3
 # hook or remote)" was a tunnel error in its tail; a fixer GAVE UP on it): such a failure, a stalled push, a lock that
 # never came free and main moving under every round re-queue the entry (retry_after, at most QUEUE_INFRA_RETRIES),
 # its `attempts` reset (a checker restart after an infra re-queue is no failure of the change).
-# TRANSIENT_PUSH: netretry.py's PUSH_SIGNATURES (the network's rows and the push's own).
+# TRANSIENT_PUSH: networksignatures.py's PUSH_SIGNATURES (the network's rows and the push's own).
 
 
 INFRA_BACKOFF = (300, 600, 1800, 3600)  # infra re-queues back off; from the third, each one escalates

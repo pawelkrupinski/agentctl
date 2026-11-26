@@ -11,7 +11,7 @@ from typing import Any, Optional
 from agentctl.timefmt import parse_time, ts
 from agentctl.statefile import read_record, write_json
 from agentctl.core import branch_of, git, reds_dir, remote, slug, tilde
-from agentctl.netretry import NETWORK_CHECK_FAILURE
+from agentctl.networksignatures import NETWORK_CHECK_FAILURE
 from agentctl.repos import movies_repo_path
 from agentctl.fixerrecords import fixer_records
 from agentctl.inboxentry import inbox_write

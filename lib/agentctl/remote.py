@@ -8,7 +8,7 @@ from agentctl.timefmt import parse_time
 from agentctl.storeknobs import knob_remote_ghost
 from agentctl.leasetable import LeaseLost
 from agentctl.core import err, fmt_age, git, host_role, remote, slug
-from agentctl.netretry import check_push_failure, credential_failure
+from agentctl.networksignatures import check_push_failure, credential_failure
 from agentctl.forge import api, forge_actions_run, forge_actions_runs, forge_delete_branch, forge_find_run
 from agentctl.waitingdir import save_entry, waiting_state, wlog
 from agentctl.procs import Terminated

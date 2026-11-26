@@ -2410,7 +2410,7 @@ The old names (design §14.5) answer until 2026-11-05, each printing its new one
   check-branch push that succeeds (save_remote's `pushed_at`), or when no
   change waits on it (probe `push_credential`). The probe reads the queue's own records only, never a credential
   helper (the GitHub App's mints a token per call), and only on the host whose push failed (elsewhere it cannot tell).
-  A token GitHub refuses opens the same condition. What it says is redacted (netretry.py `redact_credentials`). A held
+  A token GitHub refuses opens the same condition. What it says is redacted (networksignatures.py `redact_credentials`). A held
   change's status names its retry's reason.
 - **An unread gate is RED** (the owner, 2026-10-27). When the processor cannot read the gate (GitHub, gh's auth or
   the token down) a production change waits and no batch is taken; one `UNKNOWN: ... cannot read the gate (…)` per

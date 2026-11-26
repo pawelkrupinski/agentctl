@@ -16,7 +16,7 @@
 import re
 from typing import Any, Iterable, List, Optional, Tuple
 
-from agentctl.netretry import NETWORK_SIGNATURES, _union, network_failure
+from agentctl.networksignatures import NETWORK_SIGNATURES, _union, network_failure
 
 
 # The roles of a step that runs before any of the change's code is judged: failing in one is infra.
