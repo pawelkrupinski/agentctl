@@ -345,7 +345,8 @@ def cmd_suite(a):
     this directory). run.py takes its governor ticket itself (THE GOVERNED FAN-OUT, govpool.py: class `suite`, SUITE_CAP
     at once, charged its workers): parallel agents queue there instead of piling up. Arguments are run.py's (-j N,
     --timeout S, PATTERN...)."""
-    return process_runner().run([sys.executable, os.path.join("tests", "run.py")] + list(a.args or [])).returncode
+    return process_runner().run([sys.executable, os.path.join("tests", "run.py")] + list(a.args or []),
+                                timeout=None).returncode  # the suite bounds itself (--suite-timeout)
 
 
 def gov_class_of(repo, commits, reds, st=None):

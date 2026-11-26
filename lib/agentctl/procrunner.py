@@ -5,6 +5,9 @@ import subprocess
 from typing import Any, Sequence
 
 
+RUN_TIMEOUT = 60  # s a run may take unless its caller says otherwise (timeout=N; None: unbounded, for a command that runs long)
+
+
 class ProcessRunner:
     """subprocess.run and Popen: THE PROCESS RUNNER IS PASSED IN (CLAUDE.md, "Design"). cli, the composition root, wires
     the one a process uses (wire_runner); core.git, run_cmd, git_ok, spawn_detached, classify.net_run and every module
@@ -12,6 +15,9 @@ class ProcessRunner:
     instead of patching a module."""
 
     def run(self, argv: Sequence[str], **kw: Any) -> "subprocess.CompletedProcess[Any]":
+        """subprocess.run, BOUNDED by default (RUN_TIMEOUT: a hung `ps` or `ssh` never blocks the watchdog); a command
+        that legitimately runs long passes timeout=None (or its own)."""
+        kw.setdefault("timeout", RUN_TIMEOUT)
         return subprocess.run(argv, **kw)
 
     def popen(self, argv: Sequence[str], **kw: Any) -> "subprocess.Popen[Any]":
