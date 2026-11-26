@@ -15,7 +15,7 @@ from agentctl.inboxentry import inbox_dir, inbox_entries
 from agentctl.inbox import entry_line
 from agentctl.alertroute import alert_audience, alert_condition_audience, alert_red_audience
 from agentctl.alerts import inbox_wait
-from agentctl.timelinecmd import argparse
+import argparse
 from agentctl.redview import red_view
 
 
