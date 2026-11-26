@@ -3,12 +3,10 @@
 # fall (update records it); a row added or raised lands only in a commit carrying the kind's trailer:
 # Complexity: (cognitive, cyclomatic, inner-defs), Length: (method-lines, file-lines), Duplication:
 # (copies), Coupling: (fan-out, cycle). CLAUDE.md, "The ratchets".
-cognitive	LiveTail.poll	22
 cognitive	RemoteStore._call_once	18
 cognitive	_await_entry	35
 cognitive	_gh_api_once	19
 cognitive	_watch_group	28
-cognitive	adjust_cap	24
 cognitive	alert_item	30
 cognitive	alert_route	20
 cognitive	apply_entry	20
@@ -22,24 +20,19 @@ cognitive	blame_step	26
 cognitive	blame_withdraw	16
 cognitive	block_invalid	36
 cognitive	classify_change	33
-cognitive	classify_job	27
 cognitive	close_condition	19
 cognitive	close_landed_changes	19
-cognitive	close_superseded	16
 cognitive	cmd_config	21
 cognitive	cmd_issue	19
 cognitive	cmd_lease	17
 cognitive	cmd_recover	15
-cognitive	cmd_supersede	22
 cognitive	config_knobs	25
 cognitive	conflict_resolve	17
-cognitive	dry_run	34
 cognitive	explorer_tick	19
 cognitive	failed_jobs_log	23
 cognitive	fix_between	21
 cognitive	fix_replay_refusal	25
 cognitive	fix_replay_trailers	30
-cognitive	fixers_land_watch	28
 cognitive	forge_run_list	22
 cognitive	gate_flow_names	17
 cognitive	gate_runs_pass	17
@@ -59,7 +52,6 @@ cognitive	lap_change_deadline	15
 cognitive	laptop_role	15
 cognitive	laptop_role_refusal	23
 cognitive	live_state	12
-cognitive	live_stream	33
 cognitive	main_workflow_files	28
 cognitive	migrate_local_queue	19
 cognitive	name_causes	26
@@ -74,7 +66,6 @@ cognitive	owner_work	21
 cognitive	park_duty	28
 cognitive	park_release_why	18
 cognitive	pressure_reading	23
-cognitive	previous_fixer_tree	14
 cognitive	project_changes	14
 cognitive	read_overlap	38
 cognitive	recheck_reason	24
@@ -83,7 +74,6 @@ cognitive	recovery_tick	26
 cognitive	red_attach_obs	17
 cognitive	red_authors	22
 cognitive	red_callable_evidence	15
-cognitive	red_dispatch	27
 cognitive	red_failed_steps	14
 cognitive	red_family	16
 cognitive	red_flake_check	15
@@ -104,7 +94,6 @@ cognitive	spotlight_exclude	19
 cognitive	status_agents	29
 cognitive	status_page_start	15
 cognitive	status_worktree	15
-cognitive	successor_state	33
 cognitive	sweep_land_refs	20
 cognitive	sync_onto_main	18
 cognitive	sync_steps	11
@@ -124,12 +113,10 @@ copies	clones|serverclone	2
 copies	redcrash	2
 copies	redpending	2
 copies	store	2
-cyclomatic	LiveTail.poll	13
 cyclomatic	RemoteStore._call_once	16
 cyclomatic	_await_entry	20
 cyclomatic	_gh_api_once	18
 cyclomatic	_watch_group	21
-cyclomatic	adjust_cap	36
 cyclomatic	alert_item	27
 cyclomatic	alert_route	21
 cyclomatic	apply_entry	31
@@ -144,24 +131,19 @@ cyclomatic	blame_withdraw	18
 cyclomatic	block_invalid	30
 cyclomatic	build_view_change	15
 cyclomatic	classify_change	22
-cyclomatic	classify_job	34
 cyclomatic	close_condition	15
 cyclomatic	close_landed_changes	15
-cyclomatic	close_superseded	22
 cyclomatic	cmd_config	15
 cyclomatic	cmd_issue	13
 cyclomatic	cmd_lease	20
 cyclomatic	cmd_recover	16
-cyclomatic	cmd_supersede	18
 cyclomatic	config_knobs	14
 cyclomatic	conflict_resolve	21
-cyclomatic	dry_run	20
 cyclomatic	explorer_tick	19
 cyclomatic	failed_jobs_log	22
 cyclomatic	fix_between	22
 cyclomatic	fix_replay_refusal	23
 cyclomatic	fix_replay_trailers	16
-cyclomatic	fixers_land_watch	22
 cyclomatic	forge_run_list	15
 cyclomatic	gate_flow_names	22
 cyclomatic	gate_runs_pass	21
@@ -182,7 +164,6 @@ cyclomatic	lap_change_deadline	17
 cyclomatic	laptop_role	17
 cyclomatic	laptop_role_refusal	16
 cyclomatic	live_state	12
-cyclomatic	live_stream	23
 cyclomatic	main_workflow_files	11
 cyclomatic	migrate_local_queue	13
 cyclomatic	name_causes	20
@@ -197,7 +178,6 @@ cyclomatic	owner_work	19
 cyclomatic	park_duty	20
 cyclomatic	park_release_why	14
 cyclomatic	pressure_reading	18
-cyclomatic	previous_fixer_tree	23
 cyclomatic	project_changes	11
 cyclomatic	read_overlap	25
 cyclomatic	recheck_reason	23
@@ -208,7 +188,6 @@ cyclomatic	red_authors	23
 cyclomatic	red_callable_evidence	20
 cyclomatic	red_claim	13
 cyclomatic	red_diagnosis_step	14
-cyclomatic	red_dispatch	30
 cyclomatic	red_failed_steps	22
 cyclomatic	red_family	23
 cyclomatic	red_flake_check	17
@@ -229,7 +208,6 @@ cyclomatic	spotlight_exclude	15
 cyclomatic	status_agents	26
 cyclomatic	status_page_start	11
 cyclomatic	status_worktree	17
-cyclomatic	successor_state	24
 cyclomatic	sweep_land_refs	17
 cyclomatic	sync_onto_main	16
 cyclomatic	token	16
@@ -242,8 +220,5 @@ cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
 cyclomatic	write_snapshot	23
 inner-defs	sync_steps	7
-method-lines	dry_run	53
-method-lines	live_stream	51
-method-lines	red_dispatch	59
 method-lines	sync_onto_main	61
 method-lines	sync_steps	57
