@@ -27,8 +27,7 @@ def status_batch(st: Any, d: str) -> Any:
 
 def new_batch(st, d, state, depth=None):
     key = batch_key(d)
-    n = int(st.meta_get(f"batch_seq:{key}", 0) or 0) + 1
-    st.meta_set(f"batch_seq:{key}", n)
+    n = st.next_seq(f"batch_seq:{key}")
     return st.put_item("batch", f"{key}#{n}", state, {"retries": 0, **({"depth": depth} if depth else {})})
 
 
@@ -36,8 +35,9 @@ def batch_fail(st, d, it, why, n_changes=0):
     """A batch that did not land: assembled again, or after BATCH_RETRY_MAX tries held (with a condition on the git
     route, cleared by git answering)."""
     n = int(it["data"].get("retries") or 0) + 1
-    if n < env_num("AGENTCTL_BATCH_RETRY_MAX", BATCH_RETRY_MAX):
-        wlog(d, f"the batch {it['id']} did not land ({why}): retry {n}/{BATCH_RETRY_MAX}")
+    limit = env_num("AGENTCTL_BATCH_RETRY_MAX", BATCH_RETRY_MAX)
+    if n < limit:
+        wlog(d, f"the batch {it['id']} did not land ({why}): retry {n}/{limit}")
         return batch_move(st, it, "assembling", {"retries": n})
     text = (f"HELD: the batch {it['id']} ({n_changes} change(s)) did not land {n} times ({why}); it is assembled again "
             f"when git can read {remote()}/main, or in 30 min")

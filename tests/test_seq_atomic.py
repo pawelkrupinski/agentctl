@@ -1,0 +1,59 @@
+"""The batch and hold sequence numbers come from ONE atomic Store.next_seq: two writers never mint the same number
+(batch_seq / hold_seq were a read, then a write), and a batch's retry line names the limit in force."""
+import os, sys, tempfile, threading, unittest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from test_agentctl import A  # noqa: E402
+
+
+class NextSeqTest(unittest.TestCase):
+    def setUp(self):
+        self.st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"))
+
+    def test_concurrent_writers_never_mint_the_same_number(self):
+        got, lock = [], threading.Lock()
+
+        def mint():
+            for _ in range(15):
+                n = self.st.next_seq("some_seq")
+                with lock:
+                    got.append(n)
+        ts = [threading.Thread(target=mint) for _ in range(4)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        self.assertEqual(sorted(got), list(range(1, 61)))
+
+    def test_a_key_continues_from_the_stored_meta_and_keys_are_independent(self):
+        self.st.meta_set("hold_seq", 7)
+        self.assertEqual(self.st.next_seq("hold_seq"), 8)
+        self.assertEqual(self.st.next_seq("other"), 1)
+        self.assertEqual(self.st.meta_get("hold_seq"), "8")
+
+    def test_new_batches_and_holds_use_it(self):
+        d = tempfile.mkdtemp()
+        a = A.new_batch(self.st, d, "assembling")
+        b = A.new_batch(self.st, d, "assembling")
+        self.assertEqual(int(b["id"].split("#")[1]), int(a["id"].split("#")[1]) + 1)
+        h = A.land_hold_set(self.st, 3600, "why", "me")
+        self.assertEqual(h["id"], "land#1")
+        self.assertEqual(self.st.next_seq("hold_seq"), 2)
+
+
+class BatchRetryLineTest(unittest.TestCase):
+    def test_the_retry_line_names_the_limit_in_force(self):
+        st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"))
+        d = tempfile.mkdtemp()
+        it = A.new_batch(st, d, "assembling")
+        old = os.environ.get("AGENTCTL_BATCH_RETRY_MAX")
+        os.environ["AGENTCTL_BATCH_RETRY_MAX"] = "5"
+        try:
+            A.batch_fail(st, d, it, "boom")
+        finally:
+            os.environ.pop("AGENTCTL_BATCH_RETRY_MAX") if old is None else os.environ.__setitem__("AGENTCTL_BATCH_RETRY_MAX", old)
+        with open(os.path.join(d, "processor.log")) as f:
+            self.assertIn("retry 1/5", f.read())
+
+
+if __name__ == "__main__":
+    unittest.main()

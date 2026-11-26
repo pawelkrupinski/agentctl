@@ -44,8 +44,7 @@ def land_hold_set(st: Any, secs: int, why: str | None, by: str) -> Any:
                       event={"text": f"land hold {cur['id']} extended by {by}: {why or 'no reason given'}",
                              "dedupe": f"hold:{cur['id']}:extend:{cur['version'] + 1}"})
         return st.item("hold", cur["id"])
-    n = int(st.meta_get("hold_seq", 0) or 0) + 1
-    st.meta_set("hold_seq", n)
+    n = st.next_seq("hold_seq")
     it = st.put_item("hold", f"land#{n}", "held", data)
     if secs != LAND_HOLD_DEFAULT:  # its own expiry: a self-transition re-deadlines it
         st.transition("hold", it["id"], "held", it["version"], deadline_s=secs,
