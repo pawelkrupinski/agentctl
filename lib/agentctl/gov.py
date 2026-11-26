@@ -25,8 +25,8 @@ from agentctl.jvmreap import sbt_warm_state
 from agentctl.govbudget import GOV_MEM_GB, gov_budget
 from agentctl.store import LeaseLost
 from agentctl.leases import lock_beat
-from agentctl.redfixes import fixes_of
-from agentctl.changekind import classify_change, queue_facts
+from agentctl.changekind import queue_facts
+from agentctl.redland import may_land_on_red
 from agentctl.pressure import laptop_pressure, pressure_reading
 from agentctl.govusage import gov_job_cores
 from agentctl.govfits import gov_charged, gov_committed, gov_fits
@@ -354,10 +354,7 @@ def cmd_suite(a):
 
 def gov_class_of(repo, commits, reds, st=None):
     """red when the commits' Fixes-Red names an open red -- the gate's (reds) or any other the store has open: the
-    change's KIND (changekind.py classify_change) -- else check."""
-    fixes = fixes_of(repo, commits, st)
-    if not fixes:
-        return "check"
-    return "red" if classify_change({"fixes": sorted(fixes)}, queue_facts(reds, st))["red_fix"] else "check"
+    change's red fix, THE RED-LANDING RULE's (redland.may_land_on_red) -- else check."""
+    return "red" if may_land_on_red(queue_facts(reds, st), repo=repo, commits=commits, store=st).red_fix else "check"
 
 

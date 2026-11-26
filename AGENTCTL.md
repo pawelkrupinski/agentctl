@@ -597,8 +597,17 @@ gh (main's runs since that workflow's last green, and their failed job names; un
 (`red fix of 2896 (gate)`) matches a fix by every name of an open red item; the queue's `must_wait` read only the gate's
 newest runs (#2897, #2898), so the fix sat on `waiting` beside a non-fix change and a batch, which assembles only what
 may land on red, found nothing: WR, a fix waiting for the green only it could bring. `must_wait` now also lets a commit
-through that names any name of an open gate red in the store (`open_gate_red_names`); the batch then takes the fix
+through that names any name of an open gate red in the store (`redland.gate_red_names`); the batch then takes the fix
 alone and the non-fix change stays behind.
+
+**One red-landing rule (2026-11-26, `redland.may_land_on_red`).** Whether a change may land on the gate's red, whether
+it fixes an open red (`red_fix`: its own tree, first) and whether it fixes a GATE red (`gate_fix`) are one verdict;
+`must_wait_why`, the classifier, the check executor's red-fix tree, the governor's class, the batch order and the
+waiting batch's "a fix waits" read it. Characterised first (`tests/test_red_landing.py`: every copy over a seeded matrix),
+two disagreements were resolved: a gate red's fix beside a production commit naming no red is a red fix but NO gate fix
+(it may not land on the red, so it is not first in the batch order); and a change's commits' COUNTING trailers decide,
+not the names its entry recorded at submission (a trailer fix_check stopped counting makes no fix). An item's data read
+without git is judged by its recorded names.
 
 **WR self-heals, and an episode counts by signature (2026-11-25, the owner: "fix the class").** Three more pieces, so a
 fix of the open red never waits on bookkeeping again:

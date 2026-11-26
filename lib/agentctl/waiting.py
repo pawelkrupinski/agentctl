@@ -1,7 +1,6 @@
 # agentctl, part `waiting`: waiting.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-import fnmatch
 import os
 import signal
 from typing import Any
@@ -15,13 +14,11 @@ from agentctl.owned import cancel_run, lock_held
 from agentctl.queueslots import entry_owned, queue_verdict, set_change
 from agentctl.conflicts import pick
 from agentctl.queuerecheck import queued_entries, same_change_source
-from agentctl.redfixes import commit_fixes
-from agentctl.changekind import classify_change, queue_facts
+from agentctl.redland import may_land_on_red
+from agentctl.changekind import queue_facts
 from agentctl.statemachines import StaleVersion, change_event, machine_state
 
 
-PRODUCTION_GLOBS = ("*/src/main/*", "conf/*", "*/conf/*", "build.sbt", "project/*", "infra/nix/*", "infra/kubernetes/*",
-                    "Dockerfile")
 WAITING_AWAIT_TIMEOUT = 24 * 3600
 WAITING_HELP = """The processor (one loop of ticks, launchd net.bitcashier.agentctl-waiting) and its queue: every landed change is
 an item -- queued, checking, checked, pushing, landed; or waiting while main is red. At green the waiting changes are ONE
@@ -37,29 +34,12 @@ only the confirmed culprit rejected. No `waiting` branch. Every verdict goes to 
 The old names (`waiting status|pause|resume|cancel|run|service`) answer until 2026-11-05, each naming its new one."""
 
 
-def is_production_path(p: str) -> bool:
-    """movies' pre-push is_production_path: what reaches a pod or a fleet host (the rest lands while red)."""
-    return any(fnmatch.fnmatch(p, g) for g in PRODUCTION_GLOBS)
-
-
 GATE_UNREAD = "unread"  # gate_reds' member when the gate could not be read: never green, and no Fixes-Red matches it
 gate_unread_why = [""]
 
 
 def waiting_commits(repo, base, head):
     return git(repo, "rev-list", "--reverse", f"{base}..{head}").split()
-
-
-def open_gate_red_names(store: Any) -> set[str]:
-    """Every name (run numbers and ids, key) of the gate reds the store has open: the red a fix names by an OLDER run
-    of the same red (Main #2898 red, `Fixes-Red: 2896`) is still the red's fix, though the gate's own set (gate_reds:
-    the newest runs) no longer lists that run."""
-    return {n for n, (_rid, kind) in queue_facts(set(), store)["open"].items() if kind == "gate"}
-
-
-def touches_production(repo: str, c: str) -> bool:
-    paths = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c).split("\n")
-    return any(p and is_production_path(p) for p in paths)
 
 
 # A FIX OF AN OPEN GATE RED NEVER WAITS (2026-11-25, batch #124): the classifier (changekind.py) called a change naming
@@ -73,23 +53,9 @@ def must_wait(repo: str, commits: list[str], reds: set[str], store: Any) -> bool
 
 
 def must_wait_why(repo: str, commits: list[str], reds: set[str], store: Any) -> str | None:
-    """None when no commit must wait, else the rule that makes the first one wait, in words (WR names it when a fix
-    that cannot move says why: `Fixes-Red:` missing, not counting, or naming no run of the open gate red)."""
-    named = reds | open_gate_red_names(store)
-    for c in commits:
-        if touches_production(repo, c):
-            fixes = commit_fixes(repo, c, store)  # a trailer that does not count (fix_check) is no fix: it waits
-            if not fixes & named:
-                return wait_words(c, fixes, reds, named - reds)
-    return None
-
-
-def wait_words(c: str, fixes: set[str], reds: set[str], open_names: set[str]) -> str:
-    """Why commit c waits, as must_wait_why words it."""
-    if not fixes:
-        return f"{c[:10]} is a production commit whose `Fixes-Red:` is missing or does not count (fix_check: it touches nothing the red's job reads)"
-    return (f"{c[:10]} is a production commit whose `Fixes-Red:` names {', '.join(sorted(fixes))}, no run of the open gate red "
-            f"(the gate's runs {', '.join(sorted(reds)[:4])}; the red items' {', '.join(sorted(open_names)[:6]) or 'none'})")
+    """None when the commits may land on the gate's red (`reds`; or it is green), else why the first that may not
+    waits, in words: THE RED-LANDING RULE (redland.may_land_on_red)."""
+    return may_land_on_red(queue_facts(reds, store), repo=repo, commits=commits, store=store).wait
 
 
 def record_autoresolved(d: Any, e: dict[str, Any], resolved: Any, conflict: Any) -> None:
@@ -220,11 +186,8 @@ def batch_order(repo, entries, reds, store):
     facts = queue_facts(reds, store)
 
     def rank(e):
-        if reds and classify_change(e, facts)["gate_fix"]:  # its KIND: a fix of the gate's red (changekind.py)
-            return 0
-        if reds and not must_wait(repo, e["commits"], reds, store):
-            return 1
-        return 2
+        landing = may_land_on_red(facts, e, repo, store=store)  # THE RED-LANDING RULE (redland.py)
+        return 2 if not reds or landing.wait else 0 if landing.gate_fix else 1
     return sorted(entries, key=lambda e: (rank(e), e["seq"]))
 
 

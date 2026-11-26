@@ -109,13 +109,14 @@ class ChangeKindTest(unittest.TestCase):
         """Before: gov_class_of read the gate's reds alone -- a fix of a red outside the gate queued behind the
         governor like an ordinary check."""
         self.red("r-out", ["6"])
-        saved = A.fixes_of
-        A.fixes_of = lambda repo, commits, store: {"6"} if commits else set()
+        saved = A.commit_fixes, A.touches_production
+        A.commit_fixes = lambda repo, c, store: {"6"}
+        A.touches_production = lambda repo, c: True
         try:
             self.assertEqual(A.gov_class_of("/nonexistent", ["c1"], set(), self.st), "red")
             self.assertEqual(A.gov_class_of("/nonexistent", [], set(), self.st), "check")
         finally:
-            A.fixes_of = saved
+            A.commit_fixes, A.touches_production = saved
 
 
 class WatchdogKindTest(unittest.TestCase):

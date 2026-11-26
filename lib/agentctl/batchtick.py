@@ -10,7 +10,8 @@ from agentctl.leases import lease_live
 from agentctl.queueslots import check_tree, check_tree_slot, set_change
 from agentctl.queue import land_hold
 from agentctl.queuerecheck import queued_entries, recheck_logged
-from agentctl.changekind import classify_change, queue_facts
+from agentctl.changekind import queue_facts
+from agentctl.redland import may_land_on_red
 from agentctl.redseen import gate_reds
 from agentctl.batchrun import assemble, unread_note
 from agentctl.recovery import batch_move, current_batch
@@ -117,7 +118,7 @@ def batch_plan(repo: str, d: str, st: Any, t: float, it: Any, reds: Any) -> tupl
     acts) when nothing is to be done: the acts say what the pass did instead."""
     waiting = waiting_after_release(repo, d, st, t, it, reds)
     depth = (it or {}).get("data", {}).get("depth") or "fast"
-    fix_waits = gate_fix_waits(st, reds, waiting, t)
+    fix_waits = gate_fix_waits(repo, st, reds, waiting)
     if batch_forming(it, depth, waiting):
         it, ready, depth, acts = batch_formed(repo, d, st, t, it, reds, depth)
         if it is None:
@@ -136,9 +137,11 @@ def batch_forming(it: Any, depth: Any, waiting: Any) -> bool:
     return not waiting and (not it or (depth in DEEP_BATCHES and it["state"] == "assembling"))
 
 
-def gate_fix_waits(st: Any, reds: Any, waiting: Any, t: float) -> bool:
-    """Whether the gate is red and a waiting change is the fix of its red."""
-    return bool(reds) and any(classify_change(e, queue_facts(reds, st), t)["gate_fix"] for e in waiting)
+def gate_fix_waits(repo: str, st: Any, reds: Any, waiting: Any) -> bool:
+    """Whether the gate is red and a waiting change names its red (THE RED-LANDING RULE: one that may land on it is
+    released to the queue; one that waits beside a production commit naming no red stays)."""
+    facts = queue_facts(reds, st)
+    return bool(reds) and any(may_land_on_red(facts, e, repo, store=st).names_gate_red for e in waiting)
 
 
 def waiting_after_release(repo: str, d: str, st: Any, t: float, it: Any, reds: Any) -> list[dict[str, Any]]:

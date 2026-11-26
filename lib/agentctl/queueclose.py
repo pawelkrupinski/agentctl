@@ -22,7 +22,8 @@ from agentctl.conditions import open_condition, run_probe
 from agentctl.queue import VERIFY_MODE
 from agentctl.conflicts import CONFLICT_PLACE_KEPT
 from agentctl.changekind import (
-    HOLD_SHOWN, change_hold_visible, classify_change, file_unheld_change, kind_text, queue_facts)
+    HOLD_SHOWN, change_hold_visible, file_unheld_change, kind_text, queue_facts)
+from agentctl.redland import may_land_on_red
 from agentctl.waiting import already_landed, must_wait, waiting_commits
 from agentctl.queuesubmit import SUBMIT_FIELDS, submit_ref
 from agentctl.redseen import gate_reds
@@ -312,7 +313,7 @@ def check_entry(repo: str, eid: str, clock: Clock, store: Any) -> int:
         e = read_record(os.path.join(d, "entries", f"{eid}.json"))
         if not e or e.get("status") not in ("queued", "checking") or e.get("backlog_batch"):  # a backlog batch's
             return 0
-        fix = bool(e.get("fixes")) and classify_change(e, queue_facts(gate_reds(repo), store), clock.time())["red_fix"]
+        fix = may_land_on_red(queue_facts(gate_reds(repo), store), e, repo, store=store).red_fix  # its own tree
         slot = check_tree_slot(store, repo, d, fix=fix)
         if not slot:  # all trees busy: it stays queued, the tick starts it again when one frees
             return 0

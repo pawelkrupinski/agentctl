@@ -22,7 +22,7 @@ from agentctl.redlink import red_change_link
 from agentctl.redfixcheck import fix_check, fix_reaches_red, landed_fix_commits
 
 
-def commit_fixes(repo, sha, store):
+def commit_fixes(repo: str, sha: str, store: Any) -> set[str]:
     """The `Fixes-Red:` values of commit sha that count as fixes (fix_check)."""
     v = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", sha, check=False)
     vals = trailer_values(v.stdout if v.returncode == 0 else "")

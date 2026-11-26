@@ -66,9 +66,10 @@ def decisions(test, gate, store_kind, change):
     st = world(test, store_kind)
     shas = fake_commits(test, commits)
     entry = {"id": "e", "fixes": list(names), "commits": shas, "status": "queued"}
-    k = A.classify_change(entry, A.queue_facts(reds, st), 0)
+    facts = A.queue_facts(reds, st)
+    k = A.classify_change(entry, facts, 0, "/repo", st)
     may = not reds or A.must_wait_why("/repo", shas, reds, st) is None
-    tree = bool(entry.get("fixes")) and k["red_fix"]  # queueclose.check_entry's guard
+    tree = A.may_land_on_red(facts, entry, "/repo", store=st).red_fix  # queueclose.check_entry's guard
     return (may, k["red_fix"], k["gate_fix"], tree, A.gov_class_of("/repo", shas, reds, st))
 
 
@@ -257,8 +258,15 @@ MATRIX = {
     ('unread', 'unreadable', 'tools-fix8'): (True, False, False, False, 'check'),
 }
 
-# THE DISAGREEMENTS, each resolved (the value the one rule answers now, and why): see the tests below
-RESOLVED = {}
+# THE DISAGREEMENTS, each resolved (redland.py's header says why; each has its own test below):
+#  - NO GATE FIX THAT MAY NOT LAND ON RED: a gate red's fix beside a production commit naming no red ("mixed",
+#    "mixed7", "tools-fix-prod") was a gate fix though the rule kept it for green; it is a red fix, not a gate fix.
+#  - THE COMMITS' COUNTING TRAILERS, NOT THE NAMES RECORDED AT SUBMISSION ("stale", "stale7": the trailer counts no
+#    more): the classifier and the red-fix tree called it a fix, the rule and the governor did not; it is no fix.
+WAITS_BESIDE_A_BARE_COMMIT = ("mixed", "mixed7", "tools-fix-prod")
+NO_LONGER_COUNTS = ("stale", "stale7")
+RESOLVED = {**{k: (v[0], v[1], False, v[3], v[4]) for k, v in MATRIX.items() if k[2] in WAITS_BESIDE_A_BARE_COMMIT},
+            **{k: (v[0], False, False, False, v[4]) for k, v in MATRIX.items() if k[2] in NO_LONGER_COUNTS}}
 
 
 class RedLandingMatrixTest(unittest.TestCase):
@@ -275,6 +283,33 @@ class RedLandingMatrixTest(unittest.TestCase):
         want = {k: RESOLVED.get(k, v) for k, v in MATRIX.items()}
         diff = {k: (want.get(k), v) for k, v in got.items() if want.get(k) != v}
         self.assertEqual(diff, {}, "\n" + "\n".join(f"{k!r}: {v!r}," for k, v in sorted(got.items())))
+
+    def cell(self, gate, store_kind, change):
+        return dict(zip(("may", "red_fix", "gate_fix", "tree", "gov"), decisions(self, gate, store_kind, change)))
+
+    def test_a_fix_beside_a_production_commit_naming_no_red_is_a_red_fix_but_no_gate_fix(self):
+        """It may not land on the red (its bare commit waits for green), so it is not first in the waiting batch's order
+        nor a fix that waits for green; it names the open red, so its check still takes the red-fix tree."""
+        for store_kind in ("none", "gate-item"):
+            got = self.cell("red", store_kind, "mixed")
+            self.assertEqual((got["may"], got["red_fix"], got["gate_fix"]), (False, True, False), store_kind)
+        self.assertEqual(self.cell("red", "gate-item", "tools-fix-prod")["gate_fix"], False)
+        self.assertEqual(self.cell("red", "gate-item", "prod-fix7")["gate_fix"], True, "a covered fix stays one")
+
+    def test_a_trailer_that_no_longer_counts_makes_no_fix_whatever_the_entry_recorded(self):
+        """Its entry still says `fixes: [8]`, but fix_check no longer counts its commit's trailer: no red fix, no red-fix
+        tree, the governor's check class -- as the rule and the governor already said."""
+        got = self.cell("red", "gate-item", "stale")
+        self.assertEqual(got, {"may": False, "red_fix": False, "gate_fix": False, "tree": False, "gov": "check"})
+
+    def test_without_the_commits_an_item_is_judged_by_its_recorded_names(self):
+        """An item's data read without git (WR's pass, the governor's class of a lone entry): its names alone."""
+        st = world(self, "gate-item")
+        v = A.may_land_on_red(A.queue_facts({"8"}, st), {"fixes": ["7"]})
+        self.assertEqual((v.red_fix, v.gate_fix, v.wait), (True, True, None))
+        v = A.may_land_on_red(A.queue_facts({"8"}, st), {"fixes": ["404"]})
+        self.assertEqual((v.red_fix, v.gate_fix), (False, False))
+        self.assertIn("no run of the open gate red", v.wait)
 
 
 if __name__ == "__main__":

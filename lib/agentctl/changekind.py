@@ -2,15 +2,13 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now
-from operator import itemgetter
 from typing import Any
 from contextlib import suppress
-from typing import Any
 from agentctl.core import fmt_age
 from agentctl.redrecord import RED_TERMINAL, red_names
 from agentctl.redepisode import red_episode_names
 from agentctl.queueslots import checker_alive
-from agentctl.fixchange import fixes_named
+from agentctl.redland import may_land_on_red, red_kind_of
 from agentctl.issues import issue_open
 from agentctl.identitychange import identity_change
 from agentctl.statemachines import StaleVersion, machine_state
@@ -60,12 +58,6 @@ def priority_table_markdown():
                       PRIORITY_DOC_END])
 
 
-def red_kind_of(d):
-    """A red item's kind as a change's classifier names it: `gate` (it holds every production push), else its own
-    red_kind (`outside`, `flake`, `stuck-run`), `outside` when it records none."""
-    return "gate" if d.get("gate") else str(d.get("red_kind") or "outside")
-
-
 def queue_facts(gate, st):
     """THE FACTS a change is classified against: {"gate": the gate's current red names (gate_reds), "open": {name: [red
     id, red kind]} for every red the store has open: the item's names and, for a gate red, the runs of its EPISODE (redepisode.py).
@@ -87,16 +79,6 @@ def queue_facts(gate, st):
 def gate_facts(gate):
     """Facts with the gate's reds alone (no store read): for the decisions only the gate makes."""
     return {"gate": {str(x) for x in gate or ()}, "open": {}}
-
-
-def named_reds(names: set[str], gate: set[str], open_: dict[str, list[Any]]) -> list[dict[str, Any]]:
-    """[{name, red, kind}] of the reds a change names: the gate's current names and every open red's (queue_facts)."""
-    reds = []
-    for n in sorted(names):
-        if n in gate or n in open_:
-            rid, kind = (open_.get(n) or [None, None])[:2]
-            reds.append({"name": n, "red": rid, "kind": "gate" if n in gate else kind})
-    return reds
 
 
 def _batch_barrier(e: dict[str, Any], red_fix: bool) -> str | None:
@@ -128,15 +110,15 @@ def _verify_due(e: dict[str, Any], t: float) -> bool:
     return bool(e.get("verify")) and e.get("status") in ("queued", "checking") and not float(e.get("retry_after") or 0) > t
 
 
-def classify_change(e, facts, t=None, repo=None):
-    """THE KIND of change entry e (or an item's data) under facts (queue_facts). repo: also ask whether a queued change
-    is an identity change (batch.identity_change, cached per entry and head) when nothing else already keeps it out of
-    a backlog batch; otherwise `identity` is None (unasked)."""
+def classify_change(e, facts, t=None, repo=None, store=None):
+    """THE KIND of change entry e (or an item's data) under facts (queue_facts). Its red fix and gate fix are THE
+    RED-LANDING RULE's (redland.may_land_on_red): with repo, read from the entry's commits' counting trailers. repo: also
+    ask whether a queued change is an identity change (batch.identity_change, cached per entry and head) when nothing
+    else already keeps it out of a backlog batch; otherwise `identity` is None (unasked)."""
     t = t if t is not None else epoch_now()
-    names = fixes_named(e)
-    reds = named_reds(names, facts.get("gate") or set(), facts.get("open") or {})
-    red_fix = bool(reds)
-    gate_fix = "gate" in map(itemgetter("kind"), reds)
+    landing = may_land_on_red(facts, e, repo, store=store)
+    names, reds = landing.names, list(landing.reds)
+    red_fix, gate_fix = landing.red_fix, landing.gate_fix
     backlog_why, identity = _backlog_barrier(e, red_fix, repo)
     push_why = _push_barrier(e, red_fix)
     verify = _verify_due(e, t)
@@ -175,7 +157,7 @@ def classify_queue(repo, d, entries, facts, t, st, record=True):
     """{entry id: kind} for entries, each recorded on its item (record_change_kind) when st is given."""
     kinds = {}
     for e in entries:
-        kinds[e["id"]] = classify_change(e, facts, t, repo)
+        kinds[e["id"]] = classify_change(e, facts, t, repo, st)
         if st is not None and record:
             record_change_kind(st, e, kinds[e["id"]])
     return kinds
