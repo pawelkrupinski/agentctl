@@ -1180,7 +1180,7 @@ class QueueTest(WaitingTest):
         wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")
         d, _c, _w = A.waiting_state(self.r.path)
         sh(self.r.path, "git", "push", "--quiet", "origin", f"{sha}:refs/heads/land/20200101-000000-x-aaaaaa")
-        stamp = time.mktime(time.strptime("20200101-000000", "%Y%m%d-%H%M%S"))
+        stamp = A.entry_stamp_epoch("20200101-000000")  # an entry id's stamp is UTC (ids.stamp)
         clock_module.wire_clock(FakeClock(stamp + 30 * 3600 + 600))
         A._last_ref_sweep[0] = 0
         self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)),

@@ -13,6 +13,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402,F401 (puts lib on the path, loads every machine)
+from golden_cases import cherry_state  # noqa: E402
 
 RED = {"key": "k1", "what": "movies Main", "last_run": {"number": 2140}, "runs": [2128, 2140]}
 ITEMS = {
@@ -64,7 +65,7 @@ def run(module, script):
             "red_ask": rec("red_ask", lambda it, blk: script.get("ask")), "red_block_of": rec("red_block_of", "BLK"),
             "open_conditions": rec("open_conditions", script.get("conds", [])),
             "claude_trust_gap": rec("claude_trust_gap", script.get("gap")), "remote": lambda: "origin",
-            "cherry_landed": rec("cherry_landed", script.get("cherry", (["c"], []))),
+            "landed_state": rec("landed_state", lambda *a, **k: cherry_state(A, script.get("cherry", (["c"], [])))),
             "alert_red_audience": rec("alert_red_audience", lambda e, it, st, t: ("red-audience", it["state"])),
             "alert_condition_audience": rec("alert_condition_audience", lambda kind, e, opened, t: ("cond-audience", kind)),
             "alert_gate": rec("alert_gate", script.get("gate", [])), "red_what": lambda d: d["what"],
@@ -241,7 +242,7 @@ EXPECTED = {'red gone': ("('its red is gone', None)", 'None', ['item red nope'])
  'revert owner item keeps its rewritten key for the clearing': ("('its commits are on main', None)",
                                                                 "{'probed': {'revert:abc': 1795601800.0}}",
                                                                 ['item revert abc',
-                                                                 "cherry_landed ('TMP/wt', "
+                                                                 "landed_state ('TMP/wt', "
                                                                  "'refs/remotes/origin/main', 'HEAD') []"]),
  'issue closed': ("('its issue is closed', None)", 'None', ['item issue i1']),
  'issue open': ('(None, None)', 'None', ['item issue i2']),
@@ -275,18 +276,18 @@ EXPECTED = {'red gone': ("('its red is gone', None)", 'None', ['item red nope'])
  'orphan, no path': ('(None, None)', 'None', []),
  'orphan, commits on main': ("('its commits are on main', None)",
                              'None',
-                             ["cherry_landed ('TMP/wt', 'refs/remotes/origin/main', 'HEAD') []"]),
+                             ["landed_state ('TMP/wt', 'refs/remotes/origin/main', 'HEAD') []"]),
  'orphan, commits left': ('(None, None)',
                           'None',
-                          ["cherry_landed ('TMP/wt', 'refs/remotes/origin/main', 'HEAD') []"]),
- 'orphan, git failing': ('(None, None)', 'None', ["cherry_landed ('TMP/wt', 'refs/remotes/origin/main', 'HEAD') []"]),
+                          ["landed_state ('TMP/wt', 'refs/remotes/origin/main', 'HEAD') []"]),
+ 'orphan, git failing': ('(None, None)', 'None', ["landed_state ('TMP/wt', 'refs/remotes/origin/main', 'HEAD') []"]),
  'orphan probed lately': ('(None, None)', "{'probed': {'orphan:TMP/wt': 1795601700.0}}", []),
  'orphan probed long ago': ("('its commits are on main', None)",
                             "{'probed': {'orphan:TMP/wt': 1795601800.0}}",
-                            ["cherry_landed ('TMP/wt', 'refs/remotes/origin/main', 'HEAD') []"]),
+                            ["landed_state ('TMP/wt', 'refs/remotes/origin/main', 'HEAD') []"]),
  'orphan named in the verdict': ("('its commits are on main', None)",
                                  'None',
-                                 ["cherry_landed ('TMP/wt', 'refs/remotes/origin/main', 'HEAD') []"]),
+                                 ["landed_state ('TMP/wt', 'refs/remotes/origin/main', 'HEAD') []"]),
  'orphan named by a tilde': ("('its worktree is gone', None)", 'None', []),
  'orphan kind without a path': ('(None, None)', 'None', []),
  'watch unknown, covered': ("('a later gate run has decided (its commit is covered)', None)",

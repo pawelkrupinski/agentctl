@@ -86,7 +86,8 @@ def run_push(module, script):
             "range_paths": rec("range_paths", "paths"), "hook_query": rec("hook_query", lambda *a: script.get("skip")),
             "set_change": rec("set_change", lambda st, d_, e, to, event=None: None),
             "push_argv": lambda remote, tip: ["push", remote, tip], "push_bounds": lambda: {"limit": 9},
-            "run_watched": run_watched, "ts": lambda: "TS", "landed": rec("landed", script.get("landed", True)),
+            "run_watched": run_watched, "ts": lambda: "TS", "landed_state": lambda repo, main, tip: A.LandState(  # logged as `landed (repo, tip, main)`: the check's old spelling
+                A.LANDED if rec("landed", script.get("landed", True))(repo, tip, main) else A.NOT_LANDED),
             "mark_gate_dirty": rec("mark_gate_dirty"), "queue_verdict": rec("queue_verdict"), "wlog": rec("wlog"),
             "lock_held": lambda path: script.get("held", False) and "e-b" not in path, "Owned": Owned,
             "start_watch": rec("start_watch"), "batch_fail": rec("batch_fail", lambda st, d_, it, why, n=0: None),

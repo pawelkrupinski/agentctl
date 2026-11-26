@@ -6,7 +6,7 @@ import builtins, contextlib, io, os, sys, types, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
-from golden_cases import Probe, check as _check  # noqa: E402
+from golden_cases import Probe, cherry_state, check as _check  # noqa: E402
 
 DIGESTS = os.path.join(HERE, "fixtures", "restructure10-digests.json")
 NOW = 1_795_000_000.0
@@ -277,7 +277,7 @@ class SyncOntoMainTest(unittest.TestCase):
                           ("blame_records_quiet", lambda rng, st: ["rec"]),
                           ("land_before_queue", lambda rng, repo, head: rng.choice([head, head + "+"])),
                           ("env_num", lambda rng, name, default: default),
-                          ("landed", lambda rng, repo, head, main_ref: rng.random() < 0.12),
+                          ("landed_state", lambda rng, repo, main_ref, head: A.LandState(A.LANDED if rng.random() < 0.12 else A.NOT_LANDED)),
                           ("do_not_land", lambda rng, repo, commits, branch: maybe(rng, "marked", 0.1)),
                           ("held_commit", lambda rng, repo, commits: maybe(rng, "held", 0.1)),
                           ("blame_land_refusal", lambda rng, *a, **k: maybe(rng, "dead blame", 0.1)),
@@ -318,7 +318,7 @@ class LandUntilDoneTest(unittest.TestCase):
         case.fake("take_delivery", lambda rng, it, store: None)
         case.fake("next_command", lambda rng, repo, why: f"NEXT {why}")
         case.fake("machine_state", lambda rng, typ, state: types.SimpleNamespace(terminal=state in ("landed", "rejected", "cancelled", "superseded")))
-        case.fake("cherry_landed", lambda rng, repo, main, head: rng.choice([(None, None), ([], []), (["c"], []), (["c"], ["d"])]))
+        case.fake("landed_state", lambda rng, repo, main, head: cherry_state(A, rng.choice([(None, None), ([], []), (["c"], []), (["c"], ["d"])])))
         case.fake("until_done_finish", lambda rng, *a: rng.choice([0, 1]))
 
         def enqueue(rng, repo, main_ref, sh, a, clock, store):

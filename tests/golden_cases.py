@@ -129,3 +129,12 @@ def check(test, A, name, build, fn_of, n=1500, digests=DIGESTS):
             json.dump(d, f, indent=1, sort_keys=True)
         return
     test.assertEqual(recorded_digests(digests).get(name), got, f"{name}: behaviour moved")
+
+
+def cherry_state(A, cherry):
+    """The LandState a scripted or drawn git cherry reading (commits, left) stands for: (None, None) or left None is
+    unknown, a non-empty left not landed, else landed."""
+    commits, left = cherry
+    if commits is None or left is None:
+        return A.LandState(A.UNKNOWN)
+    return A.LandState(A.NOT_LANDED if left else A.LANDED, commits=tuple(commits), left=tuple(left))

@@ -228,7 +228,7 @@ class CancelledFixFollowsNoOlderChangeTest(VerifyWaitBase):
     """Alert backtest #4, 5254bffda9d2: the 03:59:06Z INVARIANT."""
 
     def stamp(self, eid):
-        return time.mktime(time.strptime(eid[:15], "%Y%m%d-%H%M%S"))  # a change id's stamp is local time
+        return calendar.timegm(time.strptime(eid[:15], "%Y%m%d-%H%M%S"))  # a change id's stamp is UTC (ids.stamp)
 
     def test_a_cancelled_fix_waits_for_its_requeue_not_for_an_old_change_of_its_worktree(self):
         wt = "/Users/x/projects/movies-wt-owner-outside-gate"

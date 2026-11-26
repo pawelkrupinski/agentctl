@@ -6,7 +6,7 @@ import os, sys, types, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
-from golden_cases import Probe, check as _check  # noqa: E402
+from golden_cases import Probe, cherry_state, check as _check  # noqa: E402
 
 DIGESTS = os.path.join(HERE, "fixtures", "restructure6-digests.json")
 
@@ -107,7 +107,7 @@ class CleanupTest(unittest.TestCase):
                     return "headsha\n"
                 return proc(rng)
             case.fake("git", git_)
-            case.fake("cherry_landed", lambda rng, wt, main, head: (["c"], rng.choice([None, [], ["a"], ["a", "b"]])))
+            case.fake("landed_state", lambda rng, wt, main, head: cherry_state(A, (["c"], rng.choice([None, [], ["a"], ["a", "b"]]))))
             case.fake("merged_reason", lambda rng, root, head, main: maybe(rng, "ancestor of main", 0.6))
             case.fake("log_deletion", lambda rng, *a: None)
             case.put("os", types.SimpleNamespace(**{k: getattr(os, k) for k in dir(os) if not k.startswith("__")}))
