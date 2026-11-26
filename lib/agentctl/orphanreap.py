@@ -51,7 +51,8 @@ def _wrapper_verdict(rec: Any, pid: Any, holder_pid: Any) -> Any:
 def _idle(t: float, stamped: float | None, path: str | None) -> float:
     """Seconds without progress: the age of the newest of a stamp the store or a record made (`t`'s clock, the process's)
     and the file's mtime (the wall's: a file's time is real time, never the injected clock's)."""
-    ages = ([t - float(stamped)] if stamped else []) + ([wall_epoch() - mtime(path)] if mtime(path) else [])
+    written = mtime(path)
+    ages = ([t - float(stamped)] if stamped else []) + ([wall_epoch() - written] if written else [])
     return min(ages) if ages else t
 
 

@@ -478,6 +478,7 @@ class OwnerWorkTest(unittest.TestCase):
         case.fake("pid_alive", lambda rng, pid: rng.random() < 0.5)
         case.fake("record_alive", lambda rng, rec: rng.random() < 0.85)
         case.fake("mtime", lambda rng, p: rng.choice([0, NOW - 50, NOW - 10 ** 6]))
+        case.put("wall_epoch", lambda: NOW)  # a file's age is read on the wall: pinned to the case's NOW, never today's date
         case.fake("env_num", lambda rng, n, d: rng.choice([d, d, 0, 10 ** 9]))
         case.fake("claude_cli", lambda rng: "claude")
         case.fake("bg_session", lambda rng, cli, bid: rng.choice([{}, None, {"state": "idle"}, {"state": None}, {"state": "running"}]))

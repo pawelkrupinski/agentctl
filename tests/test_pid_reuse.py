@@ -67,6 +67,17 @@ class FileTimesAreRealTimeTest(unittest.TestCase):
         self.assertGreater(A._idle(far, far - 500, "/nonexistent"), 499)  # a stamp is read on the clock that made it
         self.assertEqual(A._idle(far, far - 500, f.name) < 60, True)       # the newer of the two
 
+    def test_idle_reads_the_files_time_once(self):
+        """One stat: a file that vanishes between two reads of its time was once read as 'no progress for 56 years'
+        (the second read 0, subtracted from the wall); the golden owner_work digest showed the second read."""
+        from unittest import mock
+        wall = A.wall_epoch()
+        reads = iter([wall - 30, 0.0, 0.0])  # the second read of a vanished file
+        with mock.patch.object(A, "mtime", side_effect=lambda path: next(reads)) as m:
+            idle = A._idle(wall + 5, None, "/gone-after-one-read")
+        self.assertEqual(m.call_count, 1)
+        self.assertLess(idle, 60)
+
 
 if __name__ == "__main__":
     unittest.main()
