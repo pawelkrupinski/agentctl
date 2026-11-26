@@ -16,7 +16,7 @@ from agentctl.owned import default_repo
 from agentctl.redfamilies import red_family
 from agentctl.cistate import state_read
 from agentctl.gatesummary import GATE_LINE
-from agentctl.dispatchblock import cached_dispatch_blocker
+from agentctl.fixerblockers import cached_dispatch_blocker
 from agentctl.store import Store
 from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.leases import lease_meta

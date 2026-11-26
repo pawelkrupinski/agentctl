@@ -23,7 +23,7 @@ from agentctl.tickknobs import MAINTAIN_SWEEP_HOUR
 from agentctl.notifier import notify
 from agentctl.launchd import launch_agents_dir
 from agentctl.beats import beat_age, write_beat
-from agentctl.dispatchblock import shutil_which
+from agentctl.fixerblockers import shutil_which
 from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
 from agentctl.upkeep import rotate_logs
 from agentctl.orphanpass import orphan_duty

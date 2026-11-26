@@ -20,6 +20,7 @@ mypy-errors	branches	66
 mypy-errors	buildview	16
 mypy-errors	changekind	19
 mypy-errors	checkslot	24
+mypy-errors	cidispatches	44
 mypy-errors	cireport	37
 mypy-errors	ciwhy	48
 mypy-errors	cleanup	12
@@ -32,10 +33,9 @@ mypy-errors	configfile	8
 mypy-errors	conflicts	25
 mypy-errors	core	21
 mypy-errors	culpritfix	29
-mypy-errors	dispatchblock	13
-mypy-errors	dispatches	44
 mypy-errors	explorer	15
 mypy-errors	fixer	15
+mypy-errors	fixerblockers	13
 mypy-errors	fixerenv	3
 mypy-errors	fixerland	25
 mypy-errors	fixerlife	56
@@ -52,6 +52,7 @@ mypy-errors	govcmd	30
 mypy-errors	govfits	13
 mypy-errors	govroute	9
 mypy-errors	govusage	6
+mypy-errors	hostsleep	6
 mypy-errors	identitychange	11
 mypy-errors	inbox	14
 mypy-errors	invariants	30
@@ -88,6 +89,7 @@ mypy-errors	park	34
 mypy-errors	patches	3
 mypy-errors	policy	20
 mypy-errors	pressure	16
+mypy-errors	processor	9
 mypy-errors	processorlink	16
 mypy-errors	procwatch	2
 mypy-errors	projector	21
@@ -112,7 +114,8 @@ mypy-errors	redauthors	11
 mypy-errors	redblock	16
 mypy-errors	redclaim	17
 mypy-errors	redcommands	13
-mypy-errors	redcrash	48
+mypy-errors	redcrash	31
+mypy-errors	reddecision	11
 mypy-errors	reddispatch	31
 mypy-errors	redearly	8
 mypy-errors	redfamilies	9
@@ -134,14 +137,13 @@ mypy-errors	redrepos	8
 mypy-errors	redretired	49
 mypy-errors	redseen	43
 mypy-errors	redstatus	5
-mypy-errors	redstep	35
+mypy-errors	redstep	39
 mypy-errors	redtick	78
 mypy-errors	reduntracked	42
 mypy-errors	redvault	21
 mypy-errors	redverify	18
 mypy-errors	redview	25
 mypy-errors	redwaits	6
-mypy-errors	redworkflow	4
 mypy-errors	remote	42
 mypy-errors	remotejobs	28
 mypy-errors	remotestore	28
@@ -155,7 +157,6 @@ mypy-errors	serverclone	36
 mypy-errors	serversteps	23
 mypy-errors	sessionpaths	9
 mypy-errors	slots	51
-mypy-errors	snapshot	3
 mypy-errors	statemachines	29
 mypy-errors	stats	33
 mypy-errors	status	83
@@ -169,7 +170,6 @@ mypy-errors	storetoken	46
 mypy-errors	stuckruns	4
 mypy-errors	superseded	21
 mypy-errors	syncsteps	30
-mypy-errors	tickrun	6
 mypy-errors	tickservice	8
 mypy-errors	tools	56
 mypy-errors	trailers	2

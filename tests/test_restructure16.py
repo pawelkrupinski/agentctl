@@ -393,7 +393,7 @@ class ProjectChangesTest(unittest.TestCase):
         r = case.rng
         every = [{"id": f"e{i}", "status": r.choice(["queued", "checking", "waiting", "joined", "bogus", "landed"]),
                   "waiting_id": r.choice([None, "e0", "e1", "zz"])} for i in range(r.randint(0, 5))]
-        case.fake("waiting_entries", lambda rng, d, open_only=True: every)
+        case.fake("waiting_entries", lambda rng, d, waiting_only=True: every)
         case.fake("change_item_fields", lambda rng, e: {"head": e["id"]})
         case.fake("machine_state", lambda rng, k, s: NS(terminal=s in ("landed", "rejected")))
         case.fake("projected_transition", lambda rng, e, w, cur, state: ({"d": 1}, {"kind": "k"}))

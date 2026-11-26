@@ -34,7 +34,20 @@ The old names (`waiting status|pause|resume|cancel|run|service`) answer until 20
 
 
 GATE_UNREAD = "unread"  # gate_reds' member when the gate could not be read: never green, and no Fixes-Red matches it
-gate_unread_why = [""]
+
+
+class UnreadGate(set[str]):
+    """gate_reds' answer when the gate could not be read: {GATE_UNREAD} carrying `why` -- the reason travels with the
+    answer, never in module state a second caller could overwrite."""
+
+    def __init__(self, why: str) -> None:
+        super().__init__({GATE_UNREAD})
+        self.why = why
+
+
+def unread_why(reds: set[str]) -> str:
+    """Why the gate was unread, from the answer itself ('' for a read gate, or a set built without a reason)."""
+    return reds.why if isinstance(reds, UnreadGate) else ""
 
 
 def waiting_commits(repo, base, head):

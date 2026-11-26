@@ -246,8 +246,8 @@ def repo_path_for(o_r):
             try:
                 if slug(p) == o_r:
                     return p
-            except (SystemExit, RuntimeError):
-                pass
+            except (SystemExit, RuntimeError) as e:
+                err(f"repo lookup: no slug for {p} ({str(e)[:160]}); skipped")
     return None
 
 

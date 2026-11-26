@@ -1,4 +1,4 @@
-# agentctl, part `dispatches`: every hand-dispatched CI run's owner record, who owns a branch, and the orphan branches whose owner is gone
+# agentctl, part `cidispatches`: every hand-dispatched CI run's owner record, who owns a branch, and the orphan branches whose owner is gone
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now

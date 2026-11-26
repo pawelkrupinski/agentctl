@@ -1,4 +1,4 @@
-# agentctl, part `dispatchblock`: what blocks a fixer's dispatch here: no claude CLI, an interactive session, a fixer or land in this cwd
+# agentctl, part `fixerblockers`: what blocks a fixer's dispatch here: no claude CLI, an interactive session, a fixer or land in this cwd
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now

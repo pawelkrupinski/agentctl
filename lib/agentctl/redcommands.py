@@ -7,7 +7,7 @@ from agentctl.timefmt import ts
 from agentctl.core import reds_dir
 from agentctl.repos import scan_repo_for
 from agentctl.worktrees import claimant
-from agentctl.dispatchblock import _blocker_cache, dispatch_blocker
+from agentctl.fixerblockers import _blocker_cache, dispatch_blocker
 from agentctl.redrecord import red_what
 from agentctl.redmove import red_put_offer
 from agentctl.redopen import red_offer

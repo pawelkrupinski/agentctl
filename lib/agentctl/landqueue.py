@@ -20,7 +20,7 @@ from agentctl.queueslots import entry_owned, set_change
 from agentctl.queue import hold_text, land_hold
 from agentctl.queuerecheck import queued_entries
 from agentctl.changekind import HOLD_SHOWN
-from agentctl.waiting import GATE_UNREAD, cancel_entry_remote, cancel_submitted, gate_unread_why
+from agentctl.waiting import GATE_UNREAD, cancel_entry_remote, cancel_submitted, unread_why
 from agentctl.queuesubmit import landed_sha_of
 from agentctl.remotestore import store_url
 from agentctl.landhold import LAND_HOLD_DEFAULT, hold_by, land_hold_release, land_hold_set
@@ -138,7 +138,7 @@ def batch_status_line(bt: dict[str, Any]) -> str:
 
 
 def gate_status_line(reds: set[str]) -> str:
-    return "gate: " + (f"UNREAD, taken as red ({gate_unread_why[0]})" if GATE_UNREAD in reds else
+    return "gate: " + (f"UNREAD, taken as red ({unread_why(reds)})" if GATE_UNREAD in reds else
                        f"RED ({', '.join(sorted(reds))})" if reds else "green")
 
 
@@ -149,7 +149,7 @@ def land_status_tail(d: str, rows: list[dict[str, Any]]) -> None:
         print(f"stall at green: {prog['ticks']} tick(s): {prog.get('why')}")
     if not rows:
         print("  (no change queued or waiting)")
-    local = [e for e in waiting_entries(d, open_only=False) if e.get("status") not in ENTRY_FINAL]
+    local = [e for e in waiting_entries(d, waiting_only=False) if e.get("status") not in ENTRY_FINAL]
     if host_role() == "sync" and local:
         print(f"LOCAL QUEUE: {len(local)} entr(ies) in {d}, which nothing runs; the sync moves them to ci-runner's "
               f"queue: {', '.join(e['id'] for e in local)}")

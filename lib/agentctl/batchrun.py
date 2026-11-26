@@ -17,7 +17,7 @@ from agentctl.queueslots import queue_verdict
 from agentctl.conditions import condition_item_of, open_condition, run_probe
 from agentctl.queue import VERIFY_MODE
 from agentctl.conflicts import conflict_cause, conflict_paths
-from agentctl.waiting import GATE_UNREAD, already_landed, apply_entry, gate_unread_why, supersede
+from agentctl.waiting import GATE_UNREAD, already_landed, apply_entry, supersede, unread_why
 from agentctl.checkslot import check_slot
 from agentctl.remote import remote_check, remote_checks_supported
 
@@ -192,8 +192,8 @@ def unread_note(d, reds, entries, st) -> None:
     """The gate unread while changes wait: once per unread spell, an UNKNOWN inbox entry (they would wait unseen)."""
     if GATE_UNREAD not in reds or condition_item_of(st, "gate-unread-waiting"):
         return
-    wlog(d, f"the gate is unread ({gate_unread_why[0]}): taken as red")
-    open_condition("UNKNOWN", f"UNKNOWN: the waiting processor cannot read the gate ({gate_unread_why[0]}); {len(entries)} "
+    wlog(d, f"the gate is unread ({unread_why(reds)}): taken as red")
+    open_condition("UNKNOWN", f"UNKNOWN: the waiting processor cannot read the gate ({unread_why(reds)}); {len(entries)} "
                               "change(s) wait, taken as red. Hand it the token: `~/bin/agentctl land status` from a "
                               "session with the vault unlocked",
                    run_probe("gate_read", {"since": epoch_now()}), [], key="gate-unread-waiting", command="waiting",

@@ -101,8 +101,8 @@ def seed_processor(tok: str) -> None:
         path = processor_sock()
         if os.path.exists(path):
             hand_token(path, tok)
-    except (Exception, SystemExit):
-        pass
+    except (Exception, SystemExit) as e:
+        err(f"the processor was not handed the token ({str(e)[:160]})")
 
 
 def token_request(path, timeout=3):
@@ -274,14 +274,14 @@ def token_env(o_r, env=None):
     if ghapp_enabled():
         try:
             env["GH_TOKEN"] = ghapp_token(o_r)
-        except (Exception, SystemExit):
-            pass
+        except (Exception, SystemExit) as e:
+            err(f"no GitHub App token for {o_r} ({str(e)[:160]}); the command runs on its own auth")
     elif store_credential(o_r):
         with no_vault():
             try:
                 env[token_env_name(o_r)] = token(o_r)
-            except (Exception, SystemExit):
-                pass
+            except (Exception, SystemExit) as e:
+                err(f"no token for {o_r} ({str(e)[:160]}); the command runs on its own auth")
     return env
 
 

@@ -9,7 +9,7 @@ import sqlite3
 from agentctl.clock import epoch_now, stopwatch
 import time
 from typing import Any, Callable, cast
-from agentctl.core import state_root
+from agentctl.core import err, state_root
 from agentctl.statefile import json_object
 from agentctl.offers import OfferTable
 from agentctl.leasetable import LeaseLost
@@ -190,8 +190,8 @@ class Store(OfferTable):
                              "from_state": frm, "to_state": to,
                              "text": f"REFUSED {typ} {iid}: {frm} -> {to} is no move of its machine{said}",
                              "dedupe": f"{typ}:{iid}:illegal:{frm}:{to}"})
-        except Exception:
-            pass  # the refusal stands whether or not it is recorded
+        except Exception as e:  # the refusal stands whether or not it is recorded
+            err(f"the refusal of {typ} {iid} was not recorded ({str(e)[:160]})")
         finally:
             c.close()
 

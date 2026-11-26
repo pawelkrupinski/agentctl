@@ -33,7 +33,7 @@ from agentctl.redrepos import red_owner_only
 from agentctl.gov import gov_class_of
 from agentctl.waiting import must_wait, note_waiting, supersede_older_waiting, waiting_commits
 from agentctl.landwatch import start_watch
-from agentctl.dispatchblock import in_fixer
+from agentctl.fixerblockers import in_fixer
 from agentctl.redseen import gate_reds
 from agentctl.watchtick import watch_landed
 from agentctl.landqueue import queue_command
@@ -447,7 +447,7 @@ def join(st, repo, log_path, a, head):
     branch = branch_of(repo)
     with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a seq of its own, beside a land queueing meanwhile
         fcntl.flock(seq_lock, fcntl.LOCK_EX)
-        seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
+        seq = max([e["seq"] for e in waiting_entries(d, waiting_only=False)] + [0]) + 1
         eid = f"{stamp('entry')}-{os.path.basename(repo)}-{seq}"
         supersede_older_waiting(st, d, repo, branch, eid)
         e = {"id": eid, "seq": seq, "worktree": repo, "branch": branch, "head": head, "commits": commits,

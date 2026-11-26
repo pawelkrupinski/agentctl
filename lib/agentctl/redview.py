@@ -9,7 +9,7 @@ from agentctl.timefmt import hhmmz, ts
 from agentctl.redknobs import RED_HELD_IDLE, knob_red_fix_giveup, knob_red_held_idle
 from agentctl.core import state_root, tilde
 from agentctl.cistate import snapshot_gate_reds
-from agentctl.dispatchblock import short_flow
+from agentctl.fixerblockers import short_flow
 from agentctl.redrecord import RED_RECURRING, red_active, red_lease, red_names
 from agentctl.leases import LeaseKinds, lease_meta, red_block_of
 from agentctl.redfixread import FIX_OPEN

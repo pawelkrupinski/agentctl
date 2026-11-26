@@ -19,7 +19,7 @@ from agentctl.redrepos import red_gate_flows, red_is_other
 from agentctl.ciwhy import (
     _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap, gate_runs, gate_snap_rows)
 from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
-from agentctl.dispatchblock import in_fixer
+from agentctl.fixerblockers import in_fixer
 from agentctl.redrecord import RED_TERMINAL, red_what
 from agentctl.lander import lander_note_landed
 from agentctl.redfixread import red_main_current
@@ -346,8 +346,8 @@ def maybe_red_tick(repo, store):
             err(f"red tick: skipped ({str(e).replace('agentctl: ', '')[:200]})")
             try:
                 gate_unread_spell(slug(repo), str(e)[:200], store)
-            except (Exception, SystemExit):
-                pass
+            except (Exception, SystemExit) as spell_error:
+                err(f"red tick: the gate spell was not recorded ({str(spell_error)[:160]})")
         red_tick_others(store, force=False)  # the other watched repos (red-repos.json); never fatal, never the primary's gate spell
     if not run_bounded("red-tick", work, knob_step_bound()):
         err("red tick: still running from an earlier cycle (the loop goes on)")

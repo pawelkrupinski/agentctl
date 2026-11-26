@@ -5,13 +5,13 @@ from agentctl.clock import wall_epoch
 import os
 import re
 from typing import Any
-from agentctl.core import attempt, git, git_ok
+from agentctl.core import attempt, err, git, git_ok
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.allowedpaths import allowed_path
 from agentctl.procs import lsof_cwds, proc_alive, ps
 from agentctl.inboxentry import inbox_entries
 from agentctl.worktrees import gitdir_activity
-from agentctl.dispatches import worktree_holding
+from agentctl.cidispatches import worktree_holding
 from agentctl.jvmreap import AGENT_WORK
 from agentctl.blameknobs import knob_author_active_min
 
@@ -48,11 +48,11 @@ def landed_heads(repo):
     out = {}
     try:
         d, _c, _w = waiting_state(repo)
-        for e in waiting_entries(d, open_only=False):
+        for e in waiting_entries(d, waiting_only=False):
             if e.get("landed_sha"):
                 out[e["landed_sha"]] = {"worktree": e.get("worktree"), "session": e.get("session")}
-    except (Exception, SystemExit):
-        pass
+    except (Exception, SystemExit) as e:
+        err(f"red authors: the waiting entries could not be read ({str(e)[:160]}); no authors named")
     return out
 
 

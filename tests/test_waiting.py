@@ -92,7 +92,7 @@ class WaitingTest(Base):
 
     def entries(self):
         d, _c, _w = A.waiting_state(self.r.path)
-        return {e["id"].rsplit("-", 1)[-1]: e for e in A.waiting_entries(d, open_only=False)}
+        return {e["id"].rsplit("-", 1)[-1]: e for e in A.waiting_entries(d, waiting_only=False)}
 
     def drive(self, n=10):
         """The batch to rest, as the processor's ticks drive it, its executors run in-process (step 8). ONE CLOCK: the
@@ -477,8 +477,7 @@ class WaitingTest(Base):
         # 08:05Z 10-27: the processor could not read the gate (no token under launchd), took it for green, and pushed
         wt1, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         self.land(wt1)
-        self.reds = {A.GATE_UNREAD}
-        A.gate_unread_why[0] = "could not read the movies AGENTCTL_STORE_TOKEN from the vault"
+        self.reds = A.UnreadGate("could not read the movies AGENTCTL_STORE_TOKEN from the vault")
         self.drive()
         self.drive()
         self.assertEqual(self.pushes_count(), 0, "an unread gate is never green")
@@ -722,6 +721,20 @@ class WaitingTest(Base):
         self.assertIn("connection refused", out)
         self.assertIn("e-blip: it is waiting", out)
         self.assertTrue(out.rstrip().splitlines()[-1].startswith("LANDED abc123"), out)
+
+
+class UnreadGateTest(unittest.TestCase):
+    """The reason an unread gate was unread travels with gate_reds' answer (no module state two callers share)."""
+
+    def test_the_status_line_and_the_note_read_the_why_off_the_answer(self):
+        self.assertIn("(no token)", A.gate_status_line(A.UnreadGate("no token")))
+        self.assertEqual("no token", A.unread_why(A.UnreadGate("no token")))
+        self.assertEqual("", A.unread_why({"7"}))
+        self.assertEqual("gate: RED (7)", A.gate_status_line({"7"}))
+
+    def test_two_unread_answers_keep_their_own_reason(self):
+        first, second = A.UnreadGate("first"), A.UnreadGate("second")
+        self.assertEqual(("first", "second"), (A.unread_why(first), A.unread_why(second)))
 
 
 if __name__ == "__main__":

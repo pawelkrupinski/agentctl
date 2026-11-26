@@ -6,7 +6,7 @@ from agentctl.core import tilde
 from agentctl.repos import red_repo_clone, red_repo_of
 from agentctl.procs import socket_host
 from agentctl.fixersession import claude_trust_gap
-from agentctl.dispatchblock import cached_dispatch_blocker
+from agentctl.fixerblockers import cached_dispatch_blocker
 from agentctl.leases import LeaseKinds, lease_meta
 from agentctl.owners import OWNER_TTL, owner_alive, owner_lease
 from agentctl.red import RED_CLAIM_MAX, RED_CLAIM_TTL, RED_FIXER_MAX, RED_FIXER_TTL

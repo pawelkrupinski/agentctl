@@ -17,9 +17,9 @@ from agentctl.waitingdir import WAITING_BRANCH, waiting_entries, waiting_state
 from agentctl.procs import process_cwds
 from agentctl.inboxentry import inbox_entries
 from agentctl.worktrees import gitdir_activity, worktrees
-from agentctl.dispatches import internal_tree
+from agentctl.cidispatches import internal_tree
 from agentctl.sessionpaths import session_worktrees
-from agentctl.dispatchblock import land_cwds
+from agentctl.fixerblockers import land_cwds
 from agentctl.recovery import reland_tree_path
 from agentctl.superseded import superseded_mark, worktree_change_items
 from agentctl.park import parked_mark
@@ -114,7 +114,7 @@ def queued_worktrees(repo: str) -> set[str]:
     """The worktrees of the changes in the land queue (queued, checking, waiting): none of them is orphaned."""
     with suppress(Exception, SystemExit):
         d, _c, _w = waiting_state(repo)
-        return {os.path.realpath(e.get("worktree") or "") for e in waiting_entries(d, open_only=False)
+        return {os.path.realpath(e.get("worktree") or "") for e in waiting_entries(d, waiting_only=False)
                 if e.get("status") in ("queued", "checking", "waiting")}
     return set()
 

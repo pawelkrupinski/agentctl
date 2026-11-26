@@ -74,7 +74,7 @@ def _close_landed_entries(repo: Any, st: Any, d: Any, t: Any, did: list[str]) ->
     """The queue entries of d on main by content close as LANDED (lines to did); the ids of the open ones the entries
     cover, whose store items are not looked at again."""
     carried: set[str] = set()
-    for e in waiting_entries(d, open_only=False) if d else []:
+    for e in waiting_entries(d, waiting_only=False) if d else []:
         if e.get("status") in ENTRY_FINAL or e.get("status") == "pushing":
             continue
         carried.add(e["id"])
@@ -108,7 +108,7 @@ def stranded_changes(repo, d, store, now_ = None):
     push or close it -- opens a STRANDED CHANGE condition naming it; its probe (the item closed, or an entry for it)
     closes it. Returns the ids."""
     st = store
-    entries = {e["id"] for e in waiting_entries(d, open_only=False)}
+    entries = {e["id"] for e in waiting_entries(d, waiting_only=False)}
     out = []
     for it in st.items("change"):
         if machine_state("change", it["state"]).terminal or it["id"] in entries:
@@ -172,7 +172,7 @@ def migrate_local_queue(repo: Any, store: Any) -> Any:
         return []
     d = waiting_state(repo)[0]
     did: list[str] = []
-    for e in waiting_entries(d, open_only=False):
+    for e in waiting_entries(d, waiting_only=False):
         if e.get("status") in ENTRY_FINAL:
             continue
         state = change_state(repo, e.get("head"), e.get("commits"))

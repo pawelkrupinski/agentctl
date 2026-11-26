@@ -24,7 +24,7 @@ from agentctl.procs import PROC_ROOT, process_cwds, ps
 from agentctl.worktrees import CACHE_TREES, gitdir_activity, merged_reason, worktrees
 from agentctl.maint import cmd_orphans
 from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
-from agentctl.dispatches import orphan_branches
+from agentctl.cidispatches import orphan_branches
 from agentctl.govknobs import SBT_STALL_MIN
 from agentctl.govknobs import knob_sbt_reap
 from agentctl.queueknobs import knob_free_wait

@@ -194,5 +194,5 @@ def fix_not_counted_tell(repo, sha, v, why):
     try:
         cwd = repo if repo and os.path.isdir(repo) else None
         inbox_write("land", line, [line], [], 1, cwd=cwd)
-    except Exception:
-        pass
+    except Exception as e:  # the line was told on stderr above; the inbox is a second place
+        err(f"red fix check: the inbox entry was not written ({str(e)[:160]})")

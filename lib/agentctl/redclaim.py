@@ -5,7 +5,7 @@ from agentctl.clock import epoch_now
 import os
 import time
 from typing import Any, Callable
-from agentctl.core import git, tilde
+from agentctl.core import err, git, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.procs import safe_cwd
@@ -49,8 +49,8 @@ def root_checkout(wt: Any, o_r: Any) -> Any:
     for f in (lambda: scan_repo_for(o_r), lambda: repo_path_for(o_r), movies_repo_path):
         try:
             roots.add(os.path.realpath(f()))
-        except (Exception, SystemExit):
-            pass
+        except (Exception, SystemExit) as e:
+            err(f"red claim: a repo root could not be found ({str(e)[:160]})")
     return os.path.realpath(wt) in roots
 
 

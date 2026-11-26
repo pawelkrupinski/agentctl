@@ -11,7 +11,7 @@ import time
 import urllib.parse
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import dispatches_dir, git_ok, remote, slug
+from agentctl.core import dispatches_dir, err, git_ok, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, api, forge_argv, forge_env, gh_json
@@ -22,8 +22,8 @@ from agentctl.inbox import INBOX_TAIL
 from agentctl.ciwhy import _gate_lists, _outside_lists
 from agentctl.runsigs import save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
-from agentctl.dispatchblock import short_flow
-from agentctl.dispatches import (
+from agentctl.fixerblockers import short_flow
+from agentctl.cidispatches import (
     branch_base, branch_red_id, dispatch_key, dispatch_records, orphan_why, owner_gone, owner_of, owner_text,
     record_dispatch, save_dispatch, tracked_branch)
 from agentctl.recordingpins import pinned_recording, pinned_runs
@@ -422,8 +422,8 @@ def dispatched_run_id(o_r: str, a: Any, t0: Any) -> Any:
             fresh = [x for x in runs if str(x.get("createdAt", "")) >= t0.strftime("%Y-%m-%dT%H:%M:%SZ")]
             if fresh:
                 return max(x["databaseId"] for x in fresh)
-        except (Exception, SystemExit):
-            pass
+        except (Exception, SystemExit) as e:  # not listed yet is retried: say why the listing failed
+            err(f"dispatch find: the run list failed ({str(e)[:160]}); retried")
         # wall: waits on and times real processes and threads
         time.sleep(knob_dispatch_find_poll())
     return None

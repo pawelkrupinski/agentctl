@@ -19,7 +19,7 @@ from agentctl.redepisode import RedEpisode, streak_budget
 from agentctl.redrecord import RED_TERMINAL, red_what
 from agentctl.red import STUCK_FACTOR, red_key
 from agentctl.redmove import red_close
-from agentctl.waiting import GATE_UNREAD, gate_unread_why
+from agentctl.waiting import UnreadGate
 from agentctl.branches import branch_reds, entry_predicts
 from agentctl.redknobs import knob_unkicked_after
 
@@ -358,12 +358,11 @@ def gate_reds(repo: str) -> set[str]:
         for name, decided, _newer, _streak in gate_runs(o_r):
             if decided and decided.get("conclusion") != "success" and not gate_report_only(o_r, name, decided)[0]:
                 reds |= {str(decided.get("number")), str(decided.get("databaseId"))} | episode_names(o_r, name, decided)
-        gate_unread_why[0] = ""
         return reds
     except (Exception, SystemExit) as e:  # SystemExit: NoToken
-        gate_unread_why[0] = str(e).replace("agentctl: ", "")[:200]
-        err(f"could not read the gate ({gate_unread_why[0]}): taken as RED until it is read")
-        return {GATE_UNREAD}
+        why = str(e).replace("agentctl: ", "")[:200]
+        err(f"could not read the gate ({why}): taken as RED until it is read")
+        return UnreadGate(why)
 
 
 # A FIX MATCHES THE RED IT FIXES, NOT ONE RUN NUMBER (2026-11-05). Every push that lands while main is red (tools-only

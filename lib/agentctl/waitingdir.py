@@ -38,13 +38,13 @@ def waiting_state(repo: str) -> tuple[str, str, str]:
     return d, clone, f"{clone}-wt-waiting"
 
 
-def waiting_entries(d: str, open_only: bool = True) -> list[dict[str, Any]]:
+def waiting_entries(d: str, waiting_only: bool = True) -> list[dict[str, Any]]:
     out = []
     for p in sorted(glob.glob(os.path.join(d, "entries", "*.json"))):
         e = read_record(p)
         if e is None:
             continue
-        if not open_only or e.get("status") == "waiting":
+        if not waiting_only or e.get("status") == "waiting":
             out.append(e)
     return sorted(out, key=lambda e: (e.get("seq") is None, e.get("seq") or 0))  # an entry with no seq: last
 

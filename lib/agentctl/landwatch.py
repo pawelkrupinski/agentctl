@@ -73,8 +73,8 @@ def watch_clone(dd):
         try:
             if slug(p) == o_r:
                 return p
-        except (Exception, SystemExit):
-            pass
+        except (Exception, SystemExit) as e:
+            err(f"land watch: no slug for {p} ({str(e)[:160]}); looking for the clone")
     c = red_repo_clone(o_r)
     if c:
         return c

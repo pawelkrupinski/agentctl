@@ -134,7 +134,7 @@ class LocalQueueTest(OneQueueBase):
                                        "q-97: moved to ci-runner's queue"])
         self.assertEqual(self.refs, ["q-97"])
         self.assertEqual([(e["id"], e["head"]) for e in remote.submitted], [("q-97", ha)])
-        es = {e["id"]: e for e in A.waiting_entries(self.d, open_only=False)}
+        es = {e["id"]: e for e in A.waiting_entries(self.d, waiting_only=False)}
         self.assertEqual((es["q-97"]["status"], es["q-106"]["status"]), ("migrated", "landed"))
         self.assertEqual(A.migrate_local_queue(self.r.path, remote), [], "moved once")
 
@@ -151,7 +151,7 @@ class LocalQueueTest(OneQueueBase):
             A.inbox_write = saved
         self.assertIn("LOCAL QUEUE: q-110", did[0])
         self.assertEqual(len(told), 1, "once an hour, not every cycle")
-        self.assertEqual(A.waiting_entries(self.d, open_only=False)[0]["status"], "waiting")
+        self.assertEqual(A.waiting_entries(self.d, waiting_only=False)[0]["status"], "waiting")
 
     def test_the_server_never_migrates(self):
         os.environ["AGENTCTL_ROLE"] = "server"

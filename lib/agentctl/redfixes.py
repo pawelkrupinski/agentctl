@@ -68,7 +68,7 @@ def _queue_facts(repo: Any, store: Any) -> Any:
     untrailered: list[Any] = []
     try:
         d, _c, _w = waiting_state(repo)
-        for e in waiting_entries(d, open_only=False):
+        for e in waiting_entries(d, waiting_only=False):
             fx = entry_fixes(repo, e, store) if _recent_entry(e) or e.get("fixes") else None
             if fx and not red_unrelated(repo, e):
                 entries.append({**e, "fixes": fx})

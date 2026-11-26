@@ -21,15 +21,25 @@ from agentctl.queuerecheck import queued_entries
 from agentctl.beats import write_beat
 from agentctl.sdnotify import SD_READY, sd_notify
 from agentctl.serverclone import ensure_server_clone
-from agentctl.tickrun import ROUND_ERRORS_MAX, run_step
-from agentctl.redcrash import keep_awake
-from agentctl.snapshot import write_snapshot
+from agentctl.hostsleep import keep_awake
 from agentctl.landqueue import land_await, queue_checker, queue_command, waiting_repo
 from agentctl.statuspage import status_page_start
 from agentctl.syncsteps import sync_steps
 from agentctl.serversteps import server_steps
 from agentctl.processorlink import TokenDrop, processor_owned
 from agentctl.tickknobs import knob_tick
+from agentctl.tickknobs import knob_step_join
+from agentctl.core import NoToken, process_cache, run_bounded
+from agentctl.selfcode import code_version
+from agentctl.statemachines import MACHINES, machine_state
+from agentctl.clock import epoch_now
+from agentctl.cistate import state_update
+from agentctl.reverts import revert_brief
+from agentctl.owned import start_rev
+from agentctl.queue import hold_row, land_hold
+from agentctl.changekind import HOLD_SHOWN
+from agentctl.queueclose import change_rows
+from agentctl.ask import owner_asks
 
 
 WAITING_RENAMED = {"status": "land status", "pause": "land hold", "resume": "land release", "cancel": "land cancel <id>",
@@ -173,3 +183,76 @@ def cmd_waiting(a: argparse.Namespace, clock: Clock, store: Any) -> int:
     if a.wcmd in ("check", "check-batch"):
         return queue_checker(a, clock, store)
     return queue_command(a, store)
+
+
+ROUND_ERRORS_MAX = 3
+
+
+_step_errors = process_cache({})
+
+
+def run_step(name: str, step: Callable[[], Any]) -> bool | None:
+    """One tick step, bounded (see above). True: done; False: it failed (now or, still running before, since);
+    None: still running in its thread."""
+    def work():
+        try:
+            step()
+            _step_errors[name] = None
+        except NoToken:  # token_missing said it, on its transition: a step never repeats it every tick
+            _step_errors[name] = STEP_NO_TOKEN
+        except (Exception, SystemExit) as e:  # one step's error is that step's, never the loop's (audit #9)
+            _step_errors[name] = str(e).replace("agentctl: ", "")[:200]
+    t = _bounded.get(f"step:{name}")
+    if t and t.is_alive():
+        return None
+    if _step_errors.get(name):  # it failed after the tick stopped waiting for it
+        step_failed(name, _step_errors.pop(name))
+    if not run_bounded(f"step:{name}", work, knob_step_join()):
+        err(f"{name}: still running after {knob_step_join():.0f} s; the tick goes on (it ends "
+            "in its own thread)")
+        return None
+    why = _step_errors.pop(name, None)
+    if why:
+        step_failed(name, why)
+        return False
+    return True
+
+
+STEP_NO_TOKEN = "no token"
+
+
+def step_failed(name, why):
+    if why is not STEP_NO_TOKEN:
+        err(f"{name} failed: {why}")
+
+
+def _open_items(st: Any, typ: str) -> list[Any]:
+    """The store's items of machine `typ` not yet terminal."""
+    return [i for i in st.items(typ) if typ in MACHINES and not machine_state(typ, i["state"]).terminal]
+
+
+def _brief(i: Any) -> dict[str, Any]:
+    """One open item as the snapshot shows it: its state, deadline, level, worktree and (a held one's) why."""
+    data = i["data"] or {}
+    hold = {"hold": data["hold"].get("why")} if i["state"] in HOLD_SHOWN and data.get("hold") else {}
+    return {"id": i["id"], "state": i["state"], "deadline": i["deadline"], "level": i["level"],
+            "worktree": data.get("worktree"), **hold}
+
+
+def _briefs(st: Any, typ: str, brief: Any = _brief) -> list[Any]:
+    """The briefs of machine `typ`'s open items; none for a machine this build has not got."""
+    return [brief(i) for i in _open_items(st, typ)] if typ in MACHINES else []
+
+
+def write_snapshot(d: str, store: Any) -> None:
+    """The tick's part of state.json: the open items and the tick's own time and code version."""
+    st = store
+    rows = change_rows(st)  # ONE QUEUE: the store's items, never a host's entry files
+    state_update(tick_at=epoch_now(), version=code_version(), rev=start_rev(),
+                 changes=[_brief(i) for i in _open_items(st, "change")], batch=[_brief(i) for i in _open_items(st, "batch")],
+                 reds=_briefs(st, "red"), conditions=_briefs(st, "condition"),
+                 reverts=_briefs(st, "revert", revert_brief),
+                 asks=owner_asks(st) if "red" in MACHINES else [],  # THE OWNER'S PENDING DECISIONS (ask.py)
+                 hold=hold_row(land_hold(st)),
+                 waiting=[r["worktree"] for r in rows if r["state"] == "waiting"],
+                 queued=[r["worktree"] for r in rows if r["state"] != "waiting"])

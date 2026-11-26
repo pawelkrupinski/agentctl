@@ -42,7 +42,7 @@ def batch_fail(st, d, it, why, n_changes=0):
 def batch_members(d, it):
     """The batch's open member entries, in batch order: waiting entries (a red batch's) or a backlog batch's queued ones."""
     ids = it["data"].get("members") or []
-    every = {e["id"]: e for e in waiting_entries(d, open_only=False)}
+    every = {e["id"]: e for e in waiting_entries(d, waiting_only=False)}
     es = {i: e for i, e in every.items() if e.get("status") not in ENTRY_FINAL}
     gone = [i for i in ids if i not in every]  # a final entry left the batch for a reason; one with no record is odd
     if gone:

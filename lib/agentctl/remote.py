@@ -14,7 +14,7 @@ from agentctl.waitingdir import save_entry, waiting_state, wlog
 from agentctl.procs import Terminated
 from agentctl.wait import fetch_failed_log, job_log_lines, relevant_lines
 from agentctl.leases import lock_beat
-from agentctl.dispatches import record_dispatch, save_dispatch
+from agentctl.cidispatches import record_dispatch, save_dispatch
 from agentctl.checkrows import check_run_record, with_run
 from agentctl.remotejobs import REMOTE_WORKFLOW, jobs_verdict, remote_progress, remote_read_bounds, verdict_jobs
 from agentctl.owned import backoff, cancel_run
@@ -220,8 +220,8 @@ def remote_mirror(eid: Any, rem: dict[str, Any], st: Any) -> None:
         new = mirror_update((it or {}).get("data") or {}, rem)
         if it and new:
             st.update_item("change", eid, it["version"], new)
-    except Exception:
-        pass  # the next poll mirrors it
+    except Exception as e:  # the next poll mirrors it
+        err(f"the check summary of {eid} was not mirrored ({str(e)[:160]}); the next poll will")
 
 
 MIRRORED = ("branch", "run", "run_status", "status", "pushed_at", "progress_at", "unlisted_at", "jobs", "decided_at")

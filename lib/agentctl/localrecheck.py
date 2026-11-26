@@ -11,7 +11,6 @@ from typing import Any
 from agentctl.core import _bounded, err, git, git_ok, pid_alive, reds_dir, remote, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, read_text_or, write_json
-from agentctl.moviestools import hook_checks
 from agentctl.classify import ANSI, STRONG, norm_line
 from agentctl.repos import precheck_hook
 from agentctl.workflows import LOCAL_FLOW
@@ -240,3 +239,17 @@ def release_local_leftovers(repo):
         if r.get("workflow") == LOCAL_FLOW and not r["alive"] and not r.get("tidied"):
             acts += _tidy_local_fixer(r)
     return acts
+
+
+def hook_checks(hook_path: str) -> list[str]:
+    """The check words a repo's pre-push hook knows: each `check_<name>()` it defines and each word its code tests with
+    `skipped <word>` (comments aside). [] when there is no hook. A local recheck skips all of them but the failing ones
+    (slots.recheck_local; 2026-11-22: a hand-copied list named three checks the hook had dropped and missed fifteen)."""
+    try:
+        with open(hook_path) as f:
+            text = f.read()
+    except OSError:
+        return []
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    names = set(re.findall(r"^check_([a-z0-9_]+)\s*\(\)", code, re.M)) | set(re.findall(r"\bskipped ([a-z0-9_]+)\b", code))
+    return sorted(names)

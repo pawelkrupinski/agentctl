@@ -14,7 +14,7 @@ from agentctl.redask import ask_held_until, ask_interval, ask_refusal, ask_split
 from agentctl.alerts import alert_close_naming
 from agentctl.redmove import red_move
 from agentctl.redclaim import red_targets
-from agentctl.redcrash import RED_DECIDE, red_ask_route, red_decision_block
+from agentctl.reddecision import RED_DECIDE, red_ask_route, red_decision_block
 from agentctl.redvault import VAULT_TARGET, red_vault_decide
 from agentctl.statemachines import StaleVersion
 

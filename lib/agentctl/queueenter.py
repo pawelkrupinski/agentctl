@@ -29,7 +29,7 @@ from agentctl.queuesubmit import (
     FAST_PRECHECK, FAST_PRECHECK_BOUND, await_queued, await_verdict, change_decided, landed_sha_of, note_precheck,
     precheck_reason, push_failure_why, queued_tail, start_fast_precheck, submit_ref, take_delivery,
     verdict_still_holds)
-from agentctl.dispatchblock import in_fixer
+from agentctl.fixerblockers import in_fixer
 from agentctl.blamerecords import blame_land_refusal, blame_records_quiet
 from agentctl.tools import check_range
 from agentctl.server import queue_change

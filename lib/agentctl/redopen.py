@@ -148,8 +148,8 @@ def red_culprit_search(store, ob, repo, t, o_r):
     try:
         if ob["kind"] == "test" and ob["red_kind"] in ("gate", "outside"):
             out["culprit"] = culprit_of(repo, {"runs": ob["runs_list"]})
-    except (Exception, SystemExit):
-        pass
+    except (Exception, SystemExit) as e:
+        err(f"red open: no culprit named ({str(e)[:160]})")
     try:
         out["blame"] = blame_open(store, repo, o_r or RED_PRIMARY, ob, t)
     except (Exception, SystemExit) as e:

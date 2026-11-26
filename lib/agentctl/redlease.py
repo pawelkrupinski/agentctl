@@ -16,8 +16,9 @@ from agentctl.redask import red_decision
 from agentctl.redmove import red_close, red_move
 from agentctl.redopen import red_history, red_offer
 from agentctl.redcrash import (
-    AGENTCTL_DEFECT_CAUSE, RED_DECIDE, probe_red_newer_verdict, red_ask_route, red_blamed_issue, red_crash_loop,
-    red_crash_streak, red_decision_block, red_decision_needed, red_harness_block, red_newer_probe)
+    AGENTCTL_DEFECT_CAUSE, probe_red_newer_verdict, red_blamed_issue, red_crash_loop, red_crash_streak,
+    red_harness_block, red_newer_probe)
+from agentctl.reddecision import RED_DECIDE, red_ask_route, red_decision_block, red_decision_needed
 from agentctl.fixerlife import GAVE_UP_DECIDE, GAVE_UP_FIXED
 from agentctl.redvault import red_vault_block, vault_ask_ns, vault_ask_unfounded
 from agentctl.ask import DECISION_FAILED, red_decision_failed

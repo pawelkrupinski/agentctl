@@ -15,14 +15,15 @@ from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import bg_failure, bg_session, bg_start, bg_stop, bg_turn, bg_turn_over
 from agentctl.redknobs import RED_STALL
 from agentctl.inbox import INBOX_TAIL
-from agentctl.dispatchblock import claude_cli, interactive_mode
+from agentctl.fixerblockers import claude_cli, interactive_mode
 from agentctl.store import StoreAuthFailed, StoreUnavailable
 from agentctl.owners import OWNER_TTL, owner_lease, owner_record_path
 from agentctl.laptoprole import laptop_role_standby
 from agentctl.fixer import FIXER_IDENTITY_ENV
 from agentctl.redknobs import RED_FIXER_WALL
 from agentctl.redclaim import bind_fixer_session
-from agentctl.redcrash import keep_awake, verdict_cut
+from agentctl.hostsleep import keep_awake
+from agentctl.reddecision import verdict_cut
 from agentctl.ownerleases import owner_drop, owner_hand, owner_holder, owner_leases, owner_tell_leases
 from agentctl.sessionroll import owner_rollover, owner_turn_line, session_seen
 from agentctl.fixerlife import HeldLease, TurnProgress, store_failure_stop

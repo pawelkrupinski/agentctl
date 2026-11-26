@@ -11,7 +11,7 @@ from agentctl.procs import record_alive, socket_host
 from agentctl.fixerrecords import fixer_records
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import bg_rows, bg_session, bg_stop, bg_turn_over, bg_waiting
-from agentctl.dispatchblock import claude_cli
+from agentctl.fixerblockers import claude_cli
 from agentctl.redrecord import lease_is_live
 from agentctl.leases import lease_meta
 from agentctl.owners import owner_record_path
