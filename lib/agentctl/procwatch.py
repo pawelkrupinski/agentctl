@@ -23,7 +23,7 @@
 # known memory CEILING is judged against it (CEILINGS: a JVM's -Xmx, a mongod's cache, a VM's guest memory), and growth must reach
 # WP_GROWTH_PCT or WP_GROWTH_MB over the window: 1% of a big long-lived server is its noise.
 
-from agentctl.clock import epoch_now
+from agentctl.clock import epoch_now, wall_epoch
 import glob
 import os
 import re
@@ -360,7 +360,7 @@ def inv_wt(tmp_root: Optional[str] = None, now_: Optional[float] = None,
            projects: Optional[str] = None) -> tuple[bool, str]:
     """WT: the test suite's roots past twice the sweep's bound stay under WT_STALE_MAX (upkeep removes the ones no
     runner holds); said with them, how many worktrees hold build output (target/, node_modules)."""
-    t = now_ if now_ is not None else epoch_now()
+    t = now_ if now_ is not None else wall_epoch()  # against directory mtimes
     tmp_root, projects = _wt_places(tmp_root, projects)
     stale = [p for p in glob.glob(os.path.join(tmp_root, "agentctl-t-*")) if _older_than(p, t, 2 * TEST_TMP_MAX_AGE)]
     trees = glob.glob(os.path.join(projects, "movies-*"))

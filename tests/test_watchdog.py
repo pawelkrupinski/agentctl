@@ -547,6 +547,24 @@ class RunawayProcessTest(unittest.TestCase):
         self.assertIn("WP", A.INVARIANTS)
         self.assertIn("WT", A.INVARIANTS)
 
+    def test_a_directorys_age_is_judged_on_the_wall_not_the_process_clock(self):
+        """mtimes are the filesystem's real stamps: a process clock far behind the wall (a test's, or a skewed one)
+        must not make a stale root look young."""
+        import tempfile, time as _t
+        from agentctl import clock as clock_module
+        tmp = tempfile.mkdtemp()
+        old = _t.time() - 3 * A.TEST_TMP_MAX_AGE
+        for n in range(A.WT_STALE_MAX + 1):
+            p = os.path.join(tmp, f"agentctl-t-{n}")
+            os.makedirs(p)
+            os.utime(p, (old, old))
+        saved = clock_module._PROCESS_CLOCK[0]
+        self.addCleanup(clock_module.wire_clock, saved)
+        clock_module.wire_clock(FakeClock(1.0))
+        ok, detail = A.inv_wt(tmp_root=tmp, projects=tempfile.mkdtemp())
+        self.assertFalse(ok, detail)
+        self.assertIn(f"{A.WT_STALE_MAX + 1} test roots", detail)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,7 @@
 # agentctl, part `redauthors`: a red's authors: the commits it holds, who landed them, whether their sessions are still at work
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
+from agentctl.clock import wall_epoch
 import os
 import re
 from typing import Any
@@ -92,7 +92,7 @@ def worktree_activity(repo, wt, entries=()):
 def red_authors(repo, u, now_=None):
     """[{worktree, session, shas, pids, live, activity}] for the commits of the red run, the newest commit's author
     first. Live: an agent process works in that worktree now and it was active lately."""
-    t = now_ if now_ is not None else epoch_now()
+    t = now_ if now_ is not None else wall_epoch()  # against git times and mtimes
     commits = red_commits(repo, u)
     if not repo or not commits:
         return []

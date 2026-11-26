@@ -1157,13 +1157,34 @@ class QueueTest(WaitingTest):
         A._last_ref_sweep[0] = 0
         self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)), [], "open in the store: its ref stays")
         self.assertEqual(self.remote_refs(), [f"refs/heads/land/{eid}"])
-        # unknown to both: kept while young, deleted (and logged) past 24 h
+        # unknown to both: kept while young, deleted (and logged) past 24 h. ONE frozen clock for the sweep and the
+        # expected age (2026-11-26, Red #273: the expectation read the wall, the sweep a clock 400 s behind it: an hour apart at a boundary)
+        from agentctl import clock as clock_module
+        self.addCleanup(clock_module.wire_clock, clock_module._PROCESS_CLOCK[0])
+        clock_module.wire_clock(FakeClock(time.time()))
         sh(self.r.path, "git", "push", "--quiet", "origin", f"{sha}:refs/heads/land/20200101-000000-x-aaaaaa",
            f"{sha}:refs/heads/land/{time.strftime('%Y%m%d-%H%M%S')}-y-bbbbbb")
         A._last_ref_sweep[0] = 0
         self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)),
                          ["refs/heads/land/20200101-000000-x-aaaaaa: unknown to entries and store, %d h old" % (
-                             A.entry_id_age("20200101-000000", time.time()) // 3600),
+                             A.entry_id_age("20200101-000000", A.epoch_now()) // 3600),
+                          "refs/heads/land/20200101-000000-x-aaaaaa: deleted"])
+
+    def test_the_sweep_ages_an_unknown_ref_on_the_process_clock_that_stamped_its_id(self):
+        """Entry ids are stamped by the process clock, not by git or a file: the sweep's age of one is that clock's."""
+        from agentctl import clock as clock_module
+        saved = A.land_refs_supported
+        A.land_refs_supported = lambda repo: True
+        self.addCleanup(setattr, A, "land_refs_supported", saved)
+        self.addCleanup(clock_module.wire_clock, clock_module._PROCESS_CLOCK[0])
+        wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")
+        d, _c, _w = A.waiting_state(self.r.path)
+        sh(self.r.path, "git", "push", "--quiet", "origin", f"{sha}:refs/heads/land/20200101-000000-x-aaaaaa")
+        stamp = time.mktime(time.strptime("20200101-000000", "%Y%m%d-%H%M%S"))
+        clock_module.wire_clock(FakeClock(stamp + 30 * 3600 + 600))
+        A._last_ref_sweep[0] = 0
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)),
+                         ["refs/heads/land/20200101-000000-x-aaaaaa: unknown to entries and store, 30 h old",
                           "refs/heads/land/20200101-000000-x-aaaaaa: deleted"])
 
     def test_no_land_ref_while_the_repositorys_hook_would_check_it(self):

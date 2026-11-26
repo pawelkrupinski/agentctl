@@ -1,7 +1,7 @@
 # agentctl, part `maintain`: `agentctl maintain`: the periodic pass -- the iOS simulators' sweep, the caches' expiry, the orphans' duty
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
+from agentctl.clock import epoch_now, wall_epoch
 from typing import Any, Callable
 import argparse
 import datetime as dt
@@ -259,7 +259,7 @@ def expire_cache(root: str | None = None, days: float | None = None, now: float 
     days = env_num("AGENTCTL_CACHE_EXPIRE_DAYS", CACHE_EXPIRE_DAYS) if days is None else days
     if not allowed_path(root):
         return []
-    expiry = CacheExpiry(root, days, (epoch_now() if now is None else now) - days * 86400, dry_run)
+    expiry = CacheExpiry(root, days, (wall_epoch() if now is None else now) - days * 86400, dry_run)
     expiry.files()
     expiry.red_dirs()
     expiry.tree_tags()

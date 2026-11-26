@@ -1,7 +1,7 @@
 # agentctl, part `testtmp`: the test suite's temp leftovers: where they are, when one is old and not in use, their sweep
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
+from agentctl.clock import wall_epoch
 import glob
 import os
 from typing import Optional
@@ -54,7 +54,7 @@ def sweep_test_tmp(now_: Optional[float] = None, tmp_root: str = "/tmp") -> int:
     /tmp (never the processor's own socket dir /tmp/agentctl-<uid>), and /tmp's suite roots `agentctl-t-*` (2026-11-22:
     174 of them, 197 MB, fed a runaway fseventsd) unless one is in use (_suite_root_in_use). Returns how many went."""
     import shutil
-    t = now_ if now_ is not None else epoch_now()
+    t = now_ if now_ is not None else wall_epoch()  # against directory mtimes
     n = 0
     roots = set(glob.glob(os.path.join(tmp_root, "agentctl-t-*")))
     for pat in (os.path.join(user_tmp_dir(), "agentctl-*"), os.path.join(tmp_root, "agentctl-sock-*"), *roots):

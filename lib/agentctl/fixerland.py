@@ -1,7 +1,7 @@
 # agentctl, part `fixerland`: how a fixer lands: its land command, land as you go, real activity as progress.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
+from agentctl.clock import wall_epoch
 import glob
 import itertools
 import json
@@ -234,7 +234,7 @@ _last_land_watch = [0.0]
 
 
 def fixers_land_watch(now_: Any = None, force: Any = False) -> Any:
-    t = now_ if now_ is not None else epoch_now()
+    t = now_ if now_ is not None else wall_epoch()  # against git author times
     if not force and t - _last_land_watch[0] < env_num("AGENTCTL_FIXER_LAND_WATCH", FIXER_LAND_WATCH_EVERY):
         return []
     _last_land_watch[0] = t

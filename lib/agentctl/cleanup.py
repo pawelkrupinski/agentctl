@@ -84,8 +84,8 @@ class TreeReview:
         if busy:
             return f"in use by pid {busy[:3]}"
         act = gitdir_activity(self.repo, path)
-        if act and epoch_now() - act < self.min_age_h * 3600:
-            return f"active {int((epoch_now() - act) / 60)} min ago"
+        if act and wall_epoch() - act < self.min_age_h * 3600:
+            return f"active {int((wall_epoch() - act) / 60)} min ago"
         return None
 
     def unclean(self, path: str) -> str | None:
@@ -337,7 +337,7 @@ class RepoSweep:
 
     def __init__(self, repo: str, idle_days: float, dry: bool, out: list[str], store: Any) -> None:
         self.repo, self.idle_days, self.dry, self.out, self.store = repo, idle_days, dry, out, store
-        self.name, self.now_ = os.path.basename(repo), epoch_now()
+        self.name, self.now_ = os.path.basename(repo), wall_epoch()  # ages git times and mtimes: the real world's
         self.main, self.o_r = "", ""
         self.checked_out: set[str] = set()
 
