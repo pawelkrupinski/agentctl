@@ -375,10 +375,17 @@ class WaitingTest(Base):
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         self.land(wa)
         d, _c, _w = A.waiting_state(self.r.path)
-        for _ in range(4):  # red: waiting is right
-            A.tick_batch(self.r.path, d, *on_clock(self.clock))
-        self.reds = set()
         saved = A.spawn_batch_executor
+        # its executor runs elsewhere from the first tick: the real spawn started a DETACHED red pre-check whose verdict
+        # raced the green ticks below (the stress lane, 2026-11-26: on a loaded machine it finished first and the batch
+        # was left assembling; when it did not, it was still checking) -- the batch checks, red and green alike
+        A.spawn_batch_executor = lambda repo, d_, bid: None
+        try:
+            for _ in range(4):  # red: waiting is right
+                A.tick_batch(self.r.path, d, *on_clock(self.clock))
+        finally:
+            A.spawn_batch_executor = saved
+        self.reds = set()
         A.spawn_batch_executor = lambda repo, d_, bid: None  # its executor runs elsewhere: the batch stays checking
         try:
             for _ in range(4):
