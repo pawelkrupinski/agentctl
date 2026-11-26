@@ -130,7 +130,9 @@ class InboxTest(unittest.TestCase):
         [e] = self.entries()
         self.assertEqual((e["command"], e["verdict"], e["exit"]), ("wait", "ended by signal 15", 143))
 
-    def test_the_composition_root_routes_entries_through_the_alert_model_and_unwired_they_are_plain_files(self):
+    def test_the_composition_root_routes_entries_through_the_alert_model_and_unwired_none_is_written(self):
+        """Review 2026-11-26 (C 5.2): unwired -- a module loaded without the composition root -- an entry was written as
+        a plain file, a second write path with no routing and no merge. Now the unwired writer refuses, loudly."""
         seen, saved_write = [], A.alert_write
         A.alert_write = lambda rec, st: seen.append((rec["verdict"], st))
         try:
@@ -142,12 +144,11 @@ class InboxTest(unittest.TestCase):
         saved = list(A._inbox_writers)
         A._inbox_writers[:] = []
         try:
-            eid = A.inbox_write("wait", "run o/r#1: success", [], [], 0)
+            with self.assertRaisesRegex(RuntimeError, "no inbox writer wired"):
+                A.inbox_write("wait", "run o/r#1: success", [], [], 0)
         finally:
             A._inbox_writers[:] = saved
-        [e] = self.entries()
-        self.assertEqual((e["id"], e["verdict"]), (eid, "run o/r#1: success"))
-        self.assertNotIn("audience", e)  # never routed: no alert model ran
+        self.assertEqual(self.entries(), [])
 
     def test_an_entry_is_stamped_by_the_clock_the_composition_root_wired(self):
         from fake_clock import FakeClock

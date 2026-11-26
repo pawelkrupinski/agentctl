@@ -14,7 +14,7 @@ import time
 from typing import Any, Callable
 from agentctl.core import err, state_root
 from agentctl.timefmt import iso_at
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record
 from agentctl.procs import safe_cwd
 from agentctl.fixerrecords import agent_name
 from agentctl.watchknobs import knob_inbox_dir
@@ -75,7 +75,8 @@ def inbox_kind(verdict: Any, final: bool = True) -> str:
 
 # THE INBOX WRITER SEAM: an entry built here is routed and merged by the alert model (alerts.py alert_write, which reads
 # the store, the reds and their owners: far above this module), wired at the composition root (cli). Unwired -- a
-# module loaded on its own -- the entry is written as it is.
+# module loaded on its own -- nothing is written (review 2026-11-26: it was written as a plain file, a second write
+# path with no routing and no merge): a RuntimeError says the root was skipped.
 _inbox_writers: list[Callable[[dict[str, Any]], Any]] = []
 
 
@@ -90,15 +91,11 @@ def wire_inbox_writer(writer: Callable[[dict[str, Any]], Any], now: Callable[[],
 
 
 def write_inbox_entry(rec: dict[str, Any]) -> Any:
-    """rec into the inbox: through the wired writer, else as its own file; the id of the entry that carries it (its
-    opening an event of the offline log, filelog.py)."""
-    if _inbox_writers:
-        got = _inbox_writers[0](rec)
-    else:
-        d = inbox_dir()
-        os.makedirs(d, exist_ok=True)
-        write_json(os.path.join(d, rec["id"] + ".json"), rec)
-        got = rec["id"]
+    """rec into the inbox through the wired writer: the id of the entry that carries it (its opening an event of the
+    offline log, filelog.py). RuntimeError when no writer is wired (the composition root, cli, was skipped)."""
+    if not _inbox_writers:
+        raise RuntimeError(f"no inbox writer wired (cli.wire_collaborators): entry {rec['id']} not written")
+    got = _inbox_writers[0](rec)
     note_event("inbox", str(got or rec["id"]), None, "unread", "notified", at=rec.get("at"), detail=rec.get("kind"),
                text=str(rec.get("verdict") or "")[:160], key="opened")
     return got
