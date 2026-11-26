@@ -55,8 +55,8 @@ class VerifyWaitBase(unittest.TestCase):
             saved_fn = getattr(A, name)
             setattr(A, name, fake)
             self.addCleanup(setattr, A, name, saved_fn)
-        A._verify_runs.clear()
-        self.addCleanup(A._verify_runs.clear)
+        A.ci_runs().clear()
+        self.addCleanup(A.ci_runs().clear)
 
     def fake_gh(self, o_r, *args):  # GitHub's run list (the seam): the runs this test put there
         assert args[:2] == ("run", "list"), args
@@ -178,7 +178,7 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
         self.step("2026-11-19T04:23:15Z")
         self.runs.insert(0, gh_run(201, "2026-11-19T23:46:04Z", "2026-11-19T23:46:04Z", status="queued",
                                    conclusion="", sha=self.sha))
-        A._verify_runs.clear()
+        A.ci_runs().clear()
         by = self.item()["deadline"]
         out = self.step(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(by + 30)))
         self.assertIn("awaits Record scrape fixtures #201 (queued)", " ".join(out))
@@ -198,7 +198,7 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
     def test_past_its_deadline_a_slot_run_that_ended_without_deciding_it_escalates(self):
         self.step("2026-11-19T04:23:15Z")
         self.runs.insert(0, gh_run(201, "2026-11-19T23:46:04Z", "2026-11-19T23:50:00Z", conclusion="cancelled"))
-        A._verify_runs.clear()
+        A.ci_runs().clear()
         by = self.item()["deadline"]
         out = self.step(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(by + 30)))
         self.assertIn("its 23:31Z run #201 ended cancelled without deciding it",

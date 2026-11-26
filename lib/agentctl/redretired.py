@@ -10,6 +10,7 @@ from agentctl.timefmt import parse_time
 from agentctl.forge import gh_json
 from agentctl.workflows import fix_workflow_jobs, workflow_triggers
 from agentctl.redknobs import knob_red_stale_days
+from agentctl.ciruns import ci_runs
 
 
 RETIRE_MAIN_TTL = 60         # s: main's head is read again after this
@@ -82,8 +83,7 @@ def retire_run(o_r, rid):
 
 
 def retire_jobs(o_r, rid):
-    return _retire_get(("jobs", o_r, str(rid)), None, lambda: gh_json(
-        o_r, "api", f"repos/{o_r}/actions/runs/{rid}/jobs?per_page=100").get("jobs") or [])
+    return ci_runs().run_jobs(o_r, rid)
 
 
 def retire_newest(o_r, path):

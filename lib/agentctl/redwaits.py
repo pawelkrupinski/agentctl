@@ -15,11 +15,11 @@ from agentctl.ids import dt
 from agentctl.core import SHORT, attempt
 from agentctl.leases import block_lease, lease_meta, red_block_of
 from agentctl.classify import QUOTA_LOG
-from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.inboxentry import inbox_write
 from agentctl.rundispatch import red_verify_dispatch
 from agentctl.stuckruns import run_jobs
 from agentctl.redblock import BLOCK_MAX, BLOCK_TTL
+from agentctl.ciruns import main_runs
 
 
 # A RED WHOSE FIX IS ANOTHER RED'S COMMIT (2026-11-16, Order independence #78, e948278d144a): its fix was the main-tests
@@ -162,7 +162,7 @@ def probe_quota_reset(a):
     (a['job'], the preflight) -- or the whole run is green."""
     o_r = a.get("repo") or SHORT["movies"]
     # listing: runs created since the block; none listed keeps the wait (a probe that cannot tell never clears it)
-    runs = gh_json(o_r, "run", "list", "--workflow", a["workflow"], "--branch", "main", "--json", RUN_FIELDS, "-L", "10")
+    runs = main_runs(o_r, a["workflow"], 10)
     since = float(a.get("since") or 0)
     for r in runs or []:
         verdict = created_after(r, since) and quota_run_verdict(o_r, a, r)

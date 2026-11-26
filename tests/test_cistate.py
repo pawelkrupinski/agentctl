@@ -31,7 +31,7 @@ class SnapshotTest(RedBase):
         snap = A.ci_state_refresh(MOVIES)
         self.assertTrue(os.path.exists(A.state_path()))
         self.put("runs.json", [])  # no runs to read: everything below reads the snapshot only
-        A._main_runs.clear()
+        A.ci_runs().clear()
         red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.process_store())
         self.assertFalse(red)
         self.assertTrue(line.startswith("gate green · reds: Identity capture #2104 → offering"), line)

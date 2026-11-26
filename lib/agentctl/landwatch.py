@@ -6,11 +6,12 @@ import os
 from typing import Any
 from agentctl.core import err, slug
 from agentctl.timefmt import parse_time
-from agentctl.forge import gh_json, is_cancelled
+from agentctl.forge import is_cancelled
 from agentctl.repos import movies_repo_path, red_repo_clone
 from agentctl.clones import main_clone
 from agentctl.ancestry import contains
-from agentctl.ciwhy import main_runs, run_no_verdict
+from agentctl.ciwhy import run_no_verdict
+from agentctl.ciruns import ci_runs, main_runs
 from agentctl.watchknobs import knob_watch_conv_start
 
 
@@ -48,8 +49,7 @@ def pick_convergence_run(repo, sha, runs, pushed_at, o_r=None):
 
 
 def failed_jobs(o_r, rid):
-    d = gh_json(o_r, "run", "view", str(rid), "--json", "jobs")
-    return [j["name"] for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out", "cancelled")]
+    return [j["name"] for j in ci_runs().run_jobs(o_r, rid) if j.get("conclusion") in ("failure", "timed_out", "cancelled")]
 
 
 def start_watch(st, repo, sha, pushed_at, worktree=None, close=None, session=None, o_r=None, follower=None):
@@ -98,6 +98,7 @@ def watch_outcome(it):
 
 def _pick_run(repo: Any, sha: Any, o_r: Any, kind: Any, wfile: Any, pushed_at: Any) -> Any:
     """The run of flow `kind` (its workflow file wfile) that contains sha, or None."""
+    # listing: the newest 30 of the flow on main; a run past them is not this push's
     runs = main_runs(o_r, wfile)
     return pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at, o_r)
 

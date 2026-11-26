@@ -55,8 +55,8 @@ class RedBase(unittest.TestCase):
         self.saved_a = A.GH_CLI, A.WAITING_DIR, A.land_cwds
         A.GH_CLI, A.WAITING_DIR = FAKE, os.path.join(t, "waiting-state")
         A.land_cwds = lambda: {}
-        A._main_runs.clear()
-        A._flow_runs.clear()  # a workflow an earlier test listed on its own (audit #7) has no runs in this one
+        A.ci_runs().clear()
+        A.ci_runs().clear()  # a workflow an earlier test listed on its own (audit #7) has no runs in this one
         self.sha = sh(self.r.path, "git", "rev-parse", "HEAD")
         self.put(f"api-repos_pawelkrupinski_movies_git_commits_{self.sha}.json",
                  {"author": {"name": "Agent Smith", "email": "a@b"}, "message": "resolver: tweak"})
@@ -127,7 +127,7 @@ class RedBase(unittest.TestCase):
         return rc, out.getvalue()
 
     def why(self, *extra):
-        A._main_runs.clear()
+        A.ci_runs().clear()
         return self.tool("ci-why", "--repo", "movies", *extra)
 
     def inbox(self, kind=None):

@@ -11,10 +11,10 @@ from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import err, git, git_ok, process_cache, reds_dir, remote
 from agentctl.statefile import read_record, write_json
-from agentctl.forge import gh_json
 from agentctl.repos import red_repo_of
 from agentctl.workflows import fix_workflow_jobs
 from agentctl.clones import fetch_main
+from agentctl.ciruns import ci_runs
 
 
 # -- fixes on their way: Fixes-Red changes in the queue, and Fixes-Red commits landed on main
@@ -230,7 +230,7 @@ def _run_step_failures(d: dict[str, Any], rid: Any) -> dict[str, list[str]] | No
     """{job name: its failed steps' names} of run rid, read through gh; None when they cannot be read or the run lists
     no job."""
     try:
-        jobs = (gh_json(red_repo_of(d), "run", "view", str(rid), "--json", "jobs") or {}).get("jobs") or []
+        jobs = ci_runs().run_jobs(red_repo_of(d), rid)
     except (Exception, SystemExit):
         return None
     if not jobs:

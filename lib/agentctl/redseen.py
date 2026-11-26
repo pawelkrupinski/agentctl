@@ -15,7 +15,8 @@ from agentctl.classify import norm_line
 from agentctl.forge import RED_CONCLUSIONS
 from agentctl.repos import gated_repo
 from agentctl.workflows import LOCAL_FLOW
-from agentctl.ciwhy import gate_from_snap, gate_report_only, gate_runs, main_runs_of, outside_from_snap
+from agentctl.ciwhy import gate_from_snap, gate_report_only, gate_runs, outside_from_snap
+from agentctl.ciruns import main_runs_of
 from agentctl.runsigs import classifier_version, run_names, signature
 from agentctl.redrecord import red_key, red_what, RedEpisode, streak_budget
 from agentctl.red import red_close, STUCK_FACTOR

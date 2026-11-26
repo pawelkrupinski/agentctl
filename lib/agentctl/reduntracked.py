@@ -7,12 +7,12 @@ import json
 import time
 from typing import Any
 from agentctl.core import attempt, err, process_cache
-from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.redrecord import canon_job, red_obs_for
 from agentctl.gating import main_workflow_files
 from agentctl.redrepos import red_is_other
 from agentctl.red import red_move, red_stop_holder
-from agentctl.ciwhy import decided_runs, main_runs_of, registry_name
+from agentctl.ciwhy import decided_runs, registry_name
+from agentctl.ciruns import ci_runs, main_runs, main_runs_of
 from agentctl.redseen import red_obs_of_units
 from agentctl.redknobs import knob_ever_green_recheck
 
@@ -36,7 +36,6 @@ EVER_GREEN_JOB_RUNS = 10              # runs of the snapshot's list read for a j
 UNTRACKED_KINDS = ("gate", "outside", "stuck-run", "predicts")
 _UNREAD = object()  # newest_green_main raised: the answer is unknown, not 'never green'
 _never_green_at = process_cache({})   # (repo, workflow[, job]) -> when GitHub last said never green
-_run_jobs_mem = process_cache({})     # run id -> its jobs (a decided run's never change)
 
 
 def ever_green_record(store):
@@ -71,19 +70,14 @@ def job_matches(name, job):
 
 
 def decided_run_jobs(o_r, rid):
-    if rid in _run_jobs_mem:
-        return _run_jobs_mem[rid]
-    jobs = gh_json(o_r, "run", "view", str(rid), "--json", "jobs").get("jobs") or []
-    _run_jobs_mem[rid] = jobs
-    return jobs
+    return ci_runs().run_jobs(o_r, rid)
 
 
 def newest_green_main(o_r, workflow):
     """The newest green run of workflow on main from GitHub (its file when main names it), or None."""
     wfile = main_workflow_files(o_r).get(workflow, workflow) if not red_is_other(o_r) else workflow
     # listing: GitHub's own success filter; [] is 'never green' only from this complete filtered answer
-    runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--status", "success", "--limit", "1",
-                   "--json", RUN_FIELDS)
+    runs = main_runs(o_r, wfile, 1, status="success")
     return next((r for r in runs or [] if r.get("conclusion") == "success"), None)
 
 

@@ -45,7 +45,7 @@ class World:
         test.addCleanup(setattr, A, "run_sigs", A.run_sigs)
         A.run_sigs = self.run_sigs
         A.main_runs_of("o/r").gate["Main"] = self.runs
-        test.addCleanup(A._main_runs.clear)
+        test.addCleanup(A.ci_runs().clear)
 
     def record(self, n, state):
         line = {"cur-A": "Failed: A", "cur-B": "Failed: B", "stale-A": "Failed: A", "stale-oldline": "WARN a"}.get(state)

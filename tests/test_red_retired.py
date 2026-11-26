@@ -155,7 +155,7 @@ class RetiredTickTest(RedReposBase):
     def core_run(self, rid, num, wf, file, sha, jobs, created="2026-10-31T21:01:48Z", newest=None):
         self.api(f"repos/{CORE}/actions/runs/{rid}", {"id": rid, "path": f".github/workflows/{file}", "head_sha": sha,
                                                       "created_at": created})
-        self.api(f"repos/{CORE}/actions/runs/{rid}/jobs?per_page=100", {"jobs": jobs})
+        self.put(f"run-{rid}.json", {"jobs": jobs})  # its jobs, as `gh run view --json jobs` reads them (CiRuns)
         self.api(f"repos/{CORE}/actions/workflows/{file}/runs?branch=main&per_page=1",
                  {"workflow_runs": [newest or {"id": rid, "head_sha": sha, "created_at": created}]})
 
@@ -243,7 +243,7 @@ class RetiredTickTest(RedReposBase):
                                           "headSha": OLD, "url": "u", "number": 1081, "status": "completed",
                                           "conclusion": "failure", "workflowName": "Playwright Tests (deployed)"})
         self.put("run-41241638844.log", "playwright (dev, job 1)\tRun playwright\t2026-10-31T21:02:00Z Error: POST 400\n")
-        A._main_runs.clear()
+        A.ci_runs().clear()
         red, text = A.ci_why(CORE, repo=self.r.path, store=A.process_store())
         self.assertFalse(red, text)
         self.assertIn("Playwright Tests (deployed): RETIRED (run 41241638844 #1081", text)

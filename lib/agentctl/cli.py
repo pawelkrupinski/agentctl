@@ -11,6 +11,7 @@ import time
 from typing import Any, Callable
 from agentctl.procrunner import ProcessRunner, wire_runner
 from agentctl.clock import Clock, epoch_now, wire_clock
+from agentctl.ciruns import CiRuns, wire_ci_runs
 from agentctl.ghapp import cmd_github_app
 from agentctl.config import cmd_config
 from agentctl.storetoken import wire_token_missing_note
@@ -80,10 +81,12 @@ wire_recover_actions({"clear_hold": recover_clear_hold, "tunnel_reset": recover_
 
 
 def wire_collaborators(clock: Clock, store: Any) -> None:
-    """What a registry calls with the process's clock and store -- the probes that read them (the watchdog's
-    invariants, a change's source, a red's newer run), the inbox writer, the missing token's note -- wired with main's;
-    at import, with the wall's clock and the process's store, for a use before any main."""
+    """The process's clock and its one CI runs reader (CiRuns: what was read of GitHub's runs and jobs), and what a
+    registry calls with the clock and store -- the probes that read them (the watchdog's invariants, a change's source,
+    a red's newer run), the inbox writer, the missing token's note -- wired with main's; at import, with the wall's
+    clock and the process's store, for a use before any main."""
     wire_clock(clock)
+    wire_ci_runs(CiRuns())
     wire_probes({"orphan_landed": lambda a: probe_orphan_landed(a, store), "invariant": lambda a: probe_invariant(a, clock, store),
                  "change_source": lambda a: probe_change_source(a, store),
                  "red_newer_verdict": lambda a: probe_red_newer_verdict(a, store),

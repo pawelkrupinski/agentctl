@@ -6,8 +6,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 
-JOBS = [{"name": "unit", "databaseId": 11, "conclusion": "success", "steps": []},
-        {"name": "convergence", "databaseId": 22, "conclusion": "failure",
+JOBS = [{"name": "unit", "databaseId": 11, "status": "completed", "conclusion": "success", "steps": []},
+        {"name": "convergence", "databaseId": 22, "status": "completed", "conclusion": "failure",
          "steps": [{"number": 1, "conclusion": "success"}, {"number": 7, "conclusion": "failure"}]}]
 RED = {"repo": None, "jobs": ["convergence"], "last_run": {"databaseId": 99, "number": 5}}
 
@@ -23,7 +23,7 @@ class UrlTest(unittest.TestCase):
     def test_a_runs_jobs_are_read_once_not_per_notification(self):
         """2026-11-03: a `gh run view` per notification (10-20 s each) put the notifier 3 h behind (W6)."""
         calls = []
-        A._run_jobs.clear()
+        A.ci_runs().clear()
         with mock.patch.object(A, "gh_json", lambda *a: calls.append(a) or {"jobs": JOBS}):
             for _ in range(3):
                 self.assertTrue(A.red_url(RED).endswith("/job/22#step:7:1"))

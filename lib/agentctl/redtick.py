@@ -7,12 +7,12 @@ import threading
 from typing import Any
 from agentctl.statemachines import StaleVersion, open_items, is_terminal
 from agentctl.core import NoReadAccess, err, process_cache, run_bounded, slug
-from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
 from agentctl.redretired import red_retired
 from agentctl.storetoken import red_read_token
 from agentctl.redrepos import red_gate_flows, red_is_other
-from agentctl.ciwhy import gate_from_snap, gate_runs, gate_snap_rows, main_runs_of
+from agentctl.ciwhy import gate_from_snap, gate_runs, gate_snap_rows
+from agentctl.ciruns import main_runs, main_runs_of
 from agentctl.cistate import ci_state_load
 from agentctl.redrecord import red_active_of, red_obs_for, red_what
 from agentctl.lander import lander_note_landed
@@ -181,7 +181,7 @@ def red_open_flows(o_r, store):
 def newest_decided_main(o_r, workflow):
     """The newest decided (success / failure / timed_out) run of a workflow on main, or None."""
     # listing: None here means none decided among the newest 10 -- the callers treat it as unread, not green
-    runs = gh_json(o_r, "run", "list", "--workflow", workflow, "--branch", "main", "--limit", "10", "--json", RUN_FIELDS)
+    runs = main_runs(o_r, workflow, 10)
     return next((r for r in runs if r.get("status") == "completed"
                  and r.get("conclusion") in ("success", "failure", "timed_out")), None)
 

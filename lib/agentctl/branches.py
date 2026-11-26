@@ -19,7 +19,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.owned import default_repo
 from agentctl.worktrees import merged_reason
 from agentctl.inbox import INBOX_TAIL
-from agentctl.ciwhy import main_runs_of
+from agentctl.ciruns import main_runs_of
 from agentctl.runsigs import save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
 from agentctl.fixerblockers import short_flow

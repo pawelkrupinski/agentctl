@@ -83,7 +83,7 @@ class GateSnapRowsTest(unittest.TestCase):
         try:
             rows = A.gate_snap_rows("o/r", [("wf", {"n": 0}, True, (5.0, 3)), ("other", None, False, (None, 0))])
         finally:
-            A._main_runs.clear()
+            A.ci_runs().clear()
         self.assertEqual(rows, [{"name": "wf", "decided": {"n": 0}, "newer": True, "since": 5.0, "count": 3,
                                  "runs": [{"n": 1}], "no_verdict": {"n": 2}},
                                 {"name": "other", "decided": None, "newer": False, "since": None, "count": 0,
@@ -94,11 +94,11 @@ class GateSnapRowsTest(unittest.TestCase):
         try:
             unit = ("wf", {"n": 0}, False, (1.0, 2))
             rows = A.gate_snap_rows("o/r", [unit])
-            A._main_runs.clear()
+            A.ci_runs().clear()
             self.assertEqual(A.gate_from_snap({"repo": "o/r", "gate": rows}), [unit])
             self.assertEqual(A.main_runs_of("o/r").gate["wf"], [{"n": 1}])
         finally:
-            A._main_runs.clear()
+            A.ci_runs().clear()
 
 
 class StoreEventRowsTest(unittest.TestCase):

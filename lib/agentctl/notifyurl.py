@@ -7,9 +7,9 @@
 from typing import Any
 import os
 import re
-from agentctl.core import attempt, process_cache, state_root
-from agentctl.forge import gh_json
+from agentctl.core import attempt, state_root
 from agentctl.repos import red_repo_of
+from agentctl.ciruns import ci_runs
 
 
 import html as _html
@@ -39,20 +39,14 @@ def first_failed_step(job: Any) -> Any:
 
 
 # A decided run's jobs never change: read once per process (2026-11-03: a `gh run view` per notification, 10-20 s each
-# over a lossy uplink, made the notifier ~4 events/min -- slower than five unclaimed reds escalating, 3 h behind, W6).
-_run_jobs = process_cache({})
+# over a lossy uplink, made the notifier ~4 events/min -- slower than five unclaimed reds escalating, 3 h behind, W6):
+# the reader keeps them (CiRuns.run_jobs).
 
 
 def _red_run_jobs(o_r: Any, run_id: Any, read_jobs: Any) -> Any:
-    """The jobs of a red's run: read_jobs' when given, else cached per process, else read through gh (None: unread)."""
-    jobs = None if read_jobs else _run_jobs.get((o_r, str(run_id)))
-    if jobs is not None:
-        return jobs
+    """The jobs of a red's run: read_jobs' when given, else the reader's (CiRuns.run_jobs; None: unread)."""
     try:
-        jobs = (read_jobs or (lambda: gh_json(o_r, "run", "view", str(run_id), "--json", "jobs").get("jobs")))()
-        if jobs and not read_jobs:
-            _run_jobs[(o_r, str(run_id))] = jobs
-        return jobs
+        return read_jobs() if read_jobs else ci_runs().run_jobs(o_r, run_id)
     except (Exception, SystemExit):
         return None
 

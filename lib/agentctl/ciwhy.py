@@ -11,16 +11,16 @@ from typing import Any, Callable
 from contextlib import suppress
 from agentctl.core import attempt, err, git, git_ok, process_cache, state_root
 from agentctl.statefile import read_record, write_json
-from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, gh_json
+from agentctl.forge import gh_json, RED_CONCLUSIONS, RUN_FIELDS, run_id_of_number
 from agentctl.classify import SETUP_STEP
 from agentctl.repos import gated_repo, repo_path_for
 from agentctl.workflows import STEP_TIMED_OUT
 from agentctl.gating import GATING_CHECKS_FILE, gate_flows, gating_checks
 from agentctl.redrepos import red_gate_flows
-from agentctl.forge import run_id_of_number
+from agentctl.ciruns import ci_runs, main_runs, main_runs_of, Run
 
 
-_report_only_mem = process_cache({})  # run id -> (bool, why): a decided run's jobs never change
+_missing_row_said = process_cache(set())  # a red gate run whose failed job has no registry row: said once per run
 
 
 def registry_name(name):
@@ -78,48 +78,21 @@ def gate_report_only(o_r, name, run):
     if not gated_repo(o_r) or not run or run.get("conclusion") not in RED_CONCLUSIONS:
         return False, "not a red gate run"
     rid = str(run.get("databaseId") or "")
-    if rid in _report_only_mem:
-        return _report_only_mem[rid]
     try:
         rows = gating_checks(o_r)
         wfile = next((f for n, f in gate_flows(o_r) if n == name), name)
-        jobs = gh_json(o_r, "run", "view", rid, "--json", "jobs").get("jobs") or []
+        jobs = ci_runs().run_jobs(o_r, rid)
     except (Exception, SystemExit) as e:  # SystemExit: NoToken
         return False, f"unread ({str(e)[:120]}): it gates"
     return remember_report_only(name, rid, gate_report_only_jobs(rows, wfile, jobs))
 
 
 def remember_report_only(name: str, rid: str, out: tuple[bool, str]) -> tuple[bool, str]:
-    """out, kept for run rid; a missing registry row is said once per run: every gate job should have one."""
-    if "no row in" in out[1] and rid not in _report_only_mem:
+    """out; a missing registry row is said once per run: every gate job should have one."""
+    if "no row in" in out[1] and rid not in _missing_row_said:
         err(f"{name} run {rid}: {out[1].split('; ', 1)[-1]}")
-    if rid:
-        _report_only_mem[rid] = out
+        _missing_row_said.add(rid)
     return out
-
-
-# A WORKFLOW NOT ON MAIN HAS NO RUNS ON MAIN (2026-11-08 16:35-18:10: agentctl's gate list named identity-takes.yml before
-# the movies commit adding the file reached main; GitHub answered each list of it `HTTP 404: workflow ... not found on
-# the default branch`, so the whole gate read failed every cycle -- the status line said `gate UNREAD (as of 16:44)` and
-# every production landing waited on a gate taken as red for 1.5 h). That 404 is GitHub's own answer, not an unread
-# gate: the workflow has no run on main, so it decides nothing until its file lands. Any other error still raises.
-WORKFLOW_NOT_ON_MAIN = re.compile(r"HTTP 404: workflow \S+ not found on the default branch")
-_not_on_main_said = process_cache(set())  # said once per workflow file per process, not every cycle
-
-
-def main_runs(o_r, wfile, limit=30):
-    """A workflow's runs on main, newest first; [] when GitHub says its file is not on the default branch."""
-    try:
-        # listing: the newest `limit` of one workflow on main; callers read its newest decided run, never an absence
-        return gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", str(limit),
-                       "--json", RUN_FIELDS)
-    except RuntimeError as e:
-        if not WORKFLOW_NOT_ON_MAIN.search(str(e)):
-            raise
-        if wfile not in _not_on_main_said:
-            _not_on_main_said.add(wfile)
-            err(f"{wfile} is not on main yet: no run of it gates anything until it lands")
-        return []
 
 
 def commit_line(o_r, sha, repo=None):
@@ -156,7 +129,6 @@ def job_is_phantom(j):
 VERDICT_COMPLETE_JOB = re.compile(r"(^|/\s*)verdict complete$")
 # the workflows with a `verdict complete` job (only they are read): Identity takes; convergence for its runs before the split
 NO_VERDICT_FLOWS = {"Identity takes", "Identity model convergence"}
-_no_verdict_mem = process_cache({})
 
 
 def job_is_verdict_report(j):
@@ -177,23 +149,24 @@ def jobs_no_verdict(jobs):
 
 
 def run_no_verdict(o_r, r):
-    """A completed failed run that is incomplete (jobs_no_verdict): read once per run, kept (a decided run never
-    changes); an unreadable run is a verdict as listed (never cached)."""
+    """A completed failed run that is incomplete (jobs_no_verdict): its jobs as the reader keeps them, else the verdict
+    another process wrote (no-verdict-runs.json), else read once (and written there); an unreadable run is a verdict
+    as listed (never written)."""
     if r.get("status") != "completed" or r.get("conclusion") != "failure" or not r.get("databaseId"):
         return False
     rid = str(r["databaseId"])
-    if rid in _no_verdict_mem:
-        return _no_verdict_mem[rid]
+    kept = ci_runs().kept_jobs(o_r, rid)
+    if kept is not None:
+        return jobs_no_verdict(kept)
     path = state_root("no-verdict-runs.json")
     known = read_record(path) or {}
     if rid in known:
-        _no_verdict_mem[rid] = bool(known[rid])
-        return _no_verdict_mem[rid]
+        return bool(known[rid])
     try:
-        d = gh_json(o_r, "run", "view", rid, "--json", "jobs")
+        jobs = ci_runs().run_jobs(o_r, rid)
     except (Exception, SystemExit):
         return False
-    nv = _no_verdict_mem[rid] = jobs_no_verdict(d.get("jobs"))
+    nv = jobs_no_verdict(jobs)
     with suppress(OSError):
         known = read_record(path) or {}
         known[rid] = nv
@@ -201,38 +174,6 @@ def run_no_verdict(o_r, r):
             known = dict(list(known.items())[-500:])
         write_json(path, known)
     return nv
-
-
-Run = dict[str, Any]  # a workflow run as gh lists it (RUN_FIELDS)
-
-
-class MainRuns:
-    """ONE repository's runs on main, as gate_runs / outside_gate / a snapshot last listed them (newest first), by
-    workflow. Review 2026-11-26 (B F1): these were three process globals keyed by workflow NAME alone, imported by
-    private name into 8 modules; red_gate_snap filled them with another repo's runs and put the primary's back in a
-    `finally` (names repeat across repos), so a reader in the meantime -- the gate-publish thread, or the tick's own --
-    saw the other repo's runs. Now each repository has its own (main_runs_of), and nothing is saved or restored."""
-
-    def __init__(self) -> None:
-        self.gate: dict[str, list[Run]] = {}      # a gate workflow -> its runs on main
-        self.outside: dict[str, list[Run]] = {}   # a workflow outside the gate -> its runs on main
-        self.no_verdict: dict[str, Run | None] = {}  # a gate workflow -> its newest no-verdict run newer than its decided one
-
-    def runs_of(self, name: str) -> list[Run]:
-        """A workflow's listed runs: the gate's, else outside the gate's, else none."""
-        return self.gate.get(name) or self.outside.get(name) or []
-
-    def lists(self) -> list[tuple[str, list[Run]]]:
-        """(workflow, runs) of every listed workflow, the gate's first."""
-        return list(self.gate.items()) + list(self.outside.items())
-
-
-_main_runs: dict[str, MainRuns] = process_cache({})
-
-
-def main_runs_of(o_r: str) -> MainRuns:
-    """The repository's MainRuns (made empty on first ask)."""
-    return _main_runs.setdefault(o_r, MainRuns())
 
 
 def newest_decided(runs: list[Run], no_verdict: Callable[[Run], bool]) -> tuple[Run | None, Run | None]:
@@ -254,7 +195,7 @@ def flows_to_read(o_r: Any, flows: Any) -> Any:
     if flows:
         return flows
     # listing: only names the workflows to read; each is then read on its own (main_runs)
-    recent = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "40", "--json", RUN_FIELDS)
+    recent = ci_runs().recent_main(o_r, 40)
     return [(n, n) for n in dict.fromkeys(r["workflowName"] for r in recent)]
 
 
@@ -264,6 +205,7 @@ def gate_runs(o_r, flows=None):
     run on main."""
     out = []
     for name, wfile in flows_to_read(o_r, flows):
+        # listing: the newest 30 of a gate workflow on main; its newest decided run is read, never an absence
         runs = main_runs(o_r, wfile)
         nv = (lambda r: run_no_verdict(o_r, r)) if name in NO_VERDICT_FLOWS else (lambda r: False)
         decided, nov = newest_decided(runs, nv)
@@ -323,6 +265,7 @@ RUN_ID_MIN = 10 ** 8
 
 def paged_to_number(o_r: Any, wfile: str, n: Any) -> list[Run]:
     """The runs of workflow file wfile on main paged to where run number n sits ([] when it is 1000+ back or newer)."""
+    # listing: the newest one, then paged to where #n sits; a number further back is none of these
     newest = main_runs(o_r, wfile, limit=1)
     gap = int(newest[0]["number"]) - int(n) if newest else -1
     return main_runs(o_r, wfile, limit=min(1000, gap + 50)) if 0 <= gap < 1000 else []
@@ -340,7 +283,7 @@ def runs_of_number(o_r, n):
                 seen.add(r.get("databaseId"))
                 hits.append(r)
     # listing: a run number's hits in the newest 200; each gate workflow not hit is asked on its own below
-    attempt(lambda: take(gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)),
+    attempt(lambda: take(ci_runs().recent_main(o_r, 200)),
             None, catch=(Exception, SystemExit), what="ci-why: could not list main's runs")
     for name, wfile in red_gate_flows(o_r):
         if not any(r.get("workflowName") == name for r in hits):
@@ -404,7 +347,7 @@ def run_in_lists(o_r: str, n: Any) -> Any:
 def run_listed_or_viewed(o_r: Any, n: Any) -> Any:
     """The run on main a number or id names: from the newest 200, else by its id, else viewed."""
     # listing: a number not in the newest 200 falls back to its run id (run_id_of_number), then says unknown
-    runs = gh_json(o_r, "run", "list", "--branch", "main", "--limit", "200", "--json", RUN_FIELDS)
+    runs = ci_runs().recent_main(o_r, 200)
     r = next((r for r in runs if str(r.get("number")) == n), None)
     if r is None:
         rid = run_id_of_number(o_r, n) if n.isdigit() else None

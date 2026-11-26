@@ -351,7 +351,7 @@ class UntilGreenTest(RedBase):
         return super().tool(*argv, cwd=cwd, clock=clock or TickClock(self.t))
 
     def snap(self, conclusion):
-        A._main_runs.clear()
+        A.ci_runs().clear()
         s = A.ci_state_refresh(MOVIES, write=False)
         s["latest"]["Decodo probe"] = {"number": 99, "conclusion": conclusion}
         A.ci_state_write(s)

@@ -125,7 +125,7 @@ class RegistryGateTest(RedsBase):
         self.assertEqual(self.gate_reds(), set(), "red only in an unproven job: report only")
         self.assertEqual(A.gate_report_only(MOVIES, "Main", {"databaseId": 40, "conclusion": "failure"}),
                          (True, "report only, unproven: deps"))
-        A._main_runs.clear()
+        A.ci_runs().clear()
         red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store())
         self.assertFalse(red, text)
         self.assertIn("Main: RED, REPORT ONLY (run 40 #20, failure): report only, unproven: deps", text)
@@ -134,7 +134,7 @@ class RegistryGateTest(RedsBase):
         self.assertEqual([(i["data"]["red_kind"], i["data"]["gate"]) for i in main], [("outside", False)],
                          "no gate red: tracked as outside the gate")
         A._gating_rows.clear()
-        A._report_only_mem.clear()
+        A.ci_runs().clear()
         self.registry("2722")
         self.assertEqual(self.gate_reds(), {"20", "40"}, "a proven row's red holds the push")
         red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store())
@@ -152,7 +152,7 @@ class RegistryGateTest(RedsBase):
         self.assertTrue(report, why)
         self.assertIn("no row in .github/gating-checks.tsv: brand-new", why)
         self.assertEqual(self.gate_reds(), set(), "the hook's verdict: report only, no push held")
-        A._main_runs.clear()
+        A.ci_runs().clear()
         red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store())
         self.assertFalse(red, text)
         self.assertIn("Main: RED, REPORT ONLY", text)

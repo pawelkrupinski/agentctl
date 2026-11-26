@@ -15,7 +15,8 @@ from agentctl.redknobs import knob_streak_rereads
 from agentctl.core import SHORT, err, process_cache, reds_dir
 from agentctl.forge import RED_CONCLUSIONS
 from agentctl.cistate import ci_state_load
-from agentctl.ciwhy import Run, streak_runs
+from agentctl.ciwhy import streak_runs
+from agentctl.ciruns import Run
 from agentctl.runsigs import classifier_version, run_names, run_sigs
 
 

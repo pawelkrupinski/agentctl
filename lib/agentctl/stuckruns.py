@@ -6,10 +6,11 @@ import time
 from typing import Any, Callable
 from agentctl.timefmt import parse_time
 from agentctl.core import attempt, pct
-from agentctl.forge import gh_json, runner_queue, stuck_durations
+from agentctl.forge import runner_queue, stuck_durations
 from agentctl.runqueue import queue_full
 from agentctl.red import STUCK_FACTOR, STUCK_FLOOR
 from agentctl.outsideflows import stuck_history, stuck_timeout
+from agentctl.ciruns import ci_runs
 
 
 # THE STUCK LIMIT IS THE WORKFLOW'S OWN (the owner, 2026-11-06, deciding red 971723aec893: six false stuck reds in a
@@ -155,6 +156,6 @@ def job_starts(jobs: list[dict[str, Any]] | None) -> list[float]:
 def run_jobs(o_r: Any, run: dict[str, Any]) -> list[dict[str, Any]] | None:
     """The run's jobs ([{name, status, startedAt, ...}]), or None when they cannot be read."""
     try:
-        return gh_json(o_r, "run", "view", str(run.get("databaseId")), "--json", "jobs").get("jobs") or []
+        return ci_runs().run_jobs(o_r, run.get("databaseId"))
     except (Exception, SystemExit):
         return None

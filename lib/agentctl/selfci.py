@@ -18,11 +18,10 @@ from agentctl.core import fmt_age, git, host_role, run_cmd, state_root
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record, write_json
 from agentctl.cistate import state_read
-from agentctl.forge import gh_json
 from agentctl.redrepos import diagnosis, read_failure
 from agentctl.repos import bin_repo
-from agentctl.watchknobs import knob_wa_red_max
-from agentctl.watchknobs import knob_wa_read_every, knob_wa_undecided_max, knob_wa_unpinned_max
+from agentctl.watchknobs import knob_wa_read_every, knob_wa_red_max, knob_wa_undecided_max, knob_wa_unpinned_max
+from agentctl.ciruns import main_runs
 
 SELF_REPO = "pawelkrupinski/agentctl"
 DECIDED = ("success", "failure", "timed_out", "startup_failure")
@@ -33,8 +32,7 @@ PIN_LINK = "/var/lib/agentctl-src/current"  # the export the auto-pin runs: a li
 def read_runs() -> list[dict[str, Any]]:
     """agentctl's tests.yml runs on main, newest first."""
     # listing: the newest 30 on main; red_since reads from the newest decided run down, never an absence
-    return list(gh_json(SELF_REPO, "run", "list", "--workflow", "tests.yml", "--branch", "main", "--limit", "30",
-                        "--json", "databaseId,number,status,conclusion,headSha,createdAt,updatedAt"))
+    return list(main_runs(SELF_REPO, "tests.yml", 30))
 
 
 def pin_from_state() -> str | None:

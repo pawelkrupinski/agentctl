@@ -27,7 +27,7 @@ class CachesTest(Base):
     def test_a_registered_cache_starts_each_test_empty(self):
         self.assertTrue(A.PROCESS_CACHES)
         self.assertTrue(all(len(c) == 0 for c in A.PROCESS_CACHES))
-        A._main_runs["leak"] = 1  # the next test's setUp clears it
+        A.main_runs_of("leak")  # the next test's setUp clears it
 
 
 class EveryTestCaseTest(unittest.TestCase):
@@ -38,7 +38,7 @@ class EveryTestCaseTest(unittest.TestCase):
 
     def test_the_harness_clears_every_registered_cache_for_any_test(self):
         import harness
-        A._main_runs["leak"] = 1
+        A.main_runs_of("leak")
         harness._reset_process_state()
         self.assertEqual([c for c in A.PROCESS_CACHES if len(c)], [])
 

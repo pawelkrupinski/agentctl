@@ -150,10 +150,16 @@ class OutsideGateTest(unittest.TestCase):
         mem = {}
         for n in r.sample(flows, r.randint(0, 3)):
             mem[n.lower() + ".yml"] = (NOW - r.choice([10, 5000]), r.choice([None, [run(n)], []]))
-        case.put("_flow_runs", mem)
-        mains = {}
-        case.put("_main_runs", mains)
-        return (lambda: (mem, {n: runs for m in mains.values() for n, runs in m.outside.items()}),)
+        # the workflow files' own listings, kept by the reader (CiRuns, review 2026-11-26 B F2: this was outsideflows'
+        # own _flow_runs, keyed by file alone); a None was "never listed"
+        runs = A.CiRuns()
+        runs._listed.update({("o/r", f, 30, None): v for f, v in mem.items() if v[1] is not None})
+        case.put("ci_runs", lambda: runs)
+
+        def kept():
+            listed = {k[1]: v for k, v in runs._listed.items() if k[0] == "o/r" and k[2:] == (30, None)}
+            return {**{f: listed.get(f, v) for f, v in mem.items()}, **listed}  # the old memo's order: seeded first
+        return (lambda: (kept(), {n: rs for n, rs in runs._main.get("o/r", A.MainRuns()).outside.items()}),)
 
     def test_outside_gate(self):
         def run(A):

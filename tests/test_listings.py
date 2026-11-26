@@ -7,7 +7,8 @@ out, one attempt's jobs, a log cut short).
   repo has -- never by scanning the newest 50;
 - the ghost check (a queued run no runner scheduler can see) pages GitHub's listing to its end, and past what it reads
   it cannot tell, which is never a ghost (a healthy run is never cancelled for a long queue);
-- every run listing in lib/agentctl/ says at its call site, in a `# listing:` line, how it treats a run it left out."""
+- every run listing in lib/agentctl/ (a gh `run list`, or ciruns' main_runs / recent_main) says at its call site, in a
+  `# listing:` line, how it treats a run it left out."""
 import os, re, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -90,7 +91,8 @@ class ListingLintTest(unittest.TestCase):
             lines = open(os.path.join(LIB, name)).read().splitlines()
             for i, line in enumerate(lines):
                 if line.lstrip().startswith(("#", "def ")) or not (
-                        re.search(r'gh_json\([^)]*"run", "list"', line) or re.search(r"\bforge_actions_runs\(", line)):
+                        re.search(r'gh_json\([^)]*"run", "list"', line) or re.search(r"\bforge_actions_runs\(", line)
+                        or re.search(r"(?<![\w.])main_runs\(|\.recent_main\(", line)):
                     continue
                 if not any("# listing:" in lines[j] for j in range(max(0, i - 3), i + 1)):
                     bad.append(f"{name}:{i + 1}: {line.strip()[:100]}")

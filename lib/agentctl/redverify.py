@@ -6,7 +6,7 @@ from typing import Any
 import os
 from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.statefile import read_record
-from agentctl.core import err, git, pct, process_cache, reds_dir, remote
+from agentctl.core import err, git, pct, reds_dir, remote
 from agentctl.trailers import trailer_values
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_what
@@ -17,11 +17,11 @@ from agentctl.runsigs import cause_of, name_causes
 from agentctl.redopen import red_offer, red_open
 from agentctl.redfixcheck import fix_reaches_red
 from agentctl.redknobs import knob_red_main_verify_every, knob_red_verify_slack
-from agentctl.clock import epoch_now
 from agentctl.workflows import workflow_file_of
 from agentctl.ancestry import contains_local
-from agentctl.forge import RUN_FIELDS, gh_json, is_cancelled, stuck_durations
+from agentctl.forge import is_cancelled, stuck_durations
 from agentctl.workflowcron import cron_next
+from agentctl.ciruns import ci_runs, main_runs
 
 
 def red_verify_scheduled(store, it, f, sha, o_r, repo, t):
@@ -232,7 +232,6 @@ RED_VERIFY_DURATION = 2 * 3600  # s a scheduled run is taken to last when none o
 RED_VERIFY_HOLD = 30 * 60       # s a run that will decide the fix, still undecided at the deadline, holds it again
 
 
-_verify_runs = process_cache({})
 
 
 VERIFY_RUNS_TTL = 5 * 60
@@ -240,17 +239,12 @@ VERIFY_RUNS_TTL = 5 * 60
 
 def workflow_main_runs(o_r, wfile):
     """The newest 30 runs on main of workflow file wfile (read at most every VERIFY_RUNS_TTL); [] when unread."""
-    at, runs = _verify_runs.get((o_r, wfile), (0.0, None))
-    if runs is None or epoch_now() - at >= VERIFY_RUNS_TTL:
-        try:
-            # listing: a fix is verified by a run CONTAINING it, the newest 30 read; none there keeps it pending, never refuted
-            runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
-                           "--json", RUN_FIELDS) or []
-        except (Exception, SystemExit) as e:
-            err(f"red verify: could not list {wfile} ({str(e)[:120]})")
-            runs = runs or []
-        _verify_runs[(o_r, wfile)] = (epoch_now(), runs)
-    return runs
+    try:
+        # listing: a fix is verified by a run CONTAINING it, the newest 30 read; none there keeps it pending, never refuted
+        return main_runs(o_r, wfile, 30, fresh_for=VERIFY_RUNS_TTL)
+    except (Exception, SystemExit) as e:
+        err(f"red verify: could not list {wfile} ({str(e)[:120]})")
+        return ci_runs().last_listed(o_r, wfile, 30) or []
 
 
 def red_verify_plan(o_r, repo, workflow, after):

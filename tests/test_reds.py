@@ -80,7 +80,7 @@ class RedsBase(RedBase):
         super().tearDown()
 
     def snap(self):
-        A._main_runs.clear()
+        A.ci_runs().clear()
         return A.ci_state_refresh(MOVIES)  # written: a workflow_green probe reads it
 
     def tool(self, *argv, cwd=None, clock=None):
@@ -1200,8 +1200,8 @@ class OwnerTest(RedsBase):
         it, path = self.held_by_a_fixer("s-mine")
         os.environ.update(CLAUDE_CODE_SESSION_ID="s-mine", AGENTCTL_FIXER_RECORD=path)
         other = run(77, 20, "Report run timings", "timings.yml", self.sha)
-        A._main_runs.clear()
-        self.addCleanup(A._main_runs.clear)
+        A.ci_runs().clear()
+        self.addCleanup(A.ci_runs().clear)
         A.main_runs_of(MOVIES).outside["Report run timings"] = [other]
         rc, out = self.tool("red", "block", "20", "--owner-cause", "credentials", "--cmd", "set the key",
                             "--repo", "movies", cwd=self.r.path)
@@ -1971,7 +1971,7 @@ class AuditTest(RedsBase):
             return real(o_r, *args)
         A.main_workflow_files = lambda o_r: {"Nightly": "nightly.yml"}
         A.gh_json = gh
-        A._flow_runs.clear()
+        A.ci_runs().clear()
         try:
             out = A.outside_gate(MOVIES)
         finally:
