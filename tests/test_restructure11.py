@@ -88,9 +88,9 @@ def a_pre_rows(r, repo):
     if r.random() < 0.3:
         cache[(repo, "m" * 40)] = rows
     if r.random() < 0.3:
-        cache[("api", "o/r")] = (r.choice([999_000.0, 1_000_000.0, 1_000_001.0]), rows)
+        cache[("api", "o/r")] = (r.choice([999_000.0, 999_700.0, 1_000_000.0, 1_000_001.0]), rows)
     if r.random() < 0.3:
-        cache[("names", "o/r")] = (r.choice([999_000.0, 1_000_000.0]), {"w.yml": "W"})
+        cache[("names", "o/r")] = (r.choice([999_000.0, 999_700.0, 1_000_000.0]), {"w.yml": "W", "id.yml": "IdApi"})
     return cache
 
 
@@ -148,7 +148,7 @@ class GateFlowNamesTest(unittest.TestCase):
         r = case.rng
         clock(case)
         case.put("_gating_rows", a_pre_rows(r, "/clone"))
-        case.fake("main_workflow_files", lambda rng, o: rng.choice([{}, {"W": "w.yml"}, {"W": "w.yml", "Id": "id.yml"}]))
+        case.fake("main_workflow_files", lambda rng, o: rng.choice([{}, {"W": "w.yml"}, {"W": "w.yml", "Id": "id.yml"}, {"Wmain": "w.yml"}]))
         case.fake("gh_json", api_gh)
         fake_store(case, r)
         return ("o/r", r.choice([(), ("w.yml",), ("w.yml", "id.yml"), ["k.yml", "new.yml"], ("zzz.yml", "w.yml")]))
@@ -371,7 +371,7 @@ class OwnerOfTest(unittest.TestCase):
         run = r.choice([{"databaseId": 5, "headSha": "c" * 40, "workflowName": "W"}, {"databaseId": None, "headSha": None},
                         {"databaseId": 6}])
         rec = r.choice([None, None, {"worktree": "/w/x", "pid": 3}, {"agent": "a"}, {"worktree": "/w/gone"}])
-        old = r.choice([{}, {"source": "unmatched", "epoch": 1_000_000.0 - r.choice([10, 4000])}, {"source": "matched"}])
+        old = r.choice([{}, {"source": "unmatched", "epoch": 1_000_000.0 - r.choice([10, 3600, 4000])}, {"source": "matched"}])
         case.fake("dispatch_for", lambda rng, b, rid=None: rec)
         case.fake("owner_gone", lambda rng, rc: rng.choice([None, True, False]))
         case.fake("commit_on_main", lambda rng, repo, base: rng.choice([None, True, False, False]))
