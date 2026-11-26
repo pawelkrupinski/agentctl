@@ -44,22 +44,20 @@ def land_hold_set(st: Any, secs: int, why: str | None, by: str) -> Any:
     it, new = st.open_singleton("hold", "held", data, "hold_seq", "land#", deadline_s=secs)
     if new and secs == LAND_HOLD_DEFAULT:
         return it
-    if new:  # its own expiry, said
-        event = {"cause": "owner", "text": f"land hold {it['id']} by {by} for {secs // 60} min: {why or 'no reason given'}"}
-    else:
-        event = {"cause": "owner", "text": f"land hold {it['id']} extended by {by}: {why or 'no reason given'}"}
-    move_held(st, it, data, secs, event)
+    said = f"by {by} for {secs // 60} min" if new else f"extended by {by}"  # the maker's own expiry, or an extension
+    move_held(st, it, data, secs, f"land hold {it['id']} {said}: {why or 'no reason given'}")
     return st.item("hold", it["id"])
 
 
-def move_held(st: Any, it: dict[str, Any], data: dict[str, Any], secs: int, event: dict[str, Any]) -> None:
-    """The hold in force re-deadlined to now + secs, its event said. The other holder's own move may land between this
-    holder's read and its write -- the maker giving the hold its expiry, or the other extending it first -- so the version
-    is then stale: read it again and move (2026-11-26: the extender's stale read lost its extension, 70cab8f; then the
+def move_held(st: Any, it: dict[str, Any], data: dict[str, Any], secs: int, text: str) -> None:
+    """The hold in force re-deadlined to now + secs, the owner's move, `text` its event. The other holder's own move may
+    land between this holder's read and its write -- the maker giving the hold its expiry, or the other extending it
+    first -- so the version is then stale: read it again and move (2026-11-26: the extender's stale read lost its extension, 70cab8f; then the
     MAKER's stale read raised StaleVersion in its thread and lost its expiry, #289 / #292, test_seq_atomic)."""
     for attempt in range(3):
         try:
-            st.transition("hold", it["id"], "held", it["version"], data=data, deadline_s=secs, event=event)
+            st.transition("hold", it["id"], "held", it["version"], data=data, deadline_s=secs,
+                          event={"cause": "owner", "text": text})
             return
         except StaleVersion:
             if attempt == 2:
