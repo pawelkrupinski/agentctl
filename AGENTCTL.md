@@ -10,7 +10,7 @@ calls.
 - Not on PATH: call it as `~/bin/agentctl`.
 - Python 3, standard library only.
 - Tests: `~/bin/agentctl suite` from the worktree (= `python3 tests/run.py`, which takes a governor ticket of class `suite`,
-  ONE run at once, `$AGENTCTL_SUITE_CAP`: parallel agents queue instead of piling up on the laptop). tests/run.py runs
+  TWO runs at once when the cores allow, `$AGENTCTL_SUITE_CAP`: more agents queue instead of piling up on the laptop). tests/run.py runs
   the suite in parallel workers (`-j N`, default min(cpus, 8)), each test under a timeout (`--timeout S`, default 60:
   the test FAILS with its traceback instead of hanging the suite), the whole suite bounded (`--suite-timeout`); about
   70 s on the laptop. `agentctl suite test_reds` runs the tests whose id contains a pattern. Mutation tests included.
@@ -2397,7 +2397,7 @@ agentctl gov usage --job J --wall S --cpu S   # one run's cores, for J's measure
 agentctl gov cores --job J          # the cores J is charged (measured p75, else its default)
 agentctl gov probe                  # one line: the governor's features (admit cores route width), for other repos' callers
 agentctl gov replay --at 2026-11-18T05:45Z [--hold 30] [--cores 18]   # the admissions again under the cores rule
-agentctl suite [run.py args]       # agentctl's own tests (tests/run.py) under a `suite` ticket: one run at once (SUITE_CAP)
+agentctl suite [run.py args]       # agentctl's own tests (tests/run.py) under a `suite` ticket: two at once when the cores allow (SUITE_CAP)
 ```
 
 - **The busy cores are the whole machine's CPU** (2026-11-22): `machine_busy_cores` reads the CPU tick delta of the
@@ -3314,7 +3314,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `store_secret` | `AGENTCTL_STORE_SECRET` | - | the store's shared secret (default: the built-in one) |
 | `store_url` | `AGENTCTL_STORE_URL` | - | the remote store's URL (set: every process uses it) |
 | `streak_rereads` | `AGENTCTL_STREAK_REREADS` | `3` | stale or missing streak run signatures read again per tick |
-| `suite_cap` | `AGENTCTL_SUITE_CAP` | `1` | agentctl's own test-suite runs at once : parallel agents queue, never pile up |
+| `suite_cap` | `AGENTCTL_SUITE_CAP` | `2` | agentctl's own test-suite runs at once : more agents queue, never pile up |
 | `swap_free_floor_mb` | `AGENTCTL_SWAP_FREE_FLOOR_MB` | `2048` | swap free (MB) below which the shorter idle limit applies |
 | `sweep_hour` | `AGENTCTL_SWEEP_HOUR` | `9` | local time: the daily sweep runs at the first maintain pass from 09:00 |
 | `sync_mirror` | `AGENTCTL_SYNC_MIRROR` | `10` | s between the laptop's copies of /v1/state into state.json |

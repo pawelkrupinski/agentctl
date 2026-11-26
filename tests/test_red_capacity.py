@@ -261,7 +261,8 @@ class LaptopPressureTest(unittest.TestCase):
 
 
 class SuiteGateTest(unittest.TestCase):
-    """agentctl's own suite runs under a governor ticket of class `suite`, one at a time: a second waits."""
+    """agentctl's own suite runs under a governor ticket of class `suite`, two at a time when the cores allow: a third
+    waits on the cap."""
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -278,8 +279,10 @@ class SuiteGateTest(unittest.TestCase):
             os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         self.tmp.cleanup()
 
-    def test_one_suite_at_a_time(self):
+    def test_two_suites_at_a_time(self):
+        t0 = A.gov_admit("suite", label="zeroth", wait=False)
         t1 = A.gov_admit("suite", label="first", wait=False)
+        self.assertIsNotNone(t0, "the second suite slot")
         self.assertIsNotNone(t1)
         try:
             self.assertIsNone(A.gov_admit("suite", label="second", wait=False))
@@ -289,6 +292,7 @@ class SuiteGateTest(unittest.TestCase):
             self.assertIsNotNone(A.gov_admit("check", label="a check is no suite", wait=False))
         finally:
             t1.release()
+            t0.release()
         t2 = A.gov_admit("suite", label="second", wait=False)
         self.assertIsNotNone(t2)
         t2.release()

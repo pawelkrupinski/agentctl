@@ -193,7 +193,11 @@ GOV_ADMIT_MAX = 2 * 3600  # a check waits this long for the governor at most ($A
 LAPTOP_LOAD = 2.0             # holds other work while the 1-min load is over this x the cores
 
 
-SUITE_CAP = 1  # agentctl's own test-suite runs at once ($AGENTCTL_SUITE_CAP): parallel agents queue, never pile up
+# A SECOND SUITE SLOT (2026-11-26): at one, two lanes' pushes queued each pre-push step (suite, stress lane, simulator
+# gate) behind the other's -- 20.3 h of suite waits on the cap in 7 days, a step's wait up to 84 min. The cores rule
+# (govfits' CPU refusal: busy + the suite's charge within the cores) still decides whether the second may start, so
+# two run only when the cores are free; a third queues.
+SUITE_CAP = 2  # agentctl's own test-suite runs at once ($AGENTCTL_SUITE_CAP): more agents queue, never pile up
 
 
 GOV_RESERVE_GB = 1.0
