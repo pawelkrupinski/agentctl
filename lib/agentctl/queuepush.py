@@ -62,7 +62,7 @@ def tick_changes(repo: str, d: str, clock: Any, st: Any) -> list[str]:
         return _tick_changes(repo, d, clock, st)
 
 
-def _tick_changes(repo, d, clock, st):
+def _tick_changes(repo: str, d: str, clock: Any, st: Any) -> list[str]:
     """One tick over the change items: re-queueing re-derived (only the newest entry per worktree and branch runs), an
     executor started for each queued or lease-less checking change (red fixes first, while a slot is free), a
     checking change past its deadline back to queued (infra), a queued one past its deadline escalated, and each

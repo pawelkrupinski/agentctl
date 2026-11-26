@@ -7,7 +7,7 @@ from agentctl.core import SHORT, env_num, err, process_cache, reds_dir
 from agentctl.statefile import read_record
 from agentctl.classify import norm_line
 from agentctl.forge import RED_CONCLUSIONS
-from agentctl.ciwhy import ci_state_load, streak_runs
+from agentctl.ciwhy import Run, ci_state_load, streak_runs
 from agentctl.runsigs import classifier_version, run_names, run_sigs
 
 
@@ -29,7 +29,6 @@ from agentctl.runsigs import classifier_version, run_names, run_sigs
 # per workflow, which the queue facts carry into a waiting fix's words (redland.red_wait), until a read succeeds.
 STREAK_REREADS = 3  # stale or missing streak run signatures read again per tick ($AGENTCTL_STREAK_REREADS)
 Sig = dict[str, Any]
-Run = dict[str, Any]
 episode_unread: dict[str, str] = process_cache({})  # workflow -> why its episode's reference could not be read
 
 
@@ -59,13 +58,10 @@ class RedEpisode:
         if rid in self.sigs:
             return self.sigs[rid]
         rec = read_record(reds_dir("runsig", f"{rid}.json"))
-        if rec is not None and rec.get("classifier") == classifier_version():
-            got = rec.get("sigs") or []
-        else:
-            got = self._read_again(r) if self._may_read(r) else None
-            got = got if got is not None else (rec or {}).get("sigs") or []
-        self.sigs[rid] = got
-        return got
+        current = rec is not None and rec.get("classifier") == classifier_version()
+        fresh = None if current else self._read_again(r) if self._may_read(r) else None
+        self.sigs[rid] = fresh if fresh is not None else (rec or {}).get("sigs") or []
+        return self.sigs[rid]
 
     def _may_read(self, r: Run) -> bool:
         if self.budget[0] <= 0 or r.get("status") != "completed" or r.get("conclusion") not in RED_CONCLUSIONS:

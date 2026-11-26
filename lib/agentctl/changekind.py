@@ -59,7 +59,7 @@ def priority_table_markdown():
                       PRIORITY_DOC_END])
 
 
-def queue_facts(gate, st):
+def queue_facts(gate: Any, st: Any) -> dict[str, Any]:
     """THE FACTS a change is classified against: {"gate": the gate's current red names (gate_reds), "open": {name: [red
     id, red kind]} for every red the store has open: the item's names and, for a gate red, the runs of its EPISODE (redepisode.py);
     "episode_unread": {workflow: why} of the gate's episodes that could not be read (only their newest run counts).

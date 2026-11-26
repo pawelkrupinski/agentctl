@@ -106,7 +106,7 @@ def classifier_version() -> str:
     return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:12]
 
 
-def save_run_sigs(o_r, run, workflow, per_job):
+def save_run_sigs(o_r: str, run: dict[str, Any], workflow: str, per_job: Any) -> list[dict[str, Any]]:
     """per_job: [(job, kind, first relevant line)] of a completed red run -> its signatures, cached on disk."""
     sigs = []
     for j, k, l in per_job:
@@ -146,21 +146,21 @@ def _unread_not_due(unread: Any, t: Any) -> Any:
     return bool(unread and unread.get("classifier") == classifier_version() and t < float(unread.get("due") or 0))
 
 
-def run_sigs(o_r, run, workflow, now_=None):
+def run_sigs(o_r: str, run: dict[str, Any], workflow: str, now_: float | None = None) -> list[dict[str, Any]]:
     """The signatures of a completed red run: [{job, kind, line, sig}] (cached; explain_run fills the cache). A run whose
     log went unread answers what it last read until its backoff is due (RUNSIG_UNREAD_FIRST)."""
     t = epoch_now() if now_ is None else now_
     rid = run.get("databaseId")
     rec = read_record(reds_dir("runsig", f"{rid}.json"))
     if rec is not None and rec.get("classifier") == classifier_version():
-        return rec["sigs"]
+        return list(rec["sigs"])
     unread_path = reds_dir("runsig-unread", f"{rid}.json")
     unread = read_record(unread_path)
     if _unread_not_due(unread, t):
-        return unread["sigs"]
+        return list(unread["sigs"])
     lines, _num, per_job = explain_run_jobs(o_r, run, 6)
     if any("LOG UNREADABLE" in l for l in lines):  # a log not read is no verdict: read again when due, never cached
-        return _save_unread_sigs(unread_path, unread, rid, workflow, per_job, t)
+        return list(_save_unread_sigs(unread_path, unread, rid, workflow, per_job, t))
     if unread:
         with suppress(OSError):
             os.remove(unread_path)

@@ -8,7 +8,7 @@ import re
 import sqlite3
 from agentctl.clock import epoch_now
 import time
-from typing import Any, Callable
+from typing import Any, Callable, cast
 from agentctl.knobs import knob_contact_gap, knob_contact_pause_max
 from agentctl.core import state_root
 from agentctl.statefile import json_object
@@ -239,7 +239,7 @@ class Store(OfferTable):
             c.close()
 
     # -- items and their transitions (design §5; phase 1 step 5) -----------------------------------------------------
-    def _item(self, c, typ, iid):
+    def _item(self, c: Any, typ: str, iid: str) -> dict[str, Any] | None:
         r = c.execute("SELECT * FROM items WHERE type=? AND id=?", (typ, iid)).fetchone()
         if not r:
             return None
@@ -294,7 +294,7 @@ class Store(OfferTable):
                 c.execute("INSERT INTO items VALUES (?,?,?,?,?,?,?,?)",
                           (typ, f"{prefix}{n}", state, 1, now_, now_ + secs, 0, json.dumps(data)))
             c.execute("COMMIT")
-            return self._item(c, typ, row["id"] if row else f"{prefix}{n}"), row is None
+            return cast(dict[str, Any], self._item(c, typ, row["id"] if row else f"{prefix}{n}")), row is None
         finally:
             c.close()
 
