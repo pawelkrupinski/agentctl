@@ -99,6 +99,27 @@ class JvmRulesTest(unittest.TestCase):
                 os.environ.pop(k)
         self.assertEqual(got, {302: "hog"})
 
+    def test_an_orphan_ignoring_sigterm_is_killed_and_the_log_says_how(self):
+        """Review 2026-11-26 (C 8.4): maint's kill sent SIGTERM only and logged "killed" though a TERM-ignoring JVM
+        lived on (found again 15 min later); the JVM scan escalated. One ending now: TERM, then KILL after the grace."""
+        p = subprocess.Popen([sys.executable, "-c", "import signal, sys, time\nsignal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                              "print('ready', flush=True)\ntime.sleep(60)"], stdout=subprocess.PIPE, text=True)
+        p.stdout.readline()
+        logged, saved = [], (A.reap_log, os.environ.get("TERM_GRACE_SECONDS"))
+        A.reap_log = logged.append
+        os.environ["TERM_GRACE_SECONDS"] = "1"
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                A.kill_orphan("fixture", p.pid, [("fixture", p.pid, "1:00", "stale", "x")], [], {})
+            p.wait(timeout=10)
+        finally:
+            A.reap_log = saved[0]
+            os.environ.pop("TERM_GRACE_SECONDS") if saved[1] is None else os.environ.__setitem__("TERM_GRACE_SECONDS", saved[1])
+            if p.poll() is None:
+                p.kill()
+        self.assertEqual(p.returncode, -9)
+        self.assertRegex(logged[0], rf"^killed fixture pid {p.pid} \(SIGKILL after 1s\): stale")
+
     def test_orphans_lists_the_jvms_and_a_dry_run_kills_nothing(self):
         ps = os.path.join(self.t, "ps")
         with open(ps, "w") as f:

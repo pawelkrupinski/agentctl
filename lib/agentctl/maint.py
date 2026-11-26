@@ -16,7 +16,7 @@ from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.forge import gh_json
 from agentctl.procs import process_cwds, ps, ps_rows
 from agentctl.jvmreap import (
-    awake_now, is_sbt, jvm_candidates, jvm_reap, jvm_scan, reap_log, sbt_serving, sbt_stuck_reasons, swap_free_mb,
+    awake_now, end_process, is_sbt, jvm_candidates, jvm_reap, jvm_scan, reap_log, sbt_serving, sbt_stuck_reasons, swap_free_mb, term_grace,
     thread_dump, tree_cpu)
 from agentctl.govknobs import knob_jvm_ps, knob_sbt_reap
 
@@ -408,22 +408,18 @@ def stale_jvms(found: Any) -> Any:
         return []
 
 
-def terminate(pid: Any) -> Any:
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-
-
 def kill_orphan(kind: Any, pid: Any, found: Any, procs: Any, cwds: Any) -> Any:
     """One orphan terminated with its children (an sbt server's thread dump taken first), logged."""
     if kind == "sbt" and "java" in (next((c for p, _pp, _e, c in procs if p == pid), "").split(" ", 1)[0]):
         print(f"thread dump of sbt server pid {pid}: {thread_dump(pid, cwds.get(pid, ''))}")
     kids = run_cmd(["pgrep", "-P", str(pid)]).stdout.split()
-    for p in [pid] + [int(k) for k in kids]:
-        terminate(p)
-    print(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else ""))
-    reap_log(f"killed {kind} pid {pid}" + (f" (+children {kids})" if kids else "") + ": " + orphan_detail(found, pid))
+    for k in kids:
+        with suppress(ProcessLookupError):
+            os.kill(int(k), signal.SIGTERM)
+    how = end_process(pid, term_grace())
+    line = (f"killed {kind} pid {pid} ({how})" if how else f"{kind} pid {pid} was gone") + (f" (+children {kids})" if kids else "")
+    print(line)
+    reap_log(line + ": " + orphan_detail(found, pid))
 
 
 def orphan_detail(found: Any, pid: Any) -> Any:

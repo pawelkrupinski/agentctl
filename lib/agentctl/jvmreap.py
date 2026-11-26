@@ -413,9 +413,10 @@ def _reap_guard(pid: int, rule: str, own_pgid: int, procs: Any) -> str | None:
     return f"another agent's working process (under {w})" if w else None
 
 
-def _end_jvm(pid: int, rule: str, args: str, grace: float) -> str | None:
-    """SIGTERM (after a thread dump for an sbt server), SIGKILL after `grace` s; the line saying how, None if it was gone."""
-    dump = f"; thread dump {thread_dump(pid, '')}" if "sbt-launch" in args or "xsbt.boot" in args else ""
+def end_process(pid: int, grace: float) -> str | None:
+    """SIGTERM, SIGKILL after `grace` s: how it ended ("SIGTERM, 2s" / "SIGKILL after 10s"), None if it was gone. THE
+    ending of a reaped process (maint's orphans and the JVM scan's alike: review 2026-11-26, maint sent SIGTERM only
+    and logged a kill a TERM-ignoring JVM survived)."""
     try:
         os.kill(pid, signal.SIGTERM)
     except ProcessLookupError:
@@ -424,12 +425,22 @@ def _end_jvm(pid: int, rule: str, args: str, grace: float) -> str | None:
     while waited < grace and pid_alive(pid):
         time.sleep(0.5)  # wall: waits on and times real processes and threads
         waited += 0.5
-    how = f"SIGTERM, {waited:.0f}s"
-    if pid_alive(pid):
-        with suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
-        how = f"SIGKILL after {grace:.0f}s"
-    return f"killed jvm pid {pid} ({how}) rule={rule}{dump}: {args[:150]}"
+    if not pid_alive(pid):
+        return f"SIGTERM, {waited:.0f}s"
+    with suppress(ProcessLookupError):
+        os.kill(pid, signal.SIGKILL)
+    return f"SIGKILL after {grace:.0f}s"
+
+
+def term_grace() -> float:
+    return float(jvm_knob("TERM_GRACE_SECONDS", 10))
+
+
+def _end_jvm(pid: int, rule: str, args: str, grace: float) -> str | None:
+    """SIGTERM (after a thread dump for an sbt server), SIGKILL after `grace` s; the line saying how, None if it was gone."""
+    dump = f"; thread dump {thread_dump(pid, '')}" if "sbt-launch" in args or "xsbt.boot" in args else ""
+    how = end_process(pid, grace)
+    return f"killed jvm pid {pid} ({how}) rule={rule}{dump}: {args[:150]}" if how else None
 
 
 def _jvm_line(cand: tuple[Any, ...]) -> str:
@@ -441,7 +452,7 @@ def _jvm_line(cand: tuple[Any, ...]) -> str:
 def jvm_reap(cands: list[tuple[Any, ...]], kill: bool, procs: Any) -> list[str]:
     """List the candidates; with kill, end them under the guards (idle duplicate, alive, not this group, no agent's
     work), sbt servers after a thread dump, TERM then KILL. Returns the lines printed."""
-    grace = float(jvm_knob("TERM_GRACE_SECONDS", 10))
+    grace = term_grace()
     own_pgid = os.getpgid(0)
     lines = [_jvm_line(c) for c in cands]
     for l in lines:
