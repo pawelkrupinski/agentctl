@@ -198,18 +198,23 @@ class ChangePush:
         commits = waiting_commits(self.tree, self.base, self.head)
         reds = gate_reds(self.repo) if waiting_supported(self.repo) else set()
         # a gate red's fix failing only as main fails lands: no wait
-        kr = None if may_land_on_red(facts_for(reds, self.st), self.e, self.repo, commits, self.st).gate_fix else self.e.get("known_red")
+        landing = may_land_on_red(facts_for(reds, self.st), self.e, self.repo, commits, self.st)
+        known = self.e.get("known_red")
+        # policy: known-red-tools
+        kr = None if landing.gate_fix or landing.tools_only_known_red else known
         if kr or (reds and must_wait(self.repo, commits, reds, self.st)):
             queue_join(self.st, self.repo, self.d, self.e, self.tree, self.head, known_red_words(kr))
             return "joined"
         fixes_of(self.repo, commits, self.st)  # its Fixes-Red trailers checked (fix_check caches each verdict and tells
         # the author of one that counts for nothing)
-        return self._push()
+        return self._push(landing.tools_only_known_red)
 
-    def _push(self) -> str:
+    def _push(self, tools_only_known_red: bool = False) -> str:
         e, head = self.e, self.head
-        set_change(self.st, self.d, e, "pushing", cause="pushing", data={"rechecks": e["rechecks"]} if e.get("rechecks") else None,
-                   event={"text": f"{e['id']}: pushing {head[:10]}"})
+        past = " (tools-only, failing only as main's gate fails: not held behind that red)" if tools_only_known_red else ""
+        set_change(self.st, self.d, e, "pushing", cause="tools-only-known-red" if tools_only_known_red else "pushing",
+                   data={"rechecks": e["rechecks"]} if e.get("rechecks") else None,
+                   event={"text": f"{e['id']}: pushing {head[:10]}{past}"})
         pushed_at = self.clock.time()
         env = self._push_env()
         rc, out = run_watched(push_argv(remote(), head), self.tree, env, self.log_path, "push", **push_bounds())

@@ -28,6 +28,8 @@ CAUSES = {
     "regen-hold": "held for a generated file's regeneration",
     "lock-wait": "it waited on a lock (the landing lock, a land hold, a push in flight)",
     "batch": "a push or backlog batch took it, or went on without it",
+    "tools-only-known-red": "a tools-only change failing only as main's gate fails went on to push, not held behind "
+                            "that red (the owner, 2026-11-26)",
     "pushing": "its push to main started or was retried",
     "landed": "its content reached main (pushed, or found there)",
     "no-longer-applies": "main moved and the change no longer applies (a conflict)",

@@ -84,6 +84,7 @@ class RedLanding:
     reds: tuple[dict[str, Any], ...]
     covered: bool
     wait: str | None
+    tools_only_known_red: bool = False  # TOOLS-ONLY, FAILING ONLY AS MAIN'S GATE FAILS: lands (below)
 
     @property
     def red_fix(self) -> bool:
@@ -141,7 +142,20 @@ def may_land_on_red(facts: dict[str, Any], entry: dict[str, Any] | None = None, 
     gnames = gate_red_names(facts)
     bare = first_bare(rows, gnames)
     covered = bare is None and (rows is not None or any(r["kind"] == "gate" for r in reds))
-    return RedLanding(frozenset(names), reds, covered, None if covered else red_wait(facts, names, gnames, bare))
+    wait = None if covered else red_wait(facts, names, gnames, bare)
+    return RedLanding(frozenset(names), reds, covered, wait, tools_only_known_red(facts, entry, rows))
+
+
+# THE OWNER'S "LET IT THROUGH" (2026-11-26; policy `known-red-tools`): a TOOLS-ONLY change whose checks failed only
+# where main's newest decided gate run fails (the entry's known_red, `gate_only`: every failing key is one the gate's
+# run shows; no extra failure, which would have rejected it) does not wait behind that red -- 13 stays and 102 h in the
+# history. Production changes are unchanged. Main's own CI re-tests everything after the landing.
+def tools_only_known_red(facts: dict[str, Any], entry: dict[str, Any] | None, rows: list[CommitFixes] | None) -> bool:
+    """Whether the change's known red is no reason to wait: the gate is red, its commits are read and none touches
+    production, and every failing check is one main's gate run fails too."""
+    known = (entry or {}).get("known_red")
+    return bool(isinstance(known, dict) and known.get("gate_only") and facts.get("gate") and rows is not None
+                and not any(prod for _c, prod, _f in rows))
 
 
 def first_bare(rows: list[CommitFixes] | None, gnames: set[str]) -> tuple[str, set[str]] | None:

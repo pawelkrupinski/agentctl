@@ -24,7 +24,7 @@ from agentctl.redreplay import fix_replay_refusal
 from agentctl.waiting import already_landed, cancel_entry_remote
 from agentctl.blamerecords import blame_land_refusal
 from agentctl.queuediff import rebase_in_tree
-from agentctl.queuefailure import CHECK_TIMEOUT, TIMEOUT_RETRIES, judge_failure, keys_text
+from agentctl.queuefailure import CHECK_TIMEOUT, TIMEOUT_RETRIES, judge_failure, keys_text, on_gate_run
 
 
 def regen_commands(tree: Any, files: Any) -> Any:
@@ -255,7 +255,8 @@ def judge_check_failure(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any
     srcs = sorted(set(what.values()))
     wlog(d, f"{e['id']}: its checks failed only where its base fails too ({keys_text(what)}; {'; '.join(srcs)})"
             ": it waits behind that red")
-    return None, where, {"keys": sorted(what), "where": srcs, "base": base}
+    return None, where, {"keys": sorted(what), "where": srcs, "base": base,
+                         "gate_only": all(on_gate_run(w) for w in what.values())}
 
 
 def own_paths(tree: Any, base: str, e: dict[str, Any]) -> set[str] | None:

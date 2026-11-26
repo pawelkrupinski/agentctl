@@ -53,6 +53,9 @@ POLICIES = {p.id: p for p in (
     # -- rules the owner decided
     Policy("red-gate", "hold", "a production change waits on `waiting` while main's gate is red (unless it fixes it)",
            decided="the owner, 2026-10-27: red builds gate every push to main (CLAUDE.md, the owner's gate)"),
+    Policy("known-red-tools", "delay", "a TOOLS-ONLY change whose checks fail only where main's newest decided gate run "
+           "fails does not wait behind that red; it lands (an extra failure rejects it, a production change still waits)",
+           decided="the owner, 2026-11-26: \"let it through\" (13 stays, 102 h on `waiting`)"),
     Policy("batch", "hold", "a solo check or push waits while a batch it is not in assembles or pushes",
            decided="the owner, 2026-11-17: \"batch whenever there's a backlog, not only on red\""),
     Policy("backlog-batch", "hold", "a batchable queued change waits for the next backlog batch",

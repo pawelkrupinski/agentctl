@@ -154,6 +154,14 @@ def base_failure_keys(repo: str, d: str, e: Entry, base: str, now: float) -> dic
     return out
 
 
+GATE_RUN_WHERE = " on main"  # the end of a key's `where` when it fails in main's newest decided gate run
+
+
+def on_gate_run(where: str) -> bool:
+    """Whether a failing key's `where` (base_failure_keys) is main's gate run, not another change's failed checks."""
+    return where.endswith(GATE_RUN_WHERE)
+
+
 def gate_failure_keys(repo: str) -> dict[str, str]:
     """{key: where} of main's red gate runs."""
     out: dict[str, str] = {}
@@ -162,7 +170,7 @@ def gate_failure_keys(repo: str) -> dict[str, str]:
         for name, decided in failed_gate_runs(o_r):
             try:
                 for k in run_failure_keys(o_r, decided["databaseId"]):
-                    out.setdefault(k, f"{name} #{decided.get('number') or decided['databaseId']} on main")
+                    out.setdefault(k, f"{name} #{decided.get('number') or decided['databaseId']}{GATE_RUN_WHERE}")
             except (Exception, SystemExit) as ex:
                 err(f"{name} run {decided['databaseId']}: failed log unread ({str(ex)[:120]})")
     except (Exception, SystemExit) as ex:
