@@ -237,14 +237,11 @@ def red_crash_loop(store, it, upd, streak, t):
     return [f"crash loop on {red_what(d)}: a harness fault, filed as agentctl issue {issue}"]
 
 
-def _take_block(store: Any, it: dict[str, Any], lname: str, holder: str, max_hold: float, progress: str, meta: dict[str, Any]) -> None:
-    """Red `it`'s block lease `lname` taken by `holder` (a block already holding the red stands: the red joins its keys),
-    and the red's open offer closed as blocked."""
-    got = store.acquire(lname, holder, BLOCK_TTL, max_hold, progress=progress, meta=meta)
+def _block_taken(store: Any, it: dict[str, Any], lname: str, got: dict[str, Any], key: str) -> None:
+    """Red `it`'s block lease `lname` was asked for (`got`): a block already holding the red stands and the red joins its keys; the red's open offer closed as blocked."""
     if "held" in got:  # somebody's block already holds the red: it stands, the red joins it
         row = store.get(lname)
-        store.set_meta(lname, row["epoch"], row["secret"],
-                       {"keys": sorted(set(lease_meta(row).get("keys") or []) | set(meta["keys"]))})
+        store.set_meta(lname, row["epoch"], row["secret"], {"keys": sorted(set(lease_meta(row).get("keys") or []) | {key})})
     store.close_offer(f"red:{it['id']}", "blocked")
 
 
@@ -255,10 +252,12 @@ def red_harness_block(store, it, upd, issue, cause, cmd, until, text, t, tail=No
     key, run = d["key"], (d.get("last_run") or {}).get("number")
     lname = block_lease(key)
     probe = red_newer_probe(it, d)
-    _take_block(store, it, lname, f"harness:{cause}", env_num("AGENTCTL_RED_CRASH_BLOCK_MAX", RED_CRASH_BLOCK_MAX),
-                f"{cause}@{int(t)}", {"kind": "block", "crash_loop": True, "harness": True, "issue": issue,
-                                      "cause": cause, "cmd": cmd, "probe": probe, "until": until, "keys": [key],
-                                      "text": text, "details": text, "probed_at": t})
+    got = store.acquire(lname, f"harness:{cause}", BLOCK_TTL,
+                        env_num("AGENTCTL_RED_CRASH_BLOCK_MAX", RED_CRASH_BLOCK_MAX), progress=f"{cause}@{int(t)}",
+                        meta={"kind": "block", "crash_loop": True, "harness": True, "issue": issue,
+                              "cause": cause, "cmd": cmd, "probe": probe, "until": until, "keys": [key],
+                              "text": text, "details": text, "probed_at": t})
+    _block_taken(store, it, lname, got, key)
     line = f"RED HARNESS FAULT: {red_what(d)}: {text}"
     red_move(store, it, "blocked-external", line, data={**upd, "cause": cause, "block": lname}, severity="info",
              refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line, "tail": tail,
@@ -396,10 +395,11 @@ def red_decision_block(store, it, upd, decide, t, category=None):
             f"Look: `{cmd}`. Auto-clears when {until}, or in {fmt_age(maxh)} (offered again)")
     lname = block_lease(key)
     probe = red_newer_probe(it, d)
-    _take_block(store, it, lname, f"owner:{DECISION_CAUSE}", maxh, f"decision@{int(t)}",
-                {"kind": "block", "decision": True, "cause": DECISION_CAUSE, "cmd": cmd, "probe": probe, "until": until,
-                 "keys": [key], "text": text, "details": diag, "decide": decide, "question": decide,
-                 "category": category, "probed_at": t})
+    got = store.acquire(lname, f"owner:{DECISION_CAUSE}", BLOCK_TTL, maxh, progress=f"decision@{int(t)}",
+                        meta={"kind": "block", "decision": True, "cause": DECISION_CAUSE, "cmd": cmd, "probe": probe,
+                              "until": until, "keys": [key], "text": text, "details": diag, "decide": decide,
+                              "question": decide, "category": category, "probed_at": t})
+    _block_taken(store, it, lname, got, key)
     line = f"RED BLOCKED ON OWNER [{category}]: {text}"
     red_owner_block(store, it, line, t, data={**upd, "cause": DECISION_CAUSE, "block": lname},
                     refs={"key": key, "run": run, "workflow": d.get("workflow"), "verdict": line, "command": "red"})

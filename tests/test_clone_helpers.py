@@ -41,26 +41,23 @@ class CloneGatedTest(unittest.TestCase):
             A.clone_side = saved
 
 
-class TakeBlockTest(unittest.TestCase):
-    def store(self, held):
+class BlockTakenTest(unittest.TestCase):
+    def store(self):
         calls = []
         rec = lambda name, ret=None: (lambda *a, **k: (calls.append((name, a, k)), ret)[1])  # noqa: E731
-        return calls, NS(acquire=rec("acquire", {"held": {"holder": "x"}} if held else {"epoch": 1, "secret": "s"}),
-                         get=rec("get", {"epoch": 4, "secret": "z", "meta": '{"keys": ["a"]}'}), set_meta=rec("set_meta"),
+        return calls, NS(get=rec("get", {"epoch": 4, "secret": "z", "meta": '{"keys": ["a"]}'}), set_meta=rec("set_meta"),
                          close_offer=rec("close_offer"))
 
-    def test_a_free_block_is_taken_and_the_offer_closed(self):
-        calls, st = self.store(held=False)
-        A._take_block(st, {"id": "r1"}, "block/k", "owner:x", 900, "p@1", {"keys": ["k"], "kind": "block"})
-        self.assertEqual([c[0] for c in calls], ["acquire", "close_offer"])
-        self.assertEqual(calls[0][1], ("block/k", "owner:x", A.BLOCK_TTL, 900))
-        self.assertEqual(calls[1][1], ("red:r1", "blocked"))
+    def test_a_free_block_only_closes_the_offer(self):
+        calls, st = self.store()
+        A._block_taken(st, {"id": "r1"}, "block/k", {"epoch": 1, "secret": "s"}, "k")
+        self.assertEqual([(c[0], c[1]) for c in calls], [("close_offer", ("red:r1", "blocked"))])
 
     def test_a_held_block_stands_and_the_red_joins_its_keys(self):
-        calls, st = self.store(held=True)
-        A._take_block(st, {"id": "r1"}, "block/k", "owner:x", 900, "p@1", {"keys": ["k"]})
-        self.assertEqual([c[0] for c in calls], ["acquire", "get", "set_meta", "close_offer"])
-        self.assertEqual(calls[2][1], ("block/k", 4, "z", {"keys": ["a", "k"]}))
+        calls, st = self.store()
+        A._block_taken(st, {"id": "r1"}, "block/k", {"held": {"holder": "x"}}, "k")
+        self.assertEqual([c[0] for c in calls], ["get", "set_meta", "close_offer"])
+        self.assertEqual(calls[1][1], ("block/k", 4, "z", {"keys": ["a", "k"]}))
 
 
 class FixFailedTest(unittest.TestCase):
