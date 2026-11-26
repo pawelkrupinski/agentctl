@@ -16,13 +16,14 @@ from agentctl.statefile import read_json_file, read_record, write_json_file, unl
 from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import held_commit
-from agentctl.storetoken import token_env_name, token_from_processor, token_vault_key
+from agentctl.storetoken import red_read_token, token_env_name, token_from_processor, token_vault_key
 from agentctl.worktrees import mark_internal
 from agentctl.cistate import ci_state_load
 from agentctl.conditions import open_condition, recovery_dir, run_probe
 from agentctl.tunnel import default_route, tunnel_ports, tunnel_probe, tunnel_state_path
 from agentctl.blamerecords import blame_land_refusal
 from agentctl.batchitem import batch_move, current_batch
+from agentctl.forge import gh_json
 
 
 # -- the probes: (ok, detail) for their args. Background-safe: no `secrets`, bounded, never raising (run_probe catches).
@@ -199,3 +200,23 @@ def token_unavailable_note(ns: str, why: str, store: Any) -> None:
 _noting_token = [False]  # token_unavailable_note is running: the remote store's own token read must not recurse
 
 
+def red_no_read_access(repos, store):
+    """ONE condition while ci-runner cannot read the other watched repos: cleared by the red_read probe (the reader App
+    configured on the host, and their runs read)."""
+    return open_condition("UNKNOWN", f"NO READ ACCESS: {', '.join(repos)}: the reconciler cannot read their runs -- "
+                                     "the lander App is push-only on movies (needs the agentctl-reader App); their "
+                                     "reds are not watched until then",
+                          run_probe("red_read", {"repos": list(repos)}), [], key="red-read-access", command="red",
+                          exit_code=2, store=store)
+
+
+def probe_red_read(a):
+    """Every repo in a["repos"] has a reader token and its runs read."""
+    for o_r in a.get("repos") or []:
+        try:
+            red_read_token(o_r)
+            # listing: a read probe only (any answer proves the token reads)
+            gh_json(o_r, "run", "list", "--limit", "1", "--json", "databaseId")
+        except (Exception, SystemExit) as e:
+            return False, f"{o_r}: {str(e).replace('agentctl: ', '')[:160]}"
+    return True, "every watched repo's runs read"

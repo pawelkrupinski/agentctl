@@ -1,35 +1,26 @@
 # agentctl, part `redtick`: the tick's red step (the processor; ci-why never acts).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now, wall_epoch
+from agentctl.clock import epoch_now
 import functools
-import os
 import threading
 from typing import Any
-from agentctl.statemachines import StaleVersion, open_items, is_terminal
-from agentctl.core import NoReadAccess, attempt, err, process_cache, run_bounded, slug
+from agentctl.statemachines import is_terminal, open_items, StaleVersion
+from agentctl.core import err, NoReadAccess, process_cache, run_bounded, slug
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
 from agentctl.redretired import red_retired
 from agentctl.storetoken import red_read_token
-from agentctl.gating import gate_dirty_path
-from agentctl.fixerrecords import agent_name, own_fixer_record_path
-from agentctl.owned import default_repo
 from agentctl.redrepos import red_gate_flows, red_is_other
 from agentctl.ciwhy import gate_from_snap, gate_runs, gate_snap_rows, main_runs_of
-from agentctl.cistate import ci_state_load, ci_state_write
-from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
-from agentctl.fixerblockers import in_fixer
+from agentctl.cistate import ci_state_load
 from agentctl.redrecord import red_what
 from agentctl.lander import lander_note_landed
 from agentctl.redfixread import red_main_current
-from agentctl.conditions import open_condition, run_probe
 from agentctl.redfixes import red_fix_facts
 from agentctl.red import red_active_of, red_obs_for
-from agentctl.redknobs import RED_TICK_INTERVAL
+from agentctl.redknobs import knob_red_others_every, knob_red_skip_say, knob_red_tick, RED_TICK_INTERVAL
 from agentctl.redmove import red_settled_runs
-from agentctl.recordingpins import refresh_pinned_recording
-from agentctl.branches import route_branch_reds, settle_branch_reds
 from agentctl.redseen import gate_red_units, red_merge_rekeyed, red_obs_of_units, stuck_obs
 from agentctl.redobserve import red_observe
 from agentctl.reduntracked import red_active_untracked, red_note_untracked, red_split_untracked, red_untrack
@@ -38,22 +29,14 @@ from agentctl.redopen import red_attach_obs, red_open
 from agentctl.redearly import early_attach, early_observed, early_opened, early_unobserved
 from agentctl.localrecheck import recheck_local
 from agentctl.orphanreap import red_reap_orphans
-from agentctl.redprobe import cmd_red_probe
-from agentctl.fixerlife import red_fixer
 from agentctl.ask import red_owner_reminders
 from agentctl.reddispatch import RED_MODEL, red_migrate, red_renew_holders
-from agentctl.cireport import ci_state_refresh, ci_why
 from agentctl.offerdispatch import red_dispatcher
-from agentctl.ownerwrapper import red_owner
 from agentctl.redstep import red_step
 from agentctl.redhold import red_enforce
-from agentctl.redcommands import (
-    red_cmd_auto, red_cmd_block, red_cmd_dispatch, red_cmd_lease, red_cmd_owner_push, red_cmd_status,
-    red_cmd_unblame, red_cmd_unblock)
 from agentctl.redquota import red_quota_waits
 from agentctl.tickknobs import knob_step_bound
-from agentctl.tickknobs import knob_assign_bound, knob_gate_publish
-from agentctl.redknobs import knob_red_others_every, knob_red_skip_say, knob_red_tick
+from agentctl.recovery import red_no_read_access
 
 
 # -- the tick's red step (the processor; ci-why never acts)
@@ -299,28 +282,6 @@ def red_others_skipped(o_r, why, now_=None):
     return line
 
 
-def red_no_read_access(repos, store):
-    """ONE condition while ci-runner cannot read the other watched repos: cleared by the red_read probe (the reader App
-    configured on the host, and their runs read)."""
-    return open_condition("UNKNOWN", f"NO READ ACCESS: {', '.join(repos)}: the reconciler cannot read their runs -- "
-                                     "the lander App is push-only on movies (needs the agentctl-reader App); their "
-                                     "reds are not watched until then",
-                          run_probe("red_read", {"repos": list(repos)}), [], key="red-read-access", command="red",
-                          exit_code=2, store=store)
-
-
-def probe_red_read(a):
-    """Every repo in a["repos"] has a reader token and its runs read."""
-    for o_r in a.get("repos") or []:
-        try:
-            red_read_token(o_r)
-            # listing: a read probe only (any answer proves the token reads)
-            gh_json(o_r, "run", "list", "--limit", "1", "--json", "databaseId")
-        except (Exception, SystemExit) as e:
-            return False, f"{o_r}: {str(e).replace('agentctl: ', '')[:160]}"
-    return True, "every watched repo's runs read"
-
-
 def maybe_red_tick(repo, store):
     """At most every RED_TICK_INTERVAL s, from the processor's duties. Bounded; never fatal."""
     if epoch_now() - _last_red_tick[0] < knob_red_tick():
@@ -340,63 +301,3 @@ def maybe_red_tick(repo, store):
         err("red tick: still running from an earlier cycle (the loop goes on)")
 
 
-def red_am_fixer():
-    """`agentctl red am-fixer`: 0 inside a dispatched red fixer -- known by its session's binding or record, else (no
-    Claude session) its fixer environment (74e2ec5's in_fixer) -- printing who; 1 for anybody else."""
-    if in_fixer():
-        print(agent_name() or own_fixer_record_path() or "a red fixer")
-        return 0
-    return 1
-
-
-def cmd_red(a, clock, st):
-    if a.rcmd == "am-fixer":
-        return red_am_fixer()
-    if a.rcmd == "probe":
-        return cmd_red_probe(a, clock)
-    o_r = slug(a.repo) if getattr(a, "repo", None) and a.rcmd not in ("fixer", "owner") else default_repo()
-    handlers = {"block": red_cmd_block, "unblock": red_cmd_unblock, "owner-push": red_cmd_owner_push,
-                "claim": red_cmd_lease, "beat": red_cmd_lease, "release": red_cmd_lease, "status": red_cmd_status,
-                "auto": red_cmd_auto, "owner": lambda a, st, o_r: red_owner(a, st),
-                "fixer": lambda a, st, o_r: red_fixer(a, st), "unblame": red_cmd_unblame,
-                "dispatch": red_cmd_dispatch}
-    return handlers[a.rcmd](a, st, o_r) if a.rcmd in handlers else 2
-
-
-def gate_publish_cycle(repo: str, store: Any) -> None:
-    """One publish: the gate read once, the red tick on that snapshot, the summary line published, the branch reds
-    settled and routed."""
-    try:
-        o_r = slug(repo)
-        snap = ci_state_refresh(o_r, write=False)  # ONE read of GitHub per cycle; everything below reads it
-        refresh_pinned_recording(o_r, repo, store)  # what PREDICTS MAIN RED compares a branch run's recording with
-        ci_state_write(snap)
-        # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or
-        # held (never NOBODY). Bounded: a dispatch's worktree checkout finishes on the tick's own thread
-        if not run_bounded("red-tick", lambda: red_tick_repo(repo, store, snap), knob_assign_bound()):
-            err("red tick: still running; the gate line is published meanwhile")
-        _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo, store=store)
-        publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
-    except (Exception, SystemExit) as e:
-        err(f"gate summary: skipped ({str(e).replace('agentctl: ', '')[:200]})")
-        return
-    for failed, lines in (("not settled", lambda: settle_branch_reds(o_r, snap, store)),
-                          ("not routed", lambda: route_branch_reds(o_r, snap))):
-        try:
-            for text in lines():
-                err(f"branch reds: {text}")
-        except (Exception, SystemExit) as e:
-            err(f"branch reds: {failed} ({str(e).replace('agentctl: ', '')[:200]})")
-
-
-def maybe_publish_gate(repo, store):
-    """The processor's loop, at most every GATE_PUBLISH_INTERVAL s: read the gate (it holds the token) and publish the
-    summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
-    # a push to main since the last publish (mark_gate_dirty): publish now, not at the 45 s mark
-    marked = attempt(lambda: os.path.getmtime(gate_dirty_path()) > _last_gate_publish[0], False, catch=(OSError,))
-    if not marked and wall_epoch() - _last_gate_publish[0] < knob_gate_publish():
-        return
-    _last_gate_publish[0] = wall_epoch()  # the wall's: it is compared with a file's mtime above
-
-    if not run_bounded("gate-publish", lambda: gate_publish_cycle(repo, store), knob_step_bound()):
-        err("gate summary: still reading from an earlier cycle (the loop goes on)")

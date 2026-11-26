@@ -26,7 +26,8 @@ from agentctl.queueclose import close_landed_changes, stranded_changes
 from agentctl.watchtick import tick_watches
 from agentctl.queuepush import tick_changes
 from agentctl.batch import say_batch
-from agentctl.redtick import maybe_publish_gate, maybe_red_tick
+from agentctl.redtick import maybe_red_tick
+from agentctl.gatepublish import maybe_publish_gate
 from agentctl.batchtick import tick_batch
 
 

@@ -60,7 +60,8 @@ from agentctl.statuspage import cmd_status
 from agentctl.queueenter import cmd_land_precheck
 from agentctl.slots import cmd_land
 from agentctl.cliparser import parser
-from agentctl.redtick import cmd_red, probe_red_read
+from agentctl.recovery import probe_red_read
+from agentctl.redcli import cmd_red
 from agentctl.processor import cmd_tick, cmd_waiting
 from agentctl.redquota import probe_quota_reset
 

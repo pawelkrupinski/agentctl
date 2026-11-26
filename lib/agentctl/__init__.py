@@ -27,9 +27,9 @@ MODULES = ("procrunner", "escalationtable", "psparse", "govpool", "usage", "stat
            "explorer", "reverts", "generatedregen", "conflicts", "redreplay", "issues", "fixerland", "remotestore",
            "tunnel", "storestate", "culpritfix", "sessionroll", "queuefailure", "queueslots", "queue", "fixchange",
            "queuerecheck", "redfixes", "redland", "identitychange", "fixer", "redmove", "landhold", "processorlink",
-           "tickservice", "timelinecmd", "projector", "statusline", "remote", "redprobe", "escalationsession",
-           "orphanreap", "runexplain", "runsigs", "stuckruns", "redepisode", "branches", "changekind", "waiting",
-           "queuesubmit", "redfollow", "gov", "checkslot", "govroute", "govcmd", "batchrun", "redseen", "redobserve",
+           "tickservice", "timelinecmd", "projector", "statusline", "remote", "escalationsession", "orphanreap",
+           "runexplain", "runsigs", "stuckruns", "redepisode", "branches", "changekind", "waiting", "queuesubmit",
+           "redfollow", "gov", "checkslot", "govroute", "govcmd", "batchrun", "redseen", "redobserve",
            "reduntracked", "redblock", "redopen", "redearly", "redclaim", "redverify", "blamerecords", "redvault",
            "redownerpush", "redquota", "blame", "redwaits", "cliops", "localrecheck", "queuebatch", "queuediff",
            "queuecheck", "queueclose", "superseded", "park", "redcrash", "reddispatch", "reddecision", "fixerlife",
@@ -37,5 +37,5 @@ MODULES = ("procrunner", "escalationtable", "psparse", "govpool", "usage", "stat
            "recovery", "netwatch", "tools", "redlease", "redpending", "redstep", "redhold", "server",
            "queuebatchsel", "batch", "queuepush", "orphans", "orphanpass", "batchpush", "batchcheck", "batchtick",
            "maintain", "invariants", "watchdog", "landqueue", "inboxcli", "status", "statuspage", "redstatus",
-           "syncsteps", "redcommands", "queueenter", "landdryrun", "slots", "cliparser", "redtick", "serversteps",
-           "processor", "cli")
+           "syncsteps", "queueenter", "landdryrun", "slots", "cliparser", "redtick", "serversteps", "processor",
+           "cli", "gatepublish", "redcli")
