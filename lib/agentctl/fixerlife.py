@@ -27,7 +27,7 @@ from agentctl.inbox import INBOX_TAIL
 from agentctl.redland import sync_brief
 from agentctl.redrepos import red_owner_only
 from agentctl.fixerland import fixer_mark, fixer_meta_sent
-from agentctl.fixer import FIXER_IDENTITY_ENV, OWNER_ONLY_DENIED, fixer_prompt
+from agentctl.fixerprompt import FIXER_IDENTITY_ENV, OWNER_ONLY_DENIED, fixer_prompt
 from agentctl.red import RED_FIXER_MAX, RED_FIXER_TTL, RED_RELEASE_ASKS
 from agentctl.redclaim import bind_fixer_session
 from agentctl.hostsleep import keep_awake

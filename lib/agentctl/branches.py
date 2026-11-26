@@ -23,9 +23,7 @@ from agentctl.ciruns import main_runs_of
 from agentctl.runsigs import save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
 from agentctl.fixerblockers import short_flow
-from agentctl.cidispatches import (
-    branch_base, branch_red_id, dispatch_key, dispatch_records, orphan_why, owner_gone, owner_of, owner_text,
-    record_dispatch, save_dispatch, tracked_branch)
+from agentctl.runowners import branch_base, branch_red_id, dispatch_key, dispatch_records, orphan_why, owner_gone, owner_of, owner_text, record_dispatch, save_dispatch, tracked_branch
 from agentctl.recordingpins import pinned_recording, pinned_runs
 from agentctl.runexplain import explain_run_jobs
 from agentctl.tickknobs import knob_dispatch_find, knob_dispatch_find_poll

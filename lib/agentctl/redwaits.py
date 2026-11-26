@@ -16,7 +16,7 @@ from agentctl.core import SHORT, attempt
 from agentctl.leases import block_lease, lease_meta, red_block_of
 from agentctl.classify import QUOTA_LOG
 from agentctl.inboxentry import inbox_write
-from agentctl.rundispatch import red_verify_dispatch
+from agentctl.workflowdispatch import red_verify_dispatch
 from agentctl.stuckruns import run_jobs
 from agentctl.redblock import BLOCK_MAX, BLOCK_TTL
 from agentctl.ciruns import main_runs

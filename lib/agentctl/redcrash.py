@@ -18,7 +18,7 @@ from agentctl.redask import ask_held_until, ask_refusal, ask_split, decide_cmd, 
 from agentctl.red import red_move
 from agentctl.cistate import ci_state_load
 from agentctl.redblock import BLOCK_TTL
-from agentctl.rundispatch import red_verify_dispatch
+from agentctl.workflowdispatch import red_verify_dispatch
 from agentctl.redopen import red_offer
 from agentctl.redknobs import knob_red_crash_block_max, knob_red_decision_block_max, knob_red_old_run
 from agentctl.hostsleep import lapse_in_sleep

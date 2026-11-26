@@ -14,7 +14,7 @@ from agentctl.waitingdir import save_entry, waiting_state, wlog
 from agentctl.procs import Terminated
 from agentctl.wait import fetch_failed_log, job_log_lines, relevant_lines
 from agentctl.leases import lock_beat
-from agentctl.cidispatches import record_dispatch, save_dispatch
+from agentctl.runowners import record_dispatch, save_dispatch
 from agentctl.checkrows import check_run_record, with_run
 from agentctl.remotejobs import REMOTE_WORKFLOW, jobs_verdict, remote_progress, remote_read_bounds, verdict_jobs
 from agentctl.owned import backoff, cancel_run

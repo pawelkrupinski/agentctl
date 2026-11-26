@@ -24,7 +24,7 @@ from agentctl.leases import lease_meta
 from agentctl.redland import sync_brief
 from agentctl.owners import OWNER_TTL, owner_dir, owner_lease, owner_record_path
 from agentctl.redask import red_decision
-from agentctl.fixer import fixer_prompt
+from agentctl.fixerprompt import fixer_prompt
 from agentctl.fixerlife import HeldLease
 from agentctl.ownerleases import owner_hand, owner_holder
 

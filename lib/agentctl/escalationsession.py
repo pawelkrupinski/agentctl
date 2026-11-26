@@ -8,7 +8,7 @@ from agentctl.escalations import escalation_pass
 from agentctl.fixersession import SESSION_DENIED_TOOLS, bg_ended, bg_session, bg_start, bg_stop, claude_trust_gap
 from agentctl.fixerblockers import cached_dispatch_blocker, claude_cli, interactive_mode
 from agentctl.fixerenv import fixer_env
-from agentctl.fixer import FIXER_IDENTITY_ENV
+from agentctl.fixerprompt import FIXER_IDENTITY_ENV
 from agentctl.repos import escalation_repo_path
 from agentctl.core import SHORT
 from agentctl.worktrees import fresh_worktree

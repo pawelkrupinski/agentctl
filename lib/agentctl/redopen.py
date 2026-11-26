@@ -19,7 +19,7 @@ from agentctl.owners import owner_record_path
 from agentctl.redask import red_decision
 from agentctl.red import (
     decided_revert, red_keep_holder, red_move, RED_OFFER, red_offer_class, red_put_offer, red_tier, tail_lines)
-from agentctl.rundispatch import red_verify_dispatch
+from agentctl.workflowdispatch import red_verify_dispatch
 from agentctl.blameopen import blame_open, culprit_of
 from agentctl.blameknobs import BLAME_MAX, knob_blame_max
 from agentctl.redseen import red_obs_of_units, red_units, sigs_no_verdict

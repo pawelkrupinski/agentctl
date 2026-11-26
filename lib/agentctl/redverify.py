@@ -11,7 +11,8 @@ from agentctl.trailers import trailer_values
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_what
 from agentctl.red import red_move
-from agentctl.rundispatch import red_verify_dispatch, workflow_crons
+from agentctl.workflowcron import cron_next, workflow_crons
+from agentctl.workflowdispatch import red_verify_dispatch
 from agentctl.blameopen import PATHISH
 from agentctl.runsigs import cause_of, name_causes
 from agentctl.redopen import red_offer, red_open
@@ -20,7 +21,6 @@ from agentctl.redknobs import knob_red_main_verify_every, knob_red_verify_slack
 from agentctl.workflows import workflow_file_of
 from agentctl.ancestry import contains_local
 from agentctl.forge import is_cancelled, stuck_durations
-from agentctl.workflowcron import cron_next
 from agentctl.ciruns import ci_runs, main_runs
 
 

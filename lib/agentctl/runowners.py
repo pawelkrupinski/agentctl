@@ -1,22 +1,21 @@
-# agentctl, part `cidispatches`: every hand-dispatched CI run's owner record, who owns a branch, and the orphan branches whose owner is gone
+# agentctl, part `runowners`: every hand-dispatched CI run's owner record, who owns a branch, and the orphan branches whose owner is gone
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import glob
 import os
 import re
-import time
 from typing import Any
-from agentctl.core import PROTECTED_BRANCHES, dispatches_dir, git, remote, tilde
-from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.forge import RUN_FIELDS, gh_json
-from agentctl.maincontain import MainContainment
+from agentctl.clock import epoch_now
+from agentctl.timefmt import ts
+from agentctl.core import PROTECTED_BRANCHES, dispatches_dir, git, remote, tilde
 from agentctl.procs import process_start, record_alive, safe_cwd
-from agentctl.waitingdir import waiting_dir
 from agentctl.fixerrecords import agent_name
-from agentctl.worktrees import CACHE_TREES, internal_trees_dir, worktree_of, worktrees
+from agentctl.forge import RUN_FIELDS, gh_json
+from agentctl.waitingdir import waiting_dir
 from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
+from agentctl.worktrees import CACHE_TREES, internal_trees_dir, worktree_of, worktrees
+from agentctl.maincontain import MainContainment
 
 
 # ---------------------------------------------------------------- branch runs: every dispatch has an owner, every branch red a route

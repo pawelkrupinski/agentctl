@@ -1,18 +1,18 @@
-# agentctl, part `rundispatch`: a workflow run dispatched on main (red_verify_dispatch), and the inputs a dispatched run carries, read back
+# agentctl, part `workflowdispatch`: a workflow run dispatched on main (red_verify_dispatch), and the inputs a dispatched run carries, read back
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
-from typing import Any
-import json
 import os
 import re
-import urllib.error
-from agentctl.core import dispatches_dir, remote
+from typing import Any
+from agentctl.govpool import json
 from agentctl.statefile import read_record
-from agentctl.forge import api, gh_json
+from agentctl.clock import epoch_now
+from agentctl.core import dispatches_dir, remote
+from agentctl.ghapp import urllib
 from agentctl.workflows import workflow_file_of
-from agentctl.cidispatches import record_dispatch
+from agentctl.forge import api, gh_json
 from agentctl.redrepos import RED_WORKFLOWS_FILE, verify_dispatchable
+from agentctl.runowners import record_dispatch
 from agentctl.workflowcron import workflow_crons
 
 

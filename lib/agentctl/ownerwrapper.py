@@ -19,7 +19,7 @@ from agentctl.fixerblockers import claude_cli, interactive_mode
 from agentctl.store import StoreAuthFailed, StoreUnavailable
 from agentctl.owners import OWNER_TTL, owner_lease, owner_record_path
 from agentctl.laptoprole import laptop_role_standby
-from agentctl.fixer import FIXER_IDENTITY_ENV
+from agentctl.fixerprompt import FIXER_IDENTITY_ENV
 from agentctl.redclaim import bind_fixer_session
 from agentctl.hostsleep import keep_awake
 from agentctl.redcrash import verdict_cut

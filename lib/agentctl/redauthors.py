@@ -11,7 +11,7 @@ from agentctl.allowedpaths import allowed_path
 from agentctl.procs import lsof_cwds, proc_alive, ps
 from agentctl.inboxentry import inbox_entries
 from agentctl.worktrees import gitdir_activity
-from agentctl.cidispatches import worktree_holding
+from agentctl.runowners import worktree_holding
 from agentctl.jvmreap import AGENT_WORK
 from agentctl.blameknobs import knob_author_active_min
 

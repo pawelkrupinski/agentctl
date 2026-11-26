@@ -1,21 +1,21 @@
-# agentctl, part `fixer`: the red fixers (dispatch, sessions, the fixer wrapper).
+# agentctl, part `fixerprompt`: the red fixer's and the lander's prompts: the brief, its tasks and replay notes
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
 import re
 from typing import Any
 from agentctl.selfcode import TOOL_PATH
+from agentctl.redknobs import knob_brief_src
 from agentctl.fixerknobs import FIXER_UNLANDED_NUDGE
 from agentctl.core import err, remote, tilde
-from agentctl.classify import is_regression
 from agentctl.repos import RED_PRIMARY, red_repo_clone, red_repo_of
 from agentctl.workflows import LOCAL_FLOW
+from agentctl.classify import is_regression
 from agentctl.redrepos import red_owner_only
 from agentctl.redrecord import RED_RECURRING
-from agentctl.redland import FIX_REPLAY_NONE_MIN, red_replay_command
 from agentctl.fixerland import LAND_BRIEF
 from agentctl.redfixes import red_refuted
-from agentctl.redknobs import knob_brief_src
+from agentctl.redland import FIX_REPLAY_NONE_MIN, red_replay_command
 
 
 # THE FIXER BRIEF (the owner, 2026-10-30): the rules every dispatched fixer and family owner gets -- fast reproducer

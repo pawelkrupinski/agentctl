@@ -8,16 +8,15 @@ import os
 import re
 from contextlib import suppress
 from agentctl.landstate import landed_state
-from agentctl.core import attempt
+from agentctl.core import attempt, branch_of, git_ok, hashlib_sha1, remote
 from agentctl.procrunner import process_runner
-from agentctl.core import branch_of, git_ok, hashlib_sha1, remote
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.waitingdir import WAITING_BRANCH, waiting_entries, waiting_state
 from agentctl.procs import process_cwds
 from agentctl.inboxentry import inbox_entries
 from agentctl.worktrees import gitdir_activity, worktrees
-from agentctl.cidispatches import internal_tree
+from agentctl.runowners import internal_tree
 from agentctl.sessionpaths import session_worktrees
 from agentctl.fixerblockers import land_cwds
 from agentctl.recovery import reland_tree_path

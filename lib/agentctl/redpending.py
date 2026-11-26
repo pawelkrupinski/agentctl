@@ -21,7 +21,7 @@ from agentctl.red import (
 from agentctl.redverify import (
     red_fix_since, red_fix_unverifiable, red_verify_await, red_verify_plan, red_verify_run_on_way, red_verify_scheduled)
 from agentctl.landwatch import WATCH_SLACK
-from agentctl.rundispatch import red_verify_dispatch
+from agentctl.workflowdispatch import red_verify_dispatch
 from agentctl.redopen import red_offer
 from agentctl.ask import red_decision_failed
 from agentctl.blame import blame_refuted
