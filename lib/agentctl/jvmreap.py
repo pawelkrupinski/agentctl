@@ -69,7 +69,7 @@ def _serving_row(parts: Any) -> Any:
     return int(parts[0]) if parts[0].isdigit() else 0, owner, parts[2].strip() if len(parts) > 2 else ""
 
 
-def sbt_serving():
+def sbt_serving() -> dict[str, tuple[int, int | None, str]]:
     """{checkout root: (serving sbt-warm pid, owner pid or None, command)} from sbt-warm's .serving marks."""
     out = {}
     for path in glob.glob(os.path.join(sbt_warm_state(), "*.serving")):
@@ -365,7 +365,13 @@ def _scan_ports() -> set[int]:
 def jvm_scan() -> tuple[list[tuple[int, int, str, str, str, str]], dict[int, str], set[str], set[int]]:
     """The live process table for jvm_candidates ($AGENTCTL_JVM_PS / _CWD / _KEPT: fixture files for the tests)."""
     rows = _scan_rows()
-    return rows, _scan_cwds(rows), _scan_kept(rows), _scan_ports()
+    return rows, _scan_cwds(rows), _scan_kept(rows) | serving_roots(), _scan_ports()
+
+
+def serving_roots() -> set[str]:
+    """The checkouts whose sbt server is serving a live command (its sbt-warm and owner alive): a server maintain's sbt
+    rules and the governor's eviction both spare, so rule B spares it too (review 2026-11-26: it killed one mid-call)."""
+    return {root for root, serve in sbt_serving().items() if not _ended_serving(serve)}
 
 
 def agent_work(pid: int, procs: Any) -> str | None:

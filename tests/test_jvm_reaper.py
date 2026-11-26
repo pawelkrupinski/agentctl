@@ -76,6 +76,29 @@ class JvmRulesTest(unittest.TestCase):
         self.assertIn("agentctl land", A.agent_work(21, procs))
         self.assertIsNone(A.agent_work(30, procs))
 
+    def test_a_hog_serving_a_live_command_is_spared_as_maintain_and_the_governor_spare_it(self):
+        """Review 2026-11-26 (D A2): the three reapers disagreed on a warm server mid-call. maintain's sbt rules and the
+        governor's eviction spare a server whose sbt-warm `.serving` command and its owner live; the JVM scan's rule B
+        (hog: 90 min old, 5% lifetime CPU) killed it unless `sbt-warm --keep` kept it. It now spares it too."""
+        ps, cwds = os.path.join(self.t, "ps"), os.path.join(self.t, "cwd")
+        with open(ps, "w") as f:
+            f.write(f" 301 1 ?? 02:00:00 00:40:00 {SERVER}\n 302 1 ?? 02:00:00 00:40:00 {SERVER}\n")
+        with open(cwds, "w") as f:
+            f.write(f"301 {self.p('kept')}\n302 {self.p('unkept')}\n")
+        open(os.path.join(self.t, "keptfile"), "w").close()
+        env = {"AGENTCTL_JVM_PS": ps, "AGENTCTL_JVM_CWD": cwds, "AGENTCTL_JVM_KEPT": os.path.join(self.t, "keptfile")}
+        os.environ.update(env)
+        saved = A.sbt_serving, A.allowed_path
+        A.sbt_serving = lambda: {self.p("kept"): (os.getpid(), os.getpid(), "testOnly x")}
+        A.allowed_path = lambda p: True
+        try:
+            got = {c[0]: c[5] for c in A.stale_jvms([])}
+        finally:
+            A.sbt_serving, A.allowed_path = saved
+            for k in env:
+                os.environ.pop(k)
+        self.assertEqual(got, {302: "hog"})
+
     def test_orphans_lists_the_jvms_and_a_dry_run_kills_nothing(self):
         ps = os.path.join(self.t, "ps")
         with open(ps, "w") as f:
