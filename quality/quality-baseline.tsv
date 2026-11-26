@@ -9,10 +9,8 @@ cognitive	_watch_group	12
 cognitive	assemble	24
 cognitive	batch_check	19
 cognitive	bg_spent	16
-cognitive	close_condition	19
 cognitive	cmd_issue	19
 cognitive	cmd_lease	17
-cognitive	cmd_recover	15
 cognitive	conflict_resolve	17
 cognitive	explorer_tick	19
 cognitive	forge_run_list	22
@@ -20,11 +18,9 @@ cognitive	gov_fits	20
 cognitive	laptop_role	15
 cognitive	laptop_role_refusal	23
 cognitive	live_state	12
-cognitive	open_condition	20
 cognitive	owner_orphans	22
 cognitive	owner_work	21
 cognitive	project_changes	14
-cognitive	recovery_tick	26
 cognitive	red_attach_obs	17
 cognitive	red_callable_evidence	15
 cognitive	red_failed_steps	14
@@ -52,10 +48,8 @@ cyclomatic	assemble	15
 cyclomatic	batch_check	17
 cyclomatic	bg_spent	15
 cyclomatic	build_view_change	15
-cyclomatic	close_condition	15
 cyclomatic	cmd_issue	13
 cyclomatic	cmd_lease	20
-cyclomatic	cmd_recover	16
 cyclomatic	conflict_resolve	21
 cyclomatic	explorer_tick	19
 cyclomatic	forge_run_list	15
@@ -65,11 +59,9 @@ cyclomatic	jobs_verdict	23
 cyclomatic	laptop_role	17
 cyclomatic	laptop_role_refusal	16
 cyclomatic	live_state	12
-cyclomatic	open_condition	22
 cyclomatic	owner_orphans	13
 cyclomatic	owner_work	19
 cyclomatic	project_changes	11
-cyclomatic	recovery_tick	17
 cyclomatic	red_attach_obs	18
 cyclomatic	red_callable_evidence	20
 cyclomatic	red_claim	13

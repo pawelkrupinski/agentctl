@@ -260,5 +260,177 @@ class MigrateLocalQueueTest(unittest.TestCase):
         check(self, "migrate_local_queue", self.build, run, 8000)
 
 
+# ------------------------------------------------------------------------------------------------ conditions
+def a_probe_result(r, ok=None):
+    ok = r.choice([True, False, None]) if ok is None else ok
+    p = A.ProbeResult(r.choice(["token", "disk_free", "route", "other"]), {"since": 1, "x": r.choice([1, 2])}, ok,
+                      r.choice(["fine", "bad", "INVALID: no", "closed by hand: why", "x" * 400]), _made_by_run_probe=A._RUN_PROBE_TOKEN)
+    p.at = NOW
+    return p
+
+
+class StableResult:
+    """A probe result with a stable repr (run_probe's fake)."""
+
+    def __init__(self, kind, ok, detail):
+        self.kind, self.ok, self.detail, self.args = kind, ok, detail, {}
+
+    def __repr__(self):
+        return f"<result {self.kind} {self.ok} {self.detail}>"
+
+
+def an_open_condition(r, i=0):
+    d = {"kind": r.choice(["TOKEN", "DISK"]), "text": r.choice(["it is down", None, "t" * 300]), "key": f"k{i}",
+         "probe": {"kind": r.choice(["token", "route", "disk_free"]), "args": {"a": 1}}, "fails": r.choice([None, 0, 2, 9, 20]),
+         "next_check": r.choice([None, NOW - 5, NOW + 5, 0, NOW]), "escalate_after": r.choice([None, NOW - 1, NOW + 1000, NOW]),
+         "opened_at": r.choice([None, NOW - 10 ** 4]), "host": r.choice(["server", "sync", None]), "cwd": r.choice([None, "/wt"])}
+    if d["host"] is None:
+        del d["host"]
+    return {"id": f"c{i}", "version": 2, "state": r.choice(["open", "open", "open", "closed"]), "deadline": r.choice([NOW - 3, NOW + 3, NOW]),
+            "level": r.choice([0, 1]), "data": d}
+
+
+class RecoveryTickTest(unittest.TestCase):
+    def build(self, case):
+        r = case.rng
+        case.fake("host_role", lambda rng: r.choice(["server", "sync"]))
+        case.put("epoch_now", lambda: NOW)
+        case.put("err", lambda line: None)
+        case.fake("migrate_condition_files", lambda rng, st: raising(rng, 0.2, ["migrated x"], SystemExit))
+        items = [an_open_condition(r, i) for i in range(r.randint(0, 4))]
+        case.fake("run_probe", lambda rng, kind, args: StableResult(kind, rng.choice([True, False, None]), "d"))
+        case.fake("close_condition", lambda rng, c, res, store=None: rng.choice([None, "RECOVERED " + c["key"]]))
+        case.fake("env_num", lambda rng, n, d: rng.choice([d, 7, 10 ** 9]))
+
+        def update(rng, kind, iid, version, data):
+            if rng.random() < 0.2:
+                raise A.StaleVersion("stale")
+        st = Probe(case, "st", items=lambda rng, kind, states=None: items, update_item=update,
+                   item=lambda rng, kind, iid: next((i for i in items if i["id"] == iid), None),
+                   transition=lambda rng, *a, **k: raising(rng, 0.2, None, A.StaleVersion))
+        return (st, r.choice([None, NOW]), r.choice([False, True]))
+
+    def test_recovery_tick(self):
+        check(self, "recovery_tick", self.build, lambda A: A.recovery_tick, 8000)
+
+
+class CloseConditionTest(unittest.TestCase):
+    def build(self, case):
+        r = case.rng
+        case.fake("ts", lambda rng: "T")
+        case.fake("mark_gate_dirty", lambda rng: None)
+        case.fake("err", lambda rng, line: None)
+        case.fake("inbox_write", lambda rng, *a, **k: None)
+        import tempfile, shutil
+        root = tempfile.mkdtemp(prefix="r14-")
+        self.addCleanup(shutil.rmtree, root, True)
+        case.put("inbox_dir", lambda: root)
+
+        def action(name):
+            def run(rng, cond, a, st):
+                x = rng.random()
+                if x < 0.2:
+                    raise RuntimeError("no " * 50)
+                if x < 0.3:
+                    raise SystemExit(2)
+                return rng.choice([None, "did " + name, ""])
+            return run
+        acts = {n: case.recorded("act." + n, action(n)) for n in ("a1", "a2")}
+        case.put("RECOVER_ACTIONS", acts)
+        d = {"inbox": r.sample(["e1", "e2", "e3"], r.randint(0, 3)), "on_recover": [[n, {}] for n in r.sample(["a1", "a2", "gone"] if False else ["a1", "a2"], r.randint(0, 2))]}
+        item = r.choice([None, {"id": "c1", "version": 3, "state": r.choice(["open", "open", "closed"]), "data": d}])
+        st = Probe(case, "st", item=lambda rng, kind, iid: item,
+                   transition=lambda rng, *a, **k: raising(rng, 0.2, None, r.choice([A.StaleVersion, A.TerminalState])))
+        cond = {"id": "c1", "kind": "TOKEN", "key": "k", "text": r.choice(["", "x" * 300, "it"]), "until": "token present",
+                "probe": {"kind": "token", "args": {"a": 1}}}
+        result = r.choice([a_probe_result(r), "gone fine", "INVALID: wrong", "closed by hand: me"])
+        self.root = root
+        return (cond, result, st)
+
+    def test_close_condition(self):
+        def run(A):
+            def go(cond, result, st):
+                try:
+                    out = ["ok", A.close_condition(cond, result, st)]
+                except BaseException as e:  # noqa: BLE001
+                    out = ["raised", type(e).__name__]
+                acked = os.path.join(self.root, "acked")
+                return out, sorted(os.listdir(acked)) if os.path.isdir(acked) else None
+            return go
+
+        def build(case):
+            args = self.build(case)
+            import shutil
+            shutil.rmtree(os.path.join(self.root, "acked"), True)
+            return args
+        check(self, "close_condition", build, run, 3000)
+
+
+class OpenConditionTest(unittest.TestCase):
+    def build(self, case):
+        r = case.rng
+        case.put("condition_key", lambda kind, probe: "ck")
+        cur = maybe(r, {"id": "ck", "version": 4, "data": {"on_recover": [["a1", {"p": 1}]]}}, 0.4)
+        case.fake("condition_item_of", lambda rng, st, key: cur)
+        case.fake("condition_grace", lambda rng, kind: rng.choice([0, 300]))
+        case.fake("condition_pending", lambda rng, st, key, grace, t: rng.random() < 0.3)
+        case.fake("probe_words", lambda rng, kind, args: "words")
+        case.fake("condition_dict", lambda rng, it: {"dict": it["id"], "state": it.get("state")})
+        case.fake("inbox_write", lambda rng, *a, **k: raising(rng, 0.1, rng.choice([None, "eid1"]), SystemExit))
+        case.fake("host_role", lambda rng: "server")
+        case.fake("ts", lambda rng: "T")
+        case.put("RECOVER_ACTIONS", {"a1": None, "a2": None})
+        existing = {"ck": 0, "ck.2": 0}
+        taken = r.sample(list(existing), r.randint(0, 2))
+
+        def item(rng, kind, iid):
+            return {"id": iid, "state": "closed"} if iid in taken or iid == "ck" and cur else None
+        st = Probe(case, "st", item=item, clock=lambda rng: NOW, update_item=lambda rng, *a: None,
+                   put_item=lambda rng, kind, iid, state, data: {"id": iid, "state": state})
+        probe = a_probe_result(r) if r.random() < 0.9 else "notprobe"
+        recover = r.choice([[], [("a1", {"p": 1})], [("a2", {"z": 1}), ("a1", {"p": 1})], [("nope", {})]])
+        effect = r.choice([None, lambda: {"e": 1}, lambda: None, lambda: {}])
+        text = r.choice(["plain", lambda extra: f"called {sorted(extra)}"])
+        kwargs = dict(key=r.choice([None, "ck", "custom"]), inbox=r.choice([True, False]), command=r.choice(["recover", "land"]),
+                      exit_code=r.choice([1, 0]), cwd=r.choice([None, "/wt"]), tail=r.choice([(), ("l1",)]), effect=effect,
+                      grace=r.choice([None, 0, 5]))
+        return (r.choice(["TOKEN", "OTHER"]), text, probe, recover, kwargs, st)
+
+    def test_open_condition(self):
+        def run(A):
+            def go(kind, text, probe, recover, kwargs, st):
+                try:
+                    out = ["ok", A.open_condition(kind, text, probe, recover, store=st, **kwargs), A._OPENING[0]]
+                except BaseException as e:  # noqa: BLE001
+                    out = ["raised", type(e).__name__, A._OPENING[0]]
+                return out
+            return go
+        check(self, "open_condition", self.build, run, 6000)
+
+
+class CmdRecoverTest(unittest.TestCase):
+    def build(self, case):
+        r = case.rng
+        conds = [{"kind": "K", "key": f"k{i}", "opened": "2026-11-01", "level": r.choice([0, 1]), "text": r.choice(["t", "x" * 200, None]),
+                  "probe": {"kind": "token", "args": {"since": 5, "a": i}}, "until": "ok",
+                  "last_checked": r.choice([None, NOW - 50]), "last_result": r.choice([None, {"ok": None, "detail": "d"}, {"ok": False, "detail": "e"}]),
+                  "next_check": r.choice([None, NOW + 40, NOW - 40]), "fails": r.choice([None, 0, 3]),
+                  "on_recover": r.choice([None, [], [("a1", {}), ("a2", {})]])} for i in range(r.randint(0, 3))]
+        case.fake("open_conditions", lambda rng, st: conds)
+        case.fake("recovery_tick", lambda rng, st, force=False: r.choice([[], ["L1", "L2"]]))
+        case.fake("epoch_now", lambda rng: NOW)
+        return (types.SimpleNamespace(rcmd=r.choice(["tick", "list", None])), Probe(case, "st"))
+
+    def test_cmd_recover(self):
+        def run(A):
+            def go(a, st):
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    rc = A.cmd_recover(a, st)
+                return rc, out.getvalue()
+            return go
+        check(self, "cmd_recover", self.build, run, 3000)
+
+
 if __name__ == "__main__":
     unittest.main()

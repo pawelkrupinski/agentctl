@@ -1,7 +1,7 @@
 # THE TYPES BASELINE (quality/ratchet.py update writes it; hooks/pre-push holds every push to it).
 # mypy --strict errors per part (quality/typecheck.py), frozen. A row may only fall; a rise lands only in a
 # commit carrying `Types: <why>`. CLAUDE.md, "The ratchets".
-mypy-errors	alertprobe	24
+mypy-errors	alertprobe	22
 mypy-errors	alertroute	29
 mypy-errors	alerts	59
 mypy-errors	ask	29
@@ -9,7 +9,7 @@ mypy-errors	batch	34
 mypy-errors	batchcheck	36
 mypy-errors	batchitem	7
 mypy-errors	batchpush	24
-mypy-errors	batchrun	26
+mypy-errors	batchrun	25
 mypy-errors	batchtick	44
 mypy-errors	beats	4
 mypy-errors	blame	42
@@ -25,7 +25,7 @@ mypy-errors	cleanup	13
 mypy-errors	cleanuppass	3
 mypy-errors	cli	15
 mypy-errors	clones	1
-mypy-errors	conditions	40
+mypy-errors	conditions	11
 mypy-errors	config	17
 mypy-errors	configfile	8
 mypy-errors	conflicts	27
@@ -52,7 +52,7 @@ mypy-errors	govroute	10
 mypy-errors	govusage	6
 mypy-errors	identitychange	11
 mypy-errors	inbox	14
-mypy-errors	invariants	31
+mypy-errors	invariants	30
 mypy-errors	issues	6
 mypy-errors	jvmreap	8
 mypy-errors	land	21
@@ -107,7 +107,7 @@ mypy-errors	recovery	51
 mypy-errors	red	48
 mypy-errors	redask	18
 mypy-errors	redauthors	11
-mypy-errors	redblock	18
+mypy-errors	redblock	17
 mypy-errors	redclaim	16
 mypy-errors	redcommands	13
 mypy-errors	redcrash	48
@@ -135,7 +135,7 @@ mypy-errors	redstatus	5
 mypy-errors	redstep	35
 mypy-errors	redtick	80
 mypy-errors	reduntracked	42
-mypy-errors	redvault	23
+mypy-errors	redvault	21
 mypy-errors	redverify	18
 mypy-errors	redview	25
 mypy-errors	redwaits	8
@@ -156,7 +156,7 @@ mypy-errors	slots	56
 mypy-errors	snapshot	8
 mypy-errors	statemachines	29
 mypy-errors	stats	33
-mypy-errors	status	85
+mypy-errors	status	84
 mypy-errors	statusagents	34
 mypy-errors	statusline	4
 mypy-errors	statuspage	28
@@ -175,6 +175,6 @@ mypy-errors	tunnel	4
 mypy-errors	upkeep	13
 mypy-errors	wait	46
 mypy-errors	waiting	28
-mypy-errors	watchdog	19
+mypy-errors	watchdog	17
 mypy-errors	watchtick	52
 mypy-errors	worktrees	8

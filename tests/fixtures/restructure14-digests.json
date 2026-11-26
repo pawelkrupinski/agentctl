@@ -1,8 +1,12 @@
 {
+ "close_condition": "582334a1190933a9cb2011f45b9a38be90c7f78f0f97c36de8a85de377dee322",
  "close_landed_changes": "95e92ac11696ed4ddfc39976bab3cea1e8e0d931aef8a5086cebf1a796e5e0ec",
+ "cmd_recover": "ff9dd3d1ceb50e5d18e25066e7e8d09e07bffe0432feb4f9309d2a1f17ff0cec",
  "fix_between": "0aa4a025908967dfd82fe56c35c7ab83e614da6c65f385311220353513ecc68d",
  "lap_change_deadline": "fb0965c216829a4ce989087a3ea35de8231d79a5348845abcc5e5dd208ad2120",
  "migrate_local_queue": "e2aacd3036c4578e84a62cf076e3993b7197fee2102142b2b0f6a7bfc4f85f39",
+ "open_condition": "049c2886ecd29ca158bbf6abb96a8ae5a5a0a3ba3fc594169c1ac36bd549c9a5",
+ "recovery_tick": "ebe8d992ca409165d22f63e4c0b48e0cbdc86b05375d1bd63a465e81d29b478f",
  "red_authors": "47ea2c58b585da768f89a481dc3d7fffce4133c485cd9688b565e663d8f53614",
  "red_flake_check": "f85315f9d95ba4092c7c69e2aff1932c46036f2412c505b7bcad887425141e52",
  "red_main_verify": "13820ef23353b6d1b91f42b0943a5d4f27c3c92fc0cb91f2eea6ea64541ebbb9",

@@ -60,7 +60,7 @@ PROBE_EVERY = {"disk_free": 300, "quota_reset": 300, "invariant": 60, "waiting_o
                "batch_progress": 30, "red_read": 300}
 
 
-def probe_words(kind, a):
+def probe_words(kind: Any, a: Any) -> Any:
     """A probe in a person's words: the status line's `auto-clears when <this>`."""
     return {"disk_free": lambda: f"{a.get('min_gb')} GB are free again",
             "quota_reset": lambda: f"the quota resets and {a.get('workflow')}'s {a.get('job')} passes",
@@ -93,7 +93,7 @@ def run_probe(kind: str, args: dict[str, Any] | None = None) -> ProbeResult:
     return ProbeResult(kind, args, None if ok is None else bool(ok), detail, _made_by_run_probe=_RUN_PROBE_TOKEN)
 
 
-def condition_key(kind, probe):
+def condition_key(kind: Any, probe: Any) -> Any:
     return re.sub(r"[^\w.-]+", "_", f"{kind}-{probe.kind}-" + "-".join(f"{v}" for _k, v in sorted(probe.args.items())
                                                                            if _k != "since"))[:150]
 
@@ -112,7 +112,7 @@ def maybe_recovery_tick(store: Any) -> None:
 CONDITION_ESCALATE_EVERY = 2 * 3600  # an open condition escalates 10 min after opening, then every 2 h
 
 
-def condition_item_of(store, key):
+def condition_item_of(store: Any, key: Any) -> Any:
     """The open condition item for key, or None."""
     for it in store.items("condition", ["open"]):
         if it["data"].get("key") == key:
@@ -120,7 +120,7 @@ def condition_item_of(store, key):
     return None
 
 
-def condition_dict(it):
+def condition_dict(it: Any) -> Any:
     return {**it["data"], "id": it["id"], "version": it["version"], "deadline": it["deadline"], "level": it["level"]}
 
 
@@ -136,11 +136,11 @@ UNKNOWN_GRACE = 300  # s an UNKNOWN condition must keep failing (seen again past
 CONDITION_PENDING_LAPSE = 1800  # s between two sightings after which a pending condition's sighting run starts again
 
 
-def condition_grace(kind):
+def condition_grace(kind: Any) -> Any:
     return env_num("AGENTCTL_UNKNOWN_GRACE", UNKNOWN_GRACE) if kind == "UNKNOWN" else 0
 
 
-def condition_pending(st, key, grace, t):
+def condition_pending(st: Any, key: Any, grace: Any, t: Any) -> Any:
     """True while key's failure is younger than grace (THE BLIP rule above): the sighting is marked, nothing opens."""
     if grace <= 0:
         return False
@@ -159,27 +159,10 @@ def condition_pending(st, key, grace, t):
     return False
 
 
-def open_condition(kind: str, text: str, probe: Any, on_recover: Any, key: str | None = None, inbox: bool = True,
-                   command: str = "recover", exit_code: int = 1, cwd: str | None = None, tail: Any = (), effect: Any = None,
-                   *, store: Any, grace: float | None = None) -> Any:
-    """Open (or refresh) a non-green condition: an item of the "condition" machine. probe: the FAILED ProbeResult of the
-    check that found it (required: the same probe, passing, closes it); on_recover: [(action, args)] from
-    RECOVER_ACTIONS. effect: a callable run inside; its dict result is merged into every on_recover args. Writes ONE
-    inbox entry (text) per spell. Returns the condition, or None when the probe passes now (nothing is wrong) or the
-    failure is still inside its kind's grace (grace: seconds, None for the kind's: THE BLIP rule above). Its time is
-    the store's clock."""
-    if not isinstance(probe, ProbeResult):
-        raise ConditionBypass(f"open_condition({kind!r}) without a ProbeResult: no condition without its recovery probe")
-    for name, _a in on_recover:
-        if name not in RECOVER_ACTIONS:
-            raise ConditionBypass(f"unknown on_recover action {name!r}")
-    if probe.ok:
-        return None
-    st = store
-    key = key or condition_key(kind, probe)
-    cur = condition_item_of(st, key)
-    if not cur and condition_pending(st, key, condition_grace(kind) if grace is None else grace, st.clock()):
-        return None
+def _opened_text(text: Any, effect: Any, cur: Any, inbox: bool, command: str, exit_code: int, cwd: Any, tail: Any,
+                 key: str) -> Any:
+    """The condition's effect run and its text made (_OPENING held, so the inbox writes of an opening are allowed), and its one
+    inbox entry per spell written. (the effect's dict, the text, the inbox entry ids)"""
     _OPENING[0] += 1
     try:
         extra = (effect() if effect else None) or {}
@@ -190,16 +173,22 @@ def open_condition(kind: str, text: str, probe: Any, on_recover: Any, key: str |
             ids = [eid] if eid else []
     finally:
         _OPENING[0] -= 1
-    t = st.clock()
-    new = [[n, {**x, **extra}] for n, x in on_recover]
-    if cur:  # refreshed: re-described too, so its escalations say what is wrong NOW, not at its opening
-        d = cur["data"]
-        acts = list(d.get("on_recover") or []) + [x for x in new if x not in (d.get("on_recover") or [])]
-        st.update_item("condition", cur["id"], cur["version"], {"on_recover": acts, "last_checked": t, "text": text,
-                                                                 "last_result": {"ok": probe.ok, "detail": probe.detail}})
-        return condition_dict(st.item("condition", cur["id"]))
+    return extra, text, ids
+
+
+def _refreshed(st: Any, cur: Any, probe: Any, new: Any, text: Any, t: Any) -> Any:
+    """A condition still open: re-described too, so its escalations say what is wrong NOW, not at its opening."""
+    d = cur["data"]
+    acts = list(d.get("on_recover") or []) + [x for x in new if x not in (d.get("on_recover") or [])]
+    st.update_item("condition", cur["id"], cur["version"], {"on_recover": acts, "last_checked": t, "text": text,
+                                                             "last_result": {"ok": probe.ok, "detail": probe.detail}})
+    return condition_dict(st.item("condition", cur["id"]))
+
+
+def _put_condition(st: Any, key: str, kind: str, text: Any, probe: Any, new: Any, ids: Any, command: str, cwd: Any, t: Any) -> Any:
+    """A new condition item (an earlier spell is closed: its id is the next free one)."""
     iid, n = key, 1
-    while st.item("condition", iid) is not None:  # an earlier spell is closed: a new item
+    while st.item("condition", iid) is not None:
         n += 1
         iid = f"{key}.{n}"
     data = {"key": key, "kind": kind, "text": text, "probe": {"kind": probe.kind, "args": probe.args},
@@ -209,19 +198,90 @@ def open_condition(kind: str, text: str, probe: Any, on_recover: Any, key: str |
     return condition_dict(st.put_item("condition", iid, "open", data))
 
 
-def open_conditions(store):
+def _require_recovery(kind: str, probe: Any, on_recover: Any) -> None:
+    """No condition without the probe that closes it and recovery actions that exist."""
+    if not isinstance(probe, ProbeResult):
+        raise ConditionBypass(f"open_condition({kind!r}) without a ProbeResult: no condition without its recovery probe")
+    for name, _a in on_recover:
+        if name not in RECOVER_ACTIONS:
+            raise ConditionBypass(f"unknown on_recover action {name!r}")
+
+
+def open_condition(kind: str, text: str, probe: Any, on_recover: Any, key: str | None = None, inbox: bool = True,
+                   command: str = "recover", exit_code: int = 1, cwd: str | None = None, tail: Any = (), effect: Any = None,
+                   *, store: Any, grace: float | None = None) -> Any:
+    """Open (or refresh) a non-green condition: an item of the "condition" machine. probe: the FAILED ProbeResult of the
+    check that found it (required: the same probe, passing, closes it); on_recover: [(action, args)] from
+    RECOVER_ACTIONS. effect: a callable run inside; its dict result is merged into every on_recover args. Writes ONE
+    inbox entry (text) per spell. Returns the condition, or None when the probe passes now (nothing is wrong) or the
+    failure is still inside its kind's grace (grace: seconds, None for the kind's: THE BLIP rule above). Its time is
+    the store's clock."""
+    _require_recovery(kind, probe, on_recover)
+    if probe.ok:
+        return None
+    st = store
+    key = key or condition_key(kind, probe)
+    cur = condition_item_of(st, key)
+    if not cur and condition_pending(st, key, condition_grace(kind) if grace is None else grace, st.clock()):
+        return None
+    extra, text, ids = _opened_text(text, effect, cur, inbox, command, exit_code, cwd, tail, key)
+    t = st.clock()
+    new = [[n, {**x, **extra}] for n, x in on_recover]
+    if cur:
+        return _refreshed(st, cur, probe, new, text, t)
+    return _put_condition(st, key, kind, text, probe, new, ids, command, cwd, t)
+
+
+def open_conditions(store: Any) -> Any:
     """The open conditions, as dicts (key, kind, text, probe, on_recover, inbox, ... plus id and version)."""
     return [condition_dict(it) for it in store.items("condition", ["open"])]
 
 
-def close_condition(cond, result, store):
+def _close_result(cond: Any, result: Any) -> Any:
+    """The probe's result; a reason string (a manual close) made one that says so."""
+    if isinstance(result, str):
+        return ProbeResult(cond["probe"]["kind"], cond["probe"]["args"], True,
+                           result if result.startswith("INVALID:") else f"closed by hand: {result}",
+                           _made_by_run_probe=_RUN_PROBE_TOKEN)
+    return result
+
+
+def _ack_entries(ids: Any) -> None:
+    """The closed condition's inbox entries acked."""
+    acked = os.path.join(inbox_dir(), "acked")
+    os.makedirs(acked, exist_ok=True)
+    for eid in ids or []:
+        open(os.path.join(acked, eid), "a").close()
+
+
+def _recovery_done(cond: Any, it: Any, st: Any) -> list[str]:
+    """The condition's on_recover actions run, each failure said; what they say they did."""
+    did = []
+    for name, a in it["data"].get("on_recover") or []:
+        try:
+            w = RECOVER_ACTIONS[name](cond, a, st)
+            if w:
+                did.append(w)
+        except (Exception, SystemExit) as e:
+            did.append(f"{name} failed: {str(e)[:120]}")
+    return did
+
+
+def _closed_line(cond: Any, result: Any, reason: str, manual: bool, did: list[str]) -> str:
+    """The one RECOVERED (or, closed by hand, CLOSED) note."""
+    text = cond.get("text", "")[:200]
+    if not manual:
+        return f"RECOVERED: {cond.get('until')} ({result.detail}): {text}" + (f"; {'; '.join(did)}" if did else "")
+    if reason.startswith("INVALID:"):
+        return f"CLOSED (unjustified): {reason[len('INVALID: '):]}: {text}"
+    return f"CLOSED: {reason[len('closed by hand: '):]}: {text}"
+
+
+def close_condition(cond: Any, result: Any, store: Any) -> Any:
     """The probe passed (result: its ProbeResult, or a reason string for a manual close): the item moves to closed (a
     compare-and-set: one closer), its inbox entries are acked, its on_recover actions run, one RECOVERED note."""
     st = store
-    if isinstance(result, str):
-        result = ProbeResult(cond["probe"]["kind"], cond["probe"]["args"], True,
-                             result if result.startswith("INVALID:") else f"closed by hand: {result}",
-                             _made_by_run_probe=_RUN_PROBE_TOKEN)
+    result = _close_result(cond, result)
     it = st.item("condition", cond["id"])
     if not it or it["state"] != "open":
         return None
@@ -233,30 +293,16 @@ def close_condition(cond, result, store):
                       event={"text": f"{cond.get('kind')} closed: {reason[:200]}", "refs": {"key": cond.get("key")}})
     except (StaleVersion, TerminalState):
         return None  # another closer won
-    acked = os.path.join(inbox_dir(), "acked")
-    os.makedirs(acked, exist_ok=True)
-    for eid in it["data"].get("inbox") or []:
-        open(os.path.join(acked, eid), "a").close()
-    did = []
-    for name, a in it["data"].get("on_recover") or []:
-        try:
-            w = RECOVER_ACTIONS[name](cond, a, st)
-            if w:
-                did.append(w)
-        except (Exception, SystemExit) as e:
-            did.append(f"{name} failed: {str(e)[:120]}")
+    _ack_entries(it["data"].get("inbox"))
+    did = _recovery_done(cond, it, st)
     mark_gate_dirty()
-    line = ((f"CLOSED (unjustified): {reason[len('INVALID: '):]}: {cond.get('text', '')[:200]}"
-             if reason.startswith("INVALID:") else f"CLOSED: {reason[len('closed by hand: '):]}: {cond.get('text', '')[:200]}")
-            if manual else
-            f"RECOVERED: {cond.get('until')} ({result.detail}): {cond.get('text', '')[:200]}"
-            + (f"; {'; '.join(did)}" if did else ""))
+    line = _closed_line(cond, result, reason, manual, did)
     err(line)
     inbox_write("recover", line, [line], [], 0)
     return line
 
 
-def migrate_condition_files(store):
+def migrate_condition_files(store: Any) -> Any:
     """Step 12's migration: every open condition file under recovery_dir() becomes a condition item; the file goes."""
     out = []
     for p in sorted(glob.glob(recovery_dir("*.json"))):
@@ -276,7 +322,7 @@ def migrate_condition_files(store):
     return out
 
 
-def probed_here(c):
+def probed_here(c: Any) -> Any:
     """A condition's probe runs on the host role that opened it (its `host`; before it was recorded: the server's):
     the laptop's watchdog, tunnel or token conditions read the laptop -- on ci-runner a W5 probe found no plist and
     closed, `route -n get default` never answered, and the laptop's inbox entries were acked in the server's."""
@@ -286,7 +332,54 @@ def probed_here(c):
     return c.get("host", "server") == host_role()
 
 
-def recovery_tick(store, now_=None, force=False):
+def _reprobe(st: Any, it: Any, c: Any, t: Any, out: list[str]) -> Any:
+    """A due condition's probe run again: a pass closes it (its line to out), a failure backs its next check off. The
+    item to go on with, or None when it closed or its version moved."""
+    r = run_probe(c["probe"]["kind"], c["probe"]["args"])
+    if r.ok:
+        line = close_condition(c, r, store=st)
+        if line:
+            out.append(line)
+        return None
+    fails = int(c.get("fails") or 0) + 1
+    every = PROBE_EVERY.get(r.kind, 60) * 2 ** min(fails, 8)
+    try:
+        st.update_item("condition", it["id"], it["version"], {
+            "fails": fails, "last_checked": t, "last_result": {"ok": r.ok, "detail": r.detail},
+            "next_check": t + min(every, env_num("AGENTCTL_RECOVER_MAX", RECOVER_BACKOFF_MAX))})
+    except StaleVersion:
+        return None
+    return st.item("condition", it["id"])
+
+
+def _escalation_due(it: Any, t: Any) -> bool:
+    """An open condition past its deadline and its own escalate_after."""
+    return it["state"] == "open" and t >= max(it["deadline"], float(it["data"].get("escalate_after") or 0))
+
+
+def _escalate_overdue(st: Any, it: Any, t: Any) -> None:
+    """An open condition past its deadline (and its own escalate_after): the state's self-transition, an escalate event."""
+    age = fmt_age(t - float(it["data"].get("opened_at") or t))
+    line = f"ESCALATED: {it['data'].get('kind')} open for {age}: {str(it['data'].get('text'))[:200]}"
+    with suppress(StaleVersion):
+        st.transition("condition", it["id"], "open", it["version"], deadline_s=CONDITION_ESCALATE_EVERY,
+                      event={"text": line, "audience": {"worktree": it["data"].get("cwd")} if it["data"].get("cwd")
+                             else {}, "refs": {"verdict": line, "key": it["data"].get("key"), "command": "recover"}})
+
+
+def _tick_condition(st: Any, it: Any, t: Any, force: bool, server: bool, out: list[str]) -> None:
+    """One open condition's look: its probe re-run when due (on the host that opened it), then, on the server, its
+    escalation when overdue."""
+    c = condition_dict(it)
+    if probed_here(c) and (force or float(c.get("next_check") or 0) <= t):
+        it = _reprobe(st, it, c, t, out)
+        if it is None:
+            return
+    if server and _escalation_due(it, t):
+        _escalate_overdue(st, it, t)
+
+
+def recovery_tick(store: Any, now_: Any = None, force: bool = False) -> Any:
     """Each host's look (the server's tick and the laptop's sync both run it): each open condition OPENED ON THIS HOST
     whose next check is due re-runs ITS probe; a pass closes it. Backoff: PROBE_EVERY x 2^fails, at most
     RECOVER_BACKOFF_MAX. Past its deadline (10 min after opening, then every 2 h) an open condition escalates -- on the
@@ -299,30 +392,7 @@ def recovery_tick(store, now_=None, force=False):
     out += attempt(lambda: migrate_condition_files(st), [], catch=(Exception, SystemExit),
                    what="recover: could not migrate the condition files")
     for it in st.items("condition", ["open"]):
-        c = condition_dict(it)
-        if probed_here(c) and (force or float(c.get("next_check") or 0) <= t):
-            r = run_probe(c["probe"]["kind"], c["probe"]["args"])
-            if r.ok:
-                line = close_condition(c, r, store=st)
-                if line:
-                    out.append(line)
-                continue
-            fails = int(c.get("fails") or 0) + 1
-            every = PROBE_EVERY.get(r.kind, 60) * 2 ** min(fails, 8)
-            try:
-                st.update_item("condition", it["id"], it["version"], {
-                    "fails": fails, "last_checked": t, "last_result": {"ok": r.ok, "detail": r.detail},
-                    "next_check": t + min(every, env_num("AGENTCTL_RECOVER_MAX", RECOVER_BACKOFF_MAX))})
-            except StaleVersion:
-                continue
-            it = st.item("condition", it["id"])
-        if server and it["state"] == "open" and t >= max(it["deadline"], float(it["data"].get("escalate_after") or 0)):
-            age = fmt_age(t - float(it["data"].get("opened_at") or t))
-            line = f"ESCALATED: {it['data'].get('kind')} open for {age}: {str(it['data'].get('text'))[:200]}"
-            with suppress(StaleVersion):
-                st.transition("condition", it["id"], "open", it["version"], deadline_s=CONDITION_ESCALATE_EVERY,
-                              event={"text": line, "audience": {"worktree": it["data"].get("cwd")} if it["data"].get("cwd")
-                                     else {}, "refs": {"verdict": line, "key": it["data"].get("key"), "command": "recover"}})
+        _tick_condition(st, it, t, force, server, out)
     return out
 
 
@@ -348,6 +418,27 @@ def recovery_recheck_all(store):
             pass
 
 
+def _probe_report(c: Any) -> str:
+    """The condition's probe (its `since` left out) and what clears it."""
+    args = json.dumps({k: v for k, v in c["probe"]["args"].items() if k != "since"})
+    return f"  probe: {c['probe']['kind']} {args} -- clears when {c.get('until')}\n"
+
+
+def _checked_report(c: Any, t: Any) -> str:
+    """When it was last checked, what the check said, when it is next due."""
+    lr = c.get("last_result") or {}
+    return (f"  last checked {iso_at(float(c.get('last_checked') or 0))}: {'cannot tell' if lr.get('ok') is None else 'fails'}"
+            f" ({lr.get('detail')}); next check in {max(0, int(float(c.get('next_check') or 0) - t))} s"
+            f" (fails {c.get('fails') or 0})\n")
+
+
+def _condition_report(c: Any, t: Any) -> str:
+    """One open condition as `recover` prints it."""
+    return (f"{c['kind']} {c['key']} (open since {c.get('opened')}{', ESCALATED' if c.get('level') else ''}): "
+            f"{c.get('text', '')[:140]}\n" + _probe_report(c) + _checked_report(c, t)
+            + f"  on recover: {', '.join(n for n, _x in c.get('on_recover') or []) or 'ack + gate dirty'}")
+
+
 def cmd_recover(a, store):
     if a.rcmd == "tick":
         lines = recovery_tick(store, force=True)
@@ -359,13 +450,5 @@ def cmd_recover(a, store):
         return 0
     t = epoch_now()
     for c in cs:
-        lr = c.get("last_result") or {}
-        print(f"{c['kind']} {c['key']} (open since {c.get('opened')}{', ESCALATED' if c.get('level') else ''}): "
-              f"{c.get('text', '')[:140]}\n"
-              f"  probe: {c['probe']['kind']} {json.dumps({k: v for k, v in c['probe']['args'].items() if k != 'since'})}"
-              f" -- clears when {c.get('until')}\n"
-              f"  last checked {iso_at(float(c.get('last_checked') or 0))}: {'cannot tell' if lr.get('ok') is None else 'fails'}"
-              f" ({lr.get('detail')}); next check in {max(0, int(float(c.get('next_check') or 0) - t))} s"
-              f" (fails {c.get('fails') or 0})\n"
-              f"  on recover: {', '.join(n for n, _x in c.get('on_recover') or []) or 'ack + gate dirty'}")
+        print(_condition_report(c, t))
     return 0
