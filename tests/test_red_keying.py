@@ -73,15 +73,16 @@ class RedKeyingTest(RedsBase):
         self.assertEqual(per_job[0][2], "[info] - FooSpec should bar *** FAILED ***")
 
     def test_the_classifier_version_covers_the_line_choice(self):
-        v = A.classifier_version()
+        """The line choice's patterns are verdict rules (tests/test_classifier_version.py bumps the version on them)."""
+        v = A.verdict_rules_digest()
         for name in ("STRONG", "WEAK", "NOISE", "ANNOTATION"):
             old = getattr(A, name)
             try:
                 setattr(A, name, re.compile(old.pattern + "|xyzzy"))
-                self.assertNotEqual(A.classifier_version(), v, name)
+                self.assertNotEqual(A.verdict_rules_digest(), v, name)
             finally:
                 setattr(A, name, old)
-        self.assertEqual(A.classifier_version(), v)
+        self.assertEqual(A.verdict_rules_digest(), v)
 
     def test_the_streak_is_read_again_and_the_waiting_fix_holds_the_red(self):
         self.stale_records()

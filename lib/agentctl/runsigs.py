@@ -87,23 +87,42 @@ def run_names(r: dict[str, Any]) -> set[str]:
     return {str(x) for x in (r.get("number"), r.get("databaseId")) if x not in (None, "")}
 
 
+# THE CLASSIFIER'S VERSION (review 2026-11-26, B F8): what a cached signature was judged by -- its KIND (classify_job
+# and every pattern it reads) and its LINE, the red's key (relevant_lines, job_log_lines, choose_job_lines and the
+# STRONG / WEAK / NOISE / ANNOTATION patterns). A record of another version is read again (#2426: cached a TEST FAILURE
+# before KEY_REFUSED_LOG, `red block` kept reading it; #2406 / #2481 / #2493: one failure cached under three lines, the
+# older two from before annotations came first). It was the hash of those functions' SOURCE, so a reformat or a comment
+# in any of them -- or moving one, as a restructuring does -- re-read every cached signature from GitHub on the next
+# tick. Now it is this number, BUMPED BY THE COMMIT THAT CHANGES A VERDICT RULE; tests/test_classifier_version.py holds
+# the rules' digest (verdict_rules_digest) to tests/fixtures/classifier-rules.tsv and fails when the rules changed and
+# the version did not.
+CLASSIFIER_VERSION = 1
+
+
 def classifier_version() -> str:
-    """What a cached signature was judged by: its KIND (classify_job and every pattern it reads) and its LINE, the red's
-    key (relevant_lines, job_log_lines, choose_job_lines and the STRONG / WEAK / NOISE / ANNOTATION patterns). A record
-    of another version is read again (#2426: cached a TEST FAILURE before KEY_REFUSED_LOG, `red block` kept reading it;
-    #2406 / #2481 / #2493: one failure cached under three lines, the older two from before annotations came first)."""
-    import hashlib, inspect
-    parts = [VERDICT_COMPLETE_JOB.pattern, inspect.getsource(jobs_no_verdict), inspect.getsource(job_is_verdict_report),
-             "verdict complete beside a real failure: incomplete", inspect.getsource(classify_job),
-             inspect.getsource(job_is_phantom), SETUP_STEP.pattern, INFRA_LOG.pattern, UNKNOWN_LOG.pattern,
-             KEY_REFUSED_LOG.pattern, STEP_TIMED_OUT, inspect.getsource(relevant_lines), inspect.getsource(job_log_lines),
-             inspect.getsource(choose_job_lines), inspect.getsource(flip_listings),
-             inspect.getsource(flip_key_line), inspect.getsource(drift_key), DRIFT_LINE.pattern, FLIP_HEADER.pattern,
-             FLIP_ROW.pattern, FLIP_TAKES.pattern, str(FLIP_KEY_MAX), STRONG.pattern, WEAK.pattern, NOISE.pattern, ANNOTATION.pattern,
-             NOT_A_FAILURE.pattern, CREDENTIAL_STEP.pattern, RUNNER_FAILED.pattern, inspect.getsource(failed_jobs_log),
-             inspect.getsource(step_window_lines), inspect.getsource(run_failed_jobs), inspect.getsource(run_failed_attempt),
-             log_verdict_version()]
-    return hashlib.sha1("\n".join(parts).encode()).hexdigest()[:12]
+    """The version a cached signature records and is read back by (CLASSIFIER_VERSION)."""
+    return f"v{CLASSIFIER_VERSION}"
+
+
+def verdict_rules() -> list[str]:
+    """The verdict rules' text: every pattern and the source of every function a signature's kind and line are judged
+    by (what CLASSIFIER_VERSION versions; tests/test_classifier_version.py holds its digest)."""
+    import inspect
+    return [VERDICT_COMPLETE_JOB.pattern, inspect.getsource(jobs_no_verdict), inspect.getsource(job_is_verdict_report),
+            "verdict complete beside a real failure: incomplete", inspect.getsource(classify_job),
+            inspect.getsource(job_is_phantom), SETUP_STEP.pattern, INFRA_LOG.pattern, UNKNOWN_LOG.pattern,
+            KEY_REFUSED_LOG.pattern, STEP_TIMED_OUT, inspect.getsource(relevant_lines), inspect.getsource(job_log_lines),
+            inspect.getsource(choose_job_lines), inspect.getsource(flip_listings),
+            inspect.getsource(flip_key_line), inspect.getsource(drift_key), DRIFT_LINE.pattern, FLIP_HEADER.pattern,
+            FLIP_ROW.pattern, FLIP_TAKES.pattern, str(FLIP_KEY_MAX), STRONG.pattern, WEAK.pattern, NOISE.pattern,
+            ANNOTATION.pattern, NOT_A_FAILURE.pattern, CREDENTIAL_STEP.pattern, RUNNER_FAILED.pattern,
+            inspect.getsource(failed_jobs_log), inspect.getsource(step_window_lines), inspect.getsource(run_failed_jobs),
+            inspect.getsource(run_failed_attempt), log_verdict_version()]
+
+
+def verdict_rules_digest() -> str:
+    import hashlib
+    return hashlib.sha1("\n".join(verdict_rules()).encode()).hexdigest()[:12]
 
 
 def save_run_sigs(o_r: str, run: dict[str, Any], workflow: str, per_job: Any) -> list[dict[str, Any]]:
