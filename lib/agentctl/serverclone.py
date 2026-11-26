@@ -13,12 +13,14 @@ import threading
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import env_num, err, git, git_ok, pid_alive, process_cache, remote
+from agentctl.configfile import env_num
+from agentctl.core import err, git, git_ok, pid_alive, process_cache, remote
 from agentctl.statefile import read_record
 from agentctl.repos import server_repo
 from agentctl.clones import CORRUPT_GIT, clone_gated, clone_shared, clone_side, heal_enabled
 from agentctl.conditions import open_condition, recovery_recheck, run_probe
 from agentctl.sdnotify import SD_READY, sd_notify
+from agentctl.configfile import knob_clone_keepalive
 
 
 # THE SERVER CLONE IS ATOMIC (2026-10-29: the reconciler crash-looped at 11:33 mid-clone; the half clone's .git -- an
@@ -63,11 +65,6 @@ def clone_verify(path):
     return True, f"{remote()}/main resolves and is connected"
 
 
-# A CLONE NEVER TRIPS SYSTEMD (2026-10-29: the reconciler is Type=notify, TimeoutStartSec=300, WatchdogSec=120; movies
-# is a ~650 MB pack). While a clone runs, every CLONE_KEEPALIVE s: before READY, EXTEND_TIMEOUT_USEC (the start
-# timeout pushed out past the next keepalive); after it, WATCHDOG=1; both with a STATUS= line. The clone itself is
-# bounded by CLONE_TIMEOUT, so the extensions end.
-CLONE_KEEPALIVE = 20
 CLONE_TIMEOUT = 1800
 
 
@@ -76,7 +73,7 @@ def clone_keepalive(what, started):
     status = f"STATUS={what} ({int(started.elapsed())} s)"  # wall: waits on and times real processes and threads
     if SD_READY[0]:
         return sd_notify(f"WATCHDOG=1\n{status}")
-    every = env_num("AGENTCTL_CLONE_KEEPALIVE", CLONE_KEEPALIVE)
+    every = knob_clone_keepalive()
     return sd_notify(f"EXTEND_TIMEOUT_USEC={int(max(every * 4, 60) * 1_000_000)}\n{status}")
 
 
@@ -84,7 +81,7 @@ def run_clone(cmd, what):
     """The clone, bounded by CLONE_TIMEOUT, with systemd keepalives meanwhile: CompletedProcess; raises
     subprocess.TimeoutExpired (the clone killed) past the bound."""
     bound = env_num("AGENTCTL_CLONE_TIMEOUT", CLONE_TIMEOUT)
-    every = env_num("AGENTCTL_CLONE_KEEPALIVE", CLONE_KEEPALIVE)
+    every = knob_clone_keepalive()
     started = stopwatch()
     got = {}
 

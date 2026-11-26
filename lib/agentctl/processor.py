@@ -8,7 +8,7 @@ import signal
 import sys
 from typing import Any, Callable, Sequence
 from agentctl.clock import Clock
-from agentctl.core import SHORT, _bounded, attempt, env_num, err, git, git_ok, host_role, slug
+from agentctl.core import SHORT, _bounded, attempt, err, git, git_ok, host_role, slug
 from agentctl.statefile import write_json
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import waiting_entries, waiting_state
@@ -21,7 +21,7 @@ from agentctl.queuerecheck import queued_entries
 from agentctl.beats import write_beat
 from agentctl.sdnotify import SD_READY, sd_notify
 from agentctl.serverclone import ensure_server_clone
-from agentctl.tickrun import ROUND_ERRORS_MAX, TICK, run_step
+from agentctl.tickrun import ROUND_ERRORS_MAX, run_step
 from agentctl.redcrash import keep_awake
 from agentctl.snapshot import write_snapshot
 from agentctl.landqueue import land_await, queue_checker, queue_command, waiting_repo
@@ -29,6 +29,7 @@ from agentctl.statuspage import status_page_start
 from agentctl.syncsteps import sync_steps
 from agentctl.serversteps import server_steps
 from agentctl.processorlink import TokenDrop, processor_owned
+from agentctl.configfile import knob_tick
 
 
 WAITING_RENAMED = {"status": "land status", "pause": "land hold", "resume": "land release", "cancel": "land cancel <id>",
@@ -101,7 +102,7 @@ class ProcessorLoop:
             self.settle(self.run_steps())
             if self.drained():
                 return 0
-            self.drop.nap(env_num("AGENTCTL_TICK", TICK))
+            self.drop.nap(knob_tick())
         return 0
 
 

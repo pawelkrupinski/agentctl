@@ -9,12 +9,14 @@ import re
 import time
 from typing import Any, Callable
 from contextlib import suppress
-from agentctl.core import attempt, env_num, err, fmt_age, host_role, reds_dir, remote, state_root
+from agentctl.configfile import env_num
+from agentctl.core import attempt, err, fmt_age, host_role, reds_dir, remote, state_root
 from agentctl.timefmt import iso_at, ts
 from agentctl.statefile import read_record
 from agentctl.gating import mark_gate_dirty
 from agentctl.inboxentry import ConditionBypass, _OPENING, inbox_dir, inbox_write
 from agentctl.statemachines import StaleVersion, TerminalState
+from agentctl.configfile import knob_recovery_dir, knob_reds_dir
 
 
 RECOVER_BACKOFF_MAX = 600  # a probe is re-run at most this far apart, however often it failed ($AGENTCTL_RECOVER_MAX)
@@ -34,7 +36,7 @@ _RUN_PROBE_TOKEN = object()
 
 
 def recovery_dir(*parts):
-    d = os.environ.get("AGENTCTL_RECOVERY_DIR") or (reds_dir("recovery") if os.environ.get("AGENTCTL_REDS_DIR")
+    d = knob_recovery_dir() or (reds_dir("recovery") if knob_reds_dir()
                                                    else state_root("recovery"))
     return os.path.join(d, *parts)
 

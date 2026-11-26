@@ -9,7 +9,8 @@ import re
 import time
 from contextlib import suppress
 from typing import Any, Iterator
-from agentctl.core import HOME, attempt, env_num, hashlib_sha1
+from agentctl.configfile import env_num
+from agentctl.core import HOME, attempt, hashlib_sha1
 from agentctl.statefile import read_record, write_json
 from agentctl.claudefiles import claude_projects_root
 from agentctl.live import live_slug

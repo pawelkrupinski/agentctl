@@ -16,6 +16,7 @@ from agentctl.timefmt import iso_at
 from agentctl.statefile import read_record, write_json
 from agentctl.procs import safe_cwd
 from agentctl.fixerrecords import agent_name
+from agentctl.configfile import knob_inbox_dir, knob_owners_dir
 
 
 # ---------------------------------------------------------------- inbox
@@ -30,10 +31,10 @@ INBOX_COMMANDS = {"land", "watch", "wait", "waiting await"}
 
 
 def inbox_dir() -> str:
-    if os.environ.get("AGENTCTL_INBOX_DIR"):
-        return os.environ["AGENTCTL_INBOX_DIR"]
-    if os.environ.get("AGENTCTL_OWNERS_DIR"):
-        return os.path.join(os.path.dirname(os.path.abspath(os.environ["AGENTCTL_OWNERS_DIR"])), "inbox")
+    if knob_inbox_dir():
+        return knob_inbox_dir()
+    if knob_owners_dir():
+        return os.path.join(os.path.dirname(os.path.abspath(knob_owners_dir())), "inbox")
     return state_root("inbox")
 
 

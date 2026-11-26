@@ -6,7 +6,8 @@ import datetime as dt
 import os
 import time
 from typing import Any, Optional
-from agentctl.core import env_num, fmt_age, hashlib_sha1
+from agentctl.configfile import env_num
+from agentctl.core import fmt_age, hashlib_sha1
 from agentctl.timefmt import ts
 from agentctl.store import StoreUnavailable
 from agentctl.procs import safe_cwd

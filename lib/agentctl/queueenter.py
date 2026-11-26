@@ -9,8 +9,9 @@ import subprocess
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
+from agentctl.configfile import env_num
 from agentctl.core import (
-    MAX_FOREIGN, NO_SIGN, branch_of, env_num, err, fmt_age, git, git_ok, host_role, process_cache, remote, scratch)
+    NO_SIGN, branch_of, err, fmt_age, git, git_ok, host_role, process_cache, remote, scratch)
 from agentctl.policy import policy_blocks
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.waitingdir import waiting_state
@@ -38,6 +39,7 @@ from agentctl.syncsteps import submit_remote
 from agentctl.processorlink import offer_token, spawn_waiting_processor
 from agentctl.landqueue import queue_command
 from agentctl.statemachines import machine_state
+from agentctl.configfile import knob_max_foreign
 
 
 def change_fields(repo, main_ref, head, a, store):
@@ -366,7 +368,7 @@ def sync_onto_main(repo, main_ref, sh, clock, store, release_hold=False):
     head = land_before_queue(repo, head)
     if fix_replay_blocks(repo, head, store):
         return 1, None
-    problems = check_range(repo, f"{remote()}/main", head, [], int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)))
+    problems = check_range(repo, f"{remote()}/main", head, [], int(knob_max_foreign()))
     if problems:
         print("NOT LANDED: prepush-check refused:\n  " + "\n  ".join(problems))
         return 1, None

@@ -4,31 +4,20 @@
 from typing import Any
 import glob
 import os
-from agentctl.core import env_num, fmt_age, on_ci_runner, pid_alive, reds_dir
+from agentctl.configfile import env_num
+from agentctl.core import fmt_age, on_ci_runner, pid_alive, reds_dir
 from agentctl.clock import wall_epoch
 from agentctl.statefile import mtime, read_record
 from agentctl.procs import record_alive, socket_host
 from agentctl.fixerrecords import fixer_records
 from agentctl.inboxentry import inbox_write
-from agentctl.fixersession import RED_STALL, bg_rows, bg_session, bg_stop, bg_turn_over, bg_waiting
+from agentctl.fixersession import bg_rows, bg_session, bg_stop, bg_turn_over, bg_waiting
 from agentctl.dispatchblock import claude_cli
 from agentctl.redrecord import lease_is_live
 from agentctl.leases import lease_meta
 from agentctl.owners import owner_record_path
 from agentctl.redmove import tail_lines
-
-
-# ---------------------------------------------------------------- PROOF OF WORK: orphaned leases (2026-10-31)
-# A lease is held by WORK, never by a living process. 2026-10-31 (issue 20261031T203744-4a4a59): the main-tests owner's
-# session stopped at 20:12 (its turn ended `blocked`), while its wrapper (pid 51249) waited for `done` and kept renewing
-# the owner's heartbeat; every red of the family was handed to it, held "leased ... none at work" and never fixed. The
-# wrappers now end a turn whose session ended or stalled (red_owner, red_fixer). And whatever a wrapper does -- older
-# code, a hang -- the laptop's tick checks every laptop-held fixer and owner lease against the evidence of work: the
-# wrapper's process, its session's row in `claude agents`, the transcript's and the worktree's progress. A holder not at
-# work for RED_ORPHAN_GRACE loses its leases at once (revoked `ORPHANED: <why>`): the red is offered again, and a
-# wrapper still running reads its next renewal as lost and exits. `red status` shows such a lease as orphaned, never
-# "leased ... none at work".
-RED_ORPHAN_GRACE = 5 * 60    # an ended session's turn still held this long is orphaned ($AGENTCTL_RED_ORPHAN_GRACE)
+from agentctl.configfile import knob_red_orphan_grace, knob_red_stall
 
 
 def _wrapper_verdict(rec: Any, pid: Any, holder_pid: Any) -> Any:
@@ -72,12 +61,12 @@ def _session_verdict(rec: Any, pid: Any, t: Any, idle: Any, grace: Any) -> Any:
 
 def _turn_verdict(rec: Any, pid: Any, t: Any) -> Any:
     """(at work?, why) of an owner in its turn: its session, then the transcript's progress."""
-    grace = env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE)
+    grace = knob_red_orphan_grace()
     idle = _idle(t, rec.get("progress_at"), rec.get("transcript"))
     verdict = _session_verdict(rec, pid, t, idle, grace)
     if verdict:
         return verdict
-    if idle > env_num("AGENTCTL_RED_STALL", RED_STALL) + grace:
+    if idle > knob_red_stall() + grace:
         return False, f"turn {rec.get('turn')}: no progress (transcript) for {fmt_age(idle)}"
     return True, f"turn {rec.get('turn')} at work"
 
@@ -117,7 +106,7 @@ def _session_ended(row: Any, t: Any, m: Any, bid: Any, ent: Any) -> Any:
     """Why a dispatched fixer's bg session `bid` (entry ent) is over -- gone or its turn ended, no progress for
     RED_ORPHAN_GRACE -- or None."""
     idle = _idle(t, row.get("renewed_at") or row.get("acquired_at"), m.get("log"))
-    if (ent is None or bg_turn_over(ent, m.get("log"))) and idle > env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE):
+    if (ent is None or bg_turn_over(ent, m.get("log"))) and idle > knob_red_orphan_grace():
         return f"its session {bid} is {(ent or {}).get('state') or 'gone'}, {fmt_age(idle)} without progress"
     return None
 

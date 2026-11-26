@@ -7,7 +7,8 @@ from contextlib import suppress
 from typing import Any
 from agentctl.timefmt import parse_time
 from agentctl.statemachines import StaleVersion, machine_state
-from agentctl.core import SHORT, env_num, fmt_age
+from agentctl.configfile import env_num
+from agentctl.core import SHORT, fmt_age
 from agentctl.repos import red_repo_of
 from agentctl.cistate import snapshot_gate_reds
 from agentctl.ciwhy import ci_state_load

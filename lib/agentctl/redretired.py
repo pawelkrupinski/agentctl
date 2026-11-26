@@ -5,7 +5,8 @@ from agentctl.clock import epoch_now
 import os
 import re
 from typing import Any
-from agentctl.core import env_num, process_cache
+from agentctl.configfile import env_num
+from agentctl.core import process_cache
 from agentctl.timefmt import parse_time
 from agentctl.forge import gh_json
 from agentctl.workflows import fix_workflow_jobs, workflow_triggers

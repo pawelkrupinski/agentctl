@@ -11,6 +11,7 @@ from agentctl.statefile import read_record
 from agentctl.procs import lsof_cwds, ps
 from agentctl.fixerrecords import own_fixer_record_path
 from agentctl.worktrees import worktree_of
+from agentctl.configfile import knob_claude, knob_claude_settings, knob_red_fixer
 
 
 def in_fixer():
@@ -18,7 +19,7 @@ def in_fixer():
     environment and no Claude session of its own."""
     if own_fixer_record_path():
         return True
-    return not os.environ.get("CLAUDE_CODE_SESSION_ID") and bool(os.environ.get("AGENTCTL_RED_FIXER"))
+    return not os.environ.get("CLAUDE_CODE_SESSION_ID") and bool(knob_red_fixer())
 
 
 def land_cwds():
@@ -38,8 +39,8 @@ _blocker_cache = process_cache({})
 
 def cached_dispatch_blocker(ttl=60):
     """dispatch_blocker runs `claude --help`: once a minute per process is enough for a display."""
-    key = (reds_dir(), os.path.exists(reds_dir("DISPATCH_OFF")), os.environ.get("AGENTCTL_CLAUDE"),
-           os.environ.get("AGENTCTL_CLAUDE_SETTINGS"))
+    key = (reds_dir(), os.path.exists(reds_dir("DISPATCH_OFF")), knob_claude(),
+           knob_claude_settings())
     hit = _blocker_cache.get(key)
     if hit and epoch_now() - hit[0] < ttl:
         return hit[1]
@@ -73,8 +74,8 @@ def dispatch_blocker():
 
 
 def claude_cli():
-    if os.environ.get("AGENTCTL_CLAUDE"):  # set: that one only (the tests' fake)
-        return os.environ["AGENTCTL_CLAUDE"] if os.access(os.environ["AGENTCTL_CLAUDE"], os.X_OK) else None
+    if knob_claude():  # set: that one only (the tests' fake)
+        return knob_claude() if os.access(knob_claude(), os.X_OK) else None
     for c in (shutil_which("claude"), os.path.join(HOME, ".local", "bin", "claude")):
         if c and os.access(c, os.X_OK):
             return c
@@ -88,6 +89,6 @@ def shutil_which(name):
 
 def interactive_mode():
     """The permission mode interactive sessions start in (~/.claude/settings.json's permissions.defaultMode)."""
-    p = os.environ.get("AGENTCTL_CLAUDE_SETTINGS") or os.path.join(HOME, ".claude", "settings.json")
+    p = knob_claude_settings() or os.path.join(HOME, ".claude", "settings.json")
     rec = read_record(p) or {}
     return (rec.get("permissions") or {}).get("defaultMode") or "default"

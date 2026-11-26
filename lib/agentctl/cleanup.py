@@ -15,8 +15,9 @@ import signal
 import subprocess
 import time
 from agentctl.procrunner import process_runner
+from agentctl.configfile import env_num
 from agentctl.core import (
-    GIT_NET_SSH, HOME, PROTECTED_BRANCHES, env_num, err, git, git_ok, remote, run_cmd, slug,
+    GIT_NET_SSH, HOME, PROTECTED_BRANCHES, err, git, git_ok, remote, run_cmd, slug,
     state_root)
 from agentctl.timefmt import now, ts
 from agentctl.forge import forge_branches
@@ -25,7 +26,8 @@ from agentctl.worktrees import CACHE_TREES, gitdir_activity, merged_reason, work
 from agentctl.maint import cmd_orphans
 from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
 from agentctl.dispatches import orphan_branches
-from agentctl.jvmreap import SBT_STALL_MIN
+from agentctl.configfile import SBT_STALL_MIN
+from agentctl.configfile import knob_sbt_reap
 
 
 # A CLEANUP IS BOUNDED PER TREE AND AS A WHOLE (2026-11-22: the upkeep's `cleanup --execute --no-remote` ran past its
@@ -437,7 +439,7 @@ def cmd_sweep(a, store):
             out.append(f"== {os.path.basename(repo)}: {e}")
             rc = 1
     reaped = io.StringIO()
-    if os.environ.get("AGENTCTL_SBT_REAP") != "0":  # the tests never reap this machine's servers
+    if knob_sbt_reap() != "0":  # the tests never reap this machine's servers
         with contextlib.redirect_stdout(reaped):
             cmd_orphans(argparse.Namespace(kill=not a.dry_run, sbt_only=True))
     out.append("== sbt servers (a gone worktree, an orphaned serving command, a running command with no CPU for "

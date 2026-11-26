@@ -6,12 +6,13 @@ from contextlib import suppress
 from typing import Any
 from agentctl.statefile import read_record, write_json
 from agentctl.clock import wall_epoch
-from agentctl.core import env_num
+from agentctl.configfile import env_num
 from agentctl.cpu import GOV_SATURATED
 from agentctl.machine import machine_cores
 from agentctl.govtickets import gov_dir, gov_log, gov_tickets
 from agentctl.govbudget import checks_cap, gov_budget
 from agentctl.pressure import gov_busy_cores
+from agentctl.configfile import GOV_CPU_FACTOR, knob_gov_cpu_factor
 
 
 SUITE_CAP = 1  # agentctl's own test-suite runs at once ($AGENTCTL_SUITE_CAP): parallel agents queue, never pile up
@@ -30,7 +31,6 @@ GOV_PRESSURE_DEFAULT = 75  # memory pressure (100 - free %) at which every class
 GOV_STARVED = 1.0       # x the cores: over it, starved ($AGENTCTL_GOV_STARVED)
 GOV_RESUME = 0.8        # x the cores: under it, admitting again ($AGENTCTL_GOV_RESUME)
 GOV_SPARE = 0.5         # x the cores: under it, spare ($AGENTCTL_GOV_SPARE)
-GOV_CPU_FACTOR = 1.0    # charged cores (or the load) + a job's own may reach this x the cores ($AGENTCTL_GOV_CPU_FACTOR)
 
 
 def gov_committed(tickets):
@@ -143,7 +143,7 @@ def _cpu_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: Any
                        f"{env_num('AGENTCTL_GOV_STARVED', GOV_STARVED):g}x, resumes under "
                        f"{env_num('AGENTCTL_GOV_RESUME', GOV_RESUME):g}x)"), False
     if cores and cap["charged"] > 0:  # nothing charged: the head goes whatever it asks (never starved by its own size)
-        limit = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * cap["cores"]
+        limit = knob_gov_cpu_factor() * cap["cores"]
         if cap["busy"] + cores > limit:
             return False, (f"cores: {cap['charged']:g} charged ({cap['measured']:.1f} measured, {cap['busy']:.1f} busy) "
                            f"+ {cores:g} over {limit:g} ({env_num('AGENTCTL_GOV_CPU_FACTOR', GOV_CPU_FACTOR):g}x "

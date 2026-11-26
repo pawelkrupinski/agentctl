@@ -5,7 +5,8 @@ from contextlib import suppress
 from typing import Any, Optional
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.holdgraph import cycle_breaker, cycle_text, hold_cycles, hold_record, recorded_hold_edges
-from agentctl.core import env_num, fmt_age
+from agentctl.configfile import env_num
+from agentctl.core import fmt_age
 from agentctl.waitingdir import save_entry, wlog
 from agentctl.policy import HOLDS, hold_kind
 

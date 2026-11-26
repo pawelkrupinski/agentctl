@@ -11,26 +11,15 @@ import time
 from contextlib import suppress
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, env_num, pid_alive, run_cmd, state_root
+from agentctl.core import HOME, pid_alive, run_cmd, state_root
 from agentctl.timefmt import ts
 from agentctl.procs import lsof_cwds, ps_rows
 from agentctl.psparse import tosec
 from agentctl.allowedpaths import allowed_path
-
-
-# STUCK SBT SERVERS (2026-10-27): a worktree's one server ran an orphaned `--serve` (its owner's shell died) for hours,
-# and every later command queued behind it at 0% CPU. Besides a gone worktree, orphans/sweep reap a server whose
-# serving command's sbt-warm or owner is dead (scripts/sbt-warm's $State/<key>.serving), and one with a command
-# running (an sbtn client in its checkout) whose process tree used no CPU for SBT_STALL_MIN minutes, judged across
-# runs from ~/.cache/agentctl/sbt-cpu.json. A thread dump (jcmd Thread.print) is saved first, under
-# ~/.cache/agentctl/sbt-dumps/.
-SBT_STALL_MIN = 20
-
-
-# PROGRESS IS A RATE (2026-11-07, measured): idle server JVMs burn 0.04-0.12 CPU s/min in background threads, busy ones
-# 5-155 s/min. A fixed tolerance on the CPU total since idling began was crossed by that background burn within one
-# 15-min pass, so neither the stall nor the idle rule could ever fire; CPU since the previous pass is judged per minute.
-SBT_PROGRESS_CPU_PER_MIN = 1.0  # CPU s/min since the previous pass above which an sbt server counts as working
+from agentctl.configfile import (
+    knob_sbt_idle_min, knob_sbt_idle_pressure_min, knob_sbt_progress_cpu_per_min, knob_sbt_stall_min,
+    knob_swap_free_floor_mb)
+from agentctl.configfile import knob_jvm_cwd, knob_jvm_kept, knob_jvm_ps
 
 
 # A RATE NEEDS A COMPARABLE SAMPLE: the laptop sleeps (1565 sleep/wakes since boot, pmset 2026-11-07), and wall time runs
@@ -50,20 +39,6 @@ SBT_SAMPLE_CLOCK = getattr(time, "CLOCK_UPTIME_RAW", time.CLOCK_MONOTONIC)
 def awake_now():
     """Seconds of the awake clock the sbt reaper dates its CPU samples by (SBT_SAMPLE_CLOCK)."""
     return time.clock_gettime(SBT_SAMPLE_CLOCK)  # wall: waits on and times real processes and threads
-
-
-# IDLE DETACHED SERVERS (2026-11-07): two lone servers (core-wt-red-822/824, -Xmx6000M each) sat idle for 3 h while
-# swap stood at 40.1/40.96 GB and every other build crawled; no rule matched them (one server per checkout, under the
-# hog CPU floor, no command running). A detached server (PPID 1) with no client and no CPU for SBT_IDLE_MIN is reaped,
-# after SBT_IDLE_PRESSURE_MIN once swap free falls under SWAP_FREE_FLOOR_MB -- never one sbt-warm --keep keeps.
-# Ending an idle server costs only the next command's warm-up.
-SBT_IDLE_MIN = 120  # min a detached sbt server with no client may sit idle before the reaper ends it
-
-
-SBT_IDLE_PRESSURE_MIN = 30  # that limit while swap free is under the floor
-
-
-SWAP_FREE_FLOOR_MB = 2048  # swap free (MB) below which the shorter idle limit applies
 
 
 def parse_swap_free_mb(text):
@@ -128,7 +103,7 @@ def working(rec: dict[str, Any], cpu: float, now: float) -> bool:
     if cpu < rec.get("cpu", -1):
         return True
     minutes = max((now - rec.get("at", rec["since"])) / 60, 1 / 60)
-    return bool((cpu - rec["cpu"]) / minutes > env_num("AGENTCTL_SBT_PROGRESS_CPU_PER_MIN", SBT_PROGRESS_CPU_PER_MIN))
+    return bool((cpu - rec["cpu"]) / minutes > knob_sbt_progress_cpu_per_min())
 
 
 def _ended_serving(serve: tuple[int, int | None, str]) -> list[str]:
@@ -141,12 +116,12 @@ def _ended_serving(serve: tuple[int, int | None, str]) -> list[str]:
 
 def _detached_idle(mins: float, swap_free_mb: float | None) -> list[str]:
     """A detached server with no client: idle for SBT_IDLE_MIN (SBT_IDLE_PRESSURE_MIN under low swap)."""
-    floor = env_num("AGENTCTL_SWAP_FREE_FLOOR_MB", SWAP_FREE_FLOOR_MB)
+    floor = knob_swap_free_floor_mb()
     pressed = swap_free_mb is not None and swap_free_mb < floor
     if pressed:
-        limit = env_num("AGENTCTL_SBT_IDLE_PRESSURE_MIN", SBT_IDLE_PRESSURE_MIN)
+        limit = knob_sbt_idle_pressure_min()
     else:
-        limit = env_num("AGENTCTL_SBT_IDLE_MIN", SBT_IDLE_MIN)
+        limit = knob_sbt_idle_min()
     if mins < limit:
         return []
     return [f"detached, no client and idle for {int(mins)} min" + (f" (swap free {int(swap_free_mb or 0)} MB)" if pressed else "")]
@@ -156,7 +131,7 @@ def _no_cpu_reasons(mins: float, cwd: str, clients: dict[str, Any], ppid: int | 
                     swap_free_mb: float | None) -> list[str]:
     """What the server's CPU-less minutes mean: a stalled command (a client), or a detached idle server (none)."""
     if clients.get(cwd):
-        if mins >= env_num("AGENTCTL_SBT_STALL_MIN", SBT_STALL_MIN):
+        if mins >= knob_sbt_stall_min():
             return [f"a command running (sbtn pid {clients[cwd][0]}) and no CPU for {int(mins)} min"]
         return []
     if ppid == 1 and cwd not in kept:
@@ -340,17 +315,17 @@ def jvm_candidates(rows: list[tuple[int, int, str, str, str, str]], cwd: dict[in
     return JvmRules().candidates(rows, cwd, kept, port_pids, self_pid, isdir)
 
 
-def _scan_read(env: str, cmd: str) -> str:
-    """The fixture file named by $env, else cmd's output."""
-    if os.environ.get(env):
-        with open(os.environ[env]) as f:
+def _scan_read(fixture: str, cmd: str) -> str:
+    """The fixture file `fixture` names (a test's), else cmd's output."""
+    if fixture:
+        with open(fixture) as f:
             return f.read()
     return str(run_cmd(cmd, shell=True).stdout)
 
 
 def _scan_rows() -> list[tuple[int, int, str, str, str, str]]:
     rows = []
-    for line in _scan_read("AGENTCTL_JVM_PS", "ps -Ao pid=,ppid=,tty=,etime=,cputime=,args=").splitlines():
+    for line in _scan_read(knob_jvm_ps(), "ps -Ao pid=,ppid=,tty=,etime=,cputime=,args=").splitlines():
         f = line.split(None, 5)
         if len(f) == 6 and f[0].isdigit() and f[1].isdigit():
             rows.append((int(f[0]), int(f[1]), f[2], f[3], f[4], f[5]))
@@ -358,8 +333,8 @@ def _scan_rows() -> list[tuple[int, int, str, str, str, str]]:
 
 
 def _scan_cwds(rows: list[tuple[int, int, str, str, str, str]]) -> dict[int, str]:
-    if os.environ.get("AGENTCTL_JVM_CWD"):
-        read_cwd = _scan_read("AGENTCTL_JVM_CWD", "").splitlines()
+    if knob_jvm_cwd():
+        read_cwd = _scan_read(knob_jvm_cwd(), "").splitlines()
     else:  # pid-scoped: the java processes of the ps rows above, never a machine-wide lsof
         jp = [r_[0] for r_ in rows if re.search(r"(^|/)java(\s|$)", r_[5].split(" ", 1)[0] if r_[5] else "")]
         read_cwd = [f"{p_} {d_}" for p_, d_ in lsof_cwds(jp).items()] if jp else []
@@ -373,8 +348,8 @@ def _scan_cwds(rows: list[tuple[int, int, str, str, str, str]]) -> dict[int, str
 
 def _scan_kept(rows: list[tuple[int, int, str, str, str, str]]) -> set[str]:
     """The checkouts a live `sbt-warm --keep` keeps a server in."""
-    if os.environ.get("AGENTCTL_JVM_KEPT"):
-        return {l.strip() for l in _scan_read("AGENTCTL_JVM_KEPT", "").splitlines() if l.strip() and allowed_path(l.strip())}
+    if knob_jvm_kept():
+        return {l.strip() for l in _scan_read(knob_jvm_kept(), "").splitlines() if l.strip() and allowed_path(l.strip())}
     kp = [r_[0] for r_ in rows if "sbt-warm --keep" in r_[5]]
     return set(lsof_cwds(kp).values()) if kp else set()
 
@@ -382,7 +357,7 @@ def _scan_kept(rows: list[tuple[int, int, str, str, str, str]]) -> set[str]:
 def _scan_ports() -> set[int]:
     """The pids listening on a protected port (none under the tests' fixture table)."""
     ports: set[int] = set()
-    if not os.environ.get("AGENTCTL_JVM_PS"):
+    if not knob_jvm_ps():
         for port in str(jvm_knob("PROTECTED_PORTS", "9000")).split():
             r = run_cmd(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"])
             ports |= {int(x) for x in r.stdout.split() if x.isdigit()}

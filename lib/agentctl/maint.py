@@ -18,6 +18,7 @@ from agentctl.procs import process_cwds, ps, ps_rows
 from agentctl.jvmreap import (
     awake_now, is_sbt, jvm_candidates, jvm_reap, jvm_scan, reap_log, sbt_serving, sbt_stuck_reasons, swap_free_mb,
     thread_dump, tree_cpu)
+from agentctl.configfile import knob_jvm_ps, knob_sbt_reap
 
 
 def loop_body(cmd):
@@ -332,7 +333,7 @@ def sbt_view(procs: Any, cwds: Any, cpu_state: Any) -> Any:
 
 
 def sbt_reaping() -> Any:
-    return os.environ.get("AGENTCTL_SBT_REAP") != "0"  # tests: "0"
+    return knob_sbt_reap() != "0"  # tests: "0"
 
 
 def sbt_orphans(procs: Any, cwds: Any, me: Any) -> Any:
@@ -368,7 +369,7 @@ def sbt_reasons(pid: Any, ppid: Any, cmd: Any, cwd: Any, view: Any) -> Any:
 def save_sbt_cpu(path: Any, cpu_state: Any, live: Any) -> Any:
     """The cpu state of the servers still live (the tests' no-reap run, with none, leaves the real state alone)."""
     try:
-        if not live and os.environ.get("AGENTCTL_SBT_REAP") == "0":
+        if not live and knob_sbt_reap() == "0":
             raise OSError("tests: the real state is left alone")
         write_json(path, {k: v for k, v in cpu_state.items() if k in live}, indent=None)
     except OSError:
@@ -399,7 +400,7 @@ def fixture_orphans(procs: Any, me: Any) -> Any:
 
 def stale_jvms(found: Any) -> Any:
     """The stale JVMs the scan finds, the ones already found as sbt orphans left out."""
-    if not (os.environ.get("AGENTCTL_SBT_REAP") != "0" or os.environ.get("AGENTCTL_JVM_PS")):
+    if not (knob_sbt_reap() != "0" or knob_jvm_ps()):
         return []
     try:
         rows, jcwd, kept, ports = jvm_scan()

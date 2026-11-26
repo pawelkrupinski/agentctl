@@ -4,7 +4,7 @@
 import os
 import re
 from typing import Any
-from agentctl.core import env_num, remote
+from agentctl.core import remote
 from agentctl.landstate import landed_state
 from agentctl.repos import RED_PRIMARY
 from agentctl.claudefiles import claude_limit, claude_limit_reset
@@ -16,12 +16,13 @@ from agentctl.redask import red_decision
 from agentctl.redmove import red_close, red_move
 from agentctl.redopen import red_history, red_offer
 from agentctl.redcrash import (
-    AGENTCTL_DEFECT_CAUSE, RED_CRASH_LOOP, RED_DECIDE, probe_red_newer_verdict, red_ask_route, red_blamed_issue,
-    red_crash_loop, red_crash_streak, red_decision_block, red_decision_needed, red_harness_block, red_newer_probe)
+    AGENTCTL_DEFECT_CAUSE, RED_DECIDE, probe_red_newer_verdict, red_ask_route, red_blamed_issue, red_crash_loop,
+    red_crash_streak, red_decision_block, red_decision_needed, red_harness_block, red_newer_probe)
 from agentctl.fixerlife import GAVE_UP_DECIDE, GAVE_UP_FIXED
 from agentctl.redvault import red_vault_block, vault_ask_ns, vault_ask_unfounded
 from agentctl.ask import DECISION_FAILED, red_decision_failed
 from agentctl.redwaits import RED_WAITS_ON, red_wait_cycle
+from agentctl.configfile import knob_red_crash_loop
 
 
 def red_lift_block(store, it, block, why):
@@ -208,7 +209,7 @@ class LeaseEnd:
 
     def crash_loop(self) -> list[str] | None:
         streak = red_crash_streak({**self.d, **self.upd})
-        if len(streak) >= env_num("AGENTCTL_RED_CRASH_LOOP", RED_CRASH_LOOP):
+        if len(streak) >= knob_red_crash_loop():
             return red_crash_loop(self.store, self.it, self.upd, streak, self.t)
         return None
 

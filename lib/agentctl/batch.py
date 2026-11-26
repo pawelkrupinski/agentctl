@@ -10,11 +10,13 @@ from agentctl.timefmt import ts
 from agentctl.statefile import read_json_file, write_json_file
 from agentctl.selfcode import TOOL_PATH
 from agentctl.statemachines import StaleVersion, machine_state
-from agentctl.core import env_num, err, fmt_age, git, remote, spawn_detached
+from agentctl.configfile import env_num
+from agentctl.core import err, fmt_age, git, remote, spawn_detached
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, wlog
 from agentctl.storetoken import detached_env
-from agentctl.queueslots import CHECK_LEASE_TTL, check_tree, check_tree_slot, set_change
+from agentctl.queueslots import check_tree, check_tree_slot, set_change
+from agentctl.configfile import CHECK_LEASE_TTL
 from agentctl.conditions import open_condition, run_probe
 from agentctl.queue import VERIFY_MODE, forces_full_recheck, range_paths, verify_supported
 from agentctl.generated import without_generated
@@ -24,6 +26,7 @@ from agentctl.waiting import batch_order, must_wait, must_wait_why
 from agentctl.batchrun import assemble
 from agentctl.recovery import batch_key, batch_move
 from agentctl.queuebatchsel import BACKLOG_BATCH_MAX, drift_serialize
+from agentctl.configfile import knob_waiting_green_ticks
 
 
 # EVERY CHANGE IS A MEMBER (2026-11-20, the owner: "batching waiting changes ... structurally"): an identity change joins
@@ -143,11 +146,6 @@ def union_base(tree, members, base):
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else base
 
 
-# NO SILENT WAIT AT GREEN (2026-10-30). Changes waiting while the gate is green, with no hold and no batch checking,
-# bisecting, pushing or held, are a stall: counted per tick (batch-progress.json in the waiting dir) and, past
-# WAITING_GREEN_TICKS ticks, a STALLED condition. Its probe (batch_progress) reads the same count, so the tick that
-# finds the batch moving again -- or nothing waiting, or the gate red -- is the one that clears it.
-WAITING_GREEN_TICKS = 100  # ticks (~10 min) changes may wait at a green gate with no batch moving: then STALLED
 BATCH_MOVING = ("checking", "bisecting", "pushing", "held")  # held: its own STALLED condition says so
 
 
@@ -181,7 +179,7 @@ def note_batch_progress(d, seen, t, st):
     since = float(rec.get("since") or t) if rec.get("ticks") else t
     why = batch_stalled_why(seen)
     write_json_file(p, {"ticks": n, "at": t, "since": since, "why": why, "waiting": [e["id"] for e in waiting]})
-    if n >= env_num("AGENTCTL_WAITING_GREEN_TICKS", WAITING_GREEN_TICKS):
+    if n >= knob_waiting_green_ticks():
         ids = ", ".join(e["id"] for e in waiting)
         open_condition("STALLED", f"STALLED: {len(waiting)} change(s) waiting while the gate is green for {n} ticks "
                                   f"({fmt_age(t - since)}): {why}; waiting: {ids}",
@@ -194,7 +192,7 @@ def probe_batch_progress(a):
     """The batch tick no longer counts a stall at green (batch-progress.json under the limit)."""
     rec = read_json_file(batch_progress_path(a["d"]))
     n = int(rec.get("ticks") or 0)
-    limit = env_num("AGENTCTL_WAITING_GREEN_TICKS", WAITING_GREEN_TICKS)
+    limit = knob_waiting_green_ticks()
     return n < limit, (f"{n} stalled tick(s) at green: {rec.get('why')}" if n else "no change waits at green")
 
 

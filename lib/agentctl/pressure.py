@@ -6,13 +6,18 @@ import os
 import re
 import sys
 from typing import Any
-from agentctl.core import attempt, env_num, run_cmd
+from agentctl.configfile import env_num
+from agentctl.core import attempt, run_cmd
 from agentctl.procs import ps_rows
 from agentctl.psparse import PsRow, parse_ps
 from agentctl.statefile import read_record, write_json
 from agentctl.cpu import cpu_pressure, machine_busy_cores
 from agentctl.machine import machine_cores, machine_fixed, read_meminfo, run_queue
 from agentctl.govtickets import gov_dir
+from agentctl.configfile import (
+    LAPTOP_SWAP_WINDOW, knob_laptop_free_pct, knob_laptop_pressure_level, knob_laptop_swap_growth_mb,
+    knob_laptop_swap_window)
+from agentctl.configfile import knob_gov_busy_probe, knob_gov_load_probe, knob_gov_ps_probe, knob_laptop_pressure
 
 
 GOV_IDLE_CLAUDE = 10.0  # %CPU under which a Claude session is idle (not work)
@@ -22,11 +27,10 @@ def gov_busy_cores():
     """The cores the machine is busy on now: its own CPU ticks (cpu.py machine_busy_cores: user + sys), else ps's %CPU
     summed (ps_busy_cores). Seams: $AGENTCTL_GOV_BUSY_PROBE (its output: the number), the tests' $AGENTCTL_GOV_LOAD_PROBE (read as
     busy), $AGENTCTL_GOV_PS_PROBE (ps's `pcpu args` rows)."""
-    for k in ("AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_LOAD_PROBE"):
-        if os.environ.get(k):
-            return attempt(lambda: float(run_cmd(os.environ[k], shell=True).stdout.strip() or 0), 0.0,
-                           catch=(ValueError,))
-    probe = os.environ.get("AGENTCTL_GOV_PS_PROBE")
+    for cmd in (knob_gov_busy_probe(), knob_gov_load_probe()):
+        if cmd:
+            return attempt(lambda: float(run_cmd(cmd, shell=True).stdout.strip() or 0), 0.0, catch=(ValueError,))
+    probe = knob_gov_ps_probe()
     fixed = machine_fixed() if not probe else None
     if fixed is not None:  # the tests' fixed machine (AGENTCTL_MACHINE): its busy cores, else its load
         return float(fixed.get("busy", fixed.get("load1")) or 0)
@@ -51,27 +55,6 @@ def ps_row_percent(row: PsRow) -> float:
     return row.pcpu
 
 
-# THE LAPTOP'S PRESSURE, read as it is NOW. Two movies reds sat `waiting: laptop pressure (swap 17.7 of 19.0 GB used)`
-# for want of a fixer (2026-10-31) while memory_pressure said 58% free at load 5: macOS keeps pages swapped out hours
-# ago counted as swap USED until they are touched, so swap's level -- as a share (7c3c342 dropped that) or in GB -- is
-# no signal. The signals are macOS's free % (kern.memorystatus_level: memory_pressure's "free percentage", one cheap
-# sysctl; Linux: MemAvailable of MemTotal), the kernel's own pressure level (kern.memorystatus_vm_pressure_level: 1
-# normal, 2 warn, 4 critical), the 1-min load, and swap only while it GROWS (over the last LAPTOP_SWAP_WINDOW, from
-# samples kept in <gov>/swap-samples.json). Under pressure the governor holds every class but red (gov_fits): NOTHING
-# STOPS A GATE FIX, EVER (the owner, 2026-10-31) -- the red dispatcher never reads it, and a red fix's ticket never
-# waits. `agentctl gov status` and `agentctl red status` show the reading with its numbers.
-LAPTOP_FREE_PCT = 20          # holds other work while macOS's memory free % is under this
-
-
-LAPTOP_PRESSURE_LEVEL = 2     # holds other work at this kernel pressure level or over (1 normal, 2 warn, 4 critical)
-
-
-LAPTOP_SWAP_GROWTH_MB = 1024  # holds other work while swap grew this much (MB) within LAPTOP_SWAP_WINDOW
-
-
-LAPTOP_SWAP_WINDOW = 600      # seconds of swap samples the growth is read over
-
-
 PRESSURE_LEVELS = {1: "normal", 2: "warn", 4: "critical"}
 
 
@@ -87,7 +70,7 @@ def swap_growth(mb, now_):
     """(MB swap grew since the oldest sample within LAPTOP_SWAP_WINDOW, seconds that spans); this sample is kept."""
     if mb is None:
         return None, 0
-    window = env_num("AGENTCTL_LAPTOP_SWAP_WINDOW", LAPTOP_SWAP_WINDOW)
+    window = knob_laptop_swap_window()
     path = os.path.join(gov_dir(), "swap-samples.json")
     samples = [s for s in (read_record(path) or []) if now_ - window <= s[0] <= now_]
     samples.append([now_, mb])
@@ -148,10 +131,10 @@ def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_
 def _memory_pressure(r: Any) -> Any:
     """The reasons of a reading's free memory and kernel pressure level, as lines."""
     why = []
-    free_pct = env_num("AGENTCTL_LAPTOP_FREE_PCT", LAPTOP_FREE_PCT)
+    free_pct = knob_laptop_free_pct()
     if r.get("free_pct") is not None and r["free_pct"] < free_pct:
         why.append(f"memory {r['free_pct']}% free (holds under {free_pct:g}%)")
-    if r.get("level") is not None and r["level"] >= env_num("AGENTCTL_LAPTOP_PRESSURE_LEVEL", LAPTOP_PRESSURE_LEVEL):
+    if r.get("level") is not None and r["level"] >= knob_laptop_pressure_level():
         why.append(f"kernel memory pressure {PRESSURE_LEVELS.get(r['level'], '?')} (level {r['level']})")
     return why
 
@@ -159,7 +142,7 @@ def _memory_pressure(r: Any) -> Any:
 def _swap_pressure(r: Any) -> Any:
     """The reason of a reading's swap growth, as lines."""
     why = []
-    bar = env_num("AGENTCTL_LAPTOP_SWAP_GROWTH_MB", LAPTOP_SWAP_GROWTH_MB)
+    bar = knob_laptop_swap_growth_mb()
     if r.get("swap_growth_mb") is not None and r["swap_growth_mb"] >= bar:
         why.append(f"swap growing +{r['swap_growth_mb'] / 1024:.1f} GB in {r['swap_span'] / 60:.0f} min (holds at "
                    f"+{bar / 1024:.1f} GB in {env_num('AGENTCTL_LAPTOP_SWAP_WINDOW', LAPTOP_SWAP_WINDOW) / 60:.0f} min)")
@@ -170,8 +153,8 @@ def laptop_pressure(r: Any = None, load: Any = True) -> Any:
     """Why this machine is under pressure now, with its numbers ("; "-joined), or None. load=False leaves the load out
     (the governor holds each class on its own load factor). $AGENTCTL_LAPTOP_PRESSURE set (the tests'): its value is
     the answer, `-` or empty for none."""
-    if r is None and "AGENTCTL_LAPTOP_PRESSURE" in os.environ:
-        return os.environ["AGENTCTL_LAPTOP_PRESSURE"].strip("-") or None  # `-` or empty: none
+    if r is None and knob_laptop_pressure() is not None:
+        return (knob_laptop_pressure() or "").strip("-") or None  # `-` or empty: none
     r = r or pressure_reading()
     why = _memory_pressure(r) + (cpu_pressure(r) if load else []) + _swap_pressure(r)
     return "; ".join(why) or None
@@ -190,7 +173,7 @@ def pressure_summary(r=None):
 
 def pressure_report():
     """(why or None, summary) of this machine now: the tests' $AGENTCTL_LAPTOP_PRESSURE stands for both."""
-    if "AGENTCTL_LAPTOP_PRESSURE" in os.environ:
+    if knob_laptop_pressure() is not None:
         why = laptop_pressure()
         return why, why or "none (test)"
     r = pressure_reading()

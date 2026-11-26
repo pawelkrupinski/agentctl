@@ -9,15 +9,16 @@ import os
 import time
 from typing import Any
 from contextlib import suppress
-from agentctl.core import attempt, env_num, pct
+from agentctl.core import attempt, pct
 from agentctl.machine import machine_cores, machine_load1
 from agentctl.govtickets import gov_dir, gov_tickets
 from agentctl.govbudget import cap_state, check_runs, checks_cap, gov_budget, slot_holders
 from agentctl.gov import GOV_CLASSES, gov_admit, gov_evict, gov_machine, gov_waiters, idle_servers
-from agentctl.govfits import GOV_CPU_FACTOR, gov_capacity, gov_charged, gov_committed, gov_ramp
+from agentctl.govfits import gov_capacity, gov_charged, gov_committed, gov_ramp
 from agentctl.pressure import pressure_report
 from agentctl.govusage import GOV_USAGE_MIN_WALL, gov_job_cores, gov_measured_cores, gov_record_usage, gov_usage
 from agentctl.govroute import gov_replay, gov_route
+from agentctl.configfile import knob_gov_cpu_factor
 
 
 # THE GOVERNOR'S FEATURES, for a caller in another repository (movies' scripts/jvm-gate.sh governor_bin, bitcashier's
@@ -71,7 +72,7 @@ def gov_replay_cmd(a: Any) -> int:
     """`gov replay --at T`: the admissions around T, as admitted and under the cores rule."""
     at = dt.datetime.fromisoformat(a.at.replace("Z", "+00:00")).timestamp()
     rows = [r for r in admit_rows() if abs(float(r.get("at", r.get("end", 0))) - at) <= 12 * 3600]
-    cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * (a.cores or machine_cores())
+    cap = knob_gov_cpu_factor() * (a.cores or machine_cores())
     res = gov_replay(rows, cap, at, a.hold * 60)
     print(f"replay at {a.at} (cap {cap:g} cores; a ticket with no end record held {a.hold:g} min):")
     print(f"  as admitted:    {len(res['old'])} live, {sum(c for _, c in res['old']):g} cores: {_live_cores(res['old'])}")
@@ -155,7 +156,7 @@ def gov_status() -> int:
     """`agentctl gov status`: the totals, every live ticket and waiter, the cores outside any ticket, the evictable
     servers and the pressure."""
     tickets, m = gov_tickets(), gov_machine()
-    cap = env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR) * m["cores"]
+    cap = knob_gov_cpu_factor() * m["cores"]
     print(f"governor: {len(tickets)} admitted, {gov_committed(tickets):.1f}/{gov_budget():.0f} GB committed, "
           f"{gov_charged(tickets):g}/{cap:g} cores charged, {gov_ramp(tickets):.0f} GB still growing; free {m['free'] if m['free'] is None else round(m['free'], 1)} "
           f"GB, pressure {m['pressure']}%, load {m['load1']:.1f}/{m['cores']} cores; check cap {checks_cap()}")

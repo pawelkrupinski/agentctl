@@ -13,7 +13,8 @@ import sys
 import time
 from typing import Any, Sequence
 from agentctl.procrunner import process_runner
-from agentctl.core import SHORT, env_num, err, git, process_cache, run_cmd, slug, state_root
+from agentctl.configfile import env_num
+from agentctl.core import SHORT, err, git, process_cache, run_cmd, slug, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import load_record, read_record, write_json
 from agentctl.forge import forge_argv, forge_env
@@ -21,6 +22,7 @@ from agentctl.procs import Terminated, process_start, safe_cwd
 from agentctl.selfcode import TOOL_PATH, code_files, code_version
 from agentctl.inboxentry import caller_owner, inbox_write
 from agentctl.runverdict import file_verdict, foreign_loops_on, run_verdict
+from agentctl.configfile import knob_owners_dir
 
 
 # ---------------------------------------------------------------- owned: every long-running mode
@@ -40,7 +42,7 @@ OWNERS_RESTART_CHECK = 30  # seconds between code-version checks ($AGENTCTL_REST
 
 
 def owners_dir():
-    return os.environ.get("AGENTCTL_OWNERS_DIR") or state_root("owners")
+    return knob_owners_dir() or state_root("owners")
 
 
 START_CODE = code_version()

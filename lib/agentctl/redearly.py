@@ -4,7 +4,8 @@
 import os
 import re
 from typing import Any, Callable
-from agentctl.core import env_num, err, fmt_age, reds_dir
+from agentctl.configfile import env_num
+from agentctl.core import err, fmt_age, reds_dir
 from agentctl.timefmt import ts
 from agentctl.statefile import read_json_file, write_json_file
 from agentctl.forge import RED_CONCLUSIONS, api

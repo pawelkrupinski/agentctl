@@ -12,7 +12,8 @@ import json
 from typing import Any, Iterator
 from agentctl.procrunner import process_runner
 from agentctl.clock import Clock
-from agentctl.core import HOME, env_num, err, process_cache
+from agentctl.configfile import env_num
+from agentctl.core import HOME, err, process_cache
 from agentctl.store import LeaseLost, StoreUnavailable
 from agentctl.procs import ps_rows
 from agentctl.leases import lock_beat
@@ -22,6 +23,7 @@ from agentctl.core import SHORT, reds_dir
 from agentctl.forge import forge_env
 from agentctl.core import git, slug
 from agentctl.leases import LeaseHold, _landing
+from agentctl.configfile import knob_land_stall_min, knob_stall_cpu_seconds
 
 
 # ---------------------------------------------------------------- land / env
@@ -38,13 +40,6 @@ LAND_RETRIES = 3
 # race, rebase, and test again. Agents wait for the lock instead (land runs in the background), and it caps the
 # laptop at one landing hook's JVM at a time.
 LAND_LOCK_TIMEOUT = 4 * 3600
-# NO STALLED HOLDER (the owner, 2026-10-27): one land's hook hung 2.5 h in sbt-warm and blocked every lander behind the
-# lock. A step land runs (the hook's dry run, the push) that makes NO PROGRESS -- its output does not grow and its
-# process group uses no CPU -- for LAND_STALL_MIN minutes ($AGENTCTL_LAND_STALL_MIN) is ended (its process group,
-# TERM then KILL) and land says `NOT LANDED: stalled <step>`. And the long checks run BEFORE the lock: under it, only a
-# fetch, a check that main has not moved since, and the push (whose hook reuses the dry run's pass). Waiters print
-# how long the holder has held the lock, and what it is doing, every LAND_WAIT_REPORT_MIN minutes.
-LAND_STALL_MIN = 20
 LAND_WAIT_REPORT_MIN = 10
 LAND_PRECHECK_ROUNDS = 2  # main moved under the lock this often: the next check runs under it, so a lander finishes
 
@@ -77,16 +72,13 @@ def group_cpu_seconds(pgid: Any) -> Any:
     # A process new since the last sample is no progress (a hook's helper loop forks one every second).
     seen = _tree_seen.get(pgid, set())
     if any(x.stat.startswith("R") and x.pid in seen for x in mine):
-        _runnable_credit[pgid] = _runnable_credit.get(pgid, 0.0) + env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
+        _runnable_credit[pgid] = _runnable_credit.get(pgid, 0.0) + knob_stall_cpu_seconds()
     _tree_seen[pgid] = {x.pid for x in mine}
     # ps's d-hh:mm:ss: a day is 86400 s (the old split read it as 60 s)
     return sum(x.cpu_seconds for x in mine) + _runnable_credit.get(pgid, 0.0)
 
 
 _runnable_credit, _tree_seen = process_cache({}), process_cache({})
-
-
-STALL_CPU_SECONDS = 1.0  # CPU that counts as progress per window: a watchdog's polls are not work
 
 
 def stall_clock():
@@ -109,7 +101,7 @@ def run_watched(argv, cwd, env, log_path, step, stall = None, sampler = None, cp
     itself -- and `stall` judges the transport around it. A stalled run's output ends with its STALL_LINE (why)."""
     cpu_of, clock = cpu or group_cpu_seconds, clock or stall_clock
     hooks = hooks or group_runs_hook
-    stall = stall if stall is not None else env_num("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN) * 60
+    stall = stall if stall is not None else knob_land_stall_min() * 60
     out_path = f"{log_path}.{re.sub(r'[^A-Za-z0-9_-]', '_', step)}.out"
     with open(out_path, "w") as out:
         p = process_runner().popen(argv, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
@@ -255,7 +247,7 @@ def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_o
     group exited by itself."""
     seen, polls, in_hook = GroupProgress(clock()), 0, False
     poll = max(0.2, min(15.0, stall / 4))
-    need = env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
+    need = knob_stall_cpu_seconds()
     t_start = clock()  # the wall bound reads the same clock: tests drive it, so no verdict depends on the load
     while not _exited_within(p, poll):
         if sampler:
@@ -322,7 +314,7 @@ def push_bounds():
     lock's (LAND_STALL_MIN), its leases renewed at every poll (run_watched hook_stall); `wall` over all of it."""
     return {"stall": env_num("AGENTCTL_PUSH_STALL_SECS", PUSH_STALL_SECS),
             "wall": env_num("AGENTCTL_PUSH_WALL_MIN", PUSH_WALL_MIN) * 60,
-            "hook_stall": env_num("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN) * 60}
+            "hook_stall": knob_land_stall_min() * 60}
 
 
 def push_argv(remote, src, dst: str = "main"):

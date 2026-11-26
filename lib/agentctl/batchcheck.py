@@ -8,13 +8,14 @@ from typing import Any, Optional
 from agentctl.timefmt import ts
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.clock import Clock
-from agentctl.core import env_num, err, git, git_ok, slug, state_root
+from agentctl.configfile import env_num
+from agentctl.core import err, git, git_ok, slug, state_root
 from agentctl.classify import INFRA_LOG, _test_line
 from agentctl.forge import forge_env
 from agentctl.waitingdir import save_entry, waiting_state, wlog
 from agentctl.leases import LeaseHold
 from agentctl.land import REDGATE, run_watched, tool_env
-from agentctl.queueslots import CHECK_LEASE_TTL, queue_verdict, tree_slot
+from agentctl.queueslots import queue_verdict, tree_slot
 from agentctl.queue import INFRA_CHECK_FAILURE
 from agentctl.identitychange import identity_model_commits
 from agentctl.waiting import tail_of, waiting_commits
@@ -23,6 +24,7 @@ from agentctl.batchitem import batch_fail, batch_members
 from agentctl.batchrun import batch_check, bisect
 from agentctl.queuepush import DEEP_BATCHES
 from agentctl.queuefailure import CHECK_TIMEOUT, judge_failure
+from agentctl.configfile import knob_check_lease_ttl
 
 
 BATCH_LEASE_MAX = 6 * 3600  # the batch executor's leases: its check (2 h) and its bisect (4 h), its machine's bounds
@@ -308,7 +310,7 @@ def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
     # ONE EXECUTOR HOLDS THE BATCH THROUGH ITS CHECK AND ITS WHOLE BISECT (several checks of up to 2 h each): under a
     # change's CHECK_LEASE_MAX (3 h) the bisect lost its lease mid-way, read as a stall, and blamed "flaky" -- the culprit
     # was never rejected. Its machine bounds it (checking 2 h + bisecting 4 h); the leases' max hold matches.
-    lease = LeaseHold(f"check/batch-{bid}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), BATCH_LEASE_MAX, store=st)
+    lease = LeaseHold(f"check/batch-{bid}", knob_check_lease_ttl(), BATCH_LEASE_MAX, store=st)
     if not lease.acquire():
         return 0
     i = it["data"]["tree"]

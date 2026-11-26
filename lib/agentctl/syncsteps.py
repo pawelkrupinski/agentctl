@@ -7,8 +7,9 @@ import subprocess
 import sys
 from typing import Any, Callable, Sequence
 from contextlib import suppress
+from agentctl.configfile import env_num
 from agentctl.core import (
-    NoToken, env_num, err, git, git_ok, process_cache, reap_children, reds_dir, remote, run_bounded,
+    NoToken, err, git, git_ok, process_cache, reap_children, reds_dir, remote, run_bounded,
     spawn_detached, state_root)
 from agentctl.statefile import read_record, write_json
 from agentctl.selfcode import TOOL_PATH
@@ -35,6 +36,7 @@ from agentctl.reddispatch import red_renew_holders
 from agentctl.netwatch import network_watch, tunnel_watch
 from agentctl.redstatus import write_red_status_snapshot
 from agentctl.offerdispatch import red_dispatcher
+from agentctl.configfile import knob_step_bound
 
 
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json
@@ -97,12 +99,12 @@ class _SyncDuties:
         """The convergence pins read with the owner's token the processor holds and written into the store: the
         reconciler on ci-runner reads them from there (ci-lander may not read releases). Bounded: a network read."""
         if not run_bounded("pins", lambda: refresh_pinned_recording(self.o_r, self.repo, self.store, role="sync"),
-                           env_num("AGENTCTL_STEP_BOUND", 120)):
+                           knob_step_bound()):
             err("pinned recording: still reading from an earlier cycle")
 
     def explorer(self) -> None:
         if not run_bounded("drift explorer", lambda: [err(x) for x in explorer_tick(self.o_r, self.repo, self.store)],
-                           env_num("AGENTCTL_STEP_BOUND", 120)):
+                           knob_step_bound()):
             err("drift explorer: still running from an earlier cycle")
 
     def dispatch(self):

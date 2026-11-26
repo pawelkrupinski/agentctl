@@ -10,7 +10,8 @@ import sys
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, _bounded, env_num, reds_dir, run_bounded, state_root, tilde
+from agentctl.configfile import env_num
+from agentctl.core import HOME, _bounded, reds_dir, run_bounded, state_root, tilde
 from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
 from agentctl.fixerrecords import fixer_records

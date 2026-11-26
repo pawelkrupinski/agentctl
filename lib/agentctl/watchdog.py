@@ -7,7 +7,8 @@ import os
 import re
 import time
 from typing import Any, Dict
-from agentctl.core import attempt, env_num, fmt_age, pid_alive, state_root
+from agentctl.configfile import env_num
+from agentctl.core import attempt, fmt_age, pid_alive, state_root
 from agentctl.statefile import write_json
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import waiting_entries, waiting_state
@@ -17,8 +18,10 @@ from agentctl.launchd import SERVICE_LABEL, launchctl
 from agentctl.beats import beat_age, beat_path, write_beat
 from agentctl.conditions import close_condition, open_condition, open_conditions, run_probe
 from agentctl.changekind import file_unheld_change, unheld_changes
-from agentctl.invariants import INVARIANTS, W5_MAX, watchdog_state
+from agentctl.invariants import INVARIANTS, watchdog_state
+from agentctl.configfile import W5_MAX
 from agentctl.alertroute import ALERT_SELF_HEALING_INVARIANTS
+from agentctl.configfile import knob_w5_max
 
 
 WATCHDOG_KICK_GAP = 600
@@ -168,7 +171,7 @@ def kick_silent_processor(st: Any, woke: Any, clock: Any) -> Any:
     """Only for a processor silent past 3 x W5_MAX of AWAKE time (a beat the laptop slept through is no silence:
     2026-11-15 16:58, a dark wake), at most every WATCHDOG_KICK_GAP; the kick keeps its token."""
     silent = min(beat_age("processor") or 0, clock.time() - woke)
-    if silent > 3 * env_num("AGENTCTL_W5_MAX", W5_MAX) and clock.time() - float(st.get("kicked_at") or 0) >= WATCHDOG_KICK_GAP:
+    if silent > 3 * knob_w5_max() and clock.time() - float(st.get("kicked_at") or 0) >= WATCHDOG_KICK_GAP:
         st["kicked_at"] = clock.time()
         write_json(state_root("watchdog.json"), {**watchdog_state(), "kicked_at": st["kicked_at"]})
         print(f"W5: kickstarted {SERVICE_LABEL} ({kick_processor()})")

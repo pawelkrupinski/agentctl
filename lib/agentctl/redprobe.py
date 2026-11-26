@@ -7,16 +7,14 @@ import subprocess
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import attempt, env_num, err, git, remote, slug
+from agentctl.core import attempt, err, git, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import write_json
 from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
 from agentctl.owned import backoff
 from agentctl.remote import delete_check_branch, remote_poll
 from agentctl.remotejobs import REMOTE_WORKFLOW
-
-
-BLAME_PROBE_WALL = 2 * 3600      # s one probe may run before it is no verdict ($AGENTCTL_BLAME_PROBE_WALL)
+from agentctl.configfile import knob_blame_probe_wall
 
 
 def drift_ci_path(repo):
@@ -158,7 +156,7 @@ def probe_checks(repo, o_r, commit, run, tokens, wall, clock):
 
 def cmd_red_probe(a, clock):
     """`agentctl red probe`: one boundary's verdict on CI, written to --out (the red tick reads it)."""
-    wall = env_num("AGENTCTL_BLAME_PROBE_WALL", BLAME_PROBE_WALL)
+    wall = knob_blame_probe_wall()
     try:
         if a.kind == "drift":
             v = probe_drift(a.repo, a.commit, a.run, wall)

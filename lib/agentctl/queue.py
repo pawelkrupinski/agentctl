@@ -8,7 +8,8 @@ import subprocess
 import time
 from typing import Any, Iterable
 from agentctl.procrunner import process_runner
-from agentctl.core import env_num, err, fmt_age, git, git_ok, host_role
+from agentctl.configfile import env_num
+from agentctl.core import err, fmt_age, git, git_ok, host_role
 from agentctl.timefmt import iso_at
 from agentctl.statefile import read_record, read_text_or
 from agentctl.classify import credential_failure, redact_credentials

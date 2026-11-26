@@ -9,10 +9,12 @@ import sys
 import time
 from typing import Any, Callable
 from agentctl.core import (
-    HOME, NoReadAccess, NoToken, _tokens, env_num, err, fmt_age, on_ci_runner, process_cache, run_cmd, slug)
+    HOME, NoReadAccess, NoToken, _tokens, err, fmt_age, on_ci_runner, process_cache, run_cmd, slug)
 from agentctl.ghapp import ghapp_config, ghapp_enabled, ghapp_token
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import waiting_state
+from agentctl.configfile import TOKEN_MISSING_SUMMARY, knob_token_summary
+from agentctl.configfile import knob_detached, knob_interactive, knob_no_secrets, knob_sock_dir
 
 
 def token_ns(o_r):
@@ -54,9 +56,9 @@ def interactive_foreground():
     CLAUDE_CODE_SESSION_ID: the session's processes are the ones its vault unlock answers -- 2026-10-30: agents' `land`
     failed NoToken and had to be wrapped in `secrets run <ns> <key> --`). Never the processor, a launchd
     job, or anything agentctl started in the background (spawn_detached marks it AGENTCTL_DETACHED)."""
-    if _IN_PROCESSOR[0] or _NO_VAULT[0] or os.environ.get("AGENTCTL_NO_SECRETS") or os.environ.get("AGENTCTL_DETACHED"):
+    if _IN_PROCESSOR[0] or _NO_VAULT[0] or knob_no_secrets() or knob_detached():
         return False
-    if os.environ.get("AGENTCTL_INTERACTIVE") == "1":
+    if knob_interactive():
         return True
     if os.environ.get("CLAUDECODE") and os.environ.get("CLAUDE_CODE_SESSION_ID"):
         return True
@@ -206,13 +208,6 @@ def token(o_r):
     return _tokens[ns]
 
 
-# A MISSING TOKEN IS SAID ON ITS TRANSITION (2026-10-30: the laptop processor's service.log held ~842,000 lines of
-# "could not read the movies token" -- every step of every tick, and the inbox note's own failure, said it
-# again). A long-lived process says it once when the token goes missing (and notes the condition then), then at most a
-# summary every TOKEN_MISSING_SUMMARY s, and once more when it is back. Its callers' NoToken is quiet (run_step).
-TOKEN_MISSING_SUMMARY = 600  # s between the summaries of a still-missing token (said on its transition first)
-
-
 # THE MISSING-TOKEN SEAM: what else a missing token does is wired at the composition root (cli: recovery's
 # token_unavailable_note, a condition in the inbox); unwired -- a part loaded on its own -- only the log line.
 _token_missing_notes: list[Callable[[str, str], None]] = []
@@ -239,10 +234,10 @@ def token_missing(ns, why, now_=None):
         _token_missing[ns] = {"since": t, "reads": 1, "said": t}
         note_token_missing(ns, why)
         line = f"the {ns} token is missing ({why}); said again only as a summary every " \
-               f"{env_num('AGENTCTL_TOKEN_SUMMARY', TOKEN_MISSING_SUMMARY) / 60:.0f} min"
+               f"{knob_token_summary() / 60:.0f} min"
     else:
         m["reads"] += 1
-        if t - m["said"] < env_num("AGENTCTL_TOKEN_SUMMARY", TOKEN_MISSING_SUMMARY):
+        if t - m["said"] < knob_token_summary():
             return None
         line = f"the {ns} token is still missing: {m['reads']} read(s) failed in the " \
                f"{fmt_age(t - m['since'])} since it went ({why})"
@@ -295,7 +290,7 @@ def token_env(o_r, env=None):
 # starts inherit it), never on disk. Until it has one, the gate is unread: taken as red, said once in the inbox.
 def token_sock_path(d: str) -> str:
     import hashlib
-    base = os.environ.get("AGENTCTL_SOCK_DIR") or f"/tmp/agentctl-{os.getuid()}"  # short: a socket path is <= 104 bytes
+    base = knob_sock_dir() or f"/tmp/agentctl-{os.getuid()}"  # short: a socket path is <= 104 bytes
     return os.path.join(base, hashlib.sha1(os.path.abspath(d).encode()).hexdigest()[:12] + ".sock")
 
 

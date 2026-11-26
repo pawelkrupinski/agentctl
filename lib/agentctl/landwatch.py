@@ -4,13 +4,14 @@
 from agentctl.clock import epoch_now
 import os
 from typing import Any
-from agentctl.core import env_num, err, slug
+from agentctl.core import err, slug
 from agentctl.timefmt import parse_time
 from agentctl.forge import gh_json, is_cancelled
 from agentctl.repos import movies_repo_path, red_repo_clone
 from agentctl.clones import main_clone
 from agentctl.ancestry import contains
 from agentctl.ciwhy import main_runs, run_no_verdict
+from agentctl.configfile import knob_watch_conv_start
 
 
 # ---------------------------------------------------------------- land: the watch after LANDED
@@ -22,8 +23,6 @@ from agentctl.ciwhy import main_runs, run_no_verdict
 WATCH = {"pawelkrupinski/movies": {"main": ("Main", "main.yml"),
                                    "convergence": ("Identity model convergence", "identity-model-convergence.yml"),
                                    "takes": ("Identity takes", "identity-takes.yml")}}
-WATCH_TIMEOUT = 3 * 3600          # either run undecided by then: exit 2, could not tell
-WATCH_CONV_START = 3600           # no convergence (or takes) run containing the sha started by then: said, not waited for
 WATCH_SLACK = 120                 # clock skew between the laptop and GitHub's createdAt
 WATCH_STALL_MIN = 120  # a watch with no change in its runs for this long ends WATCH STALLED
 
@@ -60,15 +59,6 @@ WATCH_FOLLOW_LEASE = 600  # s a follower's claim on a sha's watch item lasts unr
 def failed_jobs(o_r, rid):
     d = gh_json(o_r, "run", "view", str(rid), "--json", "jobs")
     return [j["name"] for j in d.get("jobs") or [] if j.get("conclusion") in ("failure", "timed_out", "cancelled")]
-
-
-# WATCHES FROM ITEMS (design §5.1 `landed`, phase 1 step 9): a landed sha is a `watch` item; each tick evaluates it ONCE
-# (no detached process, no loop): its Main run and convergence run (pick_main_run / pick_convergence_run), WATCH OK
-# -> ok (the worktree closed when proven merged), WATCH RED -> red (its author told; the red machine attaches it), still
-# undecided at its 3 h deadline -> unknown, an escalation (a stuck run). The verdicts reach the author's inbox as
-# events. `land --follow` watches in-process (the agent waits on purpose) by CLAIMING the sha's item (WatchClaim): the
-# tick leaves a live claim alone, and the follower's verdict goes on the item, so one sha is watched once.
-WATCH_EVERY = 60
 
 
 def start_watch(st, repo, sha, pushed_at, worktree=None, close=None, session=None, o_r=None, follower=None):
@@ -137,7 +127,7 @@ def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None)
     undecided flow's run is picked; a completed (not cancelled) one goes into `done` as (run, green?), a convergence
     that has not started CONV_START s after `since` as (None, None). on_run(kind, run or None) hears each pick.
     Returns {kind: (run id, status, updatedAt)} of the runs followed (the stall judge's state)."""
-    conv_start = env_num("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START)
+    conv_start = knob_watch_conv_start()
     seen = {}
     for kind, (name, wfile) in flows.items():
         if kind in done:

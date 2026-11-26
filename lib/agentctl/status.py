@@ -8,7 +8,8 @@ import json
 import os
 import threading
 import time
-from agentctl.core import HOME, SHORT, env_num, process_cache, reds_dir, slug
+from agentctl.configfile import env_num
+from agentctl.core import HOME, SHORT, process_cache, reds_dir, slug
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_json_file, read_record
 from agentctl.forge import RED_CONCLUSIONS, forge_run_url

@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from agentctl.timefmt import parse_time, ts
 from agentctl.statefile import read_record, write_json
-from agentctl.core import branch_of, env_num, git, reds_dir, remote, slug, tilde
+from agentctl.configfile import env_num
+from agentctl.core import branch_of, git, reds_dir, remote, slug, tilde
 from agentctl.classify import NETWORK_CHECK_FAILURE
 from agentctl.repos import movies_repo_path
 from agentctl.fixerrecords import fixer_records
@@ -21,8 +22,9 @@ from agentctl.blamerecords import blame_drop_revert_worktree
 from agentctl.recovery import reland_worktree
 from agentctl.superseded import superseded_duty, worktree_change_items
 from agentctl.park import park_duty
-from agentctl.orphans import ORPHAN_IDLE, land_entries_once, orphan_candidates, orphan_covered_by, orphan_land_entry
+from agentctl.orphans import land_entries_once, orphan_candidates, orphan_covered_by, orphan_land_entry
 from agentctl.fixerland import spawn_fixer
+from agentctl.configfile import knob_orphan_idle
 
 
 ORPHAN_PER_PASS = 3
@@ -248,7 +250,7 @@ class OrphanPass:
         after = self._verdict_since(o, last_at)
         if after is not None and orphan_infra(after):  # (3) infra, not the change: submitted again, never escalated
             self._infra_retry(o, after, last_at)
-        elif epoch_now() - last_at >= env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE):  # its action had its time
+        elif epoch_now() - last_at >= knob_orphan_idle():  # its action had its time
             self._fixer_or_person(o, after if after is not None else o.verdict)
 
     def _verdict_since(self, o: Orphan, last_at: float) -> Optional[str]:

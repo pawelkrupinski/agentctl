@@ -10,7 +10,7 @@ from contextlib import suppress
 from agentctl.landstate import landed_state
 from agentctl.core import attempt
 from agentctl.procrunner import process_runner
-from agentctl.core import branch_of, env_num, git_ok, hashlib_sha1, remote
+from agentctl.core import branch_of, git_ok, hashlib_sha1, remote
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.waitingdir import WAITING_BRANCH, waiting_entries, waiting_state
@@ -24,17 +24,7 @@ from agentctl.recovery import reland_tree_path
 from agentctl.superseded import superseded_mark, worktree_change_items
 from agentctl.park import parked_mark
 from agentctl.blamerecords import blame_land_refusal, blame_records
-
-
-# ORPHANED WORK (the owner, 2026-10-28: "review and fix landing code ... so things don't get missed or stalled"; the
-# audit found movies-wt-workflow-prune rejected 6x and idle 15 h, identity-impact / unit-before-push / red-local idle
-# 12-19 h, flipflop / nodrift-cadence / unify / mongo-csot never landed at all): every maintain pass, a worktree whose
-# commits are not on origin/main (by patch) and whose author is gone -- no process in it, no land, no live claim,
-# idle ORPHAN_IDLE, no live session that ever named it -- gets ONE action: a re-land (its last verdict infra, unknown or
-# none; only with LAND INTENT, never work NOT FOR LANDING, and from a throwaway tree, never the author's: see below and
-# reland_worktree), or a dispatched fixer (a real failure: the checks rejected it). Still orphaned after that: UNLANDED ORPHAN, a condition whose probe clears
-# when its commits are on main, or somebody works in it again. Nothing is ever deleted.
-ORPHAN_IDLE = 2 * 3600
+from agentctl.configfile import knob_orphan_idle
 
 
 def orphan_key(repo: str, wt: str) -> tuple[Any, Optional[str]]:
@@ -146,7 +136,7 @@ def owned_or_set_aside(rp: str, landers: set[str], live: set[str], cwds: set[str
 
 def idle(repo: str, p: str, t: float) -> bool:
     """Nobody touched its git dir for ORPHAN_IDLE ($AGENTCTL_ORPHAN_IDLE)."""
-    return bool(t - (gitdir_activity(repo, p) or 0) >= env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE))
+    return bool(t - (gitdir_activity(repo, p) or 0) >= knob_orphan_idle())
 
 
 def orphan_of(repo: str, p: str, store: Any, records: Any, dead: Optional[list[Any]], refused: Optional[list[Any]],

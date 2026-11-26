@@ -61,7 +61,9 @@ import time
 from typing import Any, Callable, Sequence, TypeVar
 from agentctl.procrunner import process_runner
 from agentctl.psparse import parse_ps
-from agentctl.configfile import config_load
+from agentctl.configfile import config_load, env_num  # env_num: re-exported for the gate-rules lane (waiting, queueclose, queuebatchsel, redpending, redseen), which imports it from here
+from agentctl.configfile import (
+    knob_dispatch_dir, knob_host, knob_reds_dir, knob_remote, knob_role, knob_scratch, knob_state_root)
 
 # THE PROCESS-WIDE CACHES, IN ONE REGISTRY (simplification-2026-10-31 item 10): every module-level dict, list or set a
 # part keeps between calls is made with `process_cache(...)`, so the test harness clears them all between tests
@@ -93,15 +95,13 @@ SHORT = {
     "movies": "pawelkrupinski/movies",
     **{r: f"bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")},
 }
-DEFAULT_REMOTE = "origin"  # GitHub's remote name in every clone (laptop and ci-runner)
 
 
 def remote() -> str:
     """THE PUSH AND FETCH REMOTE of every clone agentctl lands, queues, waits, fixes and batches through:
     $AGENTCTL_REMOTE, else `origin`. Read at EVERY call: a test or a config change applies at once."""
-    return (os.environ.get("AGENTCTL_REMOTE") or "").strip() or DEFAULT_REMOTE
+    return knob_remote()
 PROTECTED_BRANCHES = {"main", "master"}
-MAX_FOREIGN = 2  # files a push may revert to an older main before prepush-check refuses ($AGENTCTL_MAX_FOREIGN)
 ZERO = "0" * 40
 
 
@@ -129,11 +129,11 @@ def state_root(*parts: str) -> str:
     """THE state root (the owner, 2026-10-28: tests wrote ~200 waiting/ dirs, the sweep reports and 176 rows of
     checks/runs.jsonl into the real cache): $AGENTCTL_STATE_ROOT, else ~/.cache/agentctl, resolved at EVERY use and
     inherited by every child process. Every agentctl path is under it unless its own override says otherwise."""
-    return os.path.join(os.environ.get("AGENTCTL_STATE_ROOT") or os.path.join(HOME, ".cache", "agentctl"), *parts)
+    return os.path.join(knob_state_root() or os.path.join(HOME, ".cache", "agentctl"), *parts)
 
 
 def scratch() -> str:
-    d = os.environ.get("AGENTCTL_SCRATCH")
+    d = knob_scratch()
     if not d:
         sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
         hits = sorted(glob.glob(f"/private/tmp/claude-{os.getuid()}/*/{sid}/scratchpad")) if sid else []
@@ -384,13 +384,6 @@ def pid_alive(pid: int) -> bool:
         return True
 
 
-def env_num(name: str, default: Any) -> Any:
-    try:
-        return float(os.environ[name]) if os.environ.get(name) else default
-    except ValueError:
-        return default
-
-
 def fmt_age(secs: float) -> str:
     secs = max(0, int(secs))
     return f"{secs // 86400} d" if secs >= 86400 else f"{secs // 3600} h" if secs >= 3600 else f"{secs // 60} min"
@@ -411,18 +404,18 @@ class NoReadAccess(NoToken):
 
 def on_ci_runner() -> bool:
     """The reconciler's own host (infra's agentctl.nix sets AGENTCTL_HOST=ci-runner), not a test's server role."""
-    return os.environ.get("AGENTCTL_HOST") == "ci-runner"
+    return knob_host() == "ci-runner"
 
 
 def host_role() -> str:
     """"server" on ci-runner (AGENTCTL_HOST=ci-runner, or AGENTCTL_ROLE=server), else "sync". There is no third role."""
-    if os.environ.get("AGENTCTL_ROLE") == "server" or os.environ.get("AGENTCTL_HOST") == "ci-runner":
+    if knob_role() == "server" or knob_host() == "ci-runner":
         return "server"
     return "sync"
 
 
 def reds_dir(*parts: str) -> str:
-    d = os.environ.get("AGENTCTL_REDS_DIR") or state_root("reds")
+    d = knob_reds_dir() or state_root("reds")
     return os.path.join(d, *parts)
 
 
@@ -434,7 +427,7 @@ def branch_of(wt: str | None) -> str:
 
 
 def dispatches_dir(*parts: str) -> str:
-    d = os.environ.get("AGENTCTL_DISPATCH_DIR") or os.path.join(os.path.dirname(reds_dir()), "dispatches")
+    d = knob_dispatch_dir() or os.path.join(os.path.dirname(reds_dir()), "dispatches")
     return os.path.join(d, *parts)
 
 

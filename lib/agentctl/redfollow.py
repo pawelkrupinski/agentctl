@@ -2,7 +2,8 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-from agentctl.core import env_num, remote
+from agentctl.configfile import env_num
+from agentctl.core import remote
 from agentctl.landstate import landed_state
 from agentctl.queueslots import ENTRY_STATUS
 from agentctl.fixchange import CHANGE_ENDED, red_change

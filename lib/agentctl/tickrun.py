@@ -2,13 +2,11 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, Callable
-from agentctl.core import NoToken, _bounded, env_num, err, process_cache, run_bounded
+from agentctl.configfile import env_num
+from agentctl.core import NoToken, _bounded, err, process_cache, run_bounded
 
 
 ROUND_ERRORS_MAX = 3
-
-
-TICK = 5  # seconds between ticks ($AGENTCTL_TICK); every step is bounded or rate-limited inside
 
 
 # EVERY STEP OF THE TICK IS BOUNDED (2026-10-29, RECONCILER STALLED 05:37-05:41: during a tunnel hang the gate's

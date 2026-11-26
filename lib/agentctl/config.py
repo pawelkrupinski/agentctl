@@ -134,7 +134,7 @@ def config_default(expr: str | None, constants: dict[str, Any]) -> Any:
     return constants.get(e, e) if re.fullmatch(r"[A-Z_][A-Z0-9_]*", e) else e
 
 
-KNOB_READ = re.compile(r'(?:env_num|os\.environ\.get)\(\s*"AGENTCTL_([A-Z0-9_]+)"\s*(?:,\s*([^)\n]+?))?\s*\)')
+KNOB_READ = re.compile(r'(?:env_num|env_text|os\.environ\.get)\(\s*"AGENTCTL_([A-Z0-9_]+)"\s*(?:,\s*([^)\n]+?))?\s*\)')
 CONSTANT_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 
 

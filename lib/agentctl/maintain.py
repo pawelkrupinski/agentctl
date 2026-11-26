@@ -15,7 +15,8 @@ from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.core import REPOS, env_num, fmt_age, state_root
+from agentctl.configfile import env_num
+from agentctl.core import REPOS, fmt_age, state_root
 from agentctl.allowedpaths import allowed_path
 from agentctl.inboxentry import inbox_write
 from agentctl.maint import MAINTAIN_SWEEP_HOUR, cmd_orphans, spotlight_exclude

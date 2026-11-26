@@ -9,7 +9,7 @@ import re
 import time
 from typing import Any
 from contextlib import suppress
-from agentctl.core import attempt, env_num, err
+from agentctl.core import attempt, err
 from agentctl.timefmt import iso_at
 from agentctl.notifyurl import notification_url
 from agentctl.waitingdir import waiting_entries, wlog
@@ -19,9 +19,10 @@ from agentctl.notifier import notify, notify_cause, notify_fix
 from agentctl.statemachines import ENTRY_STATE, StaleVersion, TerminalState, machine_state, projected_transition
 from agentctl.store import LEASE_ARCHIVE_AFTER
 from agentctl.queueslots import change_item_fields
-from agentctl.redask import ASK_REMIND_MAX, ask_interval
+from agentctl.redask import ask_interval
 from agentctl.alerts import alert_write
 from agentctl.alertroute import event_audience
+from agentctl.configfile import knob_ask_remind_max
 
 
 def _entry_change_state(e, every):
@@ -276,7 +277,7 @@ class EscalationPass:
             self.note_failure(tell, done)
         elif st.meta_get("notify_failed"):
             st.meta_set("notify_failed", "")  # nothing left undelivered: no failure stands
-        keep = env_num("AGENTCTL_ASK_REMIND_MAX", ASK_REMIND_MAX) * 2
+        keep = knob_ask_remind_max() * 2
         told = {k: v for k, v in self.told.items() if self.t - float(v.get("at") or 0) < keep}
         st.meta_set("notify_items", json.dumps(told))
         if self.evs and self.evs[-1]["seq"] > self.cur:

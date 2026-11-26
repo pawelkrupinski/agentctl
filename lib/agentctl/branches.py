@@ -11,7 +11,8 @@ import time
 import urllib.parse
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import dispatches_dir, env_num, git_ok, remote, slug
+from agentctl.configfile import env_num
+from agentctl.core import dispatches_dir, git_ok, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, api, forge_argv, forge_env, gh_json

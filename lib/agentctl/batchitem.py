@@ -2,7 +2,8 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-from agentctl.core import env_num, remote
+from agentctl.configfile import env_num
+from agentctl.core import remote
 from agentctl.repos import repo_of_waiting
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, wlog
 from agentctl.conditions import open_condition, run_probe

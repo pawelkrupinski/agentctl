@@ -7,7 +7,8 @@ from agentctl.timefmt import hhmmz, parse_time
 from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import change_exits_unannounced
 from agentctl.clock import Clock
-from agentctl.core import SHORT, env_num, fmt_age, git, host_role, run_cmd, state_root
+from agentctl.configfile import env_num
+from agentctl.core import SHORT, fmt_age, git, host_role, run_cmd, state_root
 from agentctl.repos import movies_repo_path
 from agentctl.procs import process_cwds, ps
 from agentctl.procwatch import inv_wp, inv_wt
@@ -24,6 +25,7 @@ from agentctl.queueclose import change_rows, close_landed_changes
 from agentctl.selfci import inv_wa
 from agentctl.redhold import W1_HARD_FACTOR, change_progress, inv_wr, red_unheld
 from agentctl.queuehold import hold_recovers_itself
+from agentctl.configfile import knob_w5_max
 
 
 # ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)
@@ -37,9 +39,6 @@ W1_MAX = 2 * 3600       # the oldest unlanded change ($AGENTCTL_W1_MAX); while m
 
 
 W2_MAX = 10 * 60        # a gate red with nobody on it
-
-
-W5_MAX = 300            # the processor's duties beat (its bounded steps take up to 2 min)
 
 
 W6_MAX = 5 * 60         # a due escalation not notified
@@ -219,7 +218,7 @@ def inv_w5(clock, st):
     age = beat_age("processor")
     if age is None:
         return None, "no processor beat yet (a processor from before the watchdog)"
-    return age < env_num("AGENTCTL_W5_MAX", W5_MAX), f"the processor's duties beat {int(age)} s ago"
+    return age < knob_w5_max(), f"the processor's duties beat {int(age)} s ago"
 
 
 def inv_wn(clock, st):

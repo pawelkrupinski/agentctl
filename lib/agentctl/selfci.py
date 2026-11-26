@@ -14,16 +14,17 @@ import os
 import re
 import time
 from typing import Any, Callable
-from agentctl.core import env_num, fmt_age, git, host_role, run_cmd, state_root
+from agentctl.configfile import env_num
+from agentctl.core import fmt_age, git, host_role, run_cmd, state_root
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record, write_json
 from agentctl.cistate import state_read
 from agentctl.forge import gh_json
 from agentctl.redrepos import diagnosis, read_failure
 from agentctl.fixerland import bin_repo
+from agentctl.configfile import knob_wa_red_max
 
 SELF_REPO = "pawelkrupinski/agentctl"
-WA_RED_MAX = 30 * 60       # s agentctl's tests.yml may stay red on main ($AGENTCTL_WA_RED_MAX)
 WA_UNPINNED_MAX = 15 * 60  # s the newest green run may stay unpinned ($AGENTCTL_WA_UNPINNED_MAX)
 WA_UNDECIDED_MAX = 60 * 60  # s main's head may go without a decided run ($AGENTCTL_WA_UNDECIDED_MAX)
 DECIDED = ("success", "failure", "timed_out", "startup_failure")
@@ -103,7 +104,7 @@ def red_problem(runs: list[dict[str, Any]], now_: float, why: str = "") -> tuple
     if not red:
         return None, None
     age = now_ - red[0]
-    if age <= env_num("AGENTCTL_WA_RED_MAX", WA_RED_MAX):
+    if age <= knob_wa_red_max():
         return None, age
     return (f"agentctl's tests.yml has been red on main for {fmt_age(age)} (run #{red[1].get('number')} "
             f"{red[1].get('conclusion')} at {str(red[1].get('headSha'))[:7]}): ci-runner's auto-pin holds on a red run, "
@@ -150,7 +151,7 @@ def undecided_problem(runs: list[dict[str, Any]], now_: float) -> str | None:
 def red_why(runs: list[dict[str, Any]], now_: float, failure: Callable[[Any], str | None] | None) -> str:
     """The diagnosis of the red streak's newest run (read once per run, kept), once the streak is past WA_RED_MAX."""
     red = red_since(runs)
-    if not red or now_ - red[0] <= env_num("AGENTCTL_WA_RED_MAX", WA_RED_MAX):
+    if not red or now_ - red[0] <= knob_wa_red_max():
         return ""
     run_id = red[1].get("databaseId") or red[1].get("number")
     path = state_root("selfci-why.json")

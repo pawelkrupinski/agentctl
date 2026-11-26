@@ -4,9 +4,9 @@
 from agentctl.clock import epoch_now
 import os
 import re
-import time
 from typing import Any
-from agentctl.core import env_num, err, pct, process_cache, remote
+from agentctl.configfile import env_num
+from agentctl.core import err, pct, process_cache, remote
 from agentctl.timefmt import parse_time
 from agentctl.classify import norm_line
 from agentctl.forge import RUN_FIELDS, gh_json, is_cancelled, stuck_durations
@@ -261,8 +261,6 @@ def run_since_slot(r: Any, f: Any) -> Any:
 
 RED_PRIORITY = {"gate": 0, "fix": 1, "outside": 2, "flake": 3}
 RED_TICK_INTERVAL = 15       # seconds between the processor's red ticks ($AGENTCTL_RED_TICK)
-RED_FIXER_WALL = 3 * 3600    # a dispatched fixer's maximum wall time ($AGENTCTL_RED_FIXER_WALL)
-RED_RENEW_EVERY = 60         # a fixer's wrapper renews its lease this often
 RED_RELEASE_ASKS = 12        # ...and asks a store that does not answer this many times, a poll apart, to release it
 STUCK_FACTOR, STUCK_FLOOR = 3, 30 * 60  # audit #8: a run undecided past max(3 x its workflow's p90, 30 min) is a red
 

@@ -3058,7 +3058,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `assign_bound` | `AGENTCTL_ASSIGN_BOUND` | `20` | - |
 | `attach_poll` | `AGENTCTL_ATTACH_POLL` | `15` | - |
 | `author_active_min` | `AGENTCTL_AUTHOR_ACTIVE_MIN` | `15` | live = a pid alive and activity within this |
-| `awake_pid` | `AGENTCTL_AWAKE_PID` | - | - |
+| `awake_pid` | `AGENTCTL_AWAKE_PID` | - | the process that already holds the keep-awake (a child's inherited copy) |
 | `backlog_batch_max` | `AGENTCTL_BACKLOG_BATCH_MAX` | `8` | a backlog batch's members at most: its bisect is 3 prefix checks + 1 confirmation |
 | `backlog_batch_min` | `AGENTCTL_BACKLOG_BATCH_MIN` | `2` | queued changes that may share a check and make a backlog batch |
 | `baseline` | `AGENTCTL_BASELINE` | `1` | - |
@@ -3073,15 +3073,15 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `brief` | `AGENTCTL_BRIEF` | `~/bin/briefs/movies-agent-preamble.md` | - |
 | `brief_src` | `AGENTCTL_BRIEF_SRC` | - | a file to use instead of the tracked docs/fixer-brief.md in fixers' prompts (an override): none by default |
 | `cache_expire_days` | `AGENTCTL_CACHE_EXPIRE_DAYS` | `7` | - |
-| `caffeinate` | `AGENTCTL_CAFFEINATE` | `/usr/bin/caffeinate` | - |
+| `caffeinate` | `AGENTCTL_CAFFEINATE` | `/usr/bin/caffeinate` | the keep-awake tool; empty: none |
 | `change_hold_max` | `AGENTCTL_CHANGE_HOLD_MAX` | `21600` | s |
 | `checks_dir` | `AGENTCTL_CHECKS_DIR` | - | - |
 | `check_lease_ttl` | `AGENTCTL_CHECK_LEASE_TTL` | `600` | - |
 | `check_trees` | `AGENTCTL_CHECK_TREES` | `4` | check trees, so at most this many queued changes are checked at once |
-| `claude` | `AGENTCTL_CLAUDE` | - | set: that one only (the tests' fake) |
+| `claude` | `AGENTCTL_CLAUDE` | - | the `claude` CLI to launch (tests' fake); default: PATH, ~/.local/bin |
 | `claude_jobs` | `AGENTCTL_CLAUDE_JOBS` | - | - |
 | `claude_projects` | `AGENTCTL_CLAUDE_PROJECTS` | - | - |
-| `claude_settings` | `AGENTCTL_CLAUDE_SETTINGS` | - | - |
+| `claude_settings` | `AGENTCTL_CLAUDE_SETTINGS` | - | the interactive sessions' settings.json (default ~/.claude/settings.json) |
 | `claude_tmp` | `AGENTCTL_CLAUDE_TMP` | - | - |
 | `cleanup_item_timeout` | `AGENTCTL_CLEANUP_ITEM_TIMEOUT` | `120` | $AGENTCTL_CLEANUP_ITEM_TIMEOUT |
 | `cleanup_remove_reserve` | `AGENTCTL_CLEANUP_REMOVE_RESERVE` | `300` | $AGENTCTL_CLEANUP_REMOVE_RESERVE |
@@ -3095,7 +3095,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `context_fresh` | `AGENTCTL_CONTEXT_FRESH` | `300000` | tokens: a session whose last turn's context is past this is not resumed but started fresh |
 | `disk_min_gb` | `AGENTCTL_DISK_MIN_GB` | `50` | the Data volume's free space below which the upkeep runs at once, then WD opens |
 | `disk_path` | `AGENTCTL_DISK_PATH` | - | - |
-| `dispatch_dir` | `AGENTCTL_DISPATCH_DIR` | - | - |
+| `dispatch_dir` | `AGENTCTL_DISPATCH_DIR` | - | the dispatches' directory (default beside the reds') |
 | `dispatch_find` | `AGENTCTL_DISPATCH_FIND` | `12` | - |
 | `dispatch_find_poll` | `AGENTCTL_DISPATCH_FIND_POLL` | `5` | - |
 | `drift_ci` | `AGENTCTL_DRIFT_CI` | - | - |
@@ -3114,23 +3114,24 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `generated_regen_timeout` | `AGENTCTL_GENERATED_REGEN_TIMEOUT` | `1200` | s a generated file's regen command may run before the conflict is the author's |
 | `gh_cli` | `AGENTCTL_GH_CLI` | `gh` | the GitHub CLI |
 | `githubstatus_url` | `AGENTCTL_GITHUBSTATUS_URL` | `https://www.githubstatus.com/api/v2/incidents.json` | - |
-| `github_api` | `AGENTCTL_GITHUB_API` | - | - |
-| `github_lander_repos` | `AGENTCTL_GITHUB_LANDER_REPOS` | - | - |
+| `github_api` | `AGENTCTL_GITHUB_API` | `https://api.github.com` | the GitHub API base |
+| `github_lander_repos` | `AGENTCTL_GITHUB_LANDER_REPOS` | `pawelkrupinski/movies` | the repos the lander App writes to, comma-separated |
 | `gov_admit_max` | `AGENTCTL_GOV_ADMIT_MAX` | `7200` | a check waits this long for the governor at most |
 | `gov_budget_gb` | `AGENTCTL_GOV_BUDGET_GB` | `round(0.6 * ram_gb(` | - |
+| `gov_busy_probe` | `AGENTCTL_GOV_BUSY_PROBE` | - | a command printing the busy cores (tests) |
 | `gov_cpu_factor` | `AGENTCTL_GOV_CPU_FACTOR` | `1.0` | charged cores (or the load) + a job's own may reach this x the cores |
 | `gov_evict_settle` | `AGENTCTL_GOV_EVICT_SETTLE` | `3` | - |
 | `gov_free_need_gb` | `AGENTCTL_GOV_FREE_NEED_GB` | `2.5` | free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later |
 | `gov_idle_max` | `AGENTCTL_GOV_IDLE_MAX` | `30.0` | s a waiter behind the head waits at most between two reads of the queue |
-| `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | a waiter behind the head backs off to GOV_IDLE_MAX |
-| `gov_ps_probe` | `AGENTCTL_GOV_PS_PROBE` | - | - |
+| `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | - |
+| `gov_ps_probe` | `AGENTCTL_GOV_PS_PROBE` | - | a file of ps `pcpu args` rows (tests) |
 | `gov_reserve_gb` | `AGENTCTL_GOV_RESERVE_GB` | `1.0` | - |
 | `gov_resume` | `AGENTCTL_GOV_RESUME` | `0.8` | x the cores: under it, admitting again |
 | `gov_spare` | `AGENTCTL_GOV_SPARE` | `0.5` | x the cores: under it, spare |
 | `gov_starved` | `AGENTCTL_GOV_STARVED` | `1.0` | x the cores: over it, starved |
 | `hostname` | `AGENTCTL_HOSTNAME` | - | - |
-| `identity` | `AGENTCTL_IDENTITY` | - | - |
-| `inbox_dir` | `AGENTCTL_INBOX_DIR` | - | - |
+| `identity` | `AGENTCTL_IDENTITY` | - | github-app: credentials come from the GitHub Apps (ci-runner) |
+| `inbox_dir` | `AGENTCTL_INBOX_DIR` | - | the inbox's directory (default inbox under the state root) |
 | `inbox_poll` | `AGENTCTL_INBOX_POLL` | `1.0` | seconds between stat()s of the inbox directory |
 | `infra_same_max` | `AGENTCTL_INFRA_SAME_MAX` | `1800` | - |
 | `internal_trees_dir` | `AGENTCTL_INTERNAL_TREES_DIR` | - | - |
@@ -3169,8 +3170,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `notify` | `AGENTCTL_NOTIFY` | - | - |
 | `notify_timeout` | `AGENTCTL_NOTIFY_TIMEOUT` | `30` | s, each channel: an overloaded laptop's osascript cold start takes 10 s and more |
 | `orphan_fixers` | `AGENTCTL_ORPHAN_FIXERS` | `2` | orphan fixers alive at once ; one dispatched a pass |
-| `orphan_idle` | `AGENTCTL_ORPHAN_IDLE` | `7200` | its action had its time |
-| `owners_dir` | `AGENTCTL_OWNERS_DIR` | - | - |
+| `orphan_idle` | `AGENTCTL_ORPHAN_IDLE` | `7200` | - |
+| `owners_dir` | `AGENTCTL_OWNERS_DIR` | - | the owners' directory (default owners under the state root) |
 | `owner_active` | `AGENTCTL_OWNER_ACTIVE` | `7200` | - |
 | `owner_idle` | `AGENTCTL_OWNER_IDLE` | `21600` | no red held this long: the owner ends |
 | `park_digest_days` | `AGENTCTL_PARK_DIGEST_DAYS` | `14` | - |
@@ -3179,9 +3180,9 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `push_stall_secs` | `AGENTCTL_PUSH_STALL_SECS` | `180` | - |
 | `push_wall_min` | `AGENTCTL_PUSH_WALL_MIN` | `45` | - |
 | `queue` | `AGENTCTL_QUEUE` | `1` | - |
-| `recovery_dir` | `AGENTCTL_RECOVERY_DIR` | - | - |
+| `recovery_dir` | `AGENTCTL_RECOVERY_DIR` | - | the recovery notes' directory |
 | `recover_max` | `AGENTCTL_RECOVER_MAX` | `600` | a probe is re-run at most this far apart, however often it failed |
-| `reds_dir` | `AGENTCTL_REDS_DIR` | - | - |
+| `reds_dir` | `AGENTCTL_REDS_DIR` | - | the reds' directory (default reds under the state root) |
 | `red_crash_block_max` | `AGENTCTL_RED_CRASH_BLOCK_MAX` | `86400` | $AGENTCTL_RED_CRASH_BLOCK_MAX |
 | `red_crash_loop` | `AGENTCTL_RED_CRASH_LOOP` | `3` | $AGENTCTL_RED_CRASH_LOOP |
 | `red_decided_revert_max` | `AGENTCTL_RED_DECIDED_REVERT_MAX` | `2700` | - |
@@ -3210,22 +3211,22 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_tick` | `AGENTCTL_RED_TICK` | `15` | seconds between the processor's red ticks |
 | `red_verify_slack` | `AGENTCTL_RED_VERIFY_SLACK` | `7200` | s past a slot's expected end before its fix is called unverified |
 | `regen_recovery_wait` | `AGENTCTL_REGEN_RECOVERY_WAIT` | `7200` | s from the re-run to the owner's one escalation |
-| `remote` | `AGENTCTL_REMOTE` | - | - |
+| `remote` | `AGENTCTL_REMOTE` | - | the push and fetch remote of every clone |
 | `remote_ghost` | `AGENTCTL_REMOTE_GHOST` | `600` | s |
 | `restart_check` | `AGENTCTL_RESTART_CHECK` | `30` | seconds between code-version checks |
 | `runners_page_cache` | `AGENTCTL_RUNNERS_PAGE_CACHE` | `f"{HOME}/.cache/ci-runners-page/last-good.json"` | - |
 | `sbt_idle_min` | `AGENTCTL_SBT_IDLE_MIN` | `120` | min a detached sbt server with no client may sit idle before the reaper ends it |
 | `sbt_idle_pressure_min` | `AGENTCTL_SBT_IDLE_PRESSURE_MIN` | `30` | that limit while swap free is under the floor |
 | `sbt_progress_cpu_per_min` | `AGENTCTL_SBT_PROGRESS_CPU_PER_MIN` | `1.0` | CPU s/min since the previous pass above which an sbt server counts as working |
-| `sbt_reap` | `AGENTCTL_SBT_REAP` | - | the tests never reap this machine's servers |
+| `sbt_reap` | `AGENTCTL_SBT_REAP` | - | 0: never reap this machine's sbt servers (tests) |
 | `sbt_stall_min` | `AGENTCTL_SBT_STALL_MIN` | `20` | - |
-| `scratch` | `AGENTCTL_SCRATCH` | - | - |
-| `sleep_log` | `AGENTCTL_SLEEP_LOG` | - | - |
+| `scratch` | `AGENTCTL_SCRATCH` | - | the scratch directory (default: the Claude session's, else the state root) |
+| `sleep_log` | `AGENTCTL_SLEEP_LOG` | - | a file standing for `pmset -g log` (tests) |
 | `sleep_min` | `AGENTCTL_SLEEP_MIN` | `120` | s of sleep inside a lapse's window that count as "the host was asleep" |
-| `sock_dir` | `AGENTCTL_SOCK_DIR` | - | short: a socket path is <= 104 bytes |
+| `sock_dir` | `AGENTCTL_SOCK_DIR` | - | the token hand-off sockets' directory (default /tmp/agentctl-<uid>) |
 | `stall_cpu_seconds` | `AGENTCTL_STALL_CPU_SECONDS` | `1.0` | CPU that counts as progress per window: a watchdog's polls are not work |
 | `state_file` | `AGENTCTL_STATE_FILE` | - | - |
-| `state_root` | `AGENTCTL_STATE_ROOT` | - | - |
+| `state_root` | `AGENTCTL_STATE_ROOT` | - | the state root (default ~/.cache/agentctl) |
 | `stats_every` | `AGENTCTL_STATS_EVERY` | `60` | s between passes |
 | `stats_pass_bound` | `AGENTCTL_STATS_PASS_BOUND` | `40` | s a pass works at most (a tick step) |
 | `stats_per_pass` | `AGENTCTL_STATS_PER_PASS` | `150` | records a pass sends at most (the backfill spreads over passes) |
@@ -3235,7 +3236,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `status_bound` | `AGENTCTL_STATUS_BOUND` | `8` | s a source may take ; the agents' source twice that |
 | `status_page` | `AGENTCTL_STATUS_PAGE` | - | - |
 | `status_port` | `AGENTCTL_STATUS_PORT` | - | - |
-| `step_bound` | `AGENTCTL_STEP_BOUND` | `120` | - |
+| `step_bound` | `AGENTCTL_STEP_BOUND` | `120` | s one tick step may run before it is abandoned (the red tick's steps and the sync steps) |
 | `step_join` | `AGENTCTL_STEP_JOIN` | `20` | - |
 | `store_retries` | `AGENTCTL_STORE_RETRIES` | `4` | - |
 | `store_retry_base` | `AGENTCTL_STORE_RETRY_BASE` | `0.5` | s; doubled each attempt: 0.5 + 1 + 2 + 4 = 7.5 s at most |

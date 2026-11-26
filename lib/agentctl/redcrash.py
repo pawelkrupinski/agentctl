@@ -6,11 +6,11 @@ import datetime as dt
 import os
 import re
 import subprocess
-import time
 from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.claudefiles import claude_limit
-from agentctl.core import SHORT, env_num, fmt_age, remote, spawn_detached, tilde
+from agentctl.configfile import env_num
+from agentctl.core import SHORT, fmt_age, remote, spawn_detached, tilde
 from agentctl.timefmt import iso_epoch, parse_time, ts
 from agentctl.statefile import read_record
 from agentctl.repos import RED_PRIMARY, red_repo_of
@@ -26,20 +26,11 @@ from agentctl.ciwhy import ci_state_load
 from agentctl.redblock import BLOCK_TTL
 from agentctl.rundispatch import red_verify_dispatch
 from agentctl.redopen import red_offer
+from agentctl.configfile import (
+    RED_CRASH_BLOCK_MAX, knob_red_crash_block_max, knob_red_decision_block_max, knob_red_old_run, knob_sleep_min)
+from agentctl.configfile import knob_awake_pid, knob_caffeinate, knob_sleep_log
 
 
-# THE CRASH-LOOP BREAKER (G9, convergence-failures-2026-10-29 §4: in E9 fixers were launched 52 times over 9 reds, #2335
-# 18 and #2375 16 times, mostly `exit 1 with no LANDED / GAVE UP line`): RED_CRASH_LOOP dispatched fixers in a row that
-# ended with NO RESULT (a crash, an exit with no verdict line, a lease lost or expired without progress, a time-out, a
-# start that never got going) and the same tier is not dispatched blindly again. ONE escalation with the evidence (each
-# launch's outcome and log tail), and the red moves UP: to the deep tier (crash_loop.stage `deep`) -- or, when the deep
-# tier itself crash-looped, onto an OWNER BLOCK (block/<key>, cause `fixer-crash-loop`): the fixers, not the code, are
-# what fails, so this is the one owner block a test red may have. It recovers by itself: its probe passes when a newer
-# decided run of the red's workflow no longer fails this way (or the run is green), and it lapses after
-# RED_CRASH_BLOCK_MAX (offered again, the streak counted afresh from crash_loop.mark). A launch with a result (LANDED,
-# NOT LANDED, GAVE UP, BLOCKED ON OWNER, DIAGNOSED, a refuted fix) ends the streak; a release by hand is no launch.
-RED_CRASH_LOOP = 3                 # $AGENTCTL_RED_CRASH_LOOP
-RED_CRASH_BLOCK_MAX = 24 * 3600    # $AGENTCTL_RED_CRASH_BLOCK_MAX
 RED_CRASH_OUTCOME = re.compile(r"(NOT STARTED|ended with no|exit -?\d+ with no|TIMED OUT|lease expired|"
                                r"STOPPED: the red's lease was lost|STALLED|ORPHANED|store auth failed)")
 RED_CRASH_NEUTRAL = re.compile(r"(RELEASED|STOPPED: the fixer's wrapper was stopped|LIMITED: )")
@@ -55,7 +46,6 @@ CRASH_LOOP_CAUSE = "fixer-crash-loop"
 # to sleep when agentctl is running and power supply is on"); on battery the laptop sleeps and host_slept covers it.
 # The service (waiting run --service) holds the same assertion, so a plugged-in laptop never sleeps under agentctl.
 LEASE_LAPSE = re.compile(r"(lease expired|ORPHANED|STOPPED: the (red's|owner's) (heartbeat )?lease was lost)")
-SLEEP_MIN = 120      # s of sleep inside a lapse's window that count as "the host was asleep" ($AGENTCTL_SLEEP_MIN)
 _SLEEP_CACHE = [0.0, []]
 
 
@@ -63,9 +53,9 @@ def keep_awake(pid: int | None = None) -> "subprocess.Popen[Any] | None":
     """Hold a no-system-sleep assertion, valid on AC power only, for `pid` (default: this process) so a held lease is
     never starved by the laptop's sleep. Once per pid: an exec'd restart keeps the assertion it already has. Best
     effort: the Popen, or None (already held, no caffeinate, $AGENTCTL_CAFFEINATE empty)."""
-    exe = os.environ.get("AGENTCTL_CAFFEINATE", "/usr/bin/caffeinate")
+    exe = knob_caffeinate()
     who = str(pid or os.getpid())
-    if not exe or not os.access(exe, os.X_OK) or os.environ.get("AGENTCTL_AWAKE_PID") == who:
+    if not exe or not os.access(exe, os.X_OK) or knob_awake_pid() == who:
         return None
     os.environ["AGENTCTL_AWAKE_PID"] = who
     try:
@@ -78,7 +68,7 @@ def keep_awake(pid: int | None = None) -> "subprocess.Popen[Any] | None":
 def _sleep_log_text() -> Any:
     """`pmset -g log`'s text (or $AGENTCTL_SLEEP_LOG's file); "" when unreadable."""
     try:
-        path = os.environ.get("AGENTCTL_SLEEP_LOG")
+        path = knob_sleep_log()
         if path:
             return open(path).read()
         return process_runner().run(["pmset", "-g", "log"], capture_output=True, text=True, timeout=30).stdout
@@ -90,7 +80,7 @@ def sleep_intervals():
     """[(start, end)] epoch seconds of the host's recent sleeps, from `pmset -g log` (or $AGENTCTL_SLEEP_LOG, a file in
     its format). [] when unreadable. Cached for a minute."""
     now = epoch_now()
-    if now - _SLEEP_CACHE[0] < 60 and not os.environ.get("AGENTCTL_SLEEP_LOG"):
+    if now - _SLEEP_CACHE[0] < 60 and not knob_sleep_log():
         return _SLEEP_CACHE[1]
     text = _sleep_log_text()
     out, start = [], None
@@ -104,7 +94,7 @@ def sleep_intervals():
         elif start is not None:
             out.append((start, at))
             start = None
-    if not os.environ.get("AGENTCTL_SLEEP_LOG"):
+    if not knob_sleep_log():
         _SLEEP_CACHE[:] = [now, out]
     return out
 
@@ -123,7 +113,7 @@ def lapse_in_sleep(h):
     end = iso_epoch(h.get("at"))
     if end is None:
         return False
-    return host_slept(end, OWNER_TTL + 300) >= env_num("AGENTCTL_SLEEP_MIN", SLEEP_MIN)
+    return host_slept(end, OWNER_TTL + 300) >= knob_sleep_min()
 
 
 def launch_neutral(h: dict[str, Any]) -> bool:
@@ -253,7 +243,7 @@ def red_harness_block(store, it, upd, issue, cause, cmd, until, text, t, tail=No
     lname = block_lease(key)
     probe = red_newer_probe(it, d)
     got = store.acquire(lname, f"harness:{cause}", BLOCK_TTL,
-                        env_num("AGENTCTL_RED_CRASH_BLOCK_MAX", RED_CRASH_BLOCK_MAX), progress=f"{cause}@{int(t)}",
+                        knob_red_crash_block_max(), progress=f"{cause}@{int(t)}",
                         meta={"kind": "block", "crash_loop": True, "harness": True, "issue": issue,
                               "cause": cause, "cmd": cmd, "probe": probe, "until": until, "keys": [key],
                               "text": text, "details": text, "probed_at": t})
@@ -303,15 +293,6 @@ def red_harness_issue(store, d, n, tier, launches, cmd):
     return issue_open(store, text, "agentctl (harness fault)")["id"]
 
 
-# A DIAGNOSIS THAT NEEDS THE OWNER (2026-11-01, convergence #579: "resolver design ... The gate needs your design
-# call"): DIAGNOSED was no end -- the red went back to its fixer (the family's owner), who diagnosed it again, turn after
-# turn. A DIAGNOSED verdict that names the owner's decision (`DIAGNOSED: <cause>; decide: <the decision>`), or a second
-# DIAGNOSED in a row (the implementer briefed with the first could not make the fix either: crashes and lapses between
-# them are skipped), puts the red on an OWNER-DECISION BLOCK (block/<key>, cause `owner-decision`) whose text carries
-# the diagnosis and the decision -- never a crash, never the crash-loop breaker's. Like the crash-loop block it is one
-# a test red may hold, and it clears itself: a newer run of the red's workflow no longer failing this way, or
-# RED_DECISION_BLOCK_MAX (offered again); the owner lifts it at once with `agentctl red release <key> --any`.
-RED_DECISION_BLOCK_MAX = 7 * 86400   # an owner-decision block lapses after this: the red offered again (2026-11-03: was
 # 24 h -- each lapse re-offered the red to fixers who could not decide it, and the RED ESCALATE / GAVE UP entries
 # piled up; the owner is reminded instead (ask.py), and the block's probe still clears it)
 DECISION_CAUSE = "owner-decision"
@@ -389,7 +370,7 @@ def red_decision_block(store, it, upd, decide, t, category=None):
     diag = RED_DECIDE.sub("", str(d.get("diagnosis") or "")).strip()
     cmd = decision_look_command(d)
     until = f"a newer {d.get('workflow')} run than #{run} no longer fails this way"
-    maxh = env_num("AGENTCTL_RED_DECISION_BLOCK_MAX", RED_DECISION_BLOCK_MAX)
+    maxh = knob_red_decision_block_max()
     text = tilde(f"WAITING ON YOU: {decide[:400]} -- {red_what(d)} waits on it. Answer: `! {decide_cmd(key)}` (its fixer "
             f"is dispatched with your answer). " + (f"Why: DIAGNOSED: {diag[:400]}. " if diag else "") +
             f"Look: `{cmd}`. Auto-clears when {until}, or in {fmt_age(maxh)} (offered again)")
@@ -441,9 +422,6 @@ def probe_red_newer_verdict(a, store):
     return True, f"{a.get('workflow')} #{last.get('number')} {last.get('conclusion')}, no longer this failure"
 
 
-RED_OLD_RUN = 2 * 86400  # an outside red whose newest run is older than this is checked by a fresh run before it is fixed
-
-
 def red_old_run(d, t):
     """The age of an outside red's newest failing run when it is older than RED_OLD_RUN and not yet re-checked, else 0."""
     if d.get("red_kind") != "outside" or d.get("old_checked"):
@@ -452,7 +430,7 @@ def red_old_run(d, t):
         age = t - parse_time((d.get("last_run") or {}).get("createdAt")).timestamp()
     except (ValueError, TypeError, AttributeError):
         return 0
-    return age if age > env_num("AGENTCTL_RED_OLD_RUN", RED_OLD_RUN) else 0
+    return age if age > knob_red_old_run() else 0
 
 
 def red_resolve_old(store, it, age, o_r, repo, t):

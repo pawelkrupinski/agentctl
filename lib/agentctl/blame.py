@@ -9,7 +9,8 @@ import subprocess
 import sys
 import time
 from typing import Any
-from agentctl.core import env_num, fmt_age, git, reds_dir, spawn_detached
+from agentctl.configfile import env_num
+from agentctl.core import fmt_age, git, reds_dir, spawn_detached
 from agentctl.statefile import read_record
 from agentctl.procs import process_start, record_alive
 from agentctl.selfcode import TOOL_PATH
@@ -18,9 +19,10 @@ from agentctl.lander import blame_change_name, blame_decision
 from agentctl.redrecord import red_what
 from agentctl.redrepos import red_repo_tag
 from agentctl.fixerland import red_dispatch_log
-from agentctl.blameopen import BLAME_MAX, CONVERGENCE_FLOWS, PATHISH, TEST_TOKEN
+from agentctl.blameopen import CONVERGENCE_FLOWS, PATHISH, TEST_TOKEN
+from agentctl.configfile import BLAME_MAX
 from agentctl.redopen import red_offer
-from agentctl.redprobe import BLAME_PROBE_WALL
+from agentctl.configfile import knob_blame_max, knob_blame_probe_wall
 
 
 # ---------------------------------------------------------------- blame (the owner, 2026-11-01)
@@ -195,7 +197,7 @@ def blame_step(store, it, repo, o_r, t):
     b = it["data"].get("blame") or {}
     if b.get("state") != "probing":
         return None
-    if t - float(b.get("since") or t) > env_num("AGENTCTL_BLAME_MAX", BLAME_MAX):
+    if t - float(b.get("since") or t) > knob_blame_max():
         blame_probe_stop(b.get("probe"))
         return blame_finish(store, it, b, f"no decision in {fmt_age(t - float(b['since']))}", t)
     p = b.get("probe")
@@ -276,7 +278,7 @@ def blame_probe_result(p, t):
     if rec and rec.get("verdict"):
         return {**rec, "ci": True}
     if p.get("pid") and record_alive(p):
-        if t - float(p.get("at") or t) > env_num("AGENTCTL_BLAME_PROBE_WALL", BLAME_PROBE_WALL) + 300:
+        if t - float(p.get("at") or t) > knob_blame_probe_wall() + 300:
             blame_probe_stop(p)
             return {"verdict": "none", "evidence": "the probe ran past its wall time", "ci": True}
         return None

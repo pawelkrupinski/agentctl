@@ -6,7 +6,8 @@ import subprocess
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.core import env_num, err, git
+from agentctl.configfile import env_num
+from agentctl.core import err, git
 from agentctl.timefmt import parse_time, ts
 from agentctl.waitingdir import QUEUE_POOL, save_entry, waiting_entries, waiting_state, wlog
 from agentctl.lander import lander_fields
@@ -16,20 +17,16 @@ from agentctl.owned import Owned
 from agentctl.worktrees import mark_internal
 from agentctl.statemachines import (
     ENTRY_STATE, StaleVersion, TerminalState, change_event, joined_verdict, machine_state)
+from agentctl.configfile import knob_check_lease_ttl
 
 
-# CHECK SLOTS AND A CHANGE'S CHECK ARE LEASES (design §6, §7.1; phase 1 step 4): `slot/check/<repo>/<i>` (one per
-# check tree) and `check/<entry>` (its checker), TTL CHECK_LEASE_TTL renewed on the check's real progress
-# (run_watched's output and CPU; a remote check's run status), max hold CHECK_LEASE_MAX. A checker that stops
-# progressing loses both: the slot frees, and the entry's next checker adopts its remote run. No lock files.
-CHECK_LEASE_TTL = 10 * 60
 CHECK_LEASE_MAX = 3 * 3600
 
 
 def tree_slot(st, d, i, max_hold = None):
     """THE lease of check tree i: whoever touches the tree -- a checker, the batch, a push -- holds it."""
     return LeaseHold(f"slot/check/{os.path.basename(d.rstrip('/'))}/{i}",
-                     env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), max_hold or CHECK_LEASE_MAX,
+                     knob_check_lease_ttl(), max_hold or CHECK_LEASE_MAX,
                      store=st)
 
 
@@ -59,7 +56,7 @@ def check_tree_slot(st, repo, d, fix: bool = False):
 
 
 def checker_lease(st, eid):
-    return LeaseHold(f"check/{eid}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), CHECK_LEASE_MAX,
+    return LeaseHold(f"check/{eid}", knob_check_lease_ttl(), CHECK_LEASE_MAX,
                      meta={"entry": eid}, store=st)
 
 

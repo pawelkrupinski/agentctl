@@ -175,4 +175,3 @@ def blame_open(store, repo, o_r, ob, t):
             "hint": blame_hint(repo, groups, ob)}
 
 
-BLAME_MAX = 90 * 60              # s a red may wait for its culprit to be decided before a fresh fixer gets it ($AGENTCTL_BLAME_MAX)

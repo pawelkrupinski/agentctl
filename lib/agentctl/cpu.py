@@ -4,7 +4,7 @@ from agentctl.clock import epoch_now
 import os
 import time
 from typing import Any, Callable, Optional
-from agentctl.core import env_num
+from agentctl.configfile import env_num
 from agentctl.govpool import gov_dir_path
 from agentctl.statefile import read_record, write_json
 

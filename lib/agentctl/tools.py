@@ -9,7 +9,7 @@ import sys
 from collections.abc import Iterator
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, MAX_FOREIGN, ZERO, env_num, err, git, git_ok, remote, scratch
+from agentctl.core import HOME, ZERO, err, git, git_ok, remote, scratch
 from agentctl.timefmt import ts
 from agentctl.forge import GH_CLI
 from agentctl.land import SDKMAN_BINS, tool_env
@@ -18,6 +18,8 @@ from agentctl.patches import ALLOW_EMPTY_TRAILER, deliberate_empty, is_empty_com
 from agentctl.tunnel import tunnel_ports
 from agentctl.storestate import port_open
 from agentctl.netwatch import TUNNEL_LABEL
+from agentctl.configfile import knob_max_foreign
+from agentctl.configfile import knob_red_fixer, knob_store_token
 
 
 # ---------------------------------------------------------------- queue (retired)
@@ -72,7 +74,7 @@ def export_lines():
 # (`secrets run movies <KEY> -- ...`) still meets the vault there, and asks then.
 def vault_not_needed() -> bool:
     """This process is an agentctl fixer that already holds its credentials (fixer_env)."""
-    return bool(os.environ.get("AGENTCTL_RED_FIXER") and os.environ.get("AGENTCTL_STORE_TOKEN"))
+    return bool(knob_red_fixer() and knob_store_token())
 
 
 def env_print(ns: str) -> int:
@@ -413,7 +415,7 @@ def hook_ranges(repo: str, remote: str, lines: list[str]) -> Iterator[tuple[str,
 def cmd_prepush(a):
     repo = os.getcwd()
     allow = (a.allow or []) + os.environ.get("AGENTCTL_ALLOW", "").split()
-    max_foreign = a.max_foreign if a.max_foreign is not None else int(env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN))
+    max_foreign = a.max_foreign if a.max_foreign is not None else int(knob_max_foreign())
     if a.hook:
         ranges = hook_ranges(repo, a.hook[0], sys.stdin.read().splitlines())
         problems = [p for base, lsha in ranges for p in check_range(repo, base, lsha, allow, max_foreign)]

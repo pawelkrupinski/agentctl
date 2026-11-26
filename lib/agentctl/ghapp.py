@@ -13,6 +13,7 @@ from agentctl.core import NoReadAccess, err, process_cache, state_root
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_record, write_json
 from agentctl.selfcode import TOOL_PATH
+from agentctl.configfile import knob_github_api, knob_github_app, knob_github_lander_repos, knob_identity
 
 
 # ---------------------------------------------------------------- github-app (github-return plan §4.1 W5b, §4.2)
@@ -35,26 +36,24 @@ from agentctl.selfcode import TOOL_PATH
 # https://x-access-token:<token>@github.com/<o_r>.git, without the token in a URL.
 GHAPP_ROLES = ("lander", "reader")
 GHAPP_REFRESH = 600  # s before expiry a cached installation token is replaced
-GHAPP_LANDER_REPOS_DEFAULT = "pawelkrupinski/movies"
 
 
 def github_api_base():
-    return (os.environ.get("AGENTCTL_GITHUB_API") or "https://api.github.com").rstrip("/")
+    return knob_github_api().rstrip("/")
 
 
 def ghapp_enabled():
-    return (os.environ.get("AGENTCTL_IDENTITY") or "").strip().lower() == "github-app"
+    return knob_identity().strip().lower() == "github-app"
 
 
 def ghapp_config(role):
     """(app id, key file) of a role, or None when it is not configured."""
-    app = (os.environ.get(f"AGENTCTL_GITHUB_{role.upper()}_APP_ID") or "").strip()
-    key = (os.environ.get(f"AGENTCTL_GITHUB_{role.upper()}_KEY_FILE") or "").strip()
+    app, key = knob_github_app(role)
     return (app, key) if app and key else None
 
 
 def ghapp_lander_repos():
-    return [r.strip() for r in (os.environ.get("AGENTCTL_GITHUB_LANDER_REPOS") or GHAPP_LANDER_REPOS_DEFAULT).split(",")
+    return [r.strip() for r in knob_github_lander_repos().split(",")
             if r.strip()]
 
 

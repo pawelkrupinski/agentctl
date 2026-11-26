@@ -14,7 +14,7 @@ import threading
 import time
 import urllib.parse
 from typing import Any
-from agentctl.core import env_num, err, git, remote, state_root
+from agentctl.core import err, git, remote, state_root
 from agentctl.timefmt import iso_epoch, now, ts
 from agentctl.store import Store, store_errors
 from agentctl.repos import server_repo
@@ -31,10 +31,10 @@ from agentctl.queuesubmit import SUBMIT_FIELDS
 from agentctl.remotestore import RemoteStore, STORE_PORT, store_url
 from agentctl.storeauth import (
     store_secret, store_secret_path, store_token_issue, store_token_revoke, store_token_user, store_tokens_load)
-from agentctl.tickrun import TICK
 from agentctl.blamerecords import blame_land_refusal
 from agentctl.redhold import red_unheld
 from agentctl.statemachines import MACHINES, StaleVersion, TerminalState, machine_state
+from agentctl.configfile import knob_tick
 
 
 # ---------------------------------------------------------------- phase 2: the store over HTTP (design §6.3, §13 phase 2)
@@ -185,7 +185,7 @@ def supersede_stranded(d, e, st):
 def metrics_text(st, now_=None):
     """The Prometheus text the module's agentctl-metrics copies to node-exporter (agentctl.rules' gauges)."""
     t = now_ if now_ is not None else st.clock()
-    two = 2 * env_num("AGENTCTL_TICK", TICK)
+    two = 2 * knob_tick()
     rows = [("agentctl_reconciler_tick_timestamp", "unix time the last tick finished", float(state_read().get("tick_at") or 0)),
             ("agentctl_oldest_change_age_seconds", "age of the oldest non-terminal change, not counting red main time",
              oldest_change_age(st, t)),

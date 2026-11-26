@@ -4,7 +4,8 @@
 from typing import Any, Callable
 import os
 import re
-from agentctl.core import env_num, remote
+from agentctl.configfile import env_num
+from agentctl.core import remote
 from agentctl.landstate import landed_state
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record

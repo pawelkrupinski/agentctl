@@ -12,7 +12,7 @@ import time
 from contextlib import suppress
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import env_num, err, process_cache, reds_dir
+from agentctl.core import err, process_cache, reds_dir
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import mtime, tail_bytes
 from agentctl.procs import proc_alive
@@ -21,6 +21,7 @@ from agentctl.live import live_annotate, live_transcript_ok
 from agentctl.redrecord import lease_is_live
 from agentctl.leases import lease_meta
 from agentctl.livestream import live_mask_text
+from agentctl.configfile import knob_status_agent_bound
 
 
 STATUS_LOG_TAIL = 40            # lines of each log shown in the page
@@ -105,16 +106,6 @@ def status_agent_logs(run):
     files.sort(key=mtime, reverse=True)
     return [{"path": p, "name": os.path.basename(p), "size": os.path.getsize(p), "mtime": mtime(p), "tail": status_tail(p)}
             for p in files[:4]]
-
-
-# THE AGENTS' DETAILS ARE BOUNDED PER AGENT AND CACHED PER WORKTREE HEAD (2026-10-29: the section was "no answer within
-# 16 s" on every refresh -- the processor runs at launchd's background QoS, where three git calls in each of 10 movies
-# worktrees, one after the other, took 117 s; the same pass in a shell took 3 s). Each agent's details are read in a
-# thread of their own, all at once; the page waits STATUS_AGENT_BOUND s for each and shows a slower one from its last
-# read (marked stale) while the read finishes in the background for the next refresh (one read per worktree at a time).
-# The commits and their files are read again only when the worktree's HEAD (read from its files, no git) moved; `git
-# status` at most every STATUS_DIRTY_TTL s. Logs and transcripts are read by seeking from their end.
-STATUS_AGENT_BOUND = 4      # s the page waits for one agent's details ($AGENTCTL_STATUS_AGENT_BOUND)
 
 
 STATUS_GIT_TIMEOUT = 120    # s one git call may run (in its background read; never the page's wait)
@@ -286,7 +277,7 @@ def status_said(path):
 
 
 def status_agent_enrich(a, bound=None):
-    b = bound if bound is not None else env_num("AGENTCTL_STATUS_AGENT_BOUND", STATUS_AGENT_BOUND)
+    b = bound if bound is not None else knob_status_agent_bound()
     if a.get("alive") is None and a.get("pid"):
         try:
             a["alive"] = proc_alive(a["pid"])
@@ -305,7 +296,7 @@ def status_agent_enrich(a, bound=None):
 def status_enrich_all(agents, bound=None):
     """Every agent's details at once, each in a thread of its own; the wait is one agent's bound (plus a margin), and an
     agent still unread then keeps its row with `detail_error`."""
-    b = bound if bound is not None else env_num("AGENTCTL_STATUS_AGENT_BOUND", STATUS_AGENT_BOUND)
+    b = bound if bound is not None else knob_status_agent_bound()
     done = set()
 
     def work(i, a):

@@ -95,7 +95,7 @@ def run(module, script):
         "open_condition": rec("open_condition", script.get("stall")), "run_probe": rec("run_probe", "PROBE"),
         "write_json": rec("write_json"), "write_snapshot": rec("write_snapshot", script.get("snapshot")),
         "queued_entries": lambda d: script.get("queued", []), "waiting_entries": lambda d: script.get("waiting", []),
-        "err": rec("err"), "env_num": lambda name, default: default,
+        "err": rec("err"), "knob_tick": lambda: 5,
     }
     with contextlib.ExitStack() as stack:
         for name, fake in patches.items():

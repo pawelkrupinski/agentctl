@@ -8,7 +8,8 @@ import sys
 import threading
 from typing import Any
 from agentctl.clock import Clock
-from agentctl.core import env_num, err, slug, spawn_detached
+from agentctl.configfile import env_num
+from agentctl.core import err, slug, spawn_detached
 from agentctl.store import StoreUnavailable
 from agentctl.selfcode import TOOL_PATH
 from agentctl.waitingdir import WAITING_BRANCH, waiting_state

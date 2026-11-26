@@ -12,14 +12,15 @@ import sys
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import attempt, env_num, err, pid_alive, process_cache, run_cmd
+from agentctl.configfile import env_num
+from agentctl.core import attempt, err, pid_alive, process_cache, run_cmd
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.procs import proc_alive, process_start
 from agentctl.owned import lock_held
 from agentctl.machine import free_gb, machine_cores, machine_sample
-from agentctl.govtickets import (
-    GOV_POLL, gov_bump, gov_change_mark, gov_dir, gov_log, gov_log_end, gov_tickets, gov_wait_change)
+from agentctl.govtickets import gov_bump, gov_change_mark, gov_dir, gov_log, gov_log_end, gov_tickets, gov_wait_change
+from agentctl.configfile import GOV_POLL
 from agentctl.jvmreap import sbt_warm_state
 from agentctl.govbudget import GOV_MEM_GB, gov_budget
 from agentctl.store import LeaseLost
@@ -29,6 +30,8 @@ from agentctl.changekind import classify_change, queue_facts
 from agentctl.pressure import laptop_pressure, pressure_reading
 from agentctl.govusage import gov_job_cores
 from agentctl.govfits import gov_charged, gov_committed, gov_fits
+from agentctl.configfile import knob_gov_poll
+from agentctl.configfile import knob_laptop_pressure
 
 
 # ---------------------------------------------------------------- the governor: ONE admission control for memory and CPU
@@ -77,7 +80,7 @@ def gov_machine():
     if os.environ.get("AGENTCTL_GOV_LOAD_PROBE"):
         load1 = float(run_cmd(os.environ["AGENTCTL_GOV_LOAD_PROBE"], shell=True).stdout.strip() or 0)
     try:
-        laptop = laptop_pressure(None if "AGENTCTL_LAPTOP_PRESSURE" in os.environ else pressure_reading(), load=False)
+        laptop = laptop_pressure(None if knob_laptop_pressure() is not None else pressure_reading(), load=False)
     except Exception:
         laptop = None
     return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": machine_cores(), "laptop": laptop}
@@ -214,7 +217,7 @@ class GovWait:
         self.me, self.report, self.force, self.wait, self.max_wait = me, report, force, wait, max_wait
         self.t0 = wall_epoch()
         self.said, self.report_due, self.waited_on = False, stopwatch(0), None
-        self.idle = env_num("AGENTCTL_GOV_POLL", GOV_POLL)  # a waiter behind the head backs off to GOV_IDLE_MAX
+        self.idle = knob_gov_poll()  # a waiter behind the head backs off to GOV_IDLE_MAX
 
     def verdict(self, tickets: Any, waiters: Any, head: Any) -> Any:
         """(fits, why not, held on memory) for the waiter in this poll."""
@@ -246,7 +249,7 @@ class GovWait:
 
     def pause(self, head: Any, mark: Any) -> Any:
         if head:  # the head reads the machine every poll: memory and load free up with no event
-            self.idle = env_num("AGENTCTL_GOV_POLL", GOV_POLL)
+            self.idle = knob_gov_poll()
             time.sleep(self.idle)  # wall: waits on and times real processes and threads
         else:
             gov_wait_change(mark, self.idle)

@@ -7,7 +7,8 @@ import shlex
 import subprocess
 import sys
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, env_num
+from agentctl.configfile import env_num
+from agentctl.core import HOME
 
 
 def applescript_str(text):

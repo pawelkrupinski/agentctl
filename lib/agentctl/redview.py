@@ -6,7 +6,8 @@ import time
 from typing import Any
 from agentctl.timefmt import hhmmz, ts
 from agentctl.statefile import read_record
-from agentctl.core import env_num, state_root, tilde
+from agentctl.configfile import env_num
+from agentctl.core import state_root, tilde
 from agentctl.cistate import snapshot_gate_reds
 from agentctl.dispatchblock import short_flow
 from agentctl.redrecord import RED_RECURRING, red_active, red_lease, red_names

@@ -3,9 +3,11 @@
 
 import re
 from typing import Any
-from agentctl.core import env_num, tilde
+from agentctl.configfile import env_num
+from agentctl.core import tilde
 from agentctl.leases import red_block_of
 from agentctl.conditions import PROBES
+from agentctl.configfile import knob_ask_remind_max
 
 
 # BLOCKED ON OWNER IS FOR THE OWNER'S CAUSES ONLY (the owner, 2026-10-28: "fix this: main #2283 → BLOCKED ON OWNER ...
@@ -104,9 +106,6 @@ def ask_category(m):
 ASK_REMIND_FIRST = 3600       # the first reminder this long after the owner was told ($AGENTCTL_ASK_REMIND_FIRST)
 
 
-ASK_REMIND_MAX = 4 * 3600     # ...then doubling up to this ($AGENTCTL_ASK_REMIND_MAX)
-
-
 def decide_cmd(key, answer="<your answer>"):
     return f'~/bin/agentctl decide {key} "{answer}"'
 
@@ -149,7 +148,7 @@ def red_ask(it, b):
 def ask_interval(n):
     """The wait before reminder n+1 (n reminders so far, the first telling included): 1 h, 2 h, 4 h, 4 h, ..."""
     first = env_num("AGENTCTL_ASK_REMIND_FIRST", ASK_REMIND_FIRST)
-    return min(first * 2 ** max(0, int(n) - 1), env_num("AGENTCTL_ASK_REMIND_MAX", ASK_REMIND_MAX))
+    return min(first * 2 ** max(0, int(n) - 1), knob_ask_remind_max())
 
 
 def red_decision(d: dict[str, Any]) -> dict[str, Any] | None:

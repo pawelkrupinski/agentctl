@@ -4,7 +4,8 @@
 import json
 import os
 from typing import Any, BinaryIO, Optional
-from agentctl.core import env_num, git, tilde
+from agentctl.configfile import env_num
+from agentctl.core import git, tilde
 from agentctl.timefmt import ts
 from agentctl.claudefiles import bg_transcript
 from agentctl.fixersession import turn_entry

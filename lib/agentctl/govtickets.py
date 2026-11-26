@@ -8,14 +8,11 @@ import os
 import time
 from typing import Any, Optional
 from contextlib import suppress
-from agentctl.core import env_num
 from agentctl.govpool import gov_dir_path
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
 from agentctl.owned import lock_held
-
-
-GOV_POLL = 2.0
+from agentctl.configfile import knob_gov_poll
 
 
 def gov_dir() -> str:
@@ -76,7 +73,7 @@ def gov_change_mark() -> int:
 def gov_wait_change(mark: int, secs: float) -> None:
     """Sleep up to secs, returning early when the change mark moves past `mark`."""
     end = stopwatch(secs)
-    step = min(env_num("AGENTCTL_GOV_POLL", GOV_POLL), secs)
+    step = min(knob_gov_poll(), secs)
     while not end.expired():
         time.sleep(max(0.01, min(step, end.left())))  # wall: waits on and times real processes and threads
         if gov_change_mark() != mark:

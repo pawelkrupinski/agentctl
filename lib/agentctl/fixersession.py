@@ -12,7 +12,8 @@ from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.procs import proc_alive
-from agentctl.core import HOME, SHORT, _tokens, env_num, git, state_root, tilde
+from agentctl.configfile import env_num
+from agentctl.core import HOME, SHORT, _tokens, git, state_root, tilde
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.repos import red_repo_clone, red_repos
 from agentctl.inboxentry import inbox_write
@@ -20,11 +21,6 @@ from agentctl.storetoken import no_vault, token, token_ns
 from agentctl.claudefiles import bg_transcript, claude_jobs_root, fixer_verdict
 
 
-# A FIXER IS A BACKGROUND CLAUDE SESSION (the owner, 2026-10-29: "I want fixers to be visible in ui"): `claude --bg -n
-# <label>` starts it, so `claude agents` lists it by its label and the owner can `claude attach | logs | stop` it. The
-# wrapper tracks it by the id --bg prints, never a child pid: `claude agents --json --all` says working / done, its
-# transcript (~/.claude/projects/*/<session>.jsonl) is its progress and holds its final answer, `claude stop` ends it.
-BG_POLL = 5  # seconds between the wrapper's looks at its session ($AGENTCTL_BG_POLL)
 BG_STARTED = re.compile(r"backgrounded\W+([0-9a-f]{6,})")
 FIXER_CLAIM_WITHIN = 600  # s a started session has to start its transcript / run `red claim` ($AGENTCTL_FIXER_CLAIM_WITHIN)
 
@@ -174,7 +170,6 @@ def bg_session(cli, bid):
 # hours). A `blocked` row with a live pid may still be waiting on its own background work: judged by its progress.
 BG_ENDED_STATES = ("done", "stopped", "failed", "error")
 BG_WAITING_STATES = ("blocked", "idle")
-RED_STALL = 30 * 60   # a turn with no progress (transcript, worktree) this long is stalled: stopped ($AGENTCTL_RED_STALL)
 
 
 def bg_ended(ent):

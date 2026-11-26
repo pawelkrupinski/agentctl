@@ -9,7 +9,8 @@ import sqlite3
 from agentctl.clock import epoch_now
 import time
 from typing import Any, Callable
-from agentctl.core import env_num, state_root
+from agentctl.configfile import env_num
+from agentctl.core import state_root
 from agentctl.statefile import json_object
 from agentctl.offers import OfferTable
 from agentctl.statemachines import (

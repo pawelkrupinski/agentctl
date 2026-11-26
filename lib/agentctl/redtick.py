@@ -7,7 +7,8 @@ import os
 import threading
 from typing import Any
 from agentctl.statemachines import StaleVersion
-from agentctl.core import NoReadAccess, attempt, env_num, err, process_cache, run_bounded, slug
+from agentctl.configfile import env_num
+from agentctl.core import NoReadAccess, attempt, err, process_cache, run_bounded, slug
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
 from agentctl.redretired import red_retired
@@ -50,6 +51,7 @@ from agentctl.redcommands import (
     red_cmd_auto, red_cmd_block, red_cmd_dispatch, red_cmd_lease, red_cmd_owner_push, red_cmd_status,
     red_cmd_unblame, red_cmd_unblock)
 from agentctl.redquota import red_quota_waits
+from agentctl.configfile import knob_step_bound
 
 
 # -- the tick's red step (the processor; ci-why never acts)
@@ -347,7 +349,7 @@ def maybe_red_tick(repo, store):
             except (Exception, SystemExit):
                 pass
         red_tick_others(store, force=False)  # the other watched repos (red-repos.json); never fatal, never the primary's gate spell
-    if not run_bounded("red-tick", work, env_num("AGENTCTL_STEP_BOUND", 120)):
+    if not run_bounded("red-tick", work, knob_step_bound()):
         err("red tick: still running from an earlier cycle (the loop goes on)")
 
 
@@ -409,5 +411,5 @@ def maybe_publish_gate(repo, store):
         return
     _last_gate_publish[0] = wall_epoch()  # the wall's: it is compared with a file's mtime above
 
-    if not run_bounded("gate-publish", lambda: gate_publish_cycle(repo, store), env_num("AGENTCTL_STEP_BOUND", 120)):
+    if not run_bounded("gate-publish", lambda: gate_publish_cycle(repo, store), knob_step_bound()):
         err("gate summary: still reading from an earlier cycle (the loop goes on)")

@@ -7,13 +7,15 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.core import attempt, env_num, err, hashlib_sha1
+from agentctl.configfile import env_num
+from agentctl.core import attempt, err, hashlib_sha1
 from agentctl.statefile import read_record, write_json
 from agentctl.inboxentry import inbox_dir, inbox_entries, inbox_kind
 from agentctl.inbox import WAIT_KINDS_DEFAULT, entry_line
 from agentctl.alertroute import (
     ALERT_AUTHOR_VERDICT_KINDS, alert_audience, alert_kind_of, alert_norm, alert_route, alert_tier)
 from agentctl.alertprobe import alert_probe
+from agentctl.configfile import knob_alert_quiet_max
 
 
 # ---------------------------------------------------------------- the alert model (the owner, 2026-11-04)
@@ -41,7 +43,6 @@ ALERT_INDEX_VERSION = 1
 ALERT_CLOSES = {"LANDED": ("land",), "SUPERSEDED": ("land",), "OK": ("watch",), "FIX_OK": ("red",),
                 "RED_CLEARED": ("red",), "FIXER_LANDED": ("red",)}
 ALERT_RECONCILE_EVERY = 60  # s between reconcile passes ($AGENTCTL_ALERT_RECONCILE)
-ALERT_QUIET_MAX = 24 * 3600  # s a READ alert stays its item's live one after its last event ($AGENTCTL_ALERT_QUIET_MAX)
 ALERT_SEEN_MAX = 2000       # merged entry ids remembered (a re-projected event is merged once)
 
 
@@ -105,7 +106,7 @@ def alert_live(d, idx, item, t=None):
     if e is None:
         return None
     t = epoch_now() if t is None else t
-    if alert_acked(d, eid) and t - float(e.get("at") or 0) > env_num("AGENTCTL_ALERT_QUIET_MAX", ALERT_QUIET_MAX):
+    if alert_acked(d, eid) and t - float(e.get("at") or 0) > knob_alert_quiet_max():
         return None  # read and quiet for a day: its item's next event is news again
     return e
 
@@ -355,7 +356,7 @@ class AlertReconcile:
     def gone(self, e: Any, eid: str) -> bool:
         """An alert whose entry is gone, or that was read and has been quiet for a day: nothing live."""
         return e is None or (alert_acked(self.d, eid) and self.t - float(e.get("at") or 0)
-                             > env_num("AGENTCTL_ALERT_QUIET_MAX", ALERT_QUIET_MAX))
+                             > knob_alert_quiet_max())
 
     def reconcile(self, item: str, eid: str) -> str | None:
         p = os.path.join(self.d, eid + ".json")

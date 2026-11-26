@@ -4,7 +4,8 @@
 from agentctl.clock import epoch_now
 import os
 import json
-from agentctl.core import env_num, state_root
+from agentctl.configfile import env_num
+from agentctl.core import state_root
 from agentctl.statefile import read_record
 from agentctl.machine import ram_gb
 from agentctl.govtickets import gov_tickets

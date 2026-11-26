@@ -4,7 +4,8 @@
 import os
 import re
 from typing import Any
-from agentctl.core import env_num, err, fmt_age, git, host_role, remote, slug
+from agentctl.configfile import env_num
+from agentctl.core import err, fmt_age, git, host_role, remote, slug
 from agentctl.timefmt import parse_time
 from agentctl.classify import check_push_failure, credential_failure
 from agentctl.store import LeaseLost

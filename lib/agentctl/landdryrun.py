@@ -5,7 +5,8 @@ import os
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.core import env_num, err, git, host_role, reds_dir, remote, slug
+from agentctl.configfile import env_num
+from agentctl.core import err, git, host_role, reds_dir, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.classify import network_failure
@@ -13,7 +14,8 @@ from agentctl.repos import batching, precheck_hook, waiting_supported
 from agentctl.waitingdir import waiting_state
 from agentctl.worktrees import mark_internal
 from agentctl.leases import lock_note
-from agentctl.land import LAND_STALL_MIN, REDGATE, TUNNEL_TROUBLE, run_watched, stall_reason, tool_env
+from agentctl.land import REDGATE, TUNNEL_TROUBLE, run_watched, stall_reason, tool_env
+from agentctl.configfile import LAND_STALL_MIN
 from agentctl.queue import requeue_infra
 from agentctl.waiting import must_wait, tail_of, waiting_commits
 from agentctl.queuesubmit import queued_tail, submit_ref
