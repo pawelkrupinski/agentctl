@@ -11,8 +11,8 @@ from agentctl.redretired import red_run_retired
 from agentctl.gating import GATING_CHECKS_FILE
 from agentctl.cistate import state_read
 from agentctl.ciwhy import (
-    NO_VERDICT_FLOWS, _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap, gate_snap_rows,
-    gate_report_only, gate_runs, outside_from_snap, red_for, run_no_verdict, run_target)
+    NO_VERDICT_FLOWS, ci_state_load, ci_state_write, gate_from_snap, gate_snap_rows,
+    gate_report_only, gate_runs, main_runs_of, outside_from_snap, red_for, run_no_verdict, run_target)
 from agentctl.runsigs import run_sigs, save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
 from agentctl.fixerblockers import short_flow
@@ -141,8 +141,9 @@ class GateReport:
 
     def _read_holders(self, others: list[Row]) -> None:
         try:  # who holds each red: its item in the store (the tick acts; ci-why only renders)
-            rows = [(n, d, _gate_lists.get(n, []), not gate_report_only(self.o_r, n, d)[0]) for n, d, _nw, _s in self.gate]
-            units = gate_red_units(self.o_r, rows, [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in others],
+            mine = main_runs_of(self.o_r)
+            rows = [(n, d, mine.gate.get(n, []), not gate_report_only(self.o_r, n, d)[0]) for n, d, _nw, _s in self.gate]
+            units = gate_red_units(self.o_r, rows, [(n, r, mine.outside.get(n, []), False) for n, r, _s, _c in others],
                                    rereads=0 if self.summary else None)
             units += local_units(self.lrepo) + predict_units(self.o_r, self.bsnap)
             for u in units:
@@ -173,7 +174,7 @@ class GateReport:
 
     def gate_rows(self) -> None:
         for name, decided, newer, (since, count) in self.gate:
-            nov = _gate_no_verdict.get(name)
+            nov = main_runs_of(self.o_r).no_verdict.get(name)
             if nov and not self.summary:
                 self.out.append(f"{name}: newest run {nov['databaseId']} #{nov.get('number')}: NO VERDICT (incomplete: "
                                 "only `verdict complete` failed -- a takes row skipped, cancelled or missing; no red, no "
@@ -307,13 +308,13 @@ def ci_state_refresh(o_r: str, write: bool = True) -> dict[str, Any]:
     later), return it. Raises when the gate cannot be read (nothing is written: the old snapshot ages out)."""
     gate = gate_runs(o_r)
     snap = {"at": epoch_now(), "repo": o_r, "outside_error": None, "outside": [],
-            "gate": gate_snap_rows(gate)}
+            "gate": gate_snap_rows(o_r, gate)}
     if gated_repo(o_r):
         snap.update(outside_snap(o_r))
         snap["callable_only"] = sorted(main_callable_flows(o_r))  # their reds wait for red_callable_evidence
     snap.update(branches_snap(o_r))
     snap["latest"] = latest_decided(o_r)
-    snap["stuck"] = stuck_runs({**_outside_lists, **_gate_lists}, o_r=o_r)  # audit #8: undecided far past their workflow's p90
+    snap["stuck"] = stuck_runs({**main_runs_of(o_r).outside, **main_runs_of(o_r).gate}, o_r=o_r)  # audit #8: undecided far past their workflow's p90
     if write:
         ci_state_write(snap)
     return snap
@@ -321,7 +322,7 @@ def ci_state_refresh(o_r: str, write: bool = True) -> dict[str, Any]:
 
 def outside_snap(o_r: str) -> dict[str, Any]:
     try:
-        return {"outside": [{"name": n, "decided": r, "since": since, "count": count, "runs": _outside_lists.get(n, [])}
+        return {"outside": [{"name": n, "decided": r, "since": since, "count": count, "runs": main_runs_of(o_r).outside.get(n, [])}
                             for n, r, since, count in outside_gate(o_r)]}
     except Exception as e:
         return {"outside_error": str(e)[:200]}
@@ -339,7 +340,7 @@ def branches_snap(o_r: str) -> dict[str, Any]:
 def latest_decided(o_r: str) -> dict[str, Any]:
     """Each workflow's newest decided run on main: what workflow_green probes read."""
     latest = {}
-    for name, runs in list(_outside_lists.items()) + list(_gate_lists.items()):
+    for name, runs in list(main_runs_of(o_r).outside.items()) + list(main_runs_of(o_r).gate.items()):
         d = next((r for r in runs if decided_on_main(o_r, name, r)), None)
         if d:
             latest[name] = {k: d.get(k) for k in ("number", "databaseId", "conclusion", "headSha", "updatedAt")}

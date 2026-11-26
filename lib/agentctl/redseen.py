@@ -13,7 +13,7 @@ from agentctl.classify import norm_line
 from agentctl.forge import RED_CONCLUSIONS
 from agentctl.repos import gated_repo
 from agentctl.workflows import LOCAL_FLOW
-from agentctl.ciwhy import _gate_lists, gate_report_only, gate_runs
+from agentctl.ciwhy import gate_report_only, gate_runs, main_runs_of
 from agentctl.runsigs import classifier_version, run_names
 from agentctl.redepisode import RedEpisode, streak_budget
 from agentctl.redrecord import RED_TERMINAL, red_what
@@ -376,7 +376,7 @@ def gate_reds(repo: str) -> set[str]:
 def episode_names(o_r, name, decided):
     """The names (numbers and ids) of workflow `name`'s red streak runs on main that fail the way its newest decided red
     run does: RedEpisode.of_run (its signatures unread: only that run, and `episode_unread` says why)."""
-    return set(RedEpisode(o_r, name, _gate_lists.get(name) or [], streak_budget()).of_run(decided).names)
+    return set(RedEpisode(o_r, name, main_runs_of(o_r).gate.get(name) or [], streak_budget()).of_run(decided).names)
 
 
 def predict_units(o_r, snap):

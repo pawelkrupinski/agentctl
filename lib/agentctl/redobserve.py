@@ -4,7 +4,7 @@
 from agentctl.core import err, git, reds_dir, remote
 from agentctl.statefile import read_record
 from agentctl.workflows import LOCAL_FLOW
-from agentctl.ciwhy import _gate_lists, _outside_lists, gate_from_snap, gate_report_only, outside_from_snap
+from agentctl.ciwhy import main_runs_of, gate_from_snap, gate_report_only, outside_from_snap
 from agentctl.redseen import gate_red_units, predict_units, red_obs_of_units, red_units, stuck_obs, unkicked_obs
 from agentctl.runsigs import signature
 
@@ -13,8 +13,9 @@ def red_observe(o_r, repo, snap):
     """{key: observation} of everything red on main now: the gate, every other workflow (its newest decided run, audit
     #7), main's local checks, the branch runs that predict main red, and the stuck runs (audit #8). A report-only gate
     run's reds (gate_report_only) are outside the gate's."""
-    rows = [(n, d, _gate_lists.get(n, []), not gate_report_only(o_r, n, d)[0]) for n, d, _nw, _s in gate_from_snap(snap)]
-    others = [(n, r, _outside_lists.get(n, []), False) for n, r, _s, _c in outside_from_snap(snap)]
+    gate, outside, mine = gate_from_snap(snap), outside_from_snap(snap), main_runs_of(snap["repo"])
+    rows = [(n, d, mine.gate.get(n, []), not gate_report_only(o_r, n, d)[0]) for n, d, _nw, _s in gate]
+    others = [(n, r, mine.outside.get(n, []), False) for n, r, _s, _c in outside]
     units = gate_red_units(o_r, rows, others) + local_units(repo) + predict_units(o_r, snap)
     obs = red_obs_of_units(units)
     obs.update(stuck_obs(snap))

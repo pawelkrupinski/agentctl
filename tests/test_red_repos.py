@@ -173,6 +173,28 @@ class TickTest(RedReposBase):
         self.others(advance=60)
         self.assertEqual(self.st.item("red", it["id"])["state"], "cleared")
 
+    def test_another_repos_snapshot_never_shows_through_the_primarys_run_lists(self):
+        """Review 2026-11-26 (B F1): the run lists were process globals keyed by workflow NAME; red_gate_snap filled
+        them with another repo's runs and put the primary's back in a `finally`. Meanwhile -- the gate-publish thread,
+        or this tick's own reads -- the primary's `Main #5` named the other repo's run. One MainRuns per repository."""
+        names = ("main_runs", "red_open_flows", "red_gate_flows")
+        saved = {n: getattr(A, n) for n in names}
+        seen = []
+
+        def main_runs(o_r, wfile, limit=30):
+            return [{"databaseId": 100 if o_r == MOVIES else 200, "number": 5, "status": "completed",
+                     "conclusion": "failure", "workflowName": "Main", "headSha": self.sha}]
+        try:
+            A.main_runs = main_runs
+            A.red_gate_flows = lambda o_r: [("Main", "main.yml")]
+            A.red_open_flows = lambda o_r, store: seen.append(A.resolve_run(MOVIES, "5")[1]["databaseId"]) or []
+            A.gate_runs(MOVIES, [("Main", "main.yml")])
+            A.red_gate_snap(INFRA, self.st)
+        finally:
+            for n, v in saved.items():
+                setattr(A, n, v)
+        self.assertEqual(seen, [100])
+
     def test_an_unreadable_repo_is_skipped_and_the_others_still_tick(self):
         saved = A.gate_runs
 
@@ -232,10 +254,10 @@ class TickTest(RedReposBase):
         self.assertIsNotNone(A.red_others_skipped(CORE, "HTTP 502", now_=1070))
         self.assertIn("(still)", A.red_others_skipped(CORE, "HTTP 502", now_=1070 + A.RED_SKIP_SAY))
 
-    def test_the_shared_run_lists_are_put_back(self):
-        A._gate_lists["Main"] = ["movies"]
+    def test_another_repos_tick_leaves_the_primarys_run_lists_alone(self):
+        A.main_runs_of(MOVIES).gate["Main"] = ["movies"]
         self.others()
-        self.assertEqual(A._gate_lists, {"Main": ["movies"]})
+        self.assertEqual(A.main_runs_of(MOVIES).gate, {"Main": ["movies"]})
 
 
 class DispatchTest(RedReposBase):

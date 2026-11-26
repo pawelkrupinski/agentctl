@@ -125,7 +125,7 @@ class RegistryGateTest(RedsBase):
         self.assertEqual(self.gate_reds(), set(), "red only in an unproven job: report only")
         self.assertEqual(A.gate_report_only(MOVIES, "Main", {"databaseId": 40, "conclusion": "failure"}),
                          (True, "report only, unproven: deps"))
-        A._gate_lists.clear()
+        A._main_runs.clear()
         red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store())
         self.assertFalse(red, text)
         self.assertIn("Main: RED, REPORT ONLY (run 40 #20, failure): report only, unproven: deps", text)
@@ -152,7 +152,7 @@ class RegistryGateTest(RedsBase):
         self.assertTrue(report, why)
         self.assertIn("no row in .github/gating-checks.tsv: brand-new", why)
         self.assertEqual(self.gate_reds(), set(), "the hook's verdict: report only, no push held")
-        A._gate_lists.clear()
+        A._main_runs.clear()
         red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store())
         self.assertFalse(red, text)
         self.assertIn("Main: RED, REPORT ONLY", text)

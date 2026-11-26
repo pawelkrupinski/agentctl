@@ -79,28 +79,26 @@ class FixFailedTest(unittest.TestCase):
 
 class GateSnapRowsTest(unittest.TestCase):
     def test_rows_carry_their_listed_runs_and_no_verdict(self):
-        A._gate_lists["wf"], A._gate_no_verdict["wf"] = [{"n": 1}], {"n": 2}
+        A.main_runs_of("o/r").gate["wf"], A.main_runs_of("o/r").no_verdict["wf"] = [{"n": 1}], {"n": 2}
         try:
-            rows = A.gate_snap_rows([("wf", {"n": 0}, True, (5.0, 3)), ("other", None, False, (None, 0))])
+            rows = A.gate_snap_rows("o/r", [("wf", {"n": 0}, True, (5.0, 3)), ("other", None, False, (None, 0))])
         finally:
-            A._gate_lists.pop("wf", None)
-            A._gate_no_verdict.pop("wf", None)
+            A._main_runs.clear()
         self.assertEqual(rows, [{"name": "wf", "decided": {"n": 0}, "newer": True, "since": 5.0, "count": 3,
                                  "runs": [{"n": 1}], "no_verdict": {"n": 2}},
                                 {"name": "other", "decided": None, "newer": False, "since": None, "count": 0,
                                  "runs": [], "no_verdict": None}])
 
     def test_the_snapshot_reads_back_what_it_wrote(self):
-        A._gate_lists["wf"], A._gate_no_verdict["wf"] = [{"n": 1}], None
+        A.main_runs_of("o/r").gate["wf"], A.main_runs_of("o/r").no_verdict["wf"] = [{"n": 1}], None
         try:
             unit = ("wf", {"n": 0}, False, (1.0, 2))
-            rows = A.gate_snap_rows([unit])
-            A._gate_lists.pop("wf"), A._gate_no_verdict.pop("wf")
-            self.assertEqual(A.gate_from_snap({"gate": rows}), [unit])
-            self.assertEqual(A._gate_lists["wf"], [{"n": 1}])
+            rows = A.gate_snap_rows("o/r", [unit])
+            A._main_runs.clear()
+            self.assertEqual(A.gate_from_snap({"repo": "o/r", "gate": rows}), [unit])
+            self.assertEqual(A.main_runs_of("o/r").gate["wf"], [{"n": 1}])
         finally:
-            A._gate_lists.pop("wf", None)
-            A._gate_no_verdict.pop("wf", None)
+            A._main_runs.clear()
 
 
 class StoreEventRowsTest(unittest.TestCase):

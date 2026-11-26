@@ -17,7 +17,7 @@ from agentctl.fixerrecords import agent_name, own_fixer_record_path
 from agentctl.owned import default_repo
 from agentctl.redrepos import red_gate_flows, red_is_other
 from agentctl.ciwhy import (
-    _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap, gate_runs, gate_snap_rows)
+    ci_state_load, ci_state_write, gate_from_snap, gate_runs, gate_snap_rows, main_runs_of)
 from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
 from agentctl.fixerblockers import in_fixer
 from agentctl.redrecord import RED_TERMINAL, red_what
@@ -206,44 +206,31 @@ def newest_decided_main(o_r, workflow):
 
 
 def red_gate_snap(o_r, store):
-    """Another watched repo's snapshot: its gate workflows only (red-repos.json), read once. The shared run lists the
-    primary's snapshot fills (_gate_lists, _outside_lists) are put back as they were: workflow names repeat across
-    repos (movies has a `Stage NixOS closures` too)."""
-    saved = (dict(_gate_lists), dict(_outside_lists), dict(_gate_no_verdict))
-    try:
-        gate = gate_runs(o_r, red_gate_flows(o_r))
-        fields = ("number", "databaseId", "conclusion", "headSha", "updatedAt")
-        latest = {n: {k: d.get(k) for k in fields} for n, d, _nw, _st in gate if d}
-        for wf in red_open_flows(o_r, store):  # an open red's own workflow, outside the gate: read so it can clear
-            try:
-                r = newest_decided_main(o_r, wf)
-            except (Exception, SystemExit):
-                r = None
-            if r:
-                latest[wf] = {k: r.get(k) for k in fields}
-        return {"at": epoch_now(), "repo": o_r, "outside": [], "outside_error": None,
-                "gate": gate_snap_rows(gate),
-                "latest": latest}
-    finally:
-        for live, old in zip((_gate_lists, _outside_lists, _gate_no_verdict), saved):
-            live.clear()
-            live.update(old)
+    """Another watched repo's snapshot: its gate workflows only (red-repos.json), read once, into its own MainRuns
+    (workflow names repeat across repos: movies has a `Stage NixOS closures` too)."""
+    gate = gate_runs(o_r, red_gate_flows(o_r))
+    fields = ("number", "databaseId", "conclusion", "headSha", "updatedAt")
+    latest = {n: {k: d.get(k) for k in fields} for n, d, _nw, _st in gate if d}
+    for wf in red_open_flows(o_r, store):  # an open red's own workflow, outside the gate: read so it can clear
+        try:
+            r = newest_decided_main(o_r, wf)
+        except (Exception, SystemExit):
+            r = None
+        if r:
+            latest[wf] = {k: r.get(k) for k in fields}
+    return {"at": epoch_now(), "repo": o_r, "outside": [], "outside_error": None,
+            "gate": gate_snap_rows(o_r, gate),
+            "latest": latest}
 
 
 def red_observe_gate(o_r, snap):
     """{key: observation} of another watched repo: its gate workflows' red runs (no outside workflows, local checks,
-    branch predictions or convergence kicks -- those are the primary's), and its stuck gate runs. The shared run lists
-    are restored afterwards (red_gate_snap)."""
-    saved = (dict(_gate_lists), dict(_outside_lists), dict(_gate_no_verdict))
-    try:
-        rows = [(n, d, _gate_lists.get(n, []), True) for n, d, _nw, _s in gate_from_snap(snap)]
-        obs = red_obs_of_units(gate_red_units(o_r, rows))
-        obs.update(stuck_obs(snap))
-        return obs
-    finally:
-        for live, old in zip((_gate_lists, _outside_lists, _gate_no_verdict), saved):
-            live.clear()
-            live.update(old)
+    branch predictions or convergence kicks -- those are the primary's), and its stuck gate runs."""
+    gate = gate_from_snap(snap)
+    rows = [(n, d, main_runs_of(snap["repo"]).gate.get(n, []), True) for n, d, _nw, _s in gate]
+    obs = red_obs_of_units(gate_red_units(o_r, rows))
+    obs.update(stuck_obs(snap))
+    return obs
 
 
 _last_others_tick = [0.0]

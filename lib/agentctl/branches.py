@@ -19,7 +19,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.owned import default_repo
 from agentctl.worktrees import merged_reason
 from agentctl.inbox import INBOX_TAIL
-from agentctl.ciwhy import _gate_lists, _outside_lists
+from agentctl.ciwhy import main_runs_of
 from agentctl.runsigs import save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
 from agentctl.fixerblockers import short_flow
@@ -156,13 +156,13 @@ def newest_branch_runs(o_r: Any) -> Any:
             newest_main.setdefault(wf, r)
         elif tracked_branch(b, recorded):
             latest.setdefault((b, wf), r)
-    newer_gate_mains(newest_main)
+    newer_gate_mains(o_r, newest_main)
     return latest, newest_main
 
 
-def newer_gate_mains(newest_main: Any) -> Any:
+def newer_gate_mains(o_r: str, newest_main: Any) -> Any:
     """The gate and outside workflows' own lists of main's runs, a newer completed one replacing the listing's."""
-    for wf, rs in list(_gate_lists.items()) + list(_outside_lists.items()):
+    for wf, rs in main_runs_of(o_r).lists():
         m = next((r for r in rs if r.get("status") == "completed"), None)
         if m and (wf not in newest_main or m["databaseId"] > newest_main[wf]["databaseId"]):
             newest_main[wf] = m

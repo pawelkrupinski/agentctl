@@ -16,7 +16,7 @@ from agentctl.conditions import PROBES, condition_item_of, open_condition, run_p
 from agentctl.redrepos import red_gate_flows
 from agentctl.redask import OWNER_CAUSES, ask_category, ask_refusal
 from agentctl.red import red_item_of_run
-from agentctl.ciwhy import _gate_lists, _outside_lists, resolve_run
+from agentctl.ciwhy import main_runs_of, resolve_run
 from agentctl.redseen import red_units
 from agentctl.redobserve import local_units
 from agentctl.runsigs import run_sigs
@@ -49,7 +49,7 @@ def red_run_units(o_r, n):
     if r is None:
         return name, None, []
     if r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS:
-        runs = _gate_lists.get(name) or _outside_lists.get(name) or [r]
+        runs = main_runs_of(o_r).runs_of(name) or [r]
         gate = name in {g for g, _ in red_gate_flows(o_r)}
         try:
             sigs = run_sigs(o_r, r, name)

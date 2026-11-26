@@ -12,7 +12,7 @@ from agentctl.gating import main_workflow_files
 from agentctl.redrepos import red_is_other
 from agentctl.red import canon_job, red_obs_for
 from agentctl.redmove import red_move, red_stop_holder
-from agentctl.ciwhy import _gate_lists, _outside_lists, decided_runs, registry_name
+from agentctl.ciwhy import decided_runs, main_runs_of, registry_name
 from agentctl.redseen import red_obs_of_units
 from agentctl.redknobs import knob_ever_green_recheck
 
@@ -258,7 +258,7 @@ def red_active_untracked(store, o_r, it, untracked, obs, now_=None):
         return None
     wf = d.get("workflow")
     ob = {"red_kind": d.get("red_kind"), "workflow": wf, "jobs": d.get("jobs") or [d.get("job")],
-          "runs_list": _gate_lists.get(wf) or _outside_lists.get(wf) or []}
+          "runs_list": main_runs_of(o_r).runs_of(wf)}
     try:
         return red_never_green(store, o_r, ob, now_)
     except (Exception, SystemExit):

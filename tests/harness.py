@@ -182,7 +182,7 @@ def _reset_process_state():
         if isinstance(toks, dict):
             toks.clear()
         # every part's process-wide cache (core.process_cache), for every test -- not only Base's: a FakeForge test once
-        # met test_caches' deliberate `_gate_lists["leak"] = 1` when both ran in one worker (agentctl CI #44108162628)
+        # met test_caches' deliberate `_main_runs["leak"] = 1` when both ran in one worker (agentctl CI #44108162628)
         for cache in mod.__dict__.get("PROCESS_CACHES") or []:
             cache.clear()
         # the process runner (procrunner.wire_runner): the real one, whatever FakeRunner a test wired

@@ -151,9 +151,9 @@ class OutsideGateTest(unittest.TestCase):
         for n in r.sample(flows, r.randint(0, 3)):
             mem[n.lower() + ".yml"] = (NOW - r.choice([10, 5000]), r.choice([None, [run(n)], []]))
         case.put("_flow_runs", mem)
-        lists = {}
-        case.put("_outside_lists", lists)
-        return (lambda: (mem, lists),)
+        mains = {}
+        case.put("_main_runs", mains)
+        return (lambda: (mem, {n: runs for m in mains.values() for n, runs in m.outside.items()}),)
 
     def test_outside_gate(self):
         def run(A):

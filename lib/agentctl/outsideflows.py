@@ -11,7 +11,7 @@ from agentctl.repos import scan_repo_for
 from agentctl.workflows import BOUND_JOBS, GITHUB_JOB_TIMEOUT, JobBlock, scan_jobs
 from agentctl.gating import _flow_meta, main_workflow_files
 from agentctl.redrepos import red_gate_flows
-from agentctl.ciwhy import _outside_lists, red_streak
+from agentctl.ciwhy import main_runs_of, red_streak
 
 
 OUTSIDE_FLOW_RECHECK = 1800  # a workflow outside the newest-200 window is listed on its own this often (audit #7)
@@ -140,7 +140,7 @@ def outside_gate(o_r: Any) -> Any:
     for name, mine in _outside_runs(o_r, gated).items():
         if name in gated:
             continue
-        _outside_lists[name] = mine
+        main_runs_of(o_r).outside[name] = mine
         since, count = red_streak(mine)
         if count:
             decided = next(r for r in mine if r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS)

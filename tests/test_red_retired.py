@@ -243,7 +243,7 @@ class RetiredTickTest(RedReposBase):
                                           "headSha": OLD, "url": "u", "number": 1081, "status": "completed",
                                           "conclusion": "failure", "workflowName": "Playwright Tests (deployed)"})
         self.put("run-41241638844.log", "playwright (dev, job 1)\tRun playwright\t2026-10-31T21:02:00Z Error: POST 400\n")
-        A._gate_lists.clear()
+        A._main_runs.clear()
         red, text = A.ci_why(CORE, repo=self.r.path, store=A.process_store())
         self.assertFalse(red, text)
         self.assertIn("Playwright Tests (deployed): RETIRED (run 41241638844 #1081", text)

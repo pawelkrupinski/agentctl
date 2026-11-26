@@ -150,7 +150,6 @@ def job_is_phantom(j):
     return not bad or bool(SETUP_STEP.search(bad[0]["name"]))
 
 
-_gate_lists, _outside_lists = process_cache({}), process_cache({})  # workflow -> the runs on main gate_runs / outside_gate last listed (newest first)
 
 # AN INCOMPLETE RUN IS NO VERDICT (movies 4da98c308, 2026-10-30: convergence's `verdict complete` job fails a main run
 # whose takes or takes-drift rows were skipped, cancelled or missing -- "no false green"; since 2026-11-08 the job lives
@@ -160,7 +159,6 @@ _gate_lists, _outside_lists = process_cache({}), process_cache({})  # workflow -
 VERDICT_COMPLETE_JOB = re.compile(r"(^|/\s*)verdict complete$")
 # the workflows with a `verdict complete` job (only they are read): Identity takes; convergence for its runs before the split
 NO_VERDICT_FLOWS = {"Identity takes", "Identity model convergence"}
-_gate_no_verdict = process_cache({})  # workflow -> its newest no-verdict run newer than its decided one (gate_runs), or None
 _no_verdict_mem = process_cache({})
 
 
@@ -211,6 +209,35 @@ def run_no_verdict(o_r, r):
 Run = dict[str, Any]  # a workflow run as gh lists it (RUN_FIELDS)
 
 
+class MainRuns:
+    """ONE repository's runs on main, as gate_runs / outside_gate / a snapshot last listed them (newest first), by
+    workflow. Review 2026-11-26 (B F1): these were three process globals keyed by workflow NAME alone, imported by
+    private name into 8 modules; red_gate_snap filled them with another repo's runs and put the primary's back in a
+    `finally` (names repeat across repos), so a reader in the meantime -- the gate-publish thread, or the tick's own --
+    saw the other repo's runs. Now each repository has its own (main_runs_of), and nothing is saved or restored."""
+
+    def __init__(self) -> None:
+        self.gate: dict[str, list[Run]] = {}      # a gate workflow -> its runs on main
+        self.outside: dict[str, list[Run]] = {}   # a workflow outside the gate -> its runs on main
+        self.no_verdict: dict[str, Run | None] = {}  # a gate workflow -> its newest no-verdict run newer than its decided one
+
+    def runs_of(self, name: str) -> list[Run]:
+        """A workflow's listed runs: the gate's, else outside the gate's, else none."""
+        return self.gate.get(name) or self.outside.get(name) or []
+
+    def lists(self) -> list[tuple[str, list[Run]]]:
+        """(workflow, runs) of every listed workflow, the gate's first."""
+        return list(self.gate.items()) + list(self.outside.items())
+
+
+_main_runs: dict[str, MainRuns] = process_cache({})
+
+
+def main_runs_of(o_r: str) -> MainRuns:
+    """The repository's MainRuns (made empty on first ask)."""
+    return _main_runs.setdefault(o_r, MainRuns())
+
+
 def newest_decided(runs: list[Run], no_verdict: Callable[[Run], bool]) -> tuple[Run | None, Run | None]:
     """(the newest decided run of `runs` (newest first) that has a verdict, the newest decided run with none). A run
     for which no_verdict(run) holds is an incomplete one: it says nothing, and the search goes on past it."""
@@ -246,7 +273,7 @@ def gate_runs(o_r, flows=None):
         newer = next((r for r in runs if r.get("status") != "completed"), None)
         if newer and decided and newer["databaseId"] < decided["databaseId"]:
             newer = None
-        _gate_lists[name], _gate_no_verdict[name] = runs, nov
+        main_runs_of(o_r).gate[name], main_runs_of(o_r).no_verdict[name] = runs, nov
         out.append((name, decided, newer, red_streak(runs, skip=nv)))
     return out
 
@@ -359,16 +386,18 @@ def ci_state_load(o_r: str, now: float | None = None) -> dict[str, Any] | None:
     return snap if snap.get("repo") == o_r and -5 <= age <= CI_STATE_MAX_AGE else None
 
 
-def gate_snap_rows(gate: list[tuple[Any, Any, Any, Any]]) -> list[dict[str, Any]]:
+def gate_snap_rows(o_r: str, gate: list[tuple[Any, Any, Any, Any]]) -> list[dict[str, Any]]:
     """The snapshot's `gate` rows of gate_runs' units (the inverse of gate_from_snap): each with its listed runs."""
+    mine = main_runs_of(o_r)
     return [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
-             "runs": _gate_lists.get(n, []), "no_verdict": _gate_no_verdict.get(n)} for n, d, nw, st in gate]
+             "runs": mine.gate.get(n, []), "no_verdict": mine.no_verdict.get(n)} for n, d, nw, st in gate]
 
 
 def gate_from_snap(snap):
     out = []
     for g in snap["gate"]:
-        _gate_lists[g["name"]], _gate_no_verdict[g["name"]] = g["runs"], g.get("no_verdict")
+        main_runs_of(snap["repo"]).gate[g["name"]] = g["runs"]
+        main_runs_of(snap["repo"]).no_verdict[g["name"]] = g.get("no_verdict")
         out.append((g["name"], g["decided"], g["newer"], (g["since"], g["count"])))
     return out
 
@@ -376,7 +405,7 @@ def gate_from_snap(snap):
 def outside_from_snap(snap):
     out = []
     for g in snap["outside"]:
-        _outside_lists[g["name"]] = g["runs"]
+        main_runs_of(snap["repo"]).outside[g["name"]] = g["runs"]
         out.append((g["name"], g["decided"], g["since"], g["count"]))
     return out
 
@@ -431,9 +460,9 @@ def queue_full(o_r: Any, number: Any, q: dict[str, Any] | None) -> str | None:
     return None if None in says else "queued: " + "; ".join(says)
 
 
-def run_in_lists(n: Any) -> Any:
-    """(workflow, run) of a known run of main a number or id names, else None."""
-    known = [(name, r) for lists in (_gate_lists, _outside_lists) for name, runs in lists.items() for r in runs]
+def run_in_lists(o_r: str, n: Any) -> Any:
+    """(workflow, run) of a known run of the repository's main a number or id names, else None."""
+    known = [(name, r) for name, runs in main_runs_of(o_r).lists() for r in runs]
     for key in ("number", "databaseId"):  # a run NUMBER first (the repo's convention), an id only failing that
         found = next(((name, r) for name, r in known if str(r.get(key)) == n), None)
         if found:
@@ -457,7 +486,7 @@ def run_listed_or_viewed(o_r: Any, n: Any) -> Any:
 def resolve_run(o_r, n):
     """(workflow, run) of the run on main a number or id names, else (None, None)."""
     n = str(n).lstrip("#")
-    known = run_in_lists(n)
+    known = run_in_lists(o_r, n)
     if known:
         return known
     try:

@@ -55,8 +55,7 @@ class BranchBase(RedBase):
         sh(self.r.path, "git", "fetch", "-q", "origin")
 
     def snap(self):
-        A._gate_lists.clear()
-        A._outside_lists.clear()
+        A._main_runs.clear()
         return A.ci_state_refresh(MOVIES)
 
 
