@@ -1,6 +1,6 @@
 """The store's leases (design §6, reconciler phase 1 step 1): renewed on progress only, capped by a max hold, fenced by
 an epoch and a secret; an expired lease is free."""
-import os, sys, tempfile, unittest
+import json, os, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -30,6 +30,45 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(self.st.release("land/r", c["epoch"], c["secret"]), "ok")
         self.assertNotIn("held", self.st.acquire("land/r", "you", 120, 300))
         self.assertIn("held", self.st.acquire("land/r", "me", 120, 300))
+
+
+class LeaseMetaReadTest(unittest.TestCase):
+    """Every path reading a lease's meta column reads NULL, '' and '{}' alike as an empty object (`_meta`)."""
+
+    def setUp(self):
+        self.t = [1000.0]
+        self.st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"), clock=lambda: self.t[0])
+
+    def blank(self, raw):
+        c = self.st.db()
+        c.execute("UPDATE leases SET meta=?", (raw,))
+        c.commit()
+        c.close()
+
+    def meta(self, name):
+        return json.loads(self.st.get(name)["meta"])
+
+    def test_a_blank_meta_is_an_empty_object_for_every_reader(self):
+        for raw in (None, "", "{}"):
+            with self.subTest(raw=raw):
+                a = self.st.acquire(f"x/{raw}", "me", 120, 300)
+                self.blank(raw)
+                self.st.note(f"x/{raw}", a["epoch"], a["secret"], "n")
+                self.assertEqual(self.meta(f"x/{raw}"), {"note": "n"})
+                self.blank(raw)
+                self.st.set_meta(f"x/{raw}", a["epoch"], a["secret"], {"pid": 1})
+                self.assertEqual(self.meta(f"x/{raw}"), {"pid": 1})
+                self.blank(raw)
+                self.t[0] += 1
+                self.assertEqual(self.st.renew(f"x/{raw}", a["epoch"], a["secret"], "p1", 120, note="r"), "ok")
+                self.assertEqual(self.meta(f"x/{raw}"), {"note": "r"})
+                self.blank(raw)
+                self.assertTrue(self.st.revoke(f"x/{raw}", "refuted"))
+                self.assertEqual(self.meta(f"x/{raw}")["outcome"], "refuted")
+                self.blank(raw)
+                self.t[0] += 10_000
+                self.assertEqual(self.st.archive_free_leases(older=1), 1)
+                self.assertIn("lapsed", self.st.events()[-1]["text"])
 
 
 class OffersTest(unittest.TestCase):
