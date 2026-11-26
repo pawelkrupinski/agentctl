@@ -152,6 +152,40 @@ def token_vault_key(o_r):
     return ("bitcashier", "AGENTCTL_STORE_TOKEN")
 
 
+def vault_token(o_r, why):
+    """(the store token `secrets get` answers, else "") and `why` with what went wrong appended: not an interactive
+    foreground run (it would prompt), no `secrets` command, a keychain prompt nobody answered, a locked vault. A token
+    read re-seeds the processor (it held none: asked just before)."""
+    sec = secrets_bin()
+    if not interactive_foreground():
+        return "", why + "; not an interactive foreground run, so `secrets` is not tried (it would prompt)"
+    if not sec:
+        return "", why + "; no `secrets` command found"
+    try:
+        r = run_cmd([sec, "get", *token_vault_key(o_r)], timeout=120)  # a keychain prompt loop: bounded
+        tok = r.stdout.strip() if r.returncode == 0 else ""
+        if r.returncode == 124:
+            why += "; `secrets get` did not answer in 120 s (a keychain prompt nobody answered?)"
+    except OSError as e:
+        tok, why = "", why + f"; secrets: {e.strerror}"
+    if not tok:
+        return tok, why + "; the vault is locked for this process (its session ended, or `! secrets unlock " + token_vault_key(o_r)[0] + "`)"
+    seed_processor(tok)
+    return tok, why
+
+
+def fetch_token(o_r, ns):
+    """The token of namespace ns from the processor's socket, else the vault; none: said missing, and NoToken."""
+    tok = token_from_processor(o_r)
+    why = "the waiting processor holds none"
+    if not tok:
+        tok, why = vault_token(o_r, why)
+    if not tok:
+        token_missing(ns, why)
+        raise NoToken(f"agentctl: could not read the {'/'.join(token_vault_key(o_r))} token ({why})")
+    return tok
+
+
 def token(o_r):
     """ONE credential path for every agentctl process: the environment, then the processor's socket, then `secrets`
     (absolute path). No source: NoToken naming the cause, and one inbox entry. On ci-runner a repo other than movies
@@ -167,30 +201,7 @@ def token(o_r):
             token_back(ns)
         return os.environ[token_env_name(o_r)]
     if ns not in _tokens:
-        tok = token_from_processor(o_r)
-        why = "the waiting processor holds none"
-        if not tok:
-            sec = secrets_bin()
-            if not interactive_foreground():
-                why += "; not an interactive foreground run, so `secrets` is not tried (it would prompt)"
-            elif not sec:
-                why += "; no `secrets` command found"
-            else:
-                try:
-                    r = run_cmd([sec, "get", *token_vault_key(o_r)], timeout=120)  # a keychain prompt loop: bounded
-                    tok = r.stdout.strip() if r.returncode == 0 else ""
-                    if r.returncode == 124:
-                        why += "; `secrets get` did not answer in 120 s (a keychain prompt nobody answered?)"
-                except OSError as e:
-                    tok, why = "", why + f"; secrets: {e.strerror}"
-                if not tok:
-                    why += "; the vault is locked for this process (its session ended, or `! secrets unlock " + token_vault_key(o_r)[0] + "`)"
-                else:
-                    seed_processor(tok)  # it holds none (asked above): this read re-seeds it
-        if not tok:
-            token_missing(ns, why)
-            raise NoToken(f"agentctl: could not read the {'/'.join(token_vault_key(o_r))} token ({why})")
-        _tokens[ns] = tok
+        _tokens[ns] = fetch_token(o_r, ns)
         token_back(ns)
     return _tokens[ns]
 

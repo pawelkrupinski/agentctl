@@ -5,6 +5,7 @@ from agentctl.clock import epoch_now
 import os
 import re
 from contextlib import suppress
+from typing import NamedTuple
 from agentctl.core import git, process_cache, remote, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -54,64 +55,93 @@ def gating_checks_path():
 GATING_API_TTL = 300  # s a registry (or workflow names) read through GitHub's API, with no clone here, is kept
 
 
+class RegistryRead(NamedTuple):
+    """One read of the registry: its rows (none when unread), the main it was read at, why it was not read, and whether
+    the process's own cache answered it (nothing to keep then)."""
+    rows: list
+    main: str | None
+    why: str
+    cached: bool = False
+
+
+def read_registry_clone(repo):
+    """The registry at origin/main of the clone `repo` (cached per main sha)."""
+    main = git(repo, "rev-parse", f"refs/remotes/{remote()}/main", check=False).stdout.strip()
+    if main and (repo, main) in _gating_rows:
+        return RegistryRead(_gating_rows[(repo, main)], main, "", True)
+    r = git(repo, "show", f"{main}:{GATING_CHECKS_FILE}", check=False) if main else None
+    rows = gating_checks_parse(r.stdout) if r is not None and r.returncode == 0 else []
+    if rows:
+        _gating_rows[(repo, main)] = rows
+    return RegistryRead(rows, main, f"{GATING_CHECKS_FILE} unread at {remote()}/main {(main or '?')[:10]}")
+
+
+def read_registry_api(o_r):
+    """The registry through GitHub's contents API (kept GATING_API_TTL), for a repo with no clone here."""
+    hit = _gating_rows.get(("api", o_r))
+    if hit and epoch_now() - hit[0] < GATING_API_TTL:
+        return RegistryRead(hit[1], None, "", True)
+    rows, main, why = [], None, "no clone of it here"
+    try:
+        import base64
+        c = gh_json(o_r, "api", f"repos/{o_r}/contents/{GATING_CHECKS_FILE}?ref=main")
+        rows = gating_checks_parse(base64.b64decode(c.get("content") or "").decode("utf-8", "replace"))
+        main = "api"
+    except (Exception, SystemExit) as e:  # SystemExit: NoToken
+        why = f"no clone of it here, and {GATING_CHECKS_FILE} unread through the API ({str(e)[:120]})"
+    if rows:
+        _gating_rows[("api", o_r)] = (epoch_now(), rows)
+    return RegistryRead(rows, main, why)
+
+
+def keep_registry(o_r, rows, main):
+    """The rows last read, kept in the state root (when they changed): a stale registry is an earlier main's, never none."""
+    with suppress(OSError):
+        kept = read_record(gating_checks_path()) or {}
+        if kept.get(o_r, {}).get("rows") != rows:
+            kept[o_r] = {**kept.get(o_r, {}), "main": main, "rows": rows, "at": ts()}
+            write_json(gating_checks_path(), kept)
+
+
 def gating_checks(o_r):
     """The registry's rows at main: from the repo's clone at origin/main (cached per main sha), else -- no clone here --
     through GitHub's contents API (kept GATING_API_TTL). Unreadable now (no file, a git or API error): the rows last read
     (kept in the state root: a stale registry is an earlier main's, never none); never read: raises GateRegistryUnread."""
     repo = scan_repo_for(o_r)
-    rows, main, why = [], None, "no clone of it here"
-    if repo and os.path.isdir(repo):
-        main = git(repo, "rev-parse", f"refs/remotes/{remote()}/main", check=False).stdout.strip()
-        if main and (repo, main) in _gating_rows:
-            return _gating_rows[(repo, main)]
-        r = git(repo, "show", f"{main}:{GATING_CHECKS_FILE}", check=False) if main else None
-        rows = gating_checks_parse(r.stdout) if r is not None and r.returncode == 0 else []
-        if rows:
-            _gating_rows[(repo, main)] = rows
-        why = f"{GATING_CHECKS_FILE} unread at {remote()}/main {(main or '?')[:10]}"
-    else:
-        hit = _gating_rows.get(("api", o_r))
-        if hit and epoch_now() - hit[0] < GATING_API_TTL:
-            return hit[1]
-        try:
-            import base64
-            c = gh_json(o_r, "api", f"repos/{o_r}/contents/{GATING_CHECKS_FILE}?ref=main")
-            rows = gating_checks_parse(base64.b64decode(c.get("content") or "").decode("utf-8", "replace"))
-            main = "api"
-        except (Exception, SystemExit) as e:  # SystemExit: NoToken
-            why = f"no clone of it here, and {GATING_CHECKS_FILE} unread through the API ({str(e)[:120]})"
-        if rows:
-            _gating_rows[("api", o_r)] = (epoch_now(), rows)
-    if rows:
-        with suppress(OSError):
-            kept = read_record(gating_checks_path()) or {}
-            if kept.get(o_r, {}).get("rows") != rows:
-                kept[o_r] = {**kept.get(o_r, {}), "main": main, "rows": rows, "at": ts()}
-                write_json(gating_checks_path(), kept)
-        return rows
+    read = read_registry_clone(repo) if repo and os.path.isdir(repo) else read_registry_api(o_r)
+    if read.cached:
+        return read.rows
+    if read.rows:
+        keep_registry(o_r, read.rows, read.main)
+        return read.rows
     kept = ((read_record(gating_checks_path()) or {}).get(o_r) or {}).get("rows")
     if kept:
         return kept
-    raise GateRegistryUnread(f"{o_r}'s gating checks registry: {why}")
+    raise GateRegistryUnread(f"{o_r}'s gating checks registry: {read.why}")
+
+
+def api_workflow_names(o_r):
+    """{workflow file: name} of GitHub's workflows list (kept GATING_API_TTL; {} when unreadable)."""
+    hit = _gating_rows.get(("names", o_r))
+    if not (hit and epoch_now() - hit[0] < GATING_API_TTL):
+        try:
+            flows = gh_json(o_r, "api", f"repos/{o_r}/actions/workflows").get("workflows") or []
+            api = {os.path.basename(str(w.get("path") or "")): w.get("name") for w in flows if w.get("name")}
+        except (Exception, SystemExit):
+            api = {}
+        hit = (epoch_now(), api)
+        if api:
+            _gating_rows[("names", o_r)] = hit
+    return hit[1]
 
 
 def gate_flow_names(o_r, files=()):
     """{workflow file: name} for files (the registry's): main's own workflow files in the clone (main_workflow_files);
-    those it does not name, GitHub's workflows list (kept GATING_API_TTL); still unnamed, the names last read (kept
+    those it does not name, GitHub's workflows list (api_workflow_names); still unnamed, the names last read (kept
     beside the registry's rows)."""
     names = {f: n for n, f in main_workflow_files(o_r).items()}
     if any(f not in names for f in files):
-        hit = _gating_rows.get(("names", o_r))
-        if not (hit and epoch_now() - hit[0] < GATING_API_TTL):
-            try:
-                flows = gh_json(o_r, "api", f"repos/{o_r}/actions/workflows").get("workflows") or []
-                api = {os.path.basename(str(w.get("path") or "")): w.get("name") for w in flows if w.get("name")}
-            except (Exception, SystemExit):
-                api = {}
-            hit = (epoch_now(), api)
-            if api:
-                _gating_rows[("names", o_r)] = hit
-        names = {**hit[1], **names}
+        names = {**api_workflow_names(o_r), **names}
     names = {f: names[f] for f in files if names.get(f)}
     try:
         kept = read_record(gating_checks_path()) or {}
@@ -138,6 +168,18 @@ _flow_files = process_cache({})   # main sha -> {workflow name: file}
 _flow_meta = process_cache({})    # main sha -> {"callable": {name whose only trigger is workflow_call}, "paths": {name: path},
 
 
+def note_workflow_file(txt, path, out, meta):
+    """One workflow file's name -> file, path, whether only workflow_call starts it, and the workflows it calls."""
+    m = re.search(r"^name:\s*[\"']?(.+?)[\"']?\s*$", txt, re.M)
+    name = m.group(1) if m else os.path.basename(path)
+    out[name] = os.path.basename(path)
+    meta["paths"][name] = path
+    if workflow_triggers(txt) == {"workflow_call"}:
+        meta["callable"].add(name)
+    for called in re.findall(r"^\s*(?:-\s*)?uses:\s*\./\.github/workflows/([\w.-]+)\s*$", txt, re.M):
+        meta["callers"].setdefault(called, []).append(name)
+
+
 def main_workflow_files(o_r):
     """{workflow name: file} of the workflow files on origin/main (cached per main sha); {} when unreadable."""
     repo = scan_repo_for(o_r)
@@ -148,19 +190,9 @@ def main_workflow_files(o_r):
         return {}
     if main not in _flow_files:
         out, meta = {}, {"callable": set(), "paths": {}, "callers": {}}
-        for d in (".github/workflows",):
-            r = git(repo, "ls-tree", "--name-only", main, f"{d}/", check=False)
-            for path in r.stdout.split():
-                if path.endswith((".yml", ".yaml")):
-                    txt = git(repo, "show", f"{main}:{path}", check=False).stdout
-                    m = re.search(r"^name:\s*[\"']?(.+?)[\"']?\s*$", txt, re.M)
-                    name = m.group(1) if m else os.path.basename(path)
-                    out[name] = os.path.basename(path)
-                    meta["paths"][name] = path
-                    if workflow_triggers(txt) == {"workflow_call"}:
-                        meta["callable"].add(name)
-                    for called in re.findall(r"^\s*(?:-\s*)?uses:\s*\./\.github/workflows/([\w.-]+)\s*$", txt, re.M):
-                        meta["callers"].setdefault(called, []).append(name)
+        for path in git(repo, "ls-tree", "--name-only", main, ".github/workflows/", check=False).stdout.split():
+            if path.endswith((".yml", ".yaml")):
+                note_workflow_file(git(repo, "show", f"{main}:{path}", check=False).stdout, path, out, meta)
         _flow_files.clear()
         _flow_files[main] = out
         _flow_meta.clear()
