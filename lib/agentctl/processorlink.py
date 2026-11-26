@@ -18,6 +18,7 @@ from agentctl.storetoken import (
     token_sock_path)
 from agentctl.store import StoreUnavailable
 from agentctl.owned import Owned, backoff, lock_held, restart_if_changed
+from agentctl.statefile import unlink_file
 
 
 def processor_owned(d: str, repo: str | None = None) -> Owned:
@@ -120,10 +121,7 @@ class TokenDrop:
         if self.sock:
             sock, self.sock = self.sock, None
             sock.close()
-            try:
-                os.unlink(self.path)
-            except OSError:
-                pass
+            unlink_file(self.path)
         thread, self.thread = self.thread, None
         if thread is not None and thread is not threading.current_thread():
             thread.join(5)

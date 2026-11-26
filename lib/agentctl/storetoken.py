@@ -17,6 +17,7 @@ from agentctl.storeknobs import TOKEN_MISSING_SUMMARY, knob_token_summary
 from agentctl.fixerknobs import knob_detached, knob_interactive
 from agentctl.blameknobs import knob_no_secrets
 from agentctl.storeknobs import knob_sock_dir
+from agentctl.statefile import note_failure
 
 
 def token_ns(o_r):
@@ -117,8 +118,8 @@ def token_request(path, timeout=3):
         s.sendall(TOKEN_REQUEST)
         try:
             s.shutdown(socket.SHUT_WR)
-        except OSError:
-            pass
+        except OSError as e:
+            note_failure("token socket shutdown failed", e)
         chunks = []
         while True:
             b = s.recv(4096)

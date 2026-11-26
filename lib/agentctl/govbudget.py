@@ -5,7 +5,7 @@ from agentctl.clock import epoch_now
 import os
 import json
 from agentctl.core import state_root
-from agentctl.statefile import read_record
+from agentctl.statefile import read_record, note_failure
 from agentctl.machine import ram_gb
 from agentctl.govtickets import gov_tickets
 from agentctl.govknobs import knob_checks_dir, knob_gov_budget_gb, knob_max_checks
@@ -70,6 +70,8 @@ def check_runs(days=7, now=None):
                     continue
                 if r.get("at", 0) >= now - days * 86400:
                     out.append(r)
-    except OSError:
+    except FileNotFoundError:
         pass
+    except OSError as e:
+        note_failure("check runs unreadable", e)
     return out

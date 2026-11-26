@@ -10,7 +10,7 @@ import sys
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, _bounded, reds_dir, run_bounded, state_root, tilde
+from agentctl.core import HOME, _bounded, err, reds_dir, run_bounded, state_root, tilde
 from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
 from agentctl.fixerrecords import fixer_records
@@ -165,8 +165,8 @@ def run_upkeep(store):
         with open(state_root("upkeep.log"), "a") as f:
             for x in lines:
                 f.write(f"{ts()} {x}\n")
-    except OSError:
-        pass
+    except OSError as e:
+        err(f"upkeep log not written ({str(e)[:160]})")
     return lines
 
 

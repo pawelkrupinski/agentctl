@@ -32,7 +32,7 @@ from typing import Any, Callable, Optional
 from agentctl.core import HOME, run_cmd, state_root, tilde
 from agentctl.procs import ps_rows
 from agentctl.psparse import parse_ps
-from agentctl.statefile import read_record, read_text_or, write_json
+from agentctl.statefile import read_record, read_text_or, write_json, note_failure
 from agentctl.machine import machine_fixed, ram_gb
 from agentctl.govtickets import gov_tickets
 from agentctl.testtmp import TEST_TMP_MAX_AGE
@@ -329,8 +329,8 @@ def inv_wp(ps_out: Optional[str] = None, now_: Optional[float] = None, state_pat
     found = proc_watch(proc_rows(ps_out), state, t, *_wp_machine(ps_out, tickets, args_of, ram, home))
     try:
         write_json(path, state)
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("process watch state not written", e)
     if not found:
         return True, "no runaway process"
     return False, "; ".join(f"{name} pid {pid}: {why} -- {proc_fix(pid, name, cwd_of)}" for pid, name, why in found[:5])

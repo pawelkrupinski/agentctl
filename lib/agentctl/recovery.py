@@ -15,7 +15,7 @@ from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, SHORT, _tokens, err, git, remote, run_cmd, spawn_detached, tilde
 from agentctl.timefmt import iso_at, ts
-from agentctl.statefile import read_json_file, read_record, write_json_file
+from agentctl.statefile import read_json_file, read_record, write_json_file, unlink_file
 from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import held_commit
@@ -124,10 +124,7 @@ def recover_tunnel_reset(cond, a, store):
 
 
 def recover_clear_flag(cond, a, store):
-    try:
-        os.unlink(a["path"])
-    except OSError:
-        pass
+    unlink_file(a["path"])
     return ""
 
 

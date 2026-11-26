@@ -6,7 +6,7 @@ import signal
 from typing import Any
 from agentctl.core import SHORT, err, git, remote, slug
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record
+from agentctl.statefile import read_record, note_failure
 from agentctl.repos import server_repo
 from agentctl.trailers import trailer_values
 from agentctl.waitingdir import save_entry, waiting_entries, waiting_state, wlog
@@ -174,8 +174,10 @@ def supersede(st, d, e, by, why) -> None:
     if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid") and int(h["pid"]) != os.getpid():
         try:
             os.kill(int(h["pid"]), signal.SIGTERM)  # its checker: its CI run is cancelled with it
-        except OSError:
+        except ProcessLookupError:
             pass
+        except OSError as exc:
+            note_failure("checker not signalled", exc)
     wlog(d, line)
 
 

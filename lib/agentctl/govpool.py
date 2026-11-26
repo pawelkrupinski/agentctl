@@ -130,8 +130,8 @@ def take_ticket(gov: str, gov_dir: str, cls: str, want: int, job: str, label: st
     except subprocess.TimeoutExpired:
         give_back((fd, ticket))
         raise GovernorBusy(f"governor busy: waited {int(wait)} s for {want} cores (holders: {holders(gov, env)})")
-    except OSError:
-        pass
+    except OSError as e:  # the admit command could not start: no ticket
+        print(f"agentctl: governor admit failed ({str(e)[:160]})", file=sys.stderr, flush=True)
     give_back((fd, ticket))
     return None
 
@@ -141,7 +141,7 @@ def give_back(held: Optional[tuple[int, str]]) -> None:
         os.close(held[0])
         try:
             os.unlink(held[1])
-        except OSError:
+        except FileNotFoundError:  # the ticket was already removed
             pass
 
 

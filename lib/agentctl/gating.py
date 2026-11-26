@@ -8,7 +8,7 @@ from contextlib import suppress
 from typing import Any, NamedTuple
 from agentctl.core import git, process_cache, remote, state_root
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.forge import gh_json
 from agentctl.repos import scan_repo_for
 from agentctl.workflows import workflow_triggers
@@ -216,5 +216,5 @@ def mark_gate_dirty() -> None:
         with open(gate_dirty_path(), "a"):
             pass
         os.utime(gate_dirty_path(), None)
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("gate-dirty marker not written", e)

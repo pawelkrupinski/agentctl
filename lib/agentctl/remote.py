@@ -392,8 +392,8 @@ def remote_check_polled(o_r: str, e: Any, rem: Any, clock: Any, st: Any, d: str 
         if new.get("run") is not None and rem.get("run") is None:
             try:
                 save_dispatch({"branch": rem["branch"], "run_id": new["run"]})
-            except OSError:
-                pass
+            except OSError as exc:
+                err(f"remote dispatch not saved ({str(exc)[:160]})")
         if new != rem:
             rem = new
             save_remote(d, e, rem, st)

@@ -10,7 +10,7 @@ import sys
 import time
 from typing import Any
 from agentctl.core import fmt_age, git, reds_dir, spawn_detached
-from agentctl.statefile import read_record
+from agentctl.statefile import read_record, note_failure
 from agentctl.procs import process_start, record_alive
 from agentctl.selfcode import TOOL_PATH
 from agentctl.inboxentry import inbox_write
@@ -250,8 +250,10 @@ def blame_probe_stop(p):
     if p and p.get("pid") and int(p["pid"]) != os.getpid() and record_alive(p):
         try:
             os.killpg(int(p["pid"]), signal.SIGTERM)
-        except OSError:
+        except ProcessLookupError:
             pass
+        except OSError as e:
+            note_failure("blame probe not signalled", e)
 
 
 def blame_refuted(repo: Any, b: Any, sha: Any) -> Any:

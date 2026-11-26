@@ -12,7 +12,7 @@ from agentctl.core import HOME, REPOS, git, pid_alive, run_cmd, slug, state_root
 from agentctl.psparse import tosec
 from agentctl.selfcode import code_version
 from agentctl.owned import owner_records
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.forge import gh_json
 from agentctl.procs import process_cwds, ps, ps_rows
 from agentctl.jvmreap import (
@@ -365,12 +365,12 @@ def sbt_reasons(pid: Any, ppid: Any, cmd: Any, cwd: Any, view: Any) -> Any:
 
 def save_sbt_cpu(path: Any, cpu_state: Any, live: Any) -> Any:
     """The cpu state of the servers still live (the tests' no-reap run, with none, leaves the real state alone)."""
+    if not live and knob_sbt_reap() == "0":
+        return
     try:
-        if not live and knob_sbt_reap() == "0":
-            raise OSError("tests: the real state is left alone")
         write_json(path, {k: v for k, v in cpu_state.items() if k in live}, indent=None)
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("sbt cpu state not written", e)
 
 
 def sbt_directory_reasons(cwd: Any, cmd: Any) -> Any:

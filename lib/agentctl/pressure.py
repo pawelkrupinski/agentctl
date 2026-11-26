@@ -9,7 +9,7 @@ from typing import Any
 from agentctl.core import attempt, run_cmd
 from agentctl.procs import ps_rows
 from agentctl.psparse import PsRow, parse_ps
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.cpu import cpu_pressure, machine_busy_cores
 from agentctl.machine import machine_cores, machine_fixed, read_meminfo, run_queue
 from agentctl.govtickets import gov_dir
@@ -73,8 +73,8 @@ def swap_growth(mb, now_):
     samples.append([now_, mb])
     try:
         write_json(path, samples)
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("pressure sample not written", e)
     first = samples[0]
     return mb - first[1], now_ - first[0]
 

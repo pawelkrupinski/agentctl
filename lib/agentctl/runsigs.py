@@ -8,7 +8,7 @@ from contextlib import suppress
 from typing import Any
 from agentctl.core import reds_dir
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.classify import (
     CREDENTIAL_STEP, INFRA_LOG, KEY_REFUSED_LOG, NOISE, NOT_A_FAILURE, RUNNER_FAILED, SETUP_STEP, STRONG,
     UNKNOWN_LOG, WEAK, classify_job, log_verdict_version, norm_line)
@@ -115,8 +115,8 @@ def save_run_sigs(o_r: str, run: dict[str, Any], workflow: str, per_job: Any) ->
            "headSha": run.get("headSha"), "classifier": classifier_version()}
     try:
         write_json(reds_dir("runsig", f"{run.get('databaseId')}.json"), rec)
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("run signatures not written", e)
     return sigs
 
 

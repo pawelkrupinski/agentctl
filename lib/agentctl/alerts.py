@@ -8,7 +8,7 @@ import re
 import time
 from typing import Any
 from agentctl.core import attempt, err, hashlib_sha1
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, write_json, unlink_file
 from agentctl.inboxentry import inbox_dir, inbox_entries, inbox_kind
 from agentctl.inbox import WAIT_KINDS_DEFAULT, entry_line
 from agentctl.alertroute import (
@@ -88,10 +88,7 @@ def alert_ack(d, eid):
 
 
 def alert_unack(d, eid):
-    try:
-        os.unlink(os.path.join(d, "acked", eid))
-    except OSError:
-        pass
+    unlink_file(os.path.join(d, "acked", eid))
 
 
 def alert_live(d, idx, item, t=None):

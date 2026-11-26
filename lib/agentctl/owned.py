@@ -15,7 +15,7 @@ from typing import Any, Sequence
 from agentctl.procrunner import process_runner
 from agentctl.core import SHORT, err, git, process_cache, run_cmd, slug, state_root
 from agentctl.timefmt import ts
-from agentctl.statefile import load_record, read_record, write_json
+from agentctl.statefile import load_record, read_record, write_json, unlink_file
 from agentctl.forge import forge_argv, forge_env
 from agentctl.procs import Terminated, process_start, safe_cwd
 from agentctl.selfcode import TOOL_PATH, code_files, code_version
@@ -139,10 +139,7 @@ class Owned:
         if not self.f:
             return
         if not keep_record:
-            try:
-                os.unlink(self.record)
-            except FileNotFoundError:
-                pass
+            unlink_file(self.record)
         for s, h in self._old.items():
             signal.signal(s, h)
         self._old = {}
@@ -303,10 +300,7 @@ class Waiter:
         """True if we own the target now; False if a live waiter does (self.holder = its record)."""
         if self.own.acquire():
             self.owned = True
-            try:
-                os.unlink(self.verdict)
-            except FileNotFoundError:
-                pass
+            unlink_file(self.verdict)
             return True
         self.holder = self.own.holder
         return False

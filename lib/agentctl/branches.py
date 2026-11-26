@@ -13,7 +13,7 @@ from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import dispatches_dir, err, git_ok, remote, slug
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, write_json, unlink_file
 from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, api, forge_argv, forge_env, gh_json
 from agentctl.inboxentry import inbox_write
 from agentctl.owned import default_repo
@@ -221,10 +221,7 @@ def settle_branch_red(st: Any, e: Any, iid: Any, it: Any) -> Any:
         return None
     text = f"branch red reopened: {what} → owner {owner_text(e.get('owner'))}"
     st.transition("branch-red", iid, "open", it["version"], data={"why": None}, event={"cause": "ci-verdict", "text": text, "refs": refs})
-    try:
-        os.unlink(routed_path(r["databaseId"]))
-    except OSError:
-        pass
+    unlink_file(routed_path(r["databaseId"]))
     e["reopened"] = True
     return text
 

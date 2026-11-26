@@ -6,7 +6,7 @@ from typing import Any, Optional
 from agentctl.core import HOME, git, git_ok, remote, state_root
 from agentctl.landstate import landed_state
 from agentctl.timefmt import ts
-from agentctl.statefile import write_json
+from agentctl.statefile import write_json, note_failure
 from agentctl.procs import safe_cwd
 from agentctl.waitingdir import waiting_state
 from agentctl.fixerrecords import agent_name
@@ -30,8 +30,8 @@ def mark_internal(path: str) -> Any:
         p = os.path.realpath(path)
         os.makedirs(internal_trees_dir(), exist_ok=True)
         write_json(internal_trees_dir(hashlib.sha1(p.encode()).hexdigest() + ".json"), {"path": p, "at": ts()})
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("worktree registry not written", e)
     return path
 
 

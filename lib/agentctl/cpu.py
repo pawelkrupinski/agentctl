@@ -5,7 +5,7 @@ import os
 import time
 from typing import Any, Callable, Optional
 from agentctl.govpool import gov_dir_path
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.govknobs import knob_laptop_load
 
 
@@ -70,8 +70,8 @@ def machine_busy_cores(n: int, read: Optional[Callable[[], Optional[tuple[int, i
         return None
     try:
         write_json(path, {"at": now_, "ticks": list(end)})
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("cpu state not written", e)
     return round(float(n * (end[0] - start[0]) / (end[1] - start[1])), 2)
 
 

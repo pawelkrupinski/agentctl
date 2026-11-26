@@ -14,7 +14,7 @@ import time
 from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import err, git, git_ok, pid_alive, process_cache, remote
-from agentctl.statefile import read_record
+from agentctl.statefile import read_record, unlink_file
 from agentctl.repos import server_repo
 from agentctl.clones import CORRUPT_GIT, clone_gated, clone_shared, clone_side, heal_enabled
 from agentctl.conditions import open_condition, recovery_recheck, run_probe
@@ -309,10 +309,7 @@ def repair_clone(repo, why, store):
                 trees = []
                 err(f"clone repair: re-linking the worktrees failed ({str(e)[:160]}); check_tree makes them again")
         gone = prune_broken(repo, broken)
-        try:
-            os.unlink(clone_side(repo, "suspect.json"))
-        except OSError:
-            pass
+        unlink_file(clone_side(repo, "suspect.json"))
         line = (f"clone repair: {repo} re-cloned and swapped in; the broken copy is {broken}"
                 + (f"; {len(trees)} worktree(s) re-linked" if trees else "")
                 + (f"; removed {', '.join(os.path.basename(g) for g in gone)}" if gone else ""))
@@ -333,10 +330,7 @@ def clone_heal_tick(repo, store):
         return None
     r = run_probe("clone_health", {"repo": repo})
     if r.ok:
-        try:
-            os.unlink(clone_side(repo, "suspect.json"))
-        except OSError:
-            pass
+        unlink_file(clone_side(repo, "suspect.json"))
         return f"clone health: {repo} is fine ({r.detail})"
     if r.ok is None:
         return None  # cannot tell now (the network): looked at again next tick

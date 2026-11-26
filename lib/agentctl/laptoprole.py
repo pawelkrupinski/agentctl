@@ -7,7 +7,7 @@ import subprocess
 import sys
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.timefmt import day_hhmmz
 from agentctl.core import err, process_cache, state_root
 from agentctl.procs import socket_host
@@ -46,8 +46,8 @@ def machine_id():
                                  timeout=10).stdout
             m = re.search(r'"IOPlatformUUID"\s*=\s*"([^"]+)"', out)
             uid = m.group(1) if m else None
-        except (OSError, subprocess.SubprocessError):
-            pass
+        except (OSError, subprocess.SubprocessError) as e:
+            note_failure("ioreg platform uuid unreadable", e)
         _laptop_role_seen["id"] = uid or socket_host()
     return _laptop_role_seen["id"]
 

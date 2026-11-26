@@ -13,7 +13,7 @@ from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.procs import proc_alive
 from agentctl.core import HOME, SHORT, _tokens, git, state_root, tilde
-from agentctl.statefile import mtime, read_record, write_json
+from agentctl.statefile import mtime, read_record, write_json, note_failure
 from agentctl.repos import escalation_repo_path, red_repo_clone, red_repos
 from agentctl.escalationtable import escalation_repos
 from agentctl.inboxentry import inbox_write
@@ -362,8 +362,8 @@ def bg_stop(cli: str, bid: str | None) -> None:
         return
     try:
         process_runner().run([cli, "stop", bid], capture_output=True, timeout=60, stdin=subprocess.DEVNULL, cwd=claude_cwd())
-    except (OSError, subprocess.TimeoutExpired):
-        pass
+    except (OSError, subprocess.TimeoutExpired) as e:
+        note_failure("claude stop of the session failed", e)
 
 
 # A SESSION WITH NO CONVERSATION CANNOT BE RESUMED (2026-11-21, Order independence #99 HARNESS FAULT, issue
@@ -385,8 +385,10 @@ def bg_resumable(session):
                     continue
                 if isinstance(e, dict) and e.get("type") in ("user", "assistant") and e.get("message"):
                     return True
-    except OSError:
+    except FileNotFoundError:
         pass
+    except OSError as exc:
+        note_failure("transcript unreadable", exc)
     return False
 
 

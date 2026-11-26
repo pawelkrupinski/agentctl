@@ -1,0 +1,36 @@
+# file	def	exception types	reason -- a bare or silent `except` the code intends (tests/test_silent_excepts.py); a row whose handler is gone must be struck
+lib/agentctl/claudefiles.py	_stream_result	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/config.py	config_constants	ValueError, TypeError, ArithmeticError	a malformed line, field or entry is skipped; the rest still count
+lib/agentctl/config.py	config_default	ValueError, SyntaxError	a malformed line, field or entry is skipped; the rest still count
+lib/agentctl/core.py	reap_children	ChildProcessError	no child is left to reap: the loop's end
+lib/agentctl/fixerlife.py	RedFixerWrapper.cancelled	StoreUnavailable	the store cannot be reached: the release / cancel is retried by the next tick, and the lease expires on its own
+lib/agentctl/fixerlife.py	RedFixerWrapper.unclaimed_stop	StoreUnavailable	the store cannot be reached: the release / cancel is retried by the next tick, and the lease expires on its own
+lib/agentctl/fixersession.py	_scan_bg_turn	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/fixersession.py	bg_resumable	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/forge.py	stuck_durations	ValueError, TypeError	a malformed line, field or entry is skipped; the rest still count
+lib/agentctl/gov.py	gov_evict	BlockingIOError	a non-blocking lock another process holds: this one yields to it by design
+lib/agentctl/govbudget.py	check_runs	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/govusage.py	gov_usage	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/hostsleep.py	sleep_intervals	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/land.py	_end_group	subprocess.TimeoutExpired	the group did not end in time: the caller escalates to the kill that follows
+lib/agentctl/lander.py	_tail_lines	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/lander.py	transcript_cwd	ValueError, AttributeError	a malformed line, field or entry is skipped; the rest still count
+lib/agentctl/lander.py	transcript_cwd	FileNotFoundError, TypeError	no transcript (or no path) to read a cwd from: the answer is None
+lib/agentctl/live.py	live_tail_info	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/owned.py	Owned._signals	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/ownerwrapper.py	OwnerWrapper._release_heartbeat	StoreUnavailable	the store cannot be reached: the release / cancel is retried by the next tick, and the lease expires on its own
+lib/agentctl/ownerwrapper.py	OwnerWrapper._release	StoreUnavailable	the store cannot be reached: the release / cancel is retried by the next tick, and the lease expires on its own
+lib/agentctl/procs.py	_proc_cwds	FileNotFoundError, PermissionError, ProcessLookupError	a process gone or not ours to read: its cwd is simply not listed
+lib/agentctl/procwatch.py	wp_rss_gb	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/projector.py	escalation_stale	KeyError, ValueError	a malformed line, field or entry is skipped; the rest still count
+lib/agentctl/psparse.py	parse_ps	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/queuesubmit.py	take_delivery	StaleVersion, StoreUnavailable	another writer moved the item or the store is unreachable: the delivery is taken again next tick
+lib/agentctl/reddispatch.py	red_owned_progress_at	ValueError, TypeError	a malformed line, field or entry is skipped; the rest still count
+lib/agentctl/server.py	unreaped_leases	KeyError, TypeError	a malformed line, field or entry is skipped; the rest still count
+lib/agentctl/slots.py	output_file_shared	BlockingIOError	a non-blocking lock another process holds: this one yields to it by design
+lib/agentctl/statusagents.py	status_transcript_last	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
+lib/agentctl/statuspage.py	StatusHandler.do_GET	BrokenPipeError, ConnectionResetError	the status page's client went away mid-response: nothing left to answer
+lib/agentctl/statuspage.py	StatusHandler.stream	ConnectionError, TimeoutError	the status stream's client is gone or too slow to take a frame: its connection ends
+lib/agentctl/storeauth.py	store_secret	FileExistsError	another process made the secret first: the one made is read next
+lib/agentctl/testtmp.py	_suite_root_in_use	FileNotFoundError, ProcessLookupError, ValueError	no owner file, a dead runner or a torn pid: the root's newest mtime decides
+devtools/stats.py	part_lists	ValueError, KeyError, TypeError	a malformed line, field or entry is skipped; the rest still count

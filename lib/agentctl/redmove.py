@@ -86,7 +86,7 @@ def red_keep_holder(row: Any, text: str) -> None:
         try:
             with open(os.path.join(wt, "RED-NOTE.md"), "a") as f:
                 f.write(f"{text} (agentctl red, {ts()}); remove this file with your worktree.\n")
-        except OSError:
+        except FileNotFoundError:  # the worktree went between the check and the write
             pass
 
 

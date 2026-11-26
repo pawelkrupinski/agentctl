@@ -14,7 +14,7 @@ from agentctl.procrunner import process_runner
 from agentctl.procs import ps_rows
 from agentctl.core import branch_of, err, git, git_ok, process_cache, remote, slug, tilde
 from agentctl.timefmt import ts
-from agentctl.statefile import mtime
+from agentctl.statefile import mtime, note_failure
 from agentctl.repos import RED_PRIMARY
 from agentctl.storetoken import no_vault
 from agentctl.claudefiles import claude_projects_root
@@ -168,8 +168,10 @@ def transcript_cwd(path):
                     continue
                 if cwd:
                     return cwd
-    except (OSError, TypeError):
+    except (FileNotFoundError, TypeError):
         pass
+    except OSError as e:
+        note_failure("transcript unreadable", e)
     return None
 
 

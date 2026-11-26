@@ -10,7 +10,7 @@ from agentctl.clock import wall_epoch
 from typing import Any
 from agentctl.core import _bounded, err, git, git_ok, pid_alive, reds_dir, remote, tilde
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, read_text_or, write_json
+from agentctl.statefile import mtime, read_record, read_text_or, unlink_file, write_json
 from agentctl.classify import ANSI, STRONG, norm_line
 from agentctl.repos import precheck_hook
 from agentctl.workflows import LOCAL_FLOW
@@ -59,11 +59,9 @@ def write_baseline_out(main, out) -> None:
     os.replace(tmp, path)
     for name in os.listdir(d):
         p = os.path.join(d, name)
-        try:
-            if wall_epoch() - os.path.getmtime(p) > 3 * 86400:
-                os.unlink(p)
-        except OSError:
-            pass
+        modified = mtime(p)  # 0.0 when it is already gone
+        if modified and wall_epoch() - modified > 3 * 86400:
+            unlink_file(p)
 
 
 @contextlib.contextmanager

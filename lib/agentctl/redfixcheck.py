@@ -3,7 +3,7 @@
 
 import os
 from typing import Any
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.core import attempt, err, git, git_ok, reds_dir, remote
 from agentctl.trailers import trailer_values
 from agentctl.inboxentry import inbox_write
@@ -84,8 +84,8 @@ def fix_cache_put(path, cache, fresh):
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         write_json(path, {**cache, **{k: {**v, "rules": FIX_RULES} for k, v in fresh.items()}})
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("fix cache not written", e)
 
 
 def fix_reaches_red(repo, sha, d):

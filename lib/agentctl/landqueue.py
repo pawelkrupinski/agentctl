@@ -11,7 +11,7 @@ from typing import Any
 from agentctl.clock import Clock
 from agentctl.core import fmt_age, git, git_ok, host_role
 from agentctl.timefmt import hhmmz, ts
-from agentctl.statefile import read_json_file, read_record
+from agentctl.statefile import read_json_file, read_record, unlink_file
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, waiting_state
 from agentctl.procs import safe_cwd
@@ -95,10 +95,7 @@ def land_hold_command(a: argparse.Namespace, st: Any) -> int:
 def land_release_command(repo: str, d: str, st: Any) -> int:
     """`land release`: the hold gone, the processor started and the token offered."""
     gone = land_hold_release(st, hold_by())
-    try:
-        os.unlink(os.path.join(d, "PAUSED"))  # the pre-store hold file, if an old version left one
-    except FileNotFoundError:
-        pass
+    unlink_file(os.path.join(d, "PAUSED"))
     recover_clear_hold(None, {"d": d}, st)  # a held batch is assembled again at once
     spawn_waiting_processor(repo)
     offer_token(repo)

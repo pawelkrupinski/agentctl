@@ -11,7 +11,7 @@ from typing import Any
 from contextlib import suppress
 from agentctl.core import git, git_ok, remote, spawn_detached, tilde
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.selfcode import TOOL_PATH
 from agentctl.waitingdir import waiting_state
 from agentctl.procs import process_start, record_alive, socket_host
@@ -56,8 +56,8 @@ def owner_worktree(repo, fam, rec):
     lock_owner_worktree(repo, fam, wt)
     try:
         worktree_exclude(wt, (OWNER_NOTEBOOK, "RED-INBOX.md", "RED-NUDGE.md", "RED-STOP.md"))
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("worktree exclude not written", e)
     return wt
 
 

@@ -6,7 +6,7 @@ import re
 from typing import Any, Callable
 from agentctl.core import err, fmt_age, reds_dir
 from agentctl.timefmt import ts
-from agentctl.statefile import read_json_file, write_json_file
+from agentctl.statefile import read_json_file, write_json_file, note_failure
 from agentctl.forge import RED_CONCLUSIONS, api
 from agentctl.allowedpaths import allowed_path
 from agentctl.inboxentry import inbox_write
@@ -278,5 +278,5 @@ def early_tell(store: Any, d: dict[str, Any], text: str) -> None:
     try:
         with open(os.path.join(wt, "RED-INBOX.md"), "a") as f:
             f.write(f"{ts()} RED EARLY {red_what(d)} (red {d['key']}): {text}\n")
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("RED-INBOX.md note not written", e)

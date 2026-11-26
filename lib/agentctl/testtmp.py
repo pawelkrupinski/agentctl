@@ -30,8 +30,10 @@ def _suite_root_in_use(p: str, t: float) -> bool:
         with open(os.path.join(p, "owner.pid")) as f:
             os.kill(int(f.read().strip()), 0)
         return True
-    except (OSError, ValueError):
+    except (FileNotFoundError, ProcessLookupError, ValueError):  # no owner file, a dead runner, a torn pid
         pass
+    except PermissionError:  # a live process of another user
+        return True
     try:
         newest = max([os.lstat(p).st_mtime] + [os.lstat(e.path).st_mtime for e in os.scandir(p)])
     except OSError:

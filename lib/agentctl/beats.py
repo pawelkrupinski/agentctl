@@ -4,6 +4,7 @@
 from agentctl.clock import epoch_now
 import os
 from agentctl.core import state_root
+from agentctl.statefile import note_failure
 
 
 def beat_path(name):
@@ -15,8 +16,8 @@ def write_beat(name: str) -> None:
         os.makedirs(state_root(), exist_ok=True)
         with open(beat_path(name), "w") as f:
             f.write(f"{epoch_now():.0f} {os.getpid()}\n")
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("heartbeat not written", e)
 
 
 def beat_age(name):

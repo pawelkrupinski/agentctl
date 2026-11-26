@@ -75,7 +75,7 @@ def _proc_cwds(pids: Any) -> dict[int, str]:
     for pid in pids:
         try:
             cwd = os.readlink(os.path.join(PROC_ROOT, str(pid), "cwd"))
-        except OSError:  # gone, or not ours to read
+        except (FileNotFoundError, PermissionError, ProcessLookupError):  # gone, or not ours to read
             continue
         if allowed_path(cwd):
             res[pid] = cwd

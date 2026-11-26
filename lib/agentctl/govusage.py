@@ -8,6 +8,7 @@ import os
 from agentctl.core import pct
 from agentctl.machine import machine_cores, machine_load1
 from agentctl.govtickets import gov_dir
+from agentctl.statefile import note_failure
 
 
 # A job's expected cores, by its name (scripts/jvm-gate.sh passes --job: sbt-warm classifies its command); measured
@@ -45,8 +46,10 @@ def gov_usage(days=GOV_USAGE_DAYS, now=None):
                     continue
                 if r.get("at", 0) >= cutoff:
                     out.append(r)
-    except OSError:
+    except FileNotFoundError:
         pass
+    except OSError as e:
+        note_failure("usage log unreadable", e)
     return out
 
 

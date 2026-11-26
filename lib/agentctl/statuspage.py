@@ -194,7 +194,7 @@ class StatusHandler(http.server.BaseHTTPRequestHandler):
             return self.send(503, f"{LIVE_STREAMS} live streams already open\n", PLAIN)
         try:
             self.pump(e, start)
-        except OSError:  # gone, or too slow to take a frame
+        except (ConnectionError, TimeoutError):  # gone, or too slow to take a frame
             pass
         finally:
             _live_streams.release()

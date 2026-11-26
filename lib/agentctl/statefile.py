@@ -4,6 +4,7 @@
 import contextlib
 import json
 import os
+import sys
 import threading
 from typing import Any
 
@@ -58,12 +59,31 @@ def write_json(path: str, obj: Any, indent: int | None = 1, mode: int = 0o666, s
         raise
 
 
+def note_failure(what: str, e: BaseException) -> None:
+    """Tell a best-effort step's failure on stderr, `agentctl: <what> (<the error, 160 characters at most>)`: a step that
+    may fail without failing its caller never fails silently (tests/test_silent_excepts.py)."""
+    print(f"agentctl: {what} ({str(e)[:160]})", file=sys.stderr, flush=True)
+
+
+def unlink_file(path: str) -> bool:
+    """Remove path: True when it went, False when it was already gone (FileNotFoundError, the expected case). Any other
+    OSError (a permission, a busy directory) is told on stderr and not raised: a cleanup never fails its caller."""
+    try:
+        os.unlink(path)
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError as e:
+        note_failure(f"could not remove {path}", e)
+        return False
+
+
 def write_json_file(path: str, d: Any) -> None:
-    """write_json, best effort: a state file that cannot be written is left as it was."""
+    """write_json, best effort: a state file that cannot be written is left as it was, and the failure is told."""
     try:
         write_json(path, d, indent=None)
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure(f"could not write {path}", e)
 
 
 def mtime(path: Any) -> float:

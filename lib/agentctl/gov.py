@@ -13,7 +13,7 @@ from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import attempt, err, pid_alive, process_cache, run_cmd
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import read_record, write_json, note_failure, unlink_file
 from agentctl.procs import proc_alive, process_start
 from agentctl.owned import lock_held
 from agentctl.machine import free_gb, machine_cores, machine_sample
@@ -110,11 +110,8 @@ def gov_waiters():
     for p in glob.glob(os.path.join(gov_dir(), "w-*.json")):
         rec = read_record(p)
         if not rec or not gov_waiter_alive(rec):
-            try:
-                os.unlink(p)
+            if unlink_file(p):
                 gov_bump()
-            except OSError:
-                pass
             continue
         rec["path"] = p
         out.append(rec)
@@ -182,14 +179,11 @@ class GovTicket:
         if self.f is None and not os.path.exists(self.path):
             return
         for p in (self.path[:-5] + ".json", self.path):
-            try:
-                os.unlink(p)
-            except OSError:
-                pass
+            unlink_file(p)
         try:
             gov_log_end(os.path.basename(self.path))
-        except OSError:
-            pass
+        except OSError as e:
+            note_failure("governor log end not written", e)
         if self.f:
             self.f.close()
             self.f = None
@@ -341,10 +335,7 @@ def gov_admit_write(d: Any, path: Any, rec: Any) -> Any:
 
 def gov_admit_cleanup(waiter_file: Any) -> Any:
     """The waiter's file goes; the next waiter is the head now: it looks at once."""
-    try:
-        os.unlink(waiter_file)
-    except OSError:
-        pass
+    unlink_file(waiter_file)
     gov_bump()
 
 

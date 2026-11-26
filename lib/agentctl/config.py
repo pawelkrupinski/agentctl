@@ -10,6 +10,7 @@ from typing import Any, Callable
 from agentctl.core import HOME, tilde
 from agentctl.selfcode import TOOL_PATH, code_files
 from agentctl.configfile import CONFIG_ERRORS, CONFIG_SOURCE, config_files
+from agentctl.statefile import note_failure
 
 
 # ---------------------------------------------------------------- config: every knob, generated from the code
@@ -36,8 +37,10 @@ def config_source_text():
         try:
             with open(p) as f:
                 out.append((rel, f.read()))
-        except OSError:
+        except FileNotFoundError:
             pass
+        except OSError as e:
+            note_failure("source unreadable", e)
     return out
 
 

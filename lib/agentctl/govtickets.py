@@ -11,7 +11,7 @@ from contextlib import suppress
 from agentctl.govpool import gov_dir_path
 from agentctl.filelog import note_event
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record
+from agentctl.statefile import read_record, note_failure
 from agentctl.owned import lock_held
 from agentctl.govknobs import knob_gov_poll
 
@@ -62,8 +62,8 @@ def gov_bump() -> None:
         with open(os.path.join(gov_dir(), "changed"), "a"):
             pass
         os.utime(os.path.join(gov_dir(), "changed"))
-    except OSError:
-        pass
+    except OSError as e:
+        note_failure("governor change marker not written", e)
 
 
 def gov_change_mark() -> int:
