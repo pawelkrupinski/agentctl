@@ -118,7 +118,6 @@ class BaselineMergeTest(unittest.TestCase):
         git(d, "init", "-q", "-b", "main")
         os.makedirs(os.path.join(d, "quality"))
         shutil_copy = lambda s, t: open(t, "w").write(open(s).read())
-        shutil_copy(os.path.join(ROOT, "quality", "ratchet.py"), os.path.join(d, "quality", "ratchet.py"))
         self.assertEqual(baselinemerge.install(d), 0)
         return d
 

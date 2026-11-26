@@ -1,6 +1,7 @@
 # agentctl, part `statefile`: THE STATE FILES: one JSON reader (read_record), one text reader (read_text_or) and one atomic writer (write_json).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's only.
 
+import contextlib
 import json
 import os
 import threading
@@ -44,12 +45,17 @@ def read_json_file(path: str) -> dict[str, Any]:
 
 def write_json(path: str, obj: Any, indent: int | None = 1, mode: int = 0o666, sort_keys: bool = False) -> None:
     """THE JSON STATE WRITER, atomic: a temporary of this process and thread beside path, then os.replace -- a reader
-    never sees a torn file and two writers never share a temporary. mode: a new file's permissions (0o600: a secret)."""
+    never sees a torn file, two writers never share a temporary, and a failed write leaves no temporary behind. mode: a new file's permissions (0o600: a secret)."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
-    with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), "w") as f:
-        json.dump(obj, f, indent=indent, sort_keys=sort_keys)
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode), "w") as f:
+            json.dump(obj, f, indent=indent, sort_keys=sort_keys)
+        os.replace(tmp, path)
+    except BaseException:  # a failed write (an unserialisable value, a full disk) leaves path as it was and no temporary
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise
 
 
 def write_json_file(path: str, d: Any) -> None:

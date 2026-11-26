@@ -22,9 +22,9 @@ calls.
 - Coding and testing standards: `~/bin/CLAUDE.md` (movies' standards: the commit gate, coverage before a refactor,
   SOLID, one source of truth per concept, cleanup). THE RATCHETS: `hooks/pre-push` runs `quality/ratchet.py` after the
   suite -- the quality baseline (`quality/quality-baseline.tsv`: cognitive / cyclomatic 10, inner defs 2, function 50
-  lines, part 500, 50-token clones, fan-out 9, reference cycles) and the types baseline (`quality/types-baseline.tsv`:
+  lines, part 500, 50-token clones, reference cycles) and the design baseline (`quality/design-baseline.tsv`: the movies design rules, CLAUDE.md "Design") and the types baseline (`quality/types-baseline.tsv`:
   `mypy --strict` errors per part). Rows only fall (`ratchet.py update`); a rise needs a `Complexity:` / `Length:` /
-  `Duplication:` / `Coupling:` / `Types:` trailer. Tools pinned in `quality/tools.lock`, installed by the hook
+  `Duplication:` / `Coupling:` / `Typing:` / `Naming:` / `Design:` trailer. Tools pinned in `quality/tools.lock`, installed by the hook
   (`quality/tools.py`); a missing tool blocks the push.
 - The design behind it: `~/bin/docs/landing-reconciler-design.md`. Phase 2 (the store and the reconciler on
   ci-runner): `~/bin/docs/phase2-runbook.md`.

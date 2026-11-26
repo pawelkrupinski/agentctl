@@ -1,0 +1,103 @@
+# agentctl's DESIGN RULES TABLE (quality/design.py reads it; CLAUDE.md, "Design"): the movies repository's rules for
+# every language, stated once. The limits, suffixes, abbreviations and idioms below are the movies table's own rows,
+# copied (tests/test_design_rules.py fails when they differ from ~/projects/movies/test/resources/design-rules.tsv,
+# where that checkout exists); the adapters, distance rows and layers after them are agentctl's. Loosening a row -- a
+# limit raised, an adapter or an allowed idiom added, a layer moved up -- lands only with the kind's trailer
+# (`Complexity:`, `Length:`, `Duplication:`, `Coupling:`, `Design:`, `Naming: <why>`).
+#
+#   limit<TAB><kind><TAB><value><TAB><languages>         a measure's limit
+#   suffix<TAB><word>                                   a name may not END in it
+#   abbreviation<TAB><word>                             a word of a name that is an abbreviation of a real word
+#   idiom<TAB><word>                                    a language-standard idiom, allowed although it abbreviates
+#   adapter<TAB><language><TAB><module><TAB><effects>    a module allowed to touch these effects directly (clock,
+#                                                       process, env): every other module receives them
+#   distance<TAB><language><TAB><directory>             a directory whose distance D is measured
+#   layer<TAB><language><TAB><directory><TAB><rank><TAB><why>   a directory's rank, bottom (0) up: a module may import
+#                                                       only from its own rank or a lower one
+# The limits (the Scala quality module's and project/Coupling.scala's own; 2026-11-20 tightening):
+limit	cognitive	10	scala py js
+limit	cyclomatic	10	scala py js
+limit	inner-defs	2	scala py js
+limit	method-lines	50	scala py js
+limit	file-lines	500	scala py js
+limit	clone-tokens	50	scala py js
+limit	fanout	9	scala py js
+limit	distance	0.2	scala py js
+limit	distance-min-modules	8	scala py js
+# The data guard (data holding logic is a collaborator; 2026-11-26; Scala's own: project/Coupling.scala's DataMethodCut,
+# DataDecisionCut, DefaultDataBagLimit, DefaultDataFanOutLimit, checked equal to these by design_check_test.py): a data type with more non-trivial methods or
+# decisions than these is a collaborator; one naming more types a `databag` row; a module using more data types a
+# `datafanout` row.
+limit	data-methods	4	scala py
+limit	data-decisions	9	scala py
+limit	databag	9	scala py
+limit	datafanout	15	scala py
+#
+# Naming (CLAUDE.md: "Never suffix a class with Impl"; Manager/Handler/Util/Helper/Processor are a smell; "no
+# abbreviations in names").
+suffix	Impl
+suffix	Manager
+suffix	Handler
+suffix	Util
+suffix	Utils
+suffix	Helper
+suffix	Helpers
+suffix	Processor
+abbreviation	cfg
+abbreviation	mgr
+abbreviation	impl
+abbreviation	util
+abbreviation	utils
+abbreviation	tmp
+abbreviation	ctx
+abbreviation	msg
+abbreviation	msgs
+abbreviation	btn
+abbreviation	req
+abbreviation	resp
+abbreviation	cnt
+abbreviation	idx
+abbreviation	str
+abbreviation	obj
+abbreviation	arr
+abbreviation	elem
+abbreviation	el
+abbreviation	fn
+abbreviation	cb
+abbreviation	err
+abbreviation	errs
+abbreviation	buf
+abbreviation	prev
+abbreviation	curr
+abbreviation	calc
+abbreviation	proc
+abbreviation	pkg
+abbreviation	attr
+abbreviation	attrs
+abbreviation	desc
+abbreviation	num
+abbreviation	val
+abbreviation	vals
+abbreviation	args
+abbreviation	kwargs
+# The idioms allowed (the owner, 2026-11-26): `args`, `kwargs`, `self`, `e` for events, `i`/`j` loop indexes, `ctx` only
+# where a library names it -- names checked here are types, modules and top-level functions, where none of the
+# single-letter ones occurs.
+idiom	args
+idiom	kwargs
+#
+# The adapters: the modules that touch the clock, a process or the environment for everyone else.
+adapter	py	lib/agentctl/clock.py	clock
+adapter	py	lib/agentctl/procrunner.py	process
+adapter	py	lib/agentctl/configfile.py	env
+adapter	py	lib/agentctl/knobread.py	env
+#
+# Distance D, where abstractions exist: the one package of modules.
+distance	py	lib/agentctl
+#
+# The layers (ranks, bottom up): the modules the tools stand on, the quality and development tools beside each other,
+# the entry (the composition root's launcher) over them.
+layer	py	lib/agentctl	0	agentctl's modules: every concept the commands are built from
+layer	py	quality	1	the ratchets that hold the modules
+layer	py	devtools	1	the restructuring and push tools
+layer	py		2	the entry `agentctl`: the launcher over the modules

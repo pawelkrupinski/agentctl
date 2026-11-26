@@ -12,9 +12,9 @@ ratchets' limits, CLAUDE.md "Code quality ratchets"):
   method-lines <qualname>   lines from its `def` to its body's end                     50
   file-lines   <part>       the part's lines                                           500
   copies       <a>|<b>...   clone groups of 50+ tokens spanning exactly these parts    0
-  fan-out      <part>       the other parts it imports, foundations                      9
-                            aside (a part using no part but foundations: a leaf helper)
   cycle        <part>       1: the part is in a reference cycle (a strong component)   0
+
+The collaborator fan-out (the other measure of a part's coupling) is the design rules' (quality/design.py).
 
 A part is a module (lib/agentctl/<part>.py, or the entry): its dependencies are the modules it imports (`from
 agentctl.<part> import`). A function is keyed by its qualified name alone (`red_owner.step`), so a function moved to
@@ -28,7 +28,7 @@ import sys
 import tokenize
 
 LIMITS = {"cognitive": 10, "cyclomatic": 10, "inner-defs": 2, "method-lines": 50, "file-lines": 500, "copies": 0,
-          "fan-out": 9, "cycle": 0}
+          "cycle": 0}
 CLONE_TOKENS = 50
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -157,18 +157,6 @@ def part_graph(parts):
     return {part: (imports(tree) & set(trees)) - {part} for part, tree in trees.items()}
 
 
-def foundations(graph):
-    """The parts that use no part but other foundations (the fixed point from the leaves): a leaf helper such as the
-    state files' reader and writer. Using one is no collaboration (movies' fan-out counts collaborators only), so a
-    concept extracted into a part of its own never raises its users' fan-out."""
-    found = set()
-    while True:
-        more = {p for p, uses in graph.items() if p not in found and uses <= found}
-        if not more:
-            return found
-        found |= more
-
-
 def strong_components(graph):
     index, low, stack, on, out, counter = {}, {}, [], set(), [], [0]
 
@@ -212,8 +200,6 @@ def measure(root, analysers=None):
         copies[key] = copies.get(key, 0) + len(group)
     rows += [("copies", key, n) for key, n in copies.items()]
     graph = part_graph(parts)
-    found = foundations(graph)
-    rows += [("fan-out", part, len(uses - found)) for part, uses in graph.items()]
     for comp in strong_components(graph):
         rows += [("cycle", part, int(len(comp) > 1)) for part in comp]
     return rows

@@ -40,23 +40,26 @@ Push in small, coherent steps (a regression must be easy to bisect and revert); 
 
 ## The ratchets (hooks/pre-push)
 
-`quality/ratchet.py` holds the production code (`agentctl`, `lib/agentctl/*.py`) to two checked-in baselines, the
-movies model (movies "Code quality ratchets" and "Coupling"):
+`quality/ratchet.py` holds the production code (`agentctl`, `lib/agentctl/*.py`, the tools of `quality/` and `devtools/`) to three checked-in baselines, the
+movies model (movies "Code quality ratchets" and "Coupling"), on the movies repository's own ratchet engine (vendored, below):
 
 | ratchet | baseline | kinds and limits | trailer for a rise |
 |---|---|---|---|
 | quality | `quality/quality-baseline.tsv` | cognitive 10, cyclomatic 10, inner-defs 2 | `Complexity:` |
 | | | method-lines 50, file-lines 500 | `Length:` |
 | | | copies 0 (clone groups of 50+ tokens) | `Duplication:` |
-| | | fan-out 9 (other parts a part uses), cycle 0 (a part in a reference cycle) | `Coupling:` |
-| types | `quality/types-baseline.tsv` | mypy-errors 0 per part (`mypy --strict`) | `Types:` |
+| | | cycle 0 (a part in a reference cycle) | `Coupling:` |
+| types | `quality/types-baseline.tsv` | mypy-errors 0 per part (`mypy --strict`) | `Typing:` |
+| design | `quality/design-baseline.tsv` | suffix / abbreviation 0 (the design rules, below) | `Naming:` |
+| | | effect / state / import-io 0 | `Design:` |
+| | | fanout 9 (COLLABORATORS a part imports), distance 0.2, layer, databag, datafanout | `Coupling:` |
 
 - A NEW row past a limit or a frozen row RISING refuses the push; a fall passes and is recorded with
   `"$(python3 quality/tools.py)" quality/ratchet.py update` (commit the baseline). A rise lands only with the kind's
   trailer in the commit's FINAL trailer block, beside `Co-Authored-By:`; each commit growing a baseline is judged by its
   own step (one commit's trailer never excuses another's).
 - A function is keyed by its qualified name, so moving it to another part keeps its row; a new part split off a big
-  one starts its own `file-lines` / `fan-out` / `cycle` rows.
+  one starts its own `file-lines` / `fanout` / `cycle` rows.
 - The tools are pinned with hashes in `quality/tools.lock` and installed by `quality/tools.py` into
   `~/.cache/agentctl-quality/tools-<lock digest>-py<ver>/`, by the hook itself. A tool that cannot be installed blocks
   the push with the fix; it is never skipped. `ratchet.py selftest` (the hook runs it first) seeds a violation of every
@@ -82,6 +85,22 @@ movies model (movies "Code quality ratchets" and "Coupling"):
   complexity stats against the owner's start).
 
 ## Design (movies "Design rules")
+
+**The movies design rules apply here unchanged** (the owner, 2026-11-26), and agentctl never depends on the movies
+repository: the general rule core (`scripts/design-rules/`, its engine, trailer rule and rules table) is copied
+BYTE-EQUAL into `devtools/design_rules/` (`python3 devtools/vendor.py sync` copies it and records the digests in
+`VENDORED.tsv`; `check` and `tests/test_vendored.py` fail on an edited copy, and on a drifted one wherever
+`~/projects/movies` exists). Never edit a copy: change it in movies, then sync; an improvement made here is written down
+for a movies lane. `quality/design.py` is agentctl's extractor over the core (the Python modules, `agentctl.<part>` imports),
+`quality/design-rules.tsv` its table (the limits, suffixes, abbreviations and idioms equal movies' own; the adapters,
+distance and layers agentctl's), `quality/design-baseline.tsv` what is past a rule today, frozen (rows only fall;
+a rise needs `Naming:` / `Design:` / `Coupling:`), `quality/design-exemptions.tsv` a NEW row admitted with a dated,
+specific why. The rules: no `Impl` / `Manager` / `Helper` / `Util` / `Processor` name, no abbreviation (idioms allowed),
+two names of a package in another word order BLOCK; no direct clock, subprocess or `os.environ` outside an `adapter` row's
+module; no module-level state a function writes; no IO at import; fan-out counts COLLABORATORS only (a module touching
+the world, holding state or an interface, or using one), at most 9; a directory's distance D with abstractness over
+collaborators, its layers. `tests/test_design_rules.py` holds a test per rule and `tests/test_design_rules_mutation.py`
+proves each rule's removal is caught.
 
 - **True simplicity over metric numbers** (the owner's standing rule): no indirection or interface just to move a
   number; split functions at real seams.

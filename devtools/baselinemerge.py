@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A git merge driver for the ratchets' baselines (quality/quality-baseline.tsv, quality/types-baseline.tsv): two
+"""A git merge driver for the ratchets' baselines (quality/quality-baseline.tsv, quality/types-baseline.tsv, quality/design-baseline.tsv): two
 branches that each froze or lowered different rows merge to the file the ratchet's `update` would write, never to
 conflict markers.
 
@@ -19,11 +19,11 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-sys.path.insert(0, os.path.join(ROOT, "quality"))
-import ratchet  # noqa: E402
+sys.path.insert(0, os.path.join(ROOT, "devtools", "design_rules"))
+import baseline_ratchet  # noqa: E402
 
 DRIVER = "baseline-regen"
-FILES = ("quality/quality-baseline.tsv", "quality/types-baseline.tsv")
+FILES = ("quality/quality-baseline.tsv", "quality/types-baseline.tsv", "quality/design-baseline.tsv")
 
 
 def merge_rows(base, ours, theirs):
@@ -49,8 +49,8 @@ def header(text):
 def drive(base_path, ours_path, theirs_path):
     """Merge the three baseline files into ours_path."""
     texts = [open(p).read() for p in (base_path, ours_path, theirs_path)]
-    rows = merge_rows(*(ratchet.parse(t) for t in texts))
-    lines = [f"{kind}\t{key}\t{value}" for (kind, key), value in sorted(rows.items())]
+    rows = merge_rows(*(baseline_ratchet.parse(t) for t in texts))
+    lines = [f"{kind}\t{key}\t{baseline_ratchet.show(value)}" for (kind, key), value in sorted(rows.items())]
     with open(ours_path, "w") as f:
         f.write(header(texts[1]) + "\n".join(lines) + "\n")
     return 0

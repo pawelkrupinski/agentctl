@@ -1,6 +1,10 @@
 # THE QUALITY BASELINE (quality/ratchet.py update writes it; hooks/pre-push holds every push to it).
-# Every function, part and part set past a limit (quality/measure.py), frozen at its value. A row may only
-# fall (update records it); a row added or raised lands only in a commit carrying the kind's trailer:
-# Complexity: (cognitive, cyclomatic, inner-defs), Length: (method-lines, file-lines), Duplication:
-# (copies), Coupling: (fan-out, cycle). CLAUDE.md, "The ratchets".
-
+# Every function, part and part set past a limit (quality/measure.py), frozen at its value. A row may only fall (update records it); a row added or raised
+# lands only in a commit carrying the kind's trailer (`Complexity:`, `Length:`, `Duplication:`, `Coupling:`). CLAUDE.md, "The ratchets".
+limit	cognitive	10
+limit	cyclomatic	10
+limit	inner-defs	2
+limit	method-lines	50
+limit	file-lines	500
+limit	copies	0
+limit	cycle	0
