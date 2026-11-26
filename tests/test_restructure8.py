@@ -352,6 +352,31 @@ class CmdSupersedeTest(unittest.TestCase):
         check(self, "cmd_supersede", lambda case: (self.build(case),), run, 6000)
 
 
+class SupersedeOneTest(unittest.TestCase):
+    """_supersede_one: one mark's pass (the successor read, its worktree closed, the line said)."""
+
+    def build(self, case):
+        r = case.rng
+        trees_exist(case)
+        case.fake("ts", lambda rng: "T")
+        case.fake("successor_state", lambda rng, m, repo, store: raising(rng, 0.15, (rng.choice(["open", "landed", "lapsed"]), "why"), rng.choice([RuntimeError, SystemExit])))
+        case.fake("close_superseded", lambda rng, repo, wt, why: (rng.random() < 0.5, rng.choice(["closed x", "kept: locked"])))
+        case.fake("inbox_write", lambda rng, *a, **k: None)
+        m = {"by": "ci-5", "state": r.choice(["open", "landed"])}
+        if r.random() < 0.4:
+            m["said"] = r.choice(["kept: locked", "other"])
+        did = []
+        return ("/repo", "store", r.choice(["/w/a", "/h/w/e"]), m, r.random() < 0.2, did), did
+
+    def test_supersede_one(self):
+        def run(A):
+            def inner(args, did):
+                result = A._supersede_one(*args)
+                return result, did, args[3]
+            return lambda packed: inner(*packed)
+        check(self, "_supersede_one", lambda case: (self.build(case),), run, 4000)
+
+
 # ------------------------------------------------------------------------------------------------ livestream
 class Named:
     """A callable fake with a stable repr (a function's repr holds its address): every call is the case's log."""
