@@ -28,7 +28,6 @@ cognitive	gate_flow_names	17
 cognitive	gate_runs_pass	17
 cognitive	gating_checks	29
 cognitive	gov_fits	20
-cognitive	hold_for_overlap	21
 cognitive	job_ever_green	21
 cognitive	land_status_entry	25
 cognitive	lander_revive	25
@@ -42,7 +41,6 @@ cognitive	name_causes	26
 cognitive	open_condition	20
 cognitive	orphan_branches	27
 cognitive	outside_gate	22
-cognitive	overlap_hold	30
 cognitive	owner_of	25
 cognitive	owner_orphans	22
 cognitive	owner_work	21
@@ -111,7 +109,6 @@ cyclomatic	gate_flow_names	22
 cyclomatic	gate_runs_pass	21
 cyclomatic	gating_checks	21
 cyclomatic	gov_fits	21
-cyclomatic	hold_for_overlap	14
 cyclomatic	job_ever_green	20
 cyclomatic	jobs_verdict	23
 cyclomatic	land_status_entry	25
@@ -126,7 +123,6 @@ cyclomatic	name_causes	20
 cyclomatic	open_condition	22
 cyclomatic	orphan_branches	20
 cyclomatic	outside_gate	18
-cyclomatic	overlap_hold	23
 cyclomatic	owner_of	21
 cyclomatic	owner_orphans	13
 cyclomatic	owner_work	19

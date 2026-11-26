@@ -3,27 +3,27 @@
 
 import os
 from typing import Any, Optional
-from agentctl.core import SHORT, env_num, fmt_age, git, host_role, run_cmd, state_root
 from agentctl.timefmt import hhmmz, parse_time
 from agentctl.statefile import read_record, write_json
+from agentctl.statemachines import change_exits_unannounced
+from agentctl.clock import Clock
+from agentctl.core import SHORT, env_num, fmt_age, git, host_role, run_cmd, state_root
 from agentctl.repos import movies_repo_path
-from agentctl.redrecord import red_what
 from agentctl.procs import process_cwds, ps
 from agentctl.procwatch import inv_wp, inv_wt
-from agentctl.conditions import open_conditions
-from agentctl.changekind import change_hold_visible
 from agentctl.cistate import snapshot_gate_reds
-from agentctl.projector import notify_failure
-from agentctl.fixerland import bin_repo
 from agentctl.ciwhy import ci_state_load
 from agentctl.launchd import SERVICE_LABEL, launch_agents_dir
 from agentctl.beats import beat_age
-from agentctl.queuebatch import hold_recovers_itself
-from agentctl.redhold import W1_HARD_FACTOR, change_progress, inv_wr, red_unheld
+from agentctl.redrecord import red_what
+from agentctl.conditions import open_conditions
+from agentctl.fixerland import bin_repo
+from agentctl.changekind import change_hold_visible
+from agentctl.projector import notify_failure
 from agentctl.queueclose import change_rows, close_landed_changes
-from agentctl.statemachines import change_exits_unannounced
-from agentctl.clock import Clock
 from agentctl.selfci import inv_wa
+from agentctl.redhold import W1_HARD_FACTOR, change_progress, inv_wr, red_unheld
+from agentctl.queuehold import hold_recovers_itself
 
 
 # ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)

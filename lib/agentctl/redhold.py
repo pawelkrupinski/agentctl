@@ -5,12 +5,12 @@ import re
 import time
 from contextlib import suppress
 from typing import Any
+from agentctl.timefmt import parse_time
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.core import SHORT, env_num, fmt_age
 from agentctl.repos import red_repo_of
-from agentctl.ciwhy import ci_state_load
 from agentctl.cistate import snapshot_gate_reds
-from agentctl.timefmt import parse_time
+from agentctl.ciwhy import ci_state_load
 from agentctl.policy import HOLDS
 from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_active, red_lease, red_what
 from agentctl.leases import red_block_of
@@ -18,16 +18,16 @@ from agentctl.queueslots import checker_alive
 from agentctl.redfixread import FIX_OPEN
 from agentctl.fixchange import CHANGE_ENDED, red_change, red_change_read
 from agentctl.redfixes import red_fix_of
-from agentctl.changekind import HOLD_SHOWN, change_hold_visible, classify_change, kind_text, queue_facts
 from agentctl.red import red_fix_giveup
 from agentctl.redmove import red_put_offer
+from agentctl.changekind import HOLD_SHOWN, change_hold_visible, classify_change, kind_text, queue_facts
 from agentctl.redopen import red_offer
 from agentctl.redverify import red_fix_since, red_fix_unverifiable
 from agentctl.reddispatch import repo_dispatch_off
-from agentctl.redlease import red_lease_ended
-from agentctl.queuebatch import change_hold_stuck
 from agentctl.redwaits import RED_WAITS_ON
+from agentctl.redlease import red_lease_ended
 from agentctl.redfollow import RED_FIX_REQUEUE_GRACE
+from agentctl.queuehold import change_hold_stuck
 
 
 WR_MAX = 40 * 60        # a red fix still unlanded this long after it was queued ($AGENTCTL_WR_MAX; a CI-tier check ~17 min)

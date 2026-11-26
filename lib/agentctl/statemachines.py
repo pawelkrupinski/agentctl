@@ -89,7 +89,7 @@ MACHINES = {
 }
 
 
-def machine_state(typ, state):
+def machine_state(typ: Any, state: Any) -> Any:
     try:
         return MACHINES[typ][state]
     except KeyError:

@@ -6,11 +6,10 @@ import subprocess
 import sys
 import time
 from typing import Any, Optional
-from contextlib import suppress
-from agentctl.core import env_num, fmt_age, git, host_role, process_cache, remote, spawn_detached
+from agentctl.core import git, host_role, process_cache, remote, spawn_detached
 from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
-from agentctl.policy import HOLDS, hold_kind
+from agentctl.policy import HOLDS
 from agentctl.waitingdir import save_entry, waiting_entries, wlog
 from agentctl.storetoken import detached_env
 from agentctl.land import run_watched, tool_env
@@ -28,8 +27,7 @@ from agentctl.checkslot import check_slot
 from agentctl.redseen import gate_reds
 from agentctl.remote import remote_check, remote_checks_supported, remote_matches
 from agentctl.statemachines import StaleVersion, change_event, machine_state
-from agentctl.holdgraph import (
-    as_own, cycle_breaker, cycle_text, dependency_between, hold_cycles, hold_record, recorded_hold_edges)
+from agentctl.holdgraph import as_own, dependency_between
 
 
 # OVERLAPPING CHANGES ARE CHECKED AS ONE (the coordinator, 2026-11-18: B1 against the CI-workflows change, the scraper
@@ -175,6 +173,61 @@ def overlap_candidate(o, e, stacks):
     return o["id"] not in (e.get("cycle_ignore") or []) and not dependency_between(o, e, stacks)
 
 
+class OverlapScan:
+    """overlap_hold's walk over the older entries: what it has found so far (`first`), and the entry's backlog batching
+    (`together`, read once, when an overlap with a queued entry first asks)."""
+
+    def __init__(self, st: Any, repo: Any, d: Any, e: Any, t: Any, facts: Any, stacks: Any) -> None:
+        self.st, self.repo, self.d, self.e, self.t, self.facts, self.stacks = st, repo, d, e, t, facts, stacks
+        self.mine = as_own(e, stacks)
+        self.together: Any = None
+        self.first: Any = None
+
+    def run(self, entries: Any) -> Any:
+        """The (older entry, shared files, conflicting files or None) the change waits for, or None."""
+        ids = {x["id"] for x in entries}
+        entries = list(entries) + [w for w in waiting_entries(self.d) if w["id"] not in ids]  # and those waiting for green
+        for o in sorted(entries, key=lambda x: x["seq"]):
+            if not overlap_candidate(o, self.e, self.stacks):
+                continue
+            found = self.meet(o)
+            if found:
+                return found
+        return self.first
+
+    def meet(self, o: Any) -> Any:
+        """The hold to return at once when entry o overlaps the change and cannot be assembled with it, else None (`first`
+        notes the overlap that merely holds)."""
+        theirs = as_own(o, self.stacks)
+        shared, conflict, resolvable = overlap_of(self.repo, theirs, self.mine,
+                                                  strict=self.e.get("batch_alone") in ("regen", "resolve"))
+        if not shared:
+            self.note_ordered(o, theirs)
+            return None
+        if conflict is None and self.batched_together(o):
+            return None  # the next backlog batch checks them as one (its assembly resolves the `resolvable`)
+        conflict = conflict or resolvable or None  # resolved only in a batch of the two: else it cannot be assembled
+        if conflict:  # the one it cannot be assembled with is the one its author hears of
+            return o, shared, conflict
+        if o.get("status") != "waiting":  # A WAITING CHANGE HOLDS NOTHING it assembles with: they meet in the batch
+            self.first = self.first or (o, shared, conflict)
+        return None
+
+    def note_ordered(self, o: Any, theirs: Any) -> None:
+        """ONLY A VOIDED CHECK HOLDS: entry o, in flight, shares only files whose order matters: they meet in the next batch."""
+        ordered = ordered_overlap(self.repo, theirs, self.mine) if o.get("status") in IN_FLIGHT else []
+        if ordered:
+            self.first = self.first or (o, ordered, None)
+
+    def batched_together(self, o: Any) -> bool:
+        """Both the change and queued entry o are taken by the next backlog batch."""
+        if o.get("status") != "queued" or o.get("backlog_batch"):
+            return False
+        if self.together is None:
+            self.together = backlog_batchable(self.st, self.repo, self.d, self.e, self.t, self.facts)
+        return bool(self.together and backlog_batchable(self.st, self.repo, self.d, o, self.t, self.facts))
+
+
 def overlap_hold(st, repo, d, e, entries, facts, t, stacks=None):
     """(older entry, shared files, conflicting files or None) queued change e waits for (OVERLAPPING CHANGES ARE
     CHECKED AS ONE), or None. stacks: {id: the entry it is stacked on} (holdgraph.py A STACKED CHANGE WAITS FOR ITS
@@ -182,154 +235,38 @@ def overlap_hold(st, repo, d, e, entries, facts, t, stacks=None):
     commits'. A blocker e's cycle_ignore names (A HOLD CYCLE IS BROKEN) holds it no more."""
     if e.get("backlog_batch"):
         return None
-    together, first = None, None
-    stacks = stacks or {}
-    mine = as_own(e, stacks)
-    ids = {x["id"] for x in entries}
-    entries = list(entries) + [w for w in waiting_entries(d) if w["id"] not in ids]  # and those waiting for green
-    for o in sorted(entries, key=lambda x: x["seq"]):
-        if not overlap_candidate(o, e, stacks):
-            continue
-        theirs = as_own(o, stacks)
-        shared, conflict, resolvable = overlap_of(repo, theirs, mine, strict=e.get("batch_alone") in ("regen", "resolve"))
-        if not shared:
-            ordered = ordered_overlap(repo, theirs, mine) if o.get("status") in IN_FLIGHT else []
-            if ordered:  # ONLY A VOIDED CHECK HOLDS: they meet in the next batch
-                first = first or (o, ordered, None)
-            continue
-        if conflict is None and o.get("status") == "queued" and not o.get("backlog_batch"):
-            if together is None:
-                together = backlog_batchable(st, repo, d, e, t, facts)
-            if together and backlog_batchable(st, repo, d, o, t, facts):
-                continue  # the next backlog batch checks them as one (its assembly resolves the `resolvable`)
-        conflict = conflict or resolvable or None  # resolved only in a batch of the two: else it cannot be assembled
-        if conflict:  # the one it cannot be assembled with is the one its author hears of
-            return o, shared, conflict
-        if o.get("status") == "waiting":  # A WAITING CHANGE HOLDS NOTHING it assembles with: they meet in the batch
-            continue
-        first = first or (o, shared, conflict)
-    return first
+    return OverlapScan(st, repo, d, e, t, facts, stacks or {}).run(entries)
 
 
-# A HELD WAIT IS NO ESCALATION (2026-11-19: phase3-agreement, -f2 and -enrichment2 each escalated to the owner every
-# 15 min -- "queued for 45 min, waiting on a check slot" -- while each was held behind an older change it overlaps:
-# F2 behind agreement on coupling-baseline.tsv, E2 behind F2 on TestWiring.scala). `queued`'s deadline loops into
-# itself, and every lap raised the level and notified. Now each tick records WHY a queued change waits on its item
-# (`hold`: the overlap and its blocking change and files, the batch, every check tree busy, the governor) -- `land
-# status` and `status` show it -- and a lap past the deadline is QUIET while that hold is live: its blocker still in
-# flight (whose own machine escalates should IT stick), a batch or busy trees (their holders' deadlines bound them).
-# It escalates only when the hold is stuck: nothing named holds it, its blocking change is gone, or it is older than
-# CHANGE_HOLD_MAX (the `waiting` state's own bound).
-CHANGE_HOLD_MAX = 6 * 3600  # s ($AGENTCTL_CHANGE_HOLD_MAX)
-# NO HOLD YET IS NO STUCK HOLD (2026-11-23 04:19Z/04:44Z: py-restore-corpus, checked, was pushed by the next tick 40 s
-# and 27 s later; W1 read it in between as "nothing holds it, yet it has not pushed"). A change that has just entered
-# its state has no recorded hold until a tick pushes, starts or holds it: past this grace with none, it is stuck.
-UNHELD_GRACE = 10 * 60  # s ($AGENTCTL_UNHELD_GRACE)
+def conflict_text(e: Any, o: Any, conflict: Any, waits: bool, hunks: Any) -> str:
+    """What a change held behind an older one it cannot be assembled with tells its author."""
+    return (f"CONFLICTS {e['id']}: it cannot be assembled with {o['id']} ({o.get('worktree')}), queued before it "
+            f"(both change {', '.join(conflict[:3])})"
+            + (f": its check waits for {o['id']}" if waits else ": a red fix, it is checked now all the same")
+            + f"; if {o['id']} lands first, this change no "
+            f"longer applies -- rebase onto it (its branch, or {remote()}/main once it landed) and land again, or "
+            "`agentctl land cancel` this one"
+            + (f". The hunks: {'; '.join(hunks)}" if hunks else "")
+            + (f". Fix now: `cd {e.get('worktree')} && git rebase {o['branch']}`, resolve those hunks, "
+               "`~/bin/agentctl land`" if o.get("branch") and e.get("worktree") else ""))
 
 
-def note_hold(st, e, kind, why, t, blocker=None, files=None, batch=None):
-    """Record why queued change e waits (None: nothing holds it now), on its item, when that changed. kind is a row of
-    THE HOLD TABLE (policy.py HOLDS): an unregistered kind is refused (ValueError), so no wait goes unbounded."""
-    if kind is not None:
-        hold_kind(kind)
+def tell_conflict(st: Any, d: Any, e: Any, o: Any, conflict: Any, waits: bool, repo: Any) -> Optional[str]:
+    """The change's author told of its conflict with o, once (on its item, in the entry and the log): the text, or None
+    when the item moved meanwhile (the next tick tells it)."""
     it = st.item("change", e["id"])
-    if not it or machine_state("change", it["state"]).terminal:
-        return
-    cur = (it.get("data") or {}).get("hold") or {}
-    if (cur.get("why") or None) == why:
-        return
-    rec = hold_record(cur, kind, why, blocker, files, batch, t)
-    with suppress(StaleVersion):  # the next tick records it
-        st.update_item("change", e["id"], it["version"], {"hold": rec})
-
-
-def break_hold_cycles(st, d, todo):
-    """A HOLD CYCLE IS BROKEN, NEVER WAITED OUT (holdgraph.py): every cycle among the holds recorded on the open
-    changes' items, its oldest change let go of its wait on its blocker in it -- for good (`cycle_ignore` on its
-    entry) --, the cycle said on that change's item (`cycle`, shown by `status`) and in the log. Returns the lines."""
-    by_id = {e["id"]: e for e in todo}
-    edges, why, items = recorded_hold_edges(st, todo)
-    did = []
-    for cyc in hold_cycles(edges):
-        brk = cycle_breaker(cyc, {x: by_id[x]["seq"] for x in cyc})
-        did.append(cycle_text(cyc, brk, why))
-        break_cycle_at(st, d, by_id[brk], items[brk], edges[brk], did[-1])
-    return did
-
-
-def break_cycle_at(st, d, e, it, blocker, text):
-    """Change e lets go of its wait on blocker for good (cycle_ignore), the cycle said on its item and in the log."""
-    e["cycle_ignore"] = sorted(set(e.get("cycle_ignore") or []) | {blocker})
+    hunks = conflict_hunks(repo, o, e, conflict) if repo else []
+    text = conflict_text(e, o, conflict, waits, hunks)
+    if it and not machine_state("change", it["state"]).terminal:
+        try:
+            st.transition("change", e["id"], it["state"], it["version"],
+                          event={"text": text, "audience": {"worktree": e.get("worktree")}, "severity": "info"})
+        except StaleVersion:
+            return None
+    e["conflict_told"] = o["id"]
     save_entry(d, e)
     wlog(d, text)
-    try:
-        st.transition("change", e["id"], it["state"], it["version"], data={"cycle": text, "hold": None},
-                      event={"kind": "change.cycle", "text": text, "severity": "info",
-                             "audience": {"worktree": e.get("worktree")}})
-    except StaleVersion:
-        pass  # its entry carries the break: the hold is re-derived without that wait all the same
-
-
-def restart_hold(st: Any, e: Any, t: Any) -> Any:
-    """The recorded hold of change e, its clock (since) restarted at t: re-derived this tick (stuck_recovery)."""
-    it = st.item("change", e["id"])
-    hold = ((it or {}).get("data") or {}).get("hold")
-    if not hold:
-        return
-    try:
-        st.update_item("change", e["id"], it["version"], {"hold": {**hold, "since": t}})
-    except StaleVersion:
-        pass
-
-
-def unheld_stuck(it: dict[str, Any], t: float) -> Optional[str]:
-    """Why a change with no recorded hold is stuck, or None within UNHELD_GRACE in its state (NO HOLD YET IS NO STUCK
-    HOLD: a tick pushes, starts or holds it)."""
-    grace = env_num("AGENTCTL_UNHELD_GRACE", UNHELD_GRACE)
-    if grace > 0 and t - float(it.get("entered_at") or t) < grace:
-        return None
-    return "nothing holds it, yet it has not " + ("pushed" if it["state"] == "checked" else "started")
-
-
-def change_hold_stuck(st: Any, hold: Any, it: Any, t: Any) -> Any:
-    """Why a queued or checked change's hold is stuck (an escalation), or None (a legitimate wait: quiet)."""
-    if not hold:
-        return unheld_stuck(it, t)
-    if hold_recovers_itself(hold):
-        return None  # its own recovery runs at its bound (regen_hold_overdue): never a stuck lap, the owner told once
-    if t - float(it.get("entered_at") or t) > env_num("AGENTCTL_CHANGE_HOLD_MAX", CHANGE_HOLD_MAX):
-        return f"held for over {fmt_age(env_num('AGENTCTL_CHANGE_HOLD_MAX', CHANGE_HOLD_MAX))}"
-    return _hold_blocker_or_bound_stuck(st, hold, t)
-
-
-def _hold_blocker_or_bound_stuck(st: Any, hold: Any, t: Any) -> Any:
-    """Why a hold is stuck on its blocking change or past its kind's bound, or None."""
-    if hold.get("blocker"):
-        b = st.item("change", hold["blocker"])
-        if b is None or machine_state("change", b["state"]).terminal:
-            return f"its blocking change {hold['blocker']} is {'gone' if b is None else b['state']}"
-    hk = HOLDS.get(hold.get("kind"))
-    if hk and hold.get("since") and t - float(hold["since"]) > hk.bound:
-        return f"held on {hk.label} for over {fmt_age(hk.bound)} (that hold's bound)"
-    return None
-
-
-def hold_recovers_itself(hold):
-    """A hold whose kind's recovery is `recover` (THE HOLD TABLE): the change tick runs it at the bound itself."""
-    hk = HOLDS.get((hold or {}).get("kind"))
-    return bool(hk) and hk.recovery == "recover"
-
-
-def stuck_recovery(hold: Any, stuck: Any) -> Any:
-    """What the change tick does with a stuck hold (THE HOLD TABLE's recovery): `rederive` -- the recorded hold is
-    dropped and this tick decides afresh -- when its blocker is gone or its kind's own bound passed and the table says
-    so; else `escalate` (nothing recorded, the 6-h cap: the wait is real, or agentctl's bug)."""
-    if not hold or not stuck or stuck.startswith("held for over"):
-        return "escalate"
-    if stuck.startswith("its blocking change"):
-        return "rederive"
-    hk = HOLDS.get(hold.get("kind"))
-    return hk.recovery if hk else "escalate"
+    return text
 
 
 def hold_for_overlap(st, d, e, o, shared, conflict, waits=True, repo=None):
@@ -337,26 +274,9 @@ def hold_for_overlap(st, d, e, o, shared, conflict, waits=True, repo=None):
     author told once of a conflict."""
     did = []
     if conflict and e.get("conflict_told") != o["id"]:
-        it = st.item("change", e["id"])
-        hunks = conflict_hunks(repo, o, e, conflict) if repo else []
-        text = (f"CONFLICTS {e['id']}: it cannot be assembled with {o['id']} ({o.get('worktree')}), queued before it "
-                f"(both change {', '.join(conflict[:3])})"
-                + (f": its check waits for {o['id']}" if waits else ": a red fix, it is checked now all the same")
-                + f"; if {o['id']} lands first, this change no "
-                f"longer applies -- rebase onto it (its branch, or {remote()}/main once it landed) and land again, or "
-                "`agentctl land cancel` this one"
-                + (f". The hunks: {'; '.join(hunks)}" if hunks else "")
-                + (f". Fix now: `cd {e.get('worktree')} && git rebase {o['branch']}`, resolve those hunks, "
-                   "`~/bin/agentctl land`" if o.get("branch") and e.get("worktree") else ""))
-        if it and not machine_state("change", it["state"]).terminal:
-            try:
-                st.transition("change", e["id"], it["state"], it["version"],
-                              event={"text": text, "audience": {"worktree": e.get("worktree")}, "severity": "info"})
-            except StaleVersion:
-                return did
-        e["conflict_told"] = o["id"]
-        save_entry(d, e)
-        wlog(d, text)
+        text = tell_conflict(st, d, e, o, conflict, waits, repo)
+        if text is None:
+            return did
         did.append(text)
     if waits and _behind_said.get((e["id"], "overlap")) != o["id"]:
         _behind_said[(e["id"], "overlap")] = o["id"]

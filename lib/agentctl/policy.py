@@ -14,6 +14,7 @@
 # is STUCK, and what the tick does then (its recovery). note_hold refuses an unknown kind, change_hold_stuck reads the
 # bound, and the change tick runs the recovery: no hold outlives its bound in silence.
 
+from typing import Any
 from contextlib import suppress
 from agentctl.core import err, process_cache
 from agentctl.statemachines import machine_state
@@ -160,7 +161,7 @@ HOLDS = {h.kind: h for h in (
 )}
 
 
-def hold_kind(kind):
+def hold_kind(kind: Any) -> Any:
     try:
         return HOLDS[kind]
     except KeyError:

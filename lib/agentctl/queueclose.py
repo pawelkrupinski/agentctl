@@ -5,32 +5,32 @@ import os
 import time
 from typing import Any
 from contextlib import suppress
-from agentctl.clock import Clock
-from agentctl.core import cherry_landed, env_num, fmt_age, git, git_ok, host_role, process_cache, remote
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
+from agentctl.statemachines import StaleVersion, TerminalState, machine_state
+from agentctl.clock import Clock
+from agentctl.core import cherry_landed, env_num, fmt_age, git, git_ok, host_role, process_cache, remote
 from agentctl.repos import movies_repo_path, precheck_hook, waiting_supported
 from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries, waiting_state, wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_write
 from agentctl.clones import clone_shared
+from agentctl.patches import equivalent_on
 from agentctl.queueslots import check_tree_slot, checker_lease, entry_owned, set_change
 from agentctl.conditions import open_condition, run_probe
 from agentctl.queue import VERIFY_MODE
-from agentctl.patches import equivalent_on
 from agentctl.conflicts import CONFLICT_PLACE_KEPT
-from agentctl.changekind import HOLD_SHOWN, classify_change, kind_text, queue_facts
-from agentctl.gov import gov_class_of
+from agentctl.changekind import (
+    HOLD_SHOWN, change_hold_visible, classify_change, file_unheld_change, kind_text, queue_facts)
 from agentctl.waiting import already_landed, must_wait, waiting_commits
 from agentctl.queuesubmit import SUBMIT_FIELDS, submit_ref
 from agentctl.redseen import gate_reds
+from agentctl.gov import gov_class_of
 from agentctl.queuebatch import run_entry_checks
-from agentctl.statemachines import StaleVersion, TerminalState, machine_state
 from agentctl.queuecheck import (
     adopted_run, check_mode, commits_here, fetched_main, judge_check_failure, requeued_for_infra, round_ended,
     round_head, tip_refused)
-from agentctl.changekind import change_hold_visible, file_unheld_change
-from agentctl.queuebatch import change_hold_stuck, restart_hold, stuck_recovery
+from agentctl.queuehold import change_hold_stuck, restart_hold, stuck_recovery
 
 
 # ONE QUEUE, CLOSED BY CONTENT (2026-10-30 split brain: six pre-cutover entries in the laptop's local waiting dir and
