@@ -37,6 +37,20 @@ class SegmentsTest(unittest.TestCase):
                                   ev(2, 10, "watching", "red", "run-red", iid="w1", typ="watch")]), now=50)[("watch", "w1")]
         self.assertEqual([(s.state, s.length) for s in watch.segments], [("watching", 10)], "a watch's red ends it")
 
+    def test_an_unanswering_store_is_an_error_not_no_backfill(self):
+        """Review 2026-11-26 (C 8.2): derived_of swallowed every exception into "no backfill", so a store down for a
+        moment made analyze report the coverage without the backfill: a wrong number, not an error."""
+        class Down:
+            def derived(self):
+                raise A.StoreUnavailable("the tunnel is down")
+
+        class Older:
+            def derived(self):
+                raise A.StoreLacksCall("404 derived")
+        with self.assertRaises(A.StoreUnavailable):
+            A.derived_of(Down())
+        self.assertEqual(A.derived_of(Older()), {})
+
     def test_coverage_own_and_derived(self):
         raw = [ev(1, 100, "queued", "checking"), ev(2, 200, "checking", "checked", "check-passed"),
                ev(3, 500, "checked", "landed", "landed")]

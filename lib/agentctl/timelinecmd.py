@@ -8,6 +8,7 @@ import argparse
 import re
 from typing import Any, Callable
 
+from agentctl.store import StoreLacksCall
 from agentctl.checkrows import change_rows_lines, change_runs, rows_lines, rows_report
 from agentctl.timeline import (analyze, as_json, find_items, history_lines, merge, render_text, render_tsv, top_sinks,
                                traces)
@@ -37,10 +38,11 @@ def all_events(store: Any, page: int = 5000) -> list[dict[str, Any]]:
 
 
 def derived_of(store: Any) -> dict[str, list[dict[str, Any]]]:
-    """The backfill's rows; none from a store older than them (its API has no `derived`)."""
+    """The backfill's rows; none from a store older than them (its API has no `derived`). A store that does not answer
+    raises (review 2026-11-26: it read as "no backfill", and analyze reported a wrong coverage, not an error)."""
     try:
         return store.derived() or {}
-    except Exception:  # an older store server: the own columns alone
+    except StoreLacksCall:  # an older store server: the own columns alone
         return {}
 
 
