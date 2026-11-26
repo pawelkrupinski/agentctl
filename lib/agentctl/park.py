@@ -58,14 +58,8 @@ def park_until_text(m):
     return "until the owner decides"
 
 
-def park_release_why(m, repo, store, t=None):
-    """Why mark m's condition is met now, else None (unread: None -- the mark stands)."""
-    t = epoch_now() if t is None else t
-    u = m.get("until") or {}
-    if u.get("kind") == "date":
-        return f"its date {u['at']} passed" if t >= float(u.get("epoch") or 0) else None
-    if u.get("kind") != "landed":
-        return None
+def landed_release_why(u, repo, store):
+    """Why a `until landed` condition u is met now (its change landed, or its commit is on main), else None."""
     if u.get("change"):
         end = attempt(lambda: change_chain_end(store, u["change"]), None, catch=(Exception, SystemExit))
         if end and end["state"] == "landed":
@@ -75,6 +69,15 @@ def park_release_why(m, repo, store, t=None):
         if done:
             return f"its blocker {u['commit'][:11]} is on main" + (f" ({via[:10]})" if via and via != u["commit"] else "")
     return None
+
+
+def park_release_why(m, repo, store, t=None):
+    """Why mark m's condition is met now, else None (unread: None -- the mark stands)."""
+    t = epoch_now() if t is None else t
+    u = m.get("until") or {}
+    if u.get("kind") == "date":
+        return f"its date {u['at']} passed" if t >= float(u.get("epoch") or 0) else None
+    return landed_release_why(u, repo, store) if u.get("kind") == "landed" else None
 
 
 def drop_orphan_records(wt):
@@ -87,44 +90,62 @@ def drop_orphan_records(wt):
         write_json(path, keep)
 
 
+def release_parked(wt, m, repo, store, t, dry_run):
+    """The line saying parked mark m is released -- its worktree gone, or its condition met -- else None. Unless dry_run
+    the mark is released, its orphan records dropped and the inbox told."""
+    name = os.path.basename(wt)
+    if not os.path.isdir(wt):
+        if not dry_run:
+            m.update(state="released", why="its worktree is gone", decided=ts())
+        return f"parked {name}: released (its worktree is gone)"
+    why = park_release_why(m, m.get("repo") or repo, store, t)
+    if not why:
+        return None
+    if not dry_run:
+        m.update(state="released", why=why, decided=ts())
+        drop_orphan_records(wt)
+        inbox_write("maintain", f"UNPARKED {tilde(wt)}: {why}; the orphan rules apply again "
+                                f"(parked: {m['reason']})", [], [], 0, cwd=wt)
+    return f"parked {name}: released ({why}); the orphan rules apply again"
+
+
+def park_digest(old, t, dry_run):
+    """The weekly digest line of the old parks (once PARK_DIGEST_EVERY has passed since the last), else None. Unless
+    dry_run it is told in the inbox and stamped on the marks."""
+    last = max([float(m.get("digest_at") or 0) for _w, m in old] or [0])
+    if not old or t - last < PARK_DIGEST_EVERY:
+        return None
+    line = "PARKED DIGEST: " + "; ".join(
+        f"{os.path.basename(w)} ({int((t - float(m['at'])) // 86400)} d, {park_until_text(m)}: {m['reason']})" for w, m in old)
+    if not dry_run:
+        inbox_write("maintain", line, [], [], 0)
+        for _w, m in old:
+            m["digest_at"] = t
+    return line
+
+
+def parked_long(m, t):
+    """Whether mark m has stood PARK_DIGEST_DAYS (the weekly digest names it)."""
+    return t - float(m.get("at") or t) >= env_num("AGENTCTL_PARK_DIGEST_DAYS", PARK_DIGEST_DAYS) * 86400
+
+
 def park_duty(repo, store, dry_run=False, now_=None):
     """One maintain pass over the parks: a met condition releases its mark; the weekly digest of the old ones."""
     t = epoch_now() if now_ is None else now_
     marks = parked_marks()
-    did, changed, old = [], False, []
+    did, old = [], []
     for wt, m in sorted(marks.items()):
         if m.get("state") != "parked":
             continue
-        name = os.path.basename(wt)
-        if not os.path.isdir(wt):
-            if not dry_run:
-                m.update(state="released", why="its worktree is gone", decided=ts())
-                changed = True
-            did.append(f"parked {name}: released (its worktree is gone)")
-            continue
-        why = park_release_why(m, m.get("repo") or repo, store, t)
-        if why:
-            if not dry_run:
-                m.update(state="released", why=why, decided=ts())
-                changed = True
-                drop_orphan_records(wt)
-                inbox_write("maintain", f"UNPARKED {tilde(wt)}: {why}; the orphan rules apply again "
-                                        f"(parked: {m['reason']})", [], [], 0, cwd=wt)
-            did.append(f"parked {name}: released ({why}); the orphan rules apply again")
-            continue
-        if t - float(m.get("at") or t) >= env_num("AGENTCTL_PARK_DIGEST_DAYS", PARK_DIGEST_DAYS) * 86400:
+        line = release_parked(wt, m, repo, store, t, dry_run)
+        if line:
+            did.append(line)
+        elif parked_long(m, t):
             old.append((wt, m))
-    last = max([float(m.get("digest_at") or 0) for _w, m in old] or [0])
-    if old and t - last >= PARK_DIGEST_EVERY:
-        line = "PARKED DIGEST: " + "; ".join(
-            f"{os.path.basename(w)} ({int((t - float(m['at'])) // 86400)} d, {park_until_text(m)}: {m['reason']})" for w, m in old)
-        if not dry_run:
-            inbox_write("maintain", line, [], [], 0)
-            for _w, m in old:
-                m["digest_at"] = t
-            changed = True
-        did.append(line)
-    if changed:
+    digest = park_digest(old, t, dry_run)
+    if digest:
+        did.append(digest)
+    if did and not dry_run:  # every line is a mark released or a digest stamped
         write_json(parked_path(), marks)
     return did
 
