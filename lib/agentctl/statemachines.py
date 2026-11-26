@@ -216,3 +216,21 @@ def change_event(e, verdict, tail=(), code=1, final=True, severity="info", **ref
             "audience": {"worktree": e.get("worktree"), "session": e.get("session"), "claude_pid": e.get("claude_pid")},
             "refs": {"verdict": verdict.splitlines()[0], "tail": list(tail)[-25:], "exit": code, "final": final,
                      "command": "land", "entry": e["id"], **refs}}
+
+
+def check_move(typ: Any, iid: Any, cur: Any, to: Any, expect_version: Any) -> Any:
+    """Raise StaleVersion / TerminalState / IllegalTransition unless the item at `cur` may move to `to`."""
+    if not cur or cur["version"] != expect_version:
+        raise StaleVersion(f"{typ} {iid}: version {cur and cur['version']}, expected {expect_version}")
+    if machine_state(typ, cur["state"]).terminal and to != cur["state"]:
+        raise TerminalState(f"{typ} {iid} is {cur['state']}: terminal")
+    if to != cur["state"] and to not in machine_state(typ, cur["state"]).exits:
+        # THE TABLE IS THE LAW (2026-11-20): a move MACHINES does not list is refused and recorded (transition)
+        raise IllegalTransition(f"{typ} {iid}: {cur['state']} -> {to} is no move of machine {typ!r} "
+                                f"(its exits: {', '.join(machine_state(typ, cur['state']).exits) or 'none'})")
+
+
+def level_after(cur: Any, spec: Any, to: Any, event: Any, level: Any) -> Any:
+    """The level after the move: a self-transition escalates (not on severity `info`: blame.py), any other resets it."""
+    up = 1 if spec.escalate and (event or {}).get("severity") != "info" else 0
+    return int(level) if level is not None else cur["level"] + up if to == cur["state"] else 0

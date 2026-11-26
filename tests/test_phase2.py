@@ -132,9 +132,9 @@ class RemoteStoreTest(Phase2Base):
         self.assertEqual(self.st.get("red/x")["epoch"], took["epoch"])  # the server's database
         self.assertEqual(r.release("red/x", took["epoch"], took["secret"], outcome="LANDED abc"), "ok")
         it = r.put_item("condition", "c1", "open", {"kind": "X"})
-        r.transition("condition", "c1", "closed", it["version"], event={"text": "closed"})
+        r.transition("condition", "c1", "closed", it["version"], event={"cause": "agent", "text": "closed"})
         with self.assertRaises(A.StaleVersion):  # the store's exceptions cross the wire as themselves
-            r.transition("condition", "c1", "open", it["version"])
+            r.transition("condition", "c1", "open", it["version"], event={"cause": "agent"})
         oid = r.offer("fixer", "red:1", "red/y", "fresh", 1, A.epoch_now() + 600, {"workflow": "Main"})
         self.assertEqual([o["id"] for o in r.offers("fixer")], [oid])
         got = r.take(oid, "laptop:fixer:c", 900, 3600)
@@ -344,7 +344,7 @@ class ServerSideTest(Phase2Base):
         server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f, *on_clock(A.Clock()))]
         self.assertEqual(server, ["clone health", "change items", "landed changes", "stranded changes", "change tick", "land hold", "batch tick", "watches", "land refs",
                                   "lease archive", "children", "gate summary", "red time", "red tick", "recovery", "issues",
-                                  "reverts", "quiet deadlines", "stats"])
+                                  "reverts", "timeline", "quiet deadlines", "stats"])
         laptop_only = {"events", "notifier", "alerts", "network watch", "tunnel probe", "red status snapshot", "upkeep", "fixer landing", "dispatcher", "regen holds",
                        "claims"}
         self.assertEqual(laptop_only & set(server), set())
@@ -1017,7 +1017,7 @@ class CloseAfterWatchTest(Phase2Base):
         try:
             for sha, to, close in (("a" * 40, "ok", wt), ("b" * 40, "red", wt), ("c" * 40, "ok", "/gone/elsewhere")):
                 it = self.st.put_item("watch", sha, "watching", {"close": close, "worktree": close})
-                self.st.transition("watch", sha, to, it["version"], event=A.watch_event(it, f"WATCH {to.upper()}"))
+                self.st.transition("watch", sha, to, it["version"], event={**A.watch_event(it, f"WATCH {to.upper()}"), "cause": "ci-verdict"})
             self.assertEqual(A.close_landed_worktrees(self.remote), [f"closed worktree {wt}"])
             self.assertEqual(A.close_landed_worktrees(self.remote), [])  # each event once
         finally:
@@ -1031,10 +1031,10 @@ class W7Test(Phase2Base):
         self.sync()
         self.assertEqual(A.inv_w7(A.Clock(), A.CurrentStore(A.process_store))[0], True)  # no events
         it = self.st.put_item("condition", "w7", "open", {})
-        self.st.transition("condition", "w7", "closed", it["version"], event={"text": "x"})
+        self.st.transition("condition", "w7", "closed", it["version"], event={"cause": "agent", "text": "x"})
         seq = max(e["seq"] for e in self.st.events())
         c = self.st.db()
-        c.execute("UPDATE events SET at=? WHERE seq=?", (A.epoch_now() - 3600, seq))
+        c.execute("UPDATE events SET at=? WHERE item_id='w7'", (A.epoch_now() - 3600,))  # its opening and its close
         c.close()
         ok, why = A.inv_w7(A.Clock(), A.CurrentStore(A.process_store))
         self.assertEqual(ok, False)

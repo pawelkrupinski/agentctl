@@ -16,6 +16,7 @@ import urllib.parse
 from typing import Any
 from agentctl.core import err, git, remote, state_root
 from agentctl.timefmt import iso_epoch, now, ts
+from agentctl.eventrows import legacy_cause
 from agentctl.store import Store, store_errors
 from agentctl.repos import server_repo
 from agentctl.trailers import do_not_land
@@ -55,7 +56,7 @@ from agentctl.knobs import knob_tick
 # 24 hourly copies on ci-runner.
 STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer", "offers", "offer_of", "offer_reason",
              "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
-             "meta_get", "meta_set", "next_seq", "open_singleton", "events", "item_events", "archive_free_leases", "list")
+             "meta_get", "meta_set", "next_seq", "open_singleton", "events", "item_events", "derived", "archive_free_leases", "list")
 STORE_BODY_MAX = 4 << 20     # bytes: a larger request body is refused unread (413)
 
 
@@ -176,7 +177,7 @@ def supersede_stranded(d, e, st):
             continue
         try:
             st.transition("change", it["id"], "superseded", it["version"], data={"superseded_by": e["id"]},
-                          event={"text": f"SUPERSEDED {it['id']} by {e['id']}: {e['worktree']} submitted again",
+                          event={"cause": "superseded", "text": f"SUPERSEDED {it['id']} by {e['id']}: {e['worktree']} submitted again",
                                  "refs": {"entry": it["id"]}})
         except (StaleVersion, TerminalState):
             pass
@@ -358,7 +359,8 @@ class StoreAPI:
             m = p[len("/v1/store/"):]
             if m not in STORE_RPC:
                 raise KeyError(m)
-            return self._json(200, {"result": getattr(st, m)(*b.get("args", []), **b.get("kwargs", {}))})
+            args, kwargs = legacy_cause(m, b.get("args", []), b.get("kwargs", {}))
+            return self._json(200, {"result": getattr(st, m)(*args, **kwargs)})
         raise KeyError(f"POST {p}")
 
 

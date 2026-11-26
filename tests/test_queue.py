@@ -206,7 +206,7 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.remote_log()[0], "the hook's plans")
         st = A.process_store()
         bt = self.batch()
-        st.transition("batch", bt["id"], "pushing", bt["version"])  # passed: its tree is about to be pushed from
+        st.transition("batch", bt["id"], "pushing", bt["version"], event={"cause": "agent"})  # passed: its tree is about to be pushed from
         wc, _ = self.agent("c", "worker/src/main/C.scala", "c\n", msg="c: queued")
         ec, _ = self.queued(wc)
         _did, started = tick()

@@ -12,6 +12,7 @@ from agentctl.allowedpaths import allowed_path
 from agentctl.fixchange import red_change
 from agentctl.redask import red_decision
 from agentctl.red import RED_PRIORITY
+from agentctl.causes import red_move_cause
 
 
 # -- moving a red
@@ -30,6 +31,8 @@ def red_event(it, text, **kw):
 def red_move(store: Any, it: Any, to: Any, text: Any, data: Any = None, deadline_s: Any = None, level: Any = None, **ev: Any) -> Any:
     if to == "fix-pending" and it.get("state") == "fix-pending":
         ev.setdefault("severity", "info")
+    if to != it.get("state"):
+        ev.setdefault("cause", red_move_cause(it.get("state"), to))
     kw = {"level": level} if level is not None else {}  # only when said: an older store server takes no `level`
     v = store.transition("red", it["id"], to, it["version"], data=data, event=red_event(it, text, **ev),
                          deadline_s=deadline_s, **kw)

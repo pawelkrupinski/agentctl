@@ -41,16 +41,16 @@ class MachinesTest(unittest.TestCase):
         it = st.put_item("change", "e1", "queued", {"worktree": "/w"})
         self.assertEqual((it["state"], it["version"], it["deadline"]), ("queued", 1, 1000.0 + 15 * 60))
         self.assertEqual(st.put_item("change", "e1", "checking")["state"], "queued")  # idempotent create
-        v = st.transition("change", "e1", "checking", 1, data={"tip": "abc"})
+        v = st.transition("change", "e1", "checking", 1, data={"tip": "abc"}, event={"cause": "agent"})
         self.assertEqual(v, 2)
         with self.assertRaises(A.StaleVersion):
-            st.transition("change", "e1", "checked", 1)  # a racing writer loses cleanly
-        st.transition("change", "e1", "rejected", 2)
+            st.transition("change", "e1", "checked", 1, event={"cause": "agent"})  # a racing writer loses cleanly
+        st.transition("change", "e1", "rejected", 2, event={"cause": "agent"})
         with self.assertRaises(A.TerminalState):
-            st.transition("change", "e1", "queued", 3)  # audit S2: never out of a terminal state
+            st.transition("change", "e1", "queued", 3, event={"cause": "agent"})  # audit S2: never out of a terminal state
         with self.assertRaises(ValueError):
-            st.transition("change", "e1", "nonsense", 3)
-        evs = st.events()
+            st.transition("change", "e1", "nonsense", 3, event={"cause": "agent"})
+        evs = [e for e in st.events() if e["from_state"] is not None]  # the moves (an opening comes from no state)
         self.assertEqual([(e["kind"], e["from_state"], e["to_state"]) for e in evs],
                          [("change.checking", "queued", "checking"), ("change.rejected", "checking", "rejected")])
         self.assertEqual(st.item("change", "e1")["data"], {"worktree": "/w", "tip": "abc"})
@@ -65,7 +65,7 @@ class MachinesTest(unittest.TestCase):
     def test_a_self_transition_of_an_escalating_state_escalates_and_raises_its_level(self):
         st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"))
         st.put_item("change", "e2", "queued")
-        st.transition("change", "e2", "queued", 1)
+        st.transition("change", "e2", "queued", 1, event={"cause": "agent"})
         it = st.item("change", "e2")
         self.assertEqual(it["level"], 1)
         self.assertEqual(st.events()[-1]["severity"], "escalate")
@@ -99,7 +99,7 @@ class DeadlineTickTest(unittest.TestCase):
         self.assertEqual(A.tick_quiet_deadlines(st), [], "a second tick moves nothing")
         self.assertEqual([st.item("lander", i)["state"] for i in ("c-old", "c-new")], ["gone", "recorded"])
         self.assertEqual(st.item("explorer-flip", "f-old")["state"], "closed")
-        moved = [e for e in st.events() if e["item_id"] in ("c-old", "f-old")]
+        moved = [e for e in st.events() if e["item_id"] in ("c-old", "f-old") and e["from_state"] is not None]
         self.assertEqual([e["severity"] for e in moved], ["info", "info"], "a retirement never notifies")
         past = sum(1 for typ in A.MACHINES for it in st.items(typ)
                    if not A.machine_state(typ, it["state"]).terminal and it["deadline"] < t[0])
@@ -132,7 +132,7 @@ class ProjectionTest(unittest.TestCase):
         self.assertEqual({i["id"]: i["state"] for i in A.project_changes(d, st)}, {"e1": "queued", "e2": "landed"})
         A.write_json(os.path.join(d, "entries", "e1.json"), {"id": "e1", "seq": 1, "status": "checking"})
         self.assertEqual(A.project_changes(d, st)[0]["state"], "checking")
-        self.assertEqual([e["kind"] for e in st.events()], ["change.checking"])
+        self.assertEqual([e["kind"] for e in st.events() if e["from_state"] is not None], ["change.checking"])
 
     def test_a_change_that_joined_waiting_gets_its_batchs_verdict_under_its_own_id(self):
         """2026-11-16: queued 20261116-184811-movies-r2-ci-ac68b8 joined `waiting` as 20261116-182331-movies-r2-ci-962;
@@ -175,7 +175,7 @@ class ProjectionTest(unittest.TestCase):
             A.write_json(os.path.join(d, "entries", "w1.json"), w)
             A.project_changes(d, st)
             event_line = why if to != "superseded" else f"SUPERSEDED w1 by w0: {why}"
-            A.set_change(st, d, w, to, event=A.change_event(w, event_line, code=0), why=why, **fields)
+            A.set_change(st, d, w, to, event=A.change_event(w, event_line, code=0), why=why, **fields, cause="agent")
             ev = [e for e in st.events() if e["item_id"] == "q1" and e["to_state"] == to]
             self.assertEqual(len(ev), 1, to)
             projected = A.projected_transition(q, w, "waiting", to)[1]["refs"]["verdict"]

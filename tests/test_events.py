@@ -32,9 +32,9 @@ class EventsTest(unittest.TestCase):
     def test_the_projector_writes_each_addressed_event_once_in_todays_format(self):
         e = {"id": "e1", "worktree": "/w/a", "session": "s1"}
         self.st.put_item("change", "e1", "checking")
-        self.st.transition("change", "e1", "checked", 1)  # no audience, info: nothing for the inbox
-        self.st.transition("change", "e1", "pushing", 2)
-        self.st.transition("change", "e1", "landed", 3, event=A.change_event(e, "LANDED abc1234 (queued e1)", code=0))
+        self.st.transition("change", "e1", "checked", 1, event={"cause": "agent"})  # no audience, info: nothing for the inbox
+        self.st.transition("change", "e1", "pushing", 2, event={"cause": "agent"})
+        self.st.transition("change", "e1", "landed", 3, event={"cause": "landed", **A.change_event(e, "LANDED abc1234 (queued e1)", code=0)})
         self.assertEqual(A.project_events(self.st), 1)
         self.assertEqual(A.project_events(self.st), 0)  # a repeated pass writes nothing twice
         [entry] = A.inbox_entries()
@@ -43,13 +43,13 @@ class EventsTest(unittest.TestCase):
 
     def test_a_reminder_with_no_inbox_moves_the_cursor_and_a_failed_write_leaves_it(self):
         self.st.put_item("change", "n1", "queued")
-        self.st.transition("change", "n1", "queued", 1, event={"kind": "red.remind", "severity": "escalate",
+        self.st.transition("change", "n1", "queued", 1, event={"cause": "agent", "kind": "red.remind", "severity": "escalate",
                                                                "text": "again", "refs": {"no_inbox": True}})
         self.assertEqual(A.project_events(self.st), 0)
         self.assertEqual(int(self.st.meta_get("projector_seq")), self.st.events()[-1]["seq"])
         self.assertEqual(A.inbox_entries(), [])
         self.st.put_item("change", "n2", "queued")
-        self.st.transition("change", "n2", "queued", 1, event={"kind": "change.stuck", "severity": "escalate",
+        self.st.transition("change", "n2", "queued", 1, event={"cause": "agent", "kind": "change.stuck", "severity": "escalate",
                                                                "text": "stuck", "refs": {}})
         before, saved = self.st.meta_get("projector_seq"), A.alert_write
         A.alert_write = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
@@ -57,12 +57,14 @@ class EventsTest(unittest.TestCase):
             self.assertEqual(A.project_events(self.st), 0)
         finally:
             A.alert_write = saved
-        self.assertEqual(self.st.meta_get("projector_seq"), before)  # the cursor stays before it: written next cycle
+        stuck = self.st.events()[-1]["seq"]  # the cursor passes n2's opening (nothing to write), stays before it
+        self.assertEqual(int(self.st.meta_get("projector_seq")), stuck - 1)
+        self.assertGreater(int(self.st.meta_get("projector_seq")), int(before))
         self.assertEqual(A.project_events(self.st), 1)
 
     def test_the_notifier_notifies_each_escalation_once(self):
         self.st.put_item("change", "e2", "queued")
-        self.st.transition("change", "e2", "queued", 1)  # queued past its deadline: an escalation
+        self.st.transition("change", "e2", "queued", 1, event={"cause": "agent"})  # queued past its deadline: an escalation
         self.assertEqual(A.notify_escalations(self.st), 1)
         self.assertEqual(A.notify_escalations(self.st), 0)
         self.assertEqual(len(open(self.notes).read().splitlines()), 1)
@@ -71,10 +73,10 @@ class EventsTest(unittest.TestCase):
     def test_an_escalation_the_cursor_passed_unmarked_is_still_delivered_and_a_closed_ones_resolved(self):
         """W6, 2026-10-30: RED UNCLAIMED #2560 sat 'not notified' for good -- the notifier read only past its cursor."""
         self.st.put_item("change", "e3", "queued")
-        self.st.transition("change", "e3", "queued", 1)  # an escalation, its item still open
+        self.st.transition("change", "e3", "queued", 1, event={"cause": "agent"})  # an escalation, its item still open
         self.st.put_item("change", "e4", "queued")
-        self.st.transition("change", "e4", "queued", 1)  # an escalation whose item then closes
-        self.st.transition("change", "e4", "cancelled", 2)
+        self.st.transition("change", "e4", "queued", 1, event={"cause": "agent"})  # an escalation whose item then closes
+        self.st.transition("change", "e4", "cancelled", 2, event={"cause": "agent"})
         self.st.meta_set("notifier_seq", self.st.events()[-1]["seq"])  # the cursor past both, neither marked
         self.assertEqual(A.notify_escalations(self.st), 1)
         self.assertEqual(len(open(self.notes).read().splitlines()), 1)
@@ -89,12 +91,12 @@ class EventsTest(unittest.TestCase):
         nobody. Every terminal transition now carries an event addressed to the item's worktree, naming the item."""
         for i, to in enumerate(("landed", "rejected", "superseded", "cancelled")):
             self.st.put_item("change", f"c{i}", "queued", {"worktree": "/w/flips", "head": "83af2cb4"})
-            self.st.transition("change", f"c{i}", "checking" if to == "rejected" else to, 1)
+            self.st.transition("change", f"c{i}", "checking" if to == "rejected" else to, 1, event={"cause": "agent"})
             if to == "rejected":
                 self.st.transition("change", f"c{i}", "rejected", 2,
-                                   event={"text": "NOT LANDED: the pre-push checks failed"})  # no audience given
+                                   event={"cause": "agent", "text": "NOT LANDED: the pre-push checks failed"})  # no audience given
         self.st.put_item("change", "nowt", "queued")  # no worktree known: still an entry (the owner's)
-        self.st.transition("change", "nowt", "cancelled", 1)
+        self.st.transition("change", "nowt", "cancelled", 1, event={"cause": "agent"})
         self.assertEqual(A.change_exits_unannounced(self.st), [])
         self.assertEqual(A.project_events(self.st), 5)
         by = {e["entry"]: e for e in A.inbox_entries()}
@@ -120,7 +122,7 @@ class EventsTest(unittest.TestCase):
 
     def test_w8_names_a_change_that_left_the_queue_silently(self):
         self.st.put_item("change", "s1", "queued", {"worktree": "/w/a"})
-        self.st.transition("change", "s1", "cancelled", 1)
+        self.st.transition("change", "s1", "cancelled", 1, event={"cause": "agent"})
         c = self.st.db()
         c.execute("UPDATE events SET audience='{}', severity='info' WHERE item_id='s1'")  # a writer around transition
         c.close()
@@ -143,7 +145,7 @@ class EventsTest(unittest.TestCase):
         def events_then_reject(*a, **k):
             evs = real_events(*a, **k)
             if self.st.item("change", "r1")["state"] == "checking":  # the processor rejects it mid-read
-                self.st.transition("change", "r1", "rejected", 1, event={"text": "NOT LANDED: the checks failed"})
+                self.st.transition("change", "r1", "rejected", 1, event={"cause": "agent", "text": "NOT LANDED: the checks failed"})
             return evs
 
         self.st.events = events_then_reject
@@ -154,7 +156,7 @@ class EventsTest(unittest.TestCase):
         change's (`…-c77e00`) entry, which kept naming that one: `agentctl inbox <its id>` said "no entries"."""
         for i, iid in enumerate(("old-c77e00", "new-2a9c4e")):
             self.st.put_item("change", iid, "checking", {"worktree": "/w/scrapers", "session": "s1"})
-            self.st.transition("change", iid, "rejected", 1, event={"text": f"NOT LANDED: check {i} failed"})
+            self.st.transition("change", iid, "rejected", 1, event={"cause": "agent", "text": f"NOT LANDED: check {i} failed"})
         A.project_events(self.st)
         self.assertEqual(len(A.inbox_entries()), 1)  # one live alert for the worktree's landing
         self.assertIn("check 1 failed", self.run_inbox(["new-2a9c4e"]))
@@ -163,7 +165,7 @@ class EventsTest(unittest.TestCase):
     def test_the_projector_keeps_its_cursor_before_an_entry_it_could_not_write(self):
         e = {"id": "e5", "worktree": "/w/a", "session": "s1"}
         self.st.put_item("change", "e5", "pushing")
-        self.st.transition("change", "e5", "landed", 1, event=A.change_event(e, "LANDED abc (queued e5)", code=0))
+        self.st.transition("change", "e5", "landed", 1, event={"cause": "landed", **A.change_event(e, "LANDED abc (queued e5)", code=0)})
         saved = A.write_json
         A.write_json = lambda *a, **k: (_ for _ in ()).throw(OSError("disk full"))
         try:
@@ -217,7 +219,7 @@ class NotifierDeliveryTest(unittest.TestCase):
         if not self.st.item("change", iid):
             self.st.put_item("change", iid, "queued")
         for _ in range(times):
-            self.st.transition("change", iid, "queued", self.st.item("change", iid)["version"])
+            self.st.transition("change", iid, "queued", self.st.item("change", iid)["version"], event={"cause": "agent"})
 
     def unmarked(self):
         return [e for e in self.st.events(limit=10 ** 6) if e["severity"] == "escalate" and not e.get("notified_at")]
@@ -339,7 +341,7 @@ class NotifierDeliveryTest(unittest.TestCase):
 
     def test_an_escalation_whose_item_moved_on_is_closed_untold(self):
         self.escalate("m1")
-        self.st.transition("change", "m1", "checking", self.st.item("change", "m1")["version"])  # not terminal: moved on
+        self.st.transition("change", "m1", "checking", self.st.item("change", "m1")["version"], event={"cause": "agent"})  # not terminal: moved on
         self.assertEqual(A.notify_escalations(self.st), 0)
         self.assertEqual(self.unmarked(), [])
         self.assertEqual(self.shown(), [])

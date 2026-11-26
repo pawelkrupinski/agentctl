@@ -203,7 +203,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         ei2 = self.queue("i2", "identity/src/main/I2.scala", "--no-batch")  # a lone change younger than the backlog
         self.assertEqual(A.tick_batch(self.r.path, self.d, *on_clock(self.clock)), [], "no tree free: no batch yet")
         held.pop().release()  # i1's check ends, its tree free
-        A.set_change(A.CurrentStore(A.process_store), self.d, self.entry(ei1), "cancelled", event={"text": "done"})
+        A.set_change(A.CurrentStore(A.process_store), self.d, self.entry(ei1), "cancelled", event={"text": "done"}, cause="agent")
         A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertNotIn(ei2, self.started, "the younger lone change waits for the older backlog's batch")
         saved = A.spawn_batch_executor
@@ -229,7 +229,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
         e = self.entry(ev)  # its push found main moved: a verify round of its own (THE RULE; this hook has none)
         A.set_change(A.CurrentStore(A.process_store), self.d, e, "queued", event={"text": "verify"}, verify=True, full_base=e["checked_base"],
-                     full_tip=e["tip"], retry_after=0)
+                     full_tip=e["tip"], retry_after=0, cause="agent")
         ea = self.queue("a", "web/src/main/A.scala")
         eb = self.queue("b", "worker/src/main/B.scala")
         self.assertEqual([x["id"] for x in A.push_candidates(self.r.path, self.d, set(), A.CurrentStore(A.process_store))], [ev, ea, eb])
@@ -374,7 +374,7 @@ class PushBatchTest(test_queue.QueueTest):
     def start_head_round(self, ev):
         e = self.entry(ev)  # its verify round, as its push queued it (main moved), now under its live checker
         A.set_change(A.CurrentStore(A.process_store), self.d, e, "checking", event={"text": "verify"}, verify=True,
-                     full_base=e["checked_base"], full_tip=e["tip"], retry_after=0)
+                     full_base=e["checked_base"], full_tip=e["tip"], retry_after=0, cause="agent")
 
     def test_checked_changes_behind_a_slow_head_verification_form_one_batch_and_land_in_one_push(self):
         """2026-11-23: ~8 checked tools-only changes each held `its push waits for X's combined-tree verification`, one
@@ -788,7 +788,7 @@ class OverlapTest(BacklogBatchTest):
         ea = self.edit("a", "web/src/main/Ten.scala", 0, "a's line 1", alone=True)
         A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [ea])
-        A.set_change(A.CurrentStore(A.process_store), self.d, self.entry(ea), "checking")  # its check under way
+        A.set_change(A.CurrentStore(A.process_store), self.d, self.entry(ea), "checking", cause="agent")  # its check under way
         eb = self.edit("b", "web/src/main/Ten.scala", 9, "b's line 10")
         e = self.entry(eb)
         e["seq"] = self.entry(ea)["seq"] - 1  # its kept place: older by seq than the change checking now

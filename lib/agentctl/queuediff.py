@@ -107,7 +107,7 @@ class ChangePush:
     def _regenerating_round(self, owed: tuple[str, list[str]]) -> str:
         e = self.e
         what = f"main moved {owed[0]} ({', '.join(owed[1][:3])}): a new round, which regenerates them"
-        set_change(self.st, self.d, e, "queued", data={"rounds": e.get("rounds", 0) + 1},
+        set_change(self.st, self.d, e, "queued", cause="main-moved", data={"rounds": e.get("rounds", 0) + 1},
                    event={"text": f"{e['id']}: {what}"}, rounds=e.get("rounds", 0) + 1, retry_after=0, verify=True)
         wlog(self.d, f"{e['id']}: {what}: queued for a new round")
         return "queued"
@@ -163,7 +163,7 @@ class ChangePush:
         e, verify = self.e, why is None
         what = self._combined_tree_words(moved, new_head, verify_why) if verify else f"{why}: checked again"
         log = recheck_logged(e, "verify" if verify else "full", f"{moved_by}: {verify_why or why}", moved, self.clock.time())
-        set_change(self.st, self.d, e, "queued", data={"rounds": e.get("rounds", 0) + 1, "rechecks": log},
+        set_change(self.st, self.d, e, "queued", cause="main-moved", data={"rounds": e.get("rounds", 0) + 1, "rechecks": log},
                    event={"text": f"{e['id']}: {moved_by} since its checks, {what}"},
                    rounds=e.get("rounds", 0) + 1, retry_after=0, verify=verify, rechecks=log)
         wlog(self.d, f"{e['id']}: {moved_by} during its checks, {what}: queued for a new round")
@@ -182,7 +182,7 @@ class ChangePush:
         e = self.e
         self.skip = hook_query(precheck_hook(self.tree), self.tree, "--plan", range_paths(self.tree, self.base, self.head))
         if self.skip is None:
-            set_change(self.st, self.d, e, "queued",
+            set_change(self.st, self.d, e, "queued", cause="main-moved",
                        event={"text": f"{e['id']}: the hook's plan could not be read: checked again"},
                        retry_after=0, verify=False)
             return "queued"
@@ -208,7 +208,7 @@ class ChangePush:
 
     def _push(self) -> str:
         e, head = self.e, self.head
-        set_change(self.st, self.d, e, "pushing", data={"rechecks": e["rechecks"]} if e.get("rechecks") else None,
+        set_change(self.st, self.d, e, "pushing", cause="pushing", data={"rechecks": e["rechecks"]} if e.get("rechecks") else None,
                    event={"text": f"{e['id']}: pushing {head[:10]}"})
         pushed_at = self.clock.time()
         env = self._push_env()
@@ -217,7 +217,7 @@ class ChangePush:
         if landed_state(self.repo, f"refs/remotes/{remote()}/main", head).landed:  # verify: on main, whatever rc said (unknown: the rc decides)
             return self._landed(pushed_at)
         if rc is not None and (RACE.search(out or "") or REDGATE.search(out or "")):
-            set_change(self.st, self.d, e, "checked",
+            set_change(self.st, self.d, e, "checked", cause="pushing",
                        event={"text": f"{e['id']}: the push raced or met a red gate: tried again"})
             return "checked"
         return self._push_failed(rc, out)
@@ -246,7 +246,7 @@ class ChangePush:
         n = e.get("push_attempts", 0) + 1
         why = "the push stalled" if rc is None else ((TRANSIENT_PUSH.search(out or "") or [None])[0]
                                                      or f"the push failed (exit {rc})")
-        set_change(self.st, self.d, e, "checked", data={"push_attempts": n},
+        set_change(self.st, self.d, e, "checked", cause="pushing", data={"push_attempts": n},
                    event={"text": f"{e['id']}: {why}: push attempt {n}",
                           "severity": "escalate" if n >= PUSH_ATTEMPTS_MAX else "info",
                           "audience": {"worktree": e.get("worktree")}},

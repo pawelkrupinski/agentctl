@@ -343,7 +343,7 @@ class RequeueTest(unittest.TestCase):
                 A.requeue_infra(st, d, e, "the push failed on infra (closed by remote host)", A.epoch_now())
                 waits.append(round(e["retry_after"] - A.epoch_now()))
                 self.assertEqual(e["status"], "queued")
-                st.transition("change", "e1", "checking", st.item("change", "e1")["version"])
+                st.transition("change", "e1", "checking", st.item("change", "e1")["version"], event={"cause": "agent"})
                 e["status"] = "checking"
         finally:
             A.wlog = saved_wlog

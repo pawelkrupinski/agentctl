@@ -97,7 +97,7 @@ def batch_state_step(tick: BatchTick) -> list[str]:
     repo, d, st, t, it, reds = tick.repo, tick.d, tick.st, tick.t, tick.it, tick.reds
     spec = machine_state("batch", it["state"])
     if t > it["deadline"] and it["state"] != "checking" and it["state"] != "bisecting":
-        it = batch_move(st, it, spec.on_deadline, text=f"batch {it['id']}: {it['state']} past its deadline")
+        it = batch_move(st, it, spec.on_deadline, text=f"batch {it['id']}: {it['state']} past its deadline", cause="timeout")
         return [f"batch {it['id']}: deadline -> {it['state']}"]
     state = it["state"]
     if state == "blocked-red":
@@ -191,7 +191,7 @@ def batch_assemble(tick: BatchTick) -> list[str]:
     (or, with its red pre-check kept, straight to its push)."""
     it, st, d, repo = tick.it, tick.st, tick.d, tick.repo
     if tick.reds and not tick.ready:
-        batch_move(st, it, "blocked-red")
+        batch_move(st, it, "blocked-red", cause="gate-red")
         return [f"batch {it['id']}: blocked by the red gate"
                 + (" (its fix waits for green: a production commit names no red)" if tick.fix_waits else "")]
     if not tick.ready:
@@ -285,7 +285,7 @@ def member_checking(st: Any, d: str, it: Any, e: Any, n: Any, tip: str, depth: A
     """Entry e is checking in batch `it` (`n` members at `tip`); a conflict the assembly resolved is told to its author."""
     verify = {"verify": True, "rounds": e.get("rounds", 0) + (e.get("status") == "checked")} if depth == "verify" else {}
     resolved = "; ".join(f"{m['file']} ({', '.join(m['hunks'])})" for m in e.get("autoresolved") or [])
-    set_change(st, d, e, "checking", data={"autoresolved": resolved or None},
+    set_change(st, d, e, "checking", cause="batch", data={"autoresolved": resolved or None},
                event={"text": f"{e['id']}: checking in {batch_kind(it)} {it['id']} "
                               f"({n} change(s) at {tip[:10]})"
                               + (f"; its conflict AUTO-RESOLVED in the batch, the batch's full check its "

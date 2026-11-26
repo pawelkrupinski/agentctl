@@ -107,11 +107,11 @@ class StoreEventRowsTest(unittest.TestCase):
     def test_events_and_an_items_events_read_audience_and_refs_as_json(self):
         st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"), clock=lambda: 1000.0)
         it = st.put_item("change", "c1", "queued", {})
-        st.transition("change", "c1", "checking", it["version"], event={"text": "go", "refs": {"a": 1}, "audience": {"worktree": "/w"}})
+        st.transition("change", "c1", "checking", it["version"], event={"cause": "agent", "text": "go", "refs": {"a": 1}, "audience": {"worktree": "/w"}})
         st.put_item("change", "c2", "queued", {})
         mine = st.item_events("change", "c1")
         self.assertEqual([(e["item_id"], e["text"], e["refs"], e["audience"]) for e in mine],
-                         [("c1", "go", {"a": 1}, {"worktree": "/w"})])
+                         [("c1", "change c1 opened: queued", {}, {}), ("c1", "go", {"a": 1}, {"worktree": "/w"})])
         every = st.events()
         self.assertEqual(st._event_rows("SELECT * FROM events WHERE item_id=? ORDER BY seq", ("c1",)), mine)
         self.assertGreaterEqual(len(every), 1)

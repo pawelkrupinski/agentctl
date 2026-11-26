@@ -166,8 +166,7 @@ class KeptConnection:
         self.c.row_factory = sqlite3.Row
         self.c.execute("PRAGMA journal_mode=WAL")
         self.c.execute("PRAGMA synchronous=OFF")
-        for q in A.Store.SCHEMA:
-            self.c.execute(q)
+        A.Store.prepare(self.c)
 
     def __getattr__(self, name):
         return getattr(self.c, name)
@@ -1163,7 +1162,7 @@ class Sim:
             st = A.process_store()
             it = st.item("red", self.red_item)
             if it and it["state"] not in ("verified", "cleared"):
-                st.transition("red", it["id"], "verified", it["version"], event={"text": "sim: the gate went green"})
+                st.transition("red", it["id"], "verified", it["version"], event={"cause": "ci-verdict", "text": "sim: the gate went green"})
             self.red_item, self.red_item_runs = None, set()
 
     def open_outside_red(self):
@@ -1181,7 +1180,7 @@ class Sim:
             if self.tick >= at:
                 st = A.process_store()
                 it = st.item("red", self.outside[name])
-                st.transition("red", it["id"], "verified", it["version"], event={"text": "sim: fix verified"})
+                st.transition("red", it["id"], "verified", it["version"], event={"cause": "ci-verdict", "text": "sim: fix verified"})
                 del self.outside[name], self.outside_clears[name]
 
     def forge(self):

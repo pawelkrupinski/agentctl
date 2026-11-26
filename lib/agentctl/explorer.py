@@ -128,7 +128,7 @@ def _explorer_close_named(st: Any, backlog: str) -> None:
     for it in st.items("explorer-flip", ["open"]):
         d = it["data"]
         if d.get("venue") and explorer_named(backlog, d):
-            st.transition("explorer-flip", it["id"], "closed", it["version"])
+            st.transition("explorer-flip", it["id"], "closed", it["version"], event={"cause": "probe"})
 
 
 def _explorer_new_flips(st: Any, rows: Any, backlog: str) -> list[Any]:

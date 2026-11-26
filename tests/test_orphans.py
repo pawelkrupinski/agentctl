@@ -113,7 +113,7 @@ class OrphanTest(RedBase):
         self.assertEqual(self.relands, [])
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [], "nothing for a person to do: ci-5's verdict is its author's")
         it = st.item("change", "20261030-154005-repo-wt-ci-5-819355")
-        st.transition("change", it["id"], "rejected", it["version"])  # ci-5 did not land: nothing carries it now
+        st.transition("change", it["id"], "rejected", it["version"], event={"cause": "agent"})  # ci-5 did not land: nothing carries it now
         self.assertEqual(sorted(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path)), ["orphan repo-wt-ci-5: submit (never landed)",
                                                               "orphan repo-wt-review: submit (never landed)"])
         self.assertEqual(sorted(self.relands), sorted([wt, ci5]))
@@ -137,7 +137,7 @@ class OrphanTest(RedBase):
         self.assertIn(f"orphan repo-wt-ci-1: carried by open change {cid}: not submitted", A.orphan_duty(A.CurrentStore(A.process_store), self.r.path))
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
         it = st.item("change", cid)
-        st.transition("change", cid, "rejected", it["version"])  # ci-5 did not land: the orphan reopens
+        st.transition("change", cid, "rejected", it["version"], event={"cause": "agent"})  # ci-5 did not land: the orphan reopens
         did = A.orphan_duty(A.CurrentStore(A.process_store), self.r.path)
         self.assertIn("orphan repo-wt-ci-1: escalated UNLANDED ORPHAN", did)
         [c] = A.open_conditions(A.CurrentStore(A.process_store))
@@ -148,7 +148,7 @@ class OrphanTest(RedBase):
         wt, _sha = self.worktree_commit("repo-wt-dropped", "dropped: cancelled on purpose")
         st = A.process_store()
         it = st.put_item("change", "20261030-120000-repo-wt-dropped-1", "queued", {"worktree": wt, "head": _sha})
-        st.transition("change", it["id"], "cancelled", it["version"])
+        st.transition("change", it["id"], "cancelled", it["version"], event={"cause": "agent"})
         self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), ["orphan repo-wt-dropped: escalated UNLANDED ORPHAN"])
         self.assertEqual(self.relands, [], "never re-submitted")
         [c] = A.open_conditions(A.CurrentStore(A.process_store))
@@ -200,13 +200,13 @@ class OrphanTest(RedBase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), [], "carried: no submit")
         st.put_item("change", second, "queued", {"worktree": gone, "head": "b" * 40})
-        st.transition("change", first, "superseded", it["version"], data={"superseded_by": second})
+        st.transition("change", first, "superseded", it["version"], data={"superseded_by": second}, event={"cause": "agent"})
         self.assertEqual(A.successor_state(A.superseded_mark(wt), self.r.path, A.CurrentStore(A.process_store))[0], "open", "re-submitted: still on its way")
         it2 = st.item("change", second)
-        st.transition("change", second, "rejected", it2["version"])
+        st.transition("change", second, "rejected", it2["version"], event={"cause": "agent"})
         third = st.put_item("change", "20261030-190000-repo-wt-ci-5-aa11bb", "queued", {"worktree": gone, "head": "c" * 40})
         self.assertEqual(A.successor_state(A.superseded_mark(wt), self.r.path, A.CurrentStore(A.process_store))[0], "open", "landed again from its tree")
-        st.transition("change", third["id"], "cancelled", third["version"])
+        st.transition("change", third["id"], "cancelled", third["version"], event={"cause": "agent"})
         did = A.orphan_duty(A.CurrentStore(A.process_store), self.r.path)
         self.assertIn(f"superseded repo-wt-review: the mark lapsed (its change {second} ended rejected, unlanded); "
                       "the orphan rules apply again", did)

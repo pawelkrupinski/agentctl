@@ -2,6 +2,8 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, Callable, Sequence
+from agentctl.timelinecmd import timeline_step
+from agentctl.inboxentry import inbox_write
 from agentctl.core import reap_children
 from agentctl.waitingdir import wlog
 from agentctl.clones import heal_enabled
@@ -60,7 +62,7 @@ def _expire(st: Any, typ: Any, it: Any, t: Any) -> Any:
         return None
     try:
         st.transition(typ, it["id"], spec.on_deadline, it["version"],
-                      event={"text": f"{typ} {it['id']}: {it['state']} past its deadline -> {spec.on_deadline}",
+                      event={"cause": "timeout", "text": f"{typ} {it['id']}: {it['state']} past its deadline -> {spec.on_deadline}",
                              "severity": "info"})
     except (StaleVersion, TerminalState):
         return None
@@ -83,6 +85,18 @@ def tick_quiet_deadlines(st, now_=None):
 def clone_health_step(repo: str, d: str, store: Any) -> Any:
     """The clone-health step: its heal tick's line logged, or None when healing is off for the repo."""
     return [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo, store)] if x] if heal_enabled(repo) else None
+
+
+def logged(d: str, lines: list[str]) -> list[str]:
+    """A step's lines, each said in the processor's log."""
+    for x in lines:
+        wlog(d, f"tick: {x}")
+    return lines
+
+
+def owner_summary(line: str, sinks: list[str]) -> None:
+    """The weekly time-sinks summary, to the owner's inbox."""
+    inbox_write("analyze", line, [line], sinks, 0)
 
 
 def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callable[[], Any]],
@@ -108,5 +122,6 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
             ("recovery", lambda: maybe_recovery_tick(store)),
             ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues(store)]),
             ("reverts", lambda: [wlog(d, f"tick: {x}") for x in tick_reverts(repo, store)]),  # reverts.py: told their landers
+            ("timeline", lambda: logged(d, timeline_step(store, clock.time(), owner_summary))),
             ("quiet deadlines", lambda: [wlog(d, f"tick: {x}") for x in tick_quiet_deadlines(store)]),
             ("stats", shared(lambda: maybe_stats_pass(repo, d, clock, store))))

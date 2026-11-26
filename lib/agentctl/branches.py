@@ -215,12 +215,12 @@ def settle_branch_red(st: Any, e: Any, iid: Any, it: Any) -> Any:
         cleanup = "; its finished branch is for `agentctl cleanup`" if e["branch"].startswith("measure/") else ""
         text = f"branch red closed itself: {what}: {e['orphan']}{cleanup}"
         st.transition("branch-red", iid, "orphaned", it["version"], data={"why": e["orphan"]},
-                      event={"text": text, "refs": refs})
+                      event={"cause": "ci-verdict", "text": text, "refs": refs})
         return text
     if not (it and it["state"] == "orphaned"):
         return None
     text = f"branch red reopened: {what} → owner {owner_text(e.get('owner'))}"
-    st.transition("branch-red", iid, "open", it["version"], data={"why": None}, event={"text": text, "refs": refs})
+    st.transition("branch-red", iid, "open", it["version"], data={"why": None}, event={"cause": "ci-verdict", "text": text, "refs": refs})
     try:
         os.unlink(routed_path(r["databaseId"]))
     except OSError:
@@ -242,7 +242,7 @@ def retire_branch_reds(st: Any, o_r: Any, live: Any) -> Any:
             d = it["data"]
             text = (f"branch red gone: {d.get('workflow')} #{(d.get('run') or {}).get('number')} on {d.get('branch')}"
                     + (" (its branch deleted or green)" if gone else " (past its deadline)"))
-            st.transition("branch-red", it["id"], "gone", it["version"], event={"text": text})
+            st.transition("branch-red", it["id"], "gone", it["version"], event={"cause": "ci-verdict", "text": text})
             out.append(text)
     return out
 

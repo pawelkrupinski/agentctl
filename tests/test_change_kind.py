@@ -26,7 +26,7 @@ class ChangeKindTest(unittest.TestCase):
         self.red("r-flake", ["8"], kind="flake")
         self.red("r-closed", ["9"], state="offered")
         it = self.st.item("red", "r-closed")
-        self.st.transition("red", "r-closed", "cleared", it["version"])
+        self.st.transition("red", "r-closed", "cleared", it["version"], event={"cause": "agent"})
         facts = A.queue_facts({"7"}, self.st)
         k = A.classify_change({"fixes": ["#6", "7", "8", "9", "404"]}, facts)
         self.assertEqual(k["reds"], [{"name": "6", "red": "r-out", "kind": "outside"},
@@ -208,7 +208,7 @@ class WatchdogKindTest(unittest.TestCase):
         self.assertEqual(A.with_liveness("the status line\nchanges: 1", self.st, t), "the status line\nchanges: 1",
                          "no snapshot read: no line")
         it = self.st.item("change", "c-fix")
-        self.st.transition("change", "c-fix", "queued", it["version"])
+        self.st.transition("change", "c-fix", "queued", it["version"], event={"cause": "agent"})
         self.assertIsNone(A.red_fix_liveness(self.st, t, snap(80 * 60)), "its fix is queued, not stalled")
 
     def test_a_stale_hold_is_re_derived_by_the_tick_never_paged(self):
@@ -219,7 +219,7 @@ class WatchdogKindTest(unittest.TestCase):
                           ("c-old", {"kind": "backlog-batch", "why": "the next backlog batch", "since": t - 3 * 3600})):
             self.st.put_item("change", eid, "queued", {"worktree": f"/w/{eid}", "hold": hold})
             it = self.st.item("change", eid)
-            self.st.transition("change", eid, "queued", it["version"], deadline_s=-1)  # past its deadline
+            self.st.transition("change", eid, "queued", it["version"], deadline_s=-1, event={"cause": "agent"})  # past its deadline
             A.lap_change_deadline(self.st, {"id": eid, "worktree": f"/w/{eid}"}, "queued", t)
             it = self.st.item("change", eid)
             # NEVER UNHELD BETWEEN TWO READINGS (queuepush.py): kept, its clock restarted, until the tick records anew

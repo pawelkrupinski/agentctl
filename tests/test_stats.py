@@ -20,7 +20,7 @@ def store(t):
 def step(st, t, typ, iid, to, secs, text="", **kw):
     t[0] += secs
     it = st.item(typ, iid)
-    st.transition(typ, iid, to, it["version"], event={"text": text, **kw.pop("event", {})}, **kw)
+    st.transition(typ, iid, to, it["version"], event={"cause": "agent", "text": text, **kw.pop("event", {})}, **kw)
 
 
 def landed_change(st, t, iid="20261117-083612-movies-x-4a6494"):

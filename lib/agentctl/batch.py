@@ -69,8 +69,8 @@ def member_queued_again(st: Any, d: str, e: Any, it: Any, bid: str) -> str:
     what it did, in words."""
     kind = batch_kind(it) if it else "batch"
     if e["status"] == "pushing":
-        set_change(st, d, e, "checked", event={"text": f"{e['id']}: {kind} {bid}'s push did not land"})
-    set_change(st, d, e, "queued", event={"text": f"{e['id']}: queued again: {kind} {bid} is "
+        set_change(st, d, e, "checked", cause="batch", event={"text": f"{e['id']}: {kind} {bid}'s push did not land"})
+    set_change(st, d, e, "queued", cause="batch", event={"text": f"{e['id']}: queued again: {kind} {bid} is "
                                               f"{it['state'] if it else 'gone'} without it"},
                backlog_batch=None, retry_after=0)
     return f"{e['id']}: queued again ({kind} {bid})"
@@ -83,12 +83,12 @@ def member_passes_with_batch(st: Any, d: str, e: Any, it: Any) -> None:
     if it["state"] != "pushing" or e["status"] != "checking":
         return
     if dd.get("depth") == "verify":
-        set_change(st, d, e, "checked", event={"text": f"{e['id']}: verified {e['tip'][:10]} on {dd['base'][:10]} "
+        set_change(st, d, e, "checked", cause="check-passed", event={"text": f"{e['id']}: verified {e['tip'][:10]} on {dd['base'][:10]} "
                                                    f"in push batch {bid} (fully checked on "
                                                    f"{(e.get('full_base') or '?')[:10]})"},
                    checked_base=dd["base"], checked_mode=VERIFY_MODE, checked_where=f"in push batch {bid}")
     else:
-        set_change(st, d, e, "checked", event={"text": f"{e['id']}: checked in backlog batch {bid} ({e['tip'][:10]} "
+        set_change(st, d, e, "checked", cause="check-passed", event={"text": f"{e['id']}: checked in backlog batch {bid} ({e['tip'][:10]} "
                                                    f"on {dd['base'][:10]})"},
                    checked_base=dd["base"], full_base=dd["base"], full_tip=e["tip"], checked_mode="--range",
                    checked_where=f"in backlog batch {bid}")
@@ -334,7 +334,7 @@ def release_red_fixes(repo: Any, d: Any, st: Any, reds: Any, waiting: Any, t: fl
             note_wait_rule(st, e, why)
             continue
         text = "main is green" if not reds else "the open red names it, so it never waits for green"
-        set_change(st, d, e, "queued", data={"wait_rule": None},
+        set_change(st, d, e, "queued", cause="gate-red", data={"wait_rule": None},
                    event={"text": f"{e['id']}: {text} -- a fix of an open red ({kind_text(k)}) "
                                   "is checked alone and first, never a batch member", "severity": "info"},
                    waiting_released=ts())

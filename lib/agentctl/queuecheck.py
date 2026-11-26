@@ -61,7 +61,7 @@ def regen_hold(st, d, e, tree, failing, out):
            f"(ci-runner runs no {' / '.join(cmds) or 'regen command'}) and its checks failed over them ({failing}); it "
            f"keeps its place in the queue: run `{cmd}` (rebases onto {remote()}/main and runs "
            f"{' and '.join(f'`{c}`' for c in cmds) or 'the regen'} on this machine)")
-    set_change(st, d, e, "queued", event=change_event(e, why, (out or "").splitlines()[-40:], code=None, final=False),
+    set_change(st, d, e, "queued", cause="regen-hold", event=change_event(e, why, (out or "").splitlines()[-40:], code=None, final=False),
                why=why, retry_after=t + CONFLICT_PLACE_KEPT,
                regen_hold={"since": t, "cmd": cmd, "files": files, "head": e.get("head")})
     wlog(d, f"{e['id']}: held for its regeneration ({', '.join(files)}): `{cmd}`")

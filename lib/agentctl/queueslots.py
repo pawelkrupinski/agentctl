@@ -13,6 +13,7 @@ from agentctl.waitingdir import QUEUE_POOL, save_entry, waiting_entries, waiting
 from agentctl.lander import lander_fields
 from agentctl.leases import LeaseHold, lease_live
 from agentctl.land import tool_env
+from agentctl.causes import checked_cause, reject_cause, reject_class
 from agentctl.owned import Owned
 from agentctl.worktrees import mark_internal
 from agentctl.statemachines import (
@@ -152,10 +153,12 @@ def _item_data(cur, to, data, fields):
 
 
 def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any] | None = None,
-               event: dict[str, Any] | None = None,
+               event: dict[str, Any] | None = None, *, cause: str, detail: str | None = None,
                **fields: Any) -> None:
     """THE writer of a change's state: its item (transition + event) and its entry's status, together. A waiting entry
-    that queued changes joined passes a final state on to them (joined_verdicts)."""
+    that queued changes joined passes a final state on to them (joined_verdicts). cause: why it moved, one of
+    causes.CAUSES (a keyword every caller names: tests/test_causes.py); detail: a short qualifier."""
+    event = {**(event or {}), "cause": checked_cause(cause), **({"detail": detail} if detail else {})}
     joined = joined_changes(d, e, st) if machine_state("change", to).terminal else []
     if joined and event:  # its author hears it under the queued id alone (joined_verdicts)
         event = {**event, "refs": {**(event.get("refs") or {}), "no_inbox": True}}
@@ -185,8 +188,9 @@ def joined_changes(d, w, st):
     return out
 
 
-def _finish_joined(st: Any, w: Any, q: Any, it: Any, to: Any, refs: Any, data: Any) -> Any:
-    """Joined change q (item it) of waiting entry w moved to `to`, under q's id, its line the projection's."""
+def _finish_joined(st: Any, w: Any, q: Any, it: Any, to: Any, refs: Any, data: Any, cause: str) -> Any:
+    """Joined change q (item it) of waiting entry w moved to `to`, under q's id, its line the projection's, for the
+    cause w moved."""
     line = joined_verdict(q, w if w.get("why") else {**w, "why": f"{w['id']}: {to}"}, to)
     sha = w.get("landed_sha") if to == "landed" else None
     extra = {k: refs[k] for k in refs if k not in ("verdict", "tail", "exit", "final", "command", "entry", "no_inbox")}
@@ -194,7 +198,7 @@ def _finish_joined(st: Any, w: Any, q: Any, it: Any, to: Any, refs: Any, data: A
     with suppress(StaleVersion, TerminalState):
         st.transition("change", q["id"], to, it["version"],
                       data={**(data or {}), "why": line[:600], **({"tip": sha, "landed_sha": sha} if sha else {})},
-                      event=ev)
+                      event={**ev, "cause": cause})
 
 
 def joined_verdicts(st, w, joined, to, event, data) -> None:
@@ -204,16 +208,20 @@ def joined_verdicts(st, w, joined, to, event, data) -> None:
     through the projection, as a second LANDED)."""
     refs = (event or {}).get("refs") or {}
     for q, it in joined:
-        _finish_joined(st, w, q, it, to, refs, data)
+        _finish_joined(st, w, q, it, to, refs, data, (event or {}).get("cause") or "landed")
 
 
-def queue_verdict(st, d, e, status, verdict, tail = (), code: int = 1, **fields) -> None:
+def queue_verdict(st, d, e, status, verdict, tail = (), code: int = 1, cause: str | None = None, **fields) -> None:
     """A change's final verdict: its state (set_change), whose event the projector makes its author's inbox entry.
     `decided_on`: the main it was decided on (else the base it was checked on, else the one it was queued on): a land
-    replays the verdict only while main is still that (verdict_still_holds)."""
+    replays the verdict only while main is still that (verdict_still_holds). cause: a landing's is `landed`, a
+    reject's THE reject classifier's (causes.reject_cause: its class, infra | test | policy, the event's detail)."""
     fields["decided_on"] = fields.get("decided_on") or e.get("checked_base") or e.get("base")
+    cause = cause or ("landed" if status == "landed" else reject_cause(verdict, tail) if status == "rejected" else None)
+    detail = f"class={reject_class(cause)}" if status == "rejected" else None
     # its recheck log on its item too (stats' kept_verdicts reads it there): a batch's kept verdict is logged on the
     # entry alone
     set_change(st, d, e, {"joined": "waiting"}.get(status, status), event=change_event(e, verdict, tail, code),
+               cause=checked_cause(cause), detail=detail,
                data={"rechecks": e["rechecks"]} if e.get("rechecks") else None, decided=ts(), why=verdict, **fields)
     wlog(d, f"{e['id']}: {verdict.splitlines()[0]}")

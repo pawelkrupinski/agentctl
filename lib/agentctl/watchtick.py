@@ -323,7 +323,7 @@ def tick_watch(st, it, t):
     dd = it["data"]
     if t > it["deadline"]:
         st.transition("watch", it["id"], "unknown", it["version"],
-                      event=watch_event(it, f"WATCH UNKNOWN: Main or the convergence still undecided for {it['id'][:10]} "
+                      event={"cause": "timeout"} | watch_event(it, f"WATCH UNKNOWN: Main or the convergence still undecided for {it['id'][:10]} "
                                             f"after {int(WATCH_TIMEOUT // 3600)} h: a stuck run (`agentctl ci-why`)",
                                         "escalate", 2))
         return [f"watch {it['id'][:10]}: unknown"]
@@ -355,7 +355,7 @@ def finish_watch(st, it, state, line, red_runs, told=False):
         ev = watch_event(it, line, code={"ok": 0, "red": 3}.get(state, 2))
         if told:
             ev["audience"] = {}
-        st.transition("watch", it["id"], state, it["version"], data={"verdict": line}, event=ev)
+        st.transition("watch", it["id"], state, it["version"], data={"verdict": line}, event={**ev, "cause": "ci-verdict"})
     if state == "ok" and not told and dd.get("close") and os.path.isdir(dd["close"]):
         err(close_worktree(dd["close"]))
     for wf, n in red_runs:

@@ -246,7 +246,7 @@ class RequeueLoopTest(unittest.TestCase):
 
     def again(self, why, **kw):
         A.requeue_infra(self.st, self.d, self.e, why, A.epoch_now(), **kw)
-        self.st.transition("change", "e1", "checking", self.st.item("change", "e1")["version"])
+        self.st.transition("change", "e1", "checking", self.st.item("change", "e1")["version"], event={"cause": "agent"})
         self.e["status"] = "checking"
 
     def test_the_third_requeue_for_the_same_reason_opens_a_condition_with_gits_error(self):

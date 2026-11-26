@@ -61,7 +61,7 @@ class InHandBase(VerifyWaitBase):
                                                           **({"replays": replays} if replays else {}),
                                                           **({"diagnoses": list(diagnoses)} if diagnoses else {}),
                                                           **({"fixes": list(fixes)} if fixes else {})})
-        self.st.transition("change", CHANGE, "landed", ch["version"], data={"landed_sha": self.sha})
+        self.st.transition("change", CHANGE, "landed", ch["version"], data={"landed_sha": self.sha}, event={"cause": "agent"})
         self.entry = {"id": CHANGE, "status": "landed", "landed_sha": self.sha, "fixes": list(fixes or []),
                       "diagnoses": list(diagnoses or []), "worktree": self.wt, "created": "2026-11-21T02:00:00Z",
                       "landed_at": "2026-11-21T02:00:00Z", "commits": [self.sha]}

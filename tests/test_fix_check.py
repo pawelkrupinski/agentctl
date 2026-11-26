@@ -241,7 +241,7 @@ class PerRedTest(FixCheckBase):
         sha = self.ios_fix()
         it = self.st.item("red", "swift74")
         self.st.transition("red", "swift74", "fix-pending", it["version"],
-                           data={"fix": {"entry": None, "status": "landed", "sha": sha, "at": 1.0}})
+                           data={"fix": {"entry": None, "status": "landed", "sha": sha, "at": 1.0}}, event={"cause": "agent"})
         it = self.st.item("red", "swift74")
         facts = self.facts()
         out = A.red_fix_pending(self.st, it, A.red_fix_of(it, facts), False, None, {}, facts, self.r.path,
@@ -256,7 +256,7 @@ class PerRedTest(FixCheckBase):
         sha = self.ios_fix()
         it = self.st.item("red", "swift74")
         self.st.transition("red", "swift74", "fix-pending", it["version"], data={"fix": {
-            "entry": None, "status": "landed", "sha": sha, "at": 1.0, "verify_since": 1.0, "waited_on": "ios74"}})
+            "entry": None, "status": "landed", "sha": sha, "at": 1.0, "verify_since": 1.0, "waited_on": "ios74"}}, event={"cause": "agent"})
         it = self.st.item("red", "swift74")
         facts = self.facts()
         out = A.red_fix_pending(self.st, it, A.red_fix_of(it, facts), False, None, {}, facts, self.r.path,

@@ -1,6 +1,7 @@
 # agentctl, part `projector`: the store's projectors, run by the server's tick: change items from the queue, inbox entries and alerts from the events, one live notification per escalation, the lease archive.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.causes import PROJECTED_CAUSE, reject_cause
 from agentctl.ids import stamp
 from agentctl.clock import epoch_now
 import json
@@ -49,6 +50,8 @@ def project_changes(d, store):
                                                      "red_accum0": float(st.meta_get("red_accum", 0) or 0)})
         if cur["state"] != state and not machine_state("change", cur["state"]).terminal:
             data, event = projected_transition(e, w, cur["state"], state)
+            event = {**event, "cause": PROJECTED_CAUSE.get(state) or reject_cause(str((data or {}).get("why") or "")),
+                     "detail": "projected"}
             with suppress(StaleVersion, TerminalState):
                 st.transition("change", e["id"], state, cur["version"], data=data, event=event)
             cur = st.item("change", e["id"])

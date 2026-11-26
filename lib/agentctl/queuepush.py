@@ -140,7 +140,7 @@ class ChangePass:
         it = st.put_item("change", e["id"], ENTRY_STATE.get(e["status"], "queued"), change_item_fields(e))
         state = it["state"]
         if state == "pushing":  # a tick that died mid-push: verified next, never pushed twice blindly
-            set_change(st, self.d, e, "checked", event={"text": f"{e['id']}: its push was interrupted: verified, then tried again"})
+            set_change(st, self.d, e, "checked", cause="pushing", event={"text": f"{e['id']}: its push was interrupted: verified, then tried again"})
             state = "checked"
         kind = self.kinds.get(e["id"]) or classify_change(e, self.facts, t)
         record_change_kind(st, e, kind)  # on its item, now that it surely has one (a no-op when unchanged)

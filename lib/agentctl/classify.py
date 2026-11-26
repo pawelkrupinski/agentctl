@@ -345,7 +345,7 @@ def network_failure(out: Optional[str]) -> Optional[str]:
 def network_only(out: Optional[str]) -> Optional[str]:
     """A check that could not reach the network and failed nothing else: its first network signature when no test
     runner's failure line is there too (RUNNER_FAILED), else None."""
-    return network_failure(out) if not _test_line((out or "").splitlines()) else None
+    return network_failure(out) if not names_failing_test((out or "").splitlines()) else None
 
 
 # A line a test runner wrote for a failing test: scalatest's `*** FAILED` or sbt's `[error]` -- never GitHub's own
@@ -356,7 +356,7 @@ RUNNER_FAILED = re.compile(r"\*\*\* FAILED|\*\*\* \d+ TESTS? FAILED|\*\*\* ABORT
                            r"^\s*\d+\) \[[^\]]+\] \u203a |^\s*\d+ failed$")
 
 
-def _test_line(lines: list[str]) -> bool:
+def names_failing_test(lines: list[str]) -> bool:
     return any(RUNNER_FAILED.search(l) for l in lines)
 
 
@@ -375,7 +375,7 @@ class JobVerdict:
         bad = [s for s in job.get("steps") or [] if s.get("conclusion") in ("failure", "timed_out")]
         self.step = bad[0]["name"] if bad else None
         self.lines, self.raw, self.timed_out = lines, raw, timed_out
-        self.test_line = _test_line(lines)
+        self.test_line = names_failing_test(lines)
 
     def verdict(self) -> Any:
         for rule in (self.timeout, self.credentials, self.setup, self.empty_log, self.unknown, self.key_refused, self.infra_line,

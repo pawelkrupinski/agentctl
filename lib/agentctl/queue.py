@@ -63,7 +63,7 @@ def requeue_infra(st, d, e, why, now, delay=None, reason=None, detail=None, repo
     same = e.get("infra_reason") == reason
     n_same = int(e.get("infra_same") or 0) + 1 if same else 1
     since = float(e.get("infra_reason_since") or t) if same else t
-    set_change(st, d, e, "queued", data={"infra_attempts": n},
+    set_change(st, d, e, "queued", cause="check-failed-infra", data={"infra_attempts": n},
                event=change_event(e, f"QUEUED AGAIN {e['id']}: infra ({why}); checked again in {int(wait // 60)} min",
                                   code=None, final=False, severity=sev),
                infra_retries=n, retry_after=t + wait, why=f"infra: {why}", waiting_on=None,
@@ -417,7 +417,7 @@ def expire_land_hold(st: Any, it: dict[str, Any]) -> None:
     """A hold past its deadline moved to `expired`, an event saying who held it and why (one already moved: left)."""
     try:
         st.transition("hold", it["id"], "expired", it["version"],
-                      event={"text": f"land hold {it['id']} expired (held by {it['data'].get('by')}: "
+                      event={"cause": "timeout", "text": f"land hold {it['id']} expired (held by {it['data'].get('by')}: "
                                      f"{it['data'].get('why') or 'no reason given'})"})
     except (StaleVersion, TerminalState):
         pass

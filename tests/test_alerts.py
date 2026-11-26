@@ -70,8 +70,8 @@ class RoutingTest(AlertBase):
         """84 identical `NOT LANDED: the pre-push checks failed` reached the owner in a week: the author's job."""
         for i in range(3):
             self.st.put_item("change", f"c{i}", "checking", {"worktree": self.wt})
-            self.st.transition("change", f"c{i}", "rejected", 1, event=A.change_event(
-                {"id": f"c{i}", "worktree": self.wt}, f"NOT LANDED: the pre-push checks failed (ci-runner); try {i}"))
+            self.st.transition("change", f"c{i}", "rejected", 1, event={"cause": "check-failed-test", **A.change_event(
+                {"id": f"c{i}", "worktree": self.wt}, f"NOT LANDED: the pre-push checks failed (ci-runner); try {i}")})
         A.project_events(self.st)
         [e] = self.unread()
         self.assertEqual((e["audience"], e["count"], e["kind"]), ("author", 3, "NOT_LANDED"))
@@ -169,7 +169,7 @@ class SelfCloseTest(AlertBase):
         self.unclaimed()
         [e] = self.unread("owner")
         it = self.st.item("red", "r1")
-        self.st.transition("red", "r1", "leased", it["version"])
+        self.st.transition("red", "r1", "leased", it["version"], event={"cause": "agent"})
         out = A.reconcile_alerts(self.st, force=True)
         self.assertTrue(any("closed red:r1" in x for x in out), out)
         self.assertEqual(self.unread(), [])
@@ -289,7 +289,7 @@ class ClearedOwnerAlertTest(AlertBase):
         live = self.legacy("RED BLOCKED ON OWNER: WAITING ON YOU: accept Hen as known-wrong. -- Main #2128",
                            "run:or accept Hen as known-wrong. -- Main #2128")
         it = self.st.item("red", "50dd506d93c9.2")
-        self.st.transition("red", it["id"], "cleared", it["version"])
+        self.st.transition("red", it["id"], "cleared", it["version"], event={"cause": "agent"})
         A.reconcile_alerts(self.st, force=True)
         self.assertIn("red", self.closed_why(gone) or "")
         self.assertIsNone(self.closed_why(live), "its red is still waiting on the owner")
@@ -419,7 +419,7 @@ class ClearedOwnerAlertTest(AlertBase):
         A.reconcile_alerts(self.st, force=True)
         self.assertIn("gone", self.closed_why(gone) or "")
         self.assertIsNone(self.closed_why(held), "the hold is still held")
-        self.st.transition("hold", "main", "released", hold["version"])
+        self.st.transition("hold", "main", "released", hold["version"], event={"cause": "agent"})
         A.reconcile_alerts(self.st, force=True)
         self.assertIn("hold is released", self.closed_why(held) or "")
 

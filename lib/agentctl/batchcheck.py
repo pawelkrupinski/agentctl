@@ -10,7 +10,7 @@ from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.clock import Clock
 from agentctl.knobs import env_num
 from agentctl.core import err, git, git_ok, slug, state_root
-from agentctl.classify import INFRA_LOG, _test_line
+from agentctl.classify import INFRA_LOG, names_failing_test
 from agentctl.forge import forge_env
 from agentctl.waitingdir import save_entry, waiting_state, wlog
 from agentctl.leases import LeaseHold
@@ -38,7 +38,7 @@ def red_prechecked(d, st, it, members, tip, base, how, failed=None):
         e.update(prechecked=it["id"], checked_base=base)
         save_entry(d, e)
     pre = {"members": [e["id"] for e in members], "base": base, "tip": tip} if members else None
-    batch_move(st, it, "blocked-red", {"prechecked": pre, "precheck_failed": failed},
+    batch_move(st, it, "blocked-red", {"prechecked": pre, "precheck_failed": failed}, cause="gate-red",
                text=f"batch {it['id']}: {how}" + (f": pre-checked {len(members)} change(s) as one at {tip[:10]}"
                                                    if members else ""))
 
@@ -195,7 +195,7 @@ class BatchCheck:
         if ok:
             return self.passed()
         if REDGATE.search(out or ""):
-            batch_move(self.st, self.it, "assembling", text=f"batch {self.bid}: the gate went red")
+            batch_move(self.st, self.it, "assembling", text=f"batch {self.bid}: the gate went red", cause="gate-red")
             return 0
         self.move("bisecting", {"failed_out": (out or "")[-20000:]},
                   text=f"batch {self.bid}: {self.tip[:10]} failed its check; bisecting")
@@ -343,7 +343,7 @@ def batch_infra_failure(out):
         return m.group(0)
     lines = (out or "").splitlines()
     hit = next((line for line in lines if INFRA_LOG.search(line)), None)
-    return hit.strip()[:160] if hit and not _test_line(lines) else None
+    return hit.strip()[:160] if hit and not names_failing_test(lines) else None
 
 
 def culprit_own_failure(repo, d, e, base, out, now):

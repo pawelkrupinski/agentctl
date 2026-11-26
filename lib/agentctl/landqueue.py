@@ -178,7 +178,7 @@ def cancel_through_store(entry: str, st: Any) -> int:
 
 def cancel_queued(st: Any, d: str, e: dict[str, Any]) -> int:
     """A queued entry cancelled, with its remote item and its checker (its CI run is cancelled with it)."""
-    set_change(st, d, e, "cancelled", event={"text": f"{e['id']}: cancelled"},
+    set_change(st, d, e, "cancelled", cause="agent", event={"text": f"{e['id']}: cancelled"},
                why="cancelled by `agentctl land cancel`", decided=ts())
     cancel_entry_remote(st, e, "its queue entry was cancelled")
     h = read_record(entry_owned(e["id"]).record) or {}
@@ -201,7 +201,7 @@ def cancel_waiting(entry: str, repo: str, d: str, st: Any) -> int:
         print(f"no single waiting change matches {entry!r}: `agentctl land status`")
         return 1
     e = hits[0]
-    set_change(st, d, e, "cancelled", event={"text": f"{e['id']}: cancelled"}, why="cancelled by `agentctl land cancel`",
+    set_change(st, d, e, "cancelled", cause="agent", event={"text": f"{e['id']}: cancelled"}, why="cancelled by `agentctl land cancel`",
                decided=ts())  # the next batch is assembled without it
     print(f"cancelled {e['id']}")
     return 0

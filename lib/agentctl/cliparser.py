@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import argparse
+from agentctl.timelinecmd import add_timeline_commands
 from agentctl.usage import USAGE
 from agentctl.core import CI_WHY_HELP, ENV_HELP, LAND_HELP, WAIT_RUN_HELP, remote
 from agentctl.ghapp import GHAPP_ROLES
@@ -266,4 +267,5 @@ def add_checks(sub: Subparsers) -> None:
 COMMANDS = (add_wait, add_state, add_prepush_check, add_cleanup, add_ci_why, add_land, add_env, add_orphans,
             add_waiting, add_watch, add_sweep, add_store, add_github_app, add_tick, add_queue, add_checks, add_gov,
             add_laptop, add_lease, add_status, add_recover, add_inbox, add_decide, add_red, add_issue, add_revert,
-            add_dispatch, add_maintain, add_supersede, add_park, add_unpark, add_reap, add_config)
+            add_dispatch, add_maintain, add_supersede, add_park, add_unpark, add_reap, add_config,
+            add_timeline_commands)

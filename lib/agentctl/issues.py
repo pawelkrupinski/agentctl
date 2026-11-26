@@ -33,7 +33,7 @@ def issue_close(st: Any, iid: str, note: str, by: str) -> Any:
         return None
     if it["state"] != "closed":
         st.transition("issue", iid, "closed", it["version"], data={"closed_by": by, "note": note, "closed_at": ts()},
-                      event={"text": f"issue {iid} closed by {by}: {note}"[:400]})
+                      event={"cause": "agent", "text": f"issue {iid} closed by {by}: {note}"[:400]})
     return st.item("issue", iid)
 
 
@@ -71,7 +71,7 @@ def tick_issues(st, now_ = None):
     for it in due:
         try:
             st.transition("issue", it["id"], "open", it["version"],
-                          event={"text": issue_escalation_text(it, t), "refs": {"issue": it["id"]}})
+                          event={"cause": "timeout", "text": issue_escalation_text(it, t), "refs": {"issue": it["id"]}})
         except (StaleVersion, TerminalState):
             continue  # closed or moved meanwhile: the next one
         st.meta_set("issue_escalated_at", t)

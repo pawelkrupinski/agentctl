@@ -129,7 +129,7 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
 
     def test_a_landing_takes_back_the_level_its_self_move_raised(self):
         it = self.item()
-        self.st.transition("red", it["id"], "fix-pending", it["version"])  # the old landing move: escalate, level 1
+        self.st.transition("red", it["id"], "fix-pending", it["version"], event={"cause": "agent"})  # the old landing move: escalate, level 1
         self.assertEqual(self.item()["level"], 1)
         self.step("2026-11-19T04:23:15Z")
         self.assertEqual(self.item()["level"], 0)
@@ -237,7 +237,7 @@ class CancelledFixFollowsNoOlderChangeTest(VerifyWaitBase):
                                     "20261119-035951-movies-wt-owner-outside-gate-f4c153")
         self.t[0] = self.stamp(old) + 3600
         ch = self.st.put_item("change", old, "queued", {"worktree": wt, "head": "1" * 40})  # no submitted_at
-        self.st.transition("change", old, "landed", ch["version"], data={"tip": "b6d3d8235b" + "0" * 30})
+        self.st.transition("change", old, "landed", ch["version"], data={"tip": "b6d3d8235b" + "0" * 30}, event={"cause": "agent"})
         self.t[0] = self.stamp(cancelled) + 60
         ch = self.st.put_item("change", cancelled, "queued", {"worktree": wt, "head": "0be3d7d23f" + "0" * 30})
         self.st.put_item("red", "5254bffda9d2", "fix-pending", {
@@ -245,7 +245,7 @@ class CancelledFixFollowsNoOlderChangeTest(VerifyWaitBase):
             "kind": "test", "line": "backtest failed", "runs": ["4"], "opened_at": self.stamp(old) + 7 * 86400,
             "last_run": {"number": 4, "databaseId": 4},
             "fix": {"entry": cancelled, "status": "checking", "author": {"worktree": wt}}})
-        self.st.transition("change", cancelled, "cancelled", ch["version"])
+        self.st.transition("change", cancelled, "cancelled", ch["version"], event={"cause": "agent"})
         facts = {"entries": [{"id": cancelled, "status": "cancelled", "fixes": ["4"], "worktree": wt,
                               "created": "2026-11-19T03:57:58Z"}], "landed": [], "repo": None}
 
@@ -282,7 +282,7 @@ class CancelledFixFollowsNoOlderChangeTest(VerifyWaitBase):
             "jobs": ["backtest"], "kind": "test", "line": "takes moved", "runs": ["349"],
             "opened_at": self.stamp(eid) - 3600, "last_run": {"number": 349, "databaseId": 349},
             "fix": {"entry": eid, "status": "checking", "author": {"worktree": wt}}})
-        self.st.transition("change", eid, "rejected", ch["version"], data={"why": why})
+        self.st.transition("change", eid, "rejected", ch["version"], data={"why": why}, event={"cause": "agent"})
         facts = {"entries": [{"id": eid, "status": "rejected", "fixes": ["349"], "worktree": wt,
                               "created": "2026-11-22T07:26:12Z"}], "landed": [], "repo": None}
         self.t[0] += A.RED_FIX_REQUEUE_GRACE + 1

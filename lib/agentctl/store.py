@@ -13,8 +13,10 @@ from agentctl.knobs import knob_contact_gap, knob_contact_pause_max
 from agentctl.core import state_root
 from agentctl.statefile import json_object
 from agentctl.offers import OfferTable
+from agentctl.backfill import backfill_store, derived_rows
+from agentctl.eventrows import insert_event, migrate_events, move_event, opened_event
 from agentctl.statemachines import (
-    ARCHIVE, IllegalTransition, MACHINES, StaleVersion, StateSpec, TerminalState, change_exit_event, machine_state)
+    ARCHIVE, IllegalTransition, MACHINES, check_move, level_after, StaleVersion, StateSpec, TerminalState, change_exit_event, machine_state)
 
 
 # ---------------------------------------------------------------- the store (design §3, §6; phase 1 step 1)
@@ -85,9 +87,15 @@ class Store(OfferTable):
         c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         c.row_factory = sqlite3.Row
         wal_mode(c)
-        for q in self.SCHEMA:
-            c.execute(q)
+        self.prepare(c)
         return c
+
+    @classmethod
+    def prepare(cls, c: sqlite3.Connection) -> None:
+        """The schema on connection c: every table, and the events' attribution columns a store older than them lacks."""
+        for q in cls.SCHEMA:
+            c.execute(q)
+        migrate_events(c)
 
     def _row(self, c, name):
         r = c.execute("SELECT * FROM leases WHERE name=?", (name,)).fetchone()
@@ -288,6 +296,7 @@ class Store(OfferTable):
                 now_ = self.clock()
                 c.execute("INSERT INTO items VALUES (?,?,?,?,?,?,?,?)",
                           (typ, iid, state, 1, now_, now_ + spec.deadline, 0, json.dumps(data or {})))
+                insert_event(c, opened_event(typ, iid, state, now_))
             c.execute("COMMIT")
             return self._item(c, typ, iid)
         finally:
@@ -309,6 +318,7 @@ class Store(OfferTable):
                 secs = machine_state(typ, state).deadline if deadline_s is None else deadline_s
                 c.execute("INSERT INTO items VALUES (?,?,?,?,?,?,?,?)",
                           (typ, f"{prefix}{n}", state, 1, now_, now_ + secs, 0, json.dumps(data)))
+                insert_event(c, opened_event(typ, f"{prefix}{n}", state, now_))
             c.execute("COMMIT")
             return cast(dict[str, Any], self._item(c, typ, row["id"] if row else f"{prefix}{n}")), row is None
         finally:
@@ -325,14 +335,14 @@ class Store(OfferTable):
             c.execute("BEGIN IMMEDIATE")
             cur = self._item(c, typ, iid)
             try:
-                self._check_move(typ, iid, cur, to, expect_version)
+                check_move(typ, iid, cur, to, expect_version)
             except Exception as refusal:
                 c.execute("ROLLBACK")
                 if isinstance(refusal, IllegalTransition):  # recorded once the write lock is back
                     self._record_illegal(typ, iid, cur["state"], to, (event or {}).get("text"))
                 raise
             now_, same = self.clock(), to == cur["state"]
-            level = self._level_after(cur, spec, to, event, level)
+            level = level_after(cur, spec, to, event, level)
             merged = {**cur["data"], **(data or {})}
             c.execute("UPDATE items SET state=?, version=?, entered_at=?, deadline=?, level=?, data=? WHERE type=? AND id=?",
                       (to, cur["version"] + 1, now_ if not same else cur["entered_at"],
@@ -344,49 +354,21 @@ class Store(OfferTable):
         finally:
             c.close()
 
-    @staticmethod
-    def _check_move(typ: Any, iid: Any, cur: Any, to: Any, expect_version: Any) -> Any:
-        """Raise StaleVersion / TerminalState / IllegalTransition unless the item at `cur` may move to `to`."""
-        if not cur or cur["version"] != expect_version:
-            raise StaleVersion(f"{typ} {iid}: version {cur and cur['version']}, expected {expect_version}")
-        if machine_state(typ, cur["state"]).terminal and to != cur["state"]:
-            raise TerminalState(f"{typ} {iid} is {cur['state']}: terminal")
-        if to != cur["state"] and to not in machine_state(typ, cur["state"]).exits:
-            # THE TABLE IS THE LAW (2026-11-20): a move MACHINES does not list is refused and recorded (transition)
-            raise IllegalTransition(f"{typ} {iid}: {cur['state']} -> {to} is no move of machine {typ!r} "
-                                    f"(its exits: {', '.join(machine_state(typ, cur['state']).exits) or 'none'})")
-
-    @staticmethod
-    def _level_after(cur: Any, spec: Any, to: Any, event: Any, level: Any) -> Any:
-        """The level after the move: a self-transition escalates (not on severity `info`: blame.py), any other resets it."""
-        up = 1 if spec.escalate and (event or {}).get("severity") != "info" else 0
-        return int(level) if level is not None else cur["level"] + up if to == cur["state"] else 0
-
-    @staticmethod
-    def _insert_event(c: Any, at: Any, kind: Any, typ: Any, iid: Any, frm: Any, to: Any, severity: Any, audience: Any, text: Any, refs: Any, dedupe: Any) -> Any:
-        """One row of the event feed (INSERT OR IGNORE: a repeated dedupe key says nothing twice)."""
-        c.execute("INSERT OR IGNORE INTO events (at, kind, item_type, item_id, from_state, to_state, severity, "
-                  "audience, text, refs, dedupe) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                  (at, kind, typ, iid, frm, to, severity, json.dumps(audience), text, json.dumps(refs), dedupe))
-
     def _insert_move_event(self, c: Any, now_: Any, typ: Any, iid: Any, cur: Any, to: Any, spec: Any, merged: Any, event: Any) -> Any:
         """The event a move writes: the caller's (a change's exit event completed when it ends), deduped per version."""
-        same, ev = to == cur["state"], dict(event or {})
-        if typ == "change" and spec.terminal and not same:
+        ev = dict(event or {})
+        if typ == "change" and spec.terminal and to != cur["state"]:
             ev = change_exit_event(iid, to, merged, ev)
-        ev = {"kind": f"{typ}.{to}", "severity": "escalate" if same and spec.escalate else "info",
-              "dedupe": f"{typ}:{iid}:{to}:{cur['version'] + 1}", "audience": {}, "text": "", "refs": {},
-              **{k: v for k, v in ev.items() if v}}
-        self._insert_event(c, now_, ev["kind"], typ, iid, cur["state"], to, ev["severity"], ev["audience"], ev["text"],
-                           ev["refs"], ev["dedupe"])
+        insert_event(c, {**move_event(typ, iid, cur["state"], to, cur["version"] + 1, spec.escalate, ev), "at": now_})
 
     def _record_illegal(self, typ, iid, frm, to, why):
         c = self.db()
         try:
             said = f" (it would have said: {str(why)[:200]})" if why else ""
-            self._insert_event(c, self.clock(), f"{typ}.illegal", typ, iid, frm, to, "info", {},
-                               f"REFUSED {typ} {iid}: {frm} -> {to} is no move of its machine{said}", {},
-                               f"{typ}:{iid}:illegal:{frm}:{to}")
+            insert_event(c, {"at": self.clock(), "kind": f"{typ}.illegal", "item_type": typ, "item_id": iid,
+                             "from_state": frm, "to_state": to,
+                             "text": f"REFUSED {typ} {iid}: {frm} -> {to} is no move of its machine{said}",
+                             "dedupe": f"{typ}:{iid}:illegal:{frm}:{to}"})
         except Exception:
             pass  # the refusal stands whether or not it is recorded
         finally:
@@ -450,8 +432,14 @@ class Store(OfferTable):
         finally:
             c.close()
 
-    def events(self, after=0, limit=500):
+    def events(self, after=0, limit=500):  # the feed after cursor `after`
         return self._event_rows("SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?", (after, limit))
+
+    def derived(self) -> dict[str, list[dict[str, Any]]]:  # the backfill's derived rows (backfill.py)
+        return derived_rows(self.db)
+
+    def backfill(self) -> dict[str, int]:  # derive what the history lacks (backfill.py; idempotent)
+        return backfill_store(self.db)
 
     def item_events(self, typ, iid):
         """One item's events, in order."""
@@ -467,11 +455,11 @@ class Store(OfferTable):
             c.execute("BEGIN IMMEDIATE")
             for r in c.execute("SELECT * FROM leases WHERE expires_at < ?", (cut,)).fetchall():
                 meta = json_object(r["meta"])
-                self._insert_event(c, self.clock(), "lease.archived", "lease", r["name"], None, None, "info", {},
-                                   f"{r['name']} epoch {r['epoch']}: {meta.get('outcome') or 'lapsed'}",
-                                   {"holder": r["holder"], "epoch": r["epoch"], "acquired_at": r["acquired_at"],
-                                    "free_since": r["expires_at"], "item": r["item"], "meta": meta},
-                                   f"lease:{r['name']}:{r['epoch']}:archived")
+                insert_event(c, {"at": self.clock(), "kind": "lease.archived", "item_type": "lease", "item_id": r["name"],
+                                 "text": f"{r['name']} epoch {r['epoch']}: {meta.get('outcome') or 'lapsed'}",
+                                 "refs": {"holder": r["holder"], "epoch": r["epoch"], "acquired_at": r["acquired_at"],
+                                          "free_since": r["expires_at"], "item": r["item"], "meta": meta},
+                                 "actor": r["holder"], "dedupe": f"lease:{r['name']}:{r['epoch']}:archived"})
                 c.execute("DELETE FROM leases WHERE name=? AND epoch=?", (r["name"], r["epoch"]))
                 n += 1
             c.execute("COMMIT")
@@ -493,11 +481,16 @@ class CurrentStore:
     is set, else the file store): a long-running process follows `store use URL` (2026-10-29: a fixer renewed its leases
     on the old store for hours). clock: the store's time, None for the wall's."""
 
-    def __init__(self, opener: Callable[..., Any], clock: Callable[[], float] | None = None) -> None:
-        self._opener, self._clock = opener, clock
+    def __init__(self, opener: Callable[..., Any], clock: Callable[[], float] | None = None,
+                 actor: str | None = None) -> None:
+        self._opener, self._clock, self._actor = opener, clock, actor
 
     def __getattr__(self, name: str) -> Any:
-        return getattr(self._opener(clock=self._clock), name)
+        found = getattr(self._opener(clock=self._clock), name)
+        if name != "transition" or not self._actor:
+            return found
+        # the process's actor (actors.py) on every move it writes that names none of its own
+        return lambda *a, event=None, **k: found(*a, event={"actor": self._actor, **(event or {})}, **k)
 
 
 # §5.4 a condition (the recovery registry folded in), phase 1 step 12: open escalates 10 min after opening, then every

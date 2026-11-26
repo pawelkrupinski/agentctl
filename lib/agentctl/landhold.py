@@ -46,10 +46,10 @@ def land_hold_set(st: Any, secs: int, why: str | None, by: str) -> Any:
         return it
     if new:  # its own expiry, said
         st.transition("hold", it["id"], "held", it["version"], deadline_s=secs,
-                      event={"text": f"land hold {it['id']} by {by} for {secs // 60} min: {why or 'no reason given'}"})
+                      event={"cause": "owner", "text": f"land hold {it['id']} by {by} for {secs // 60} min: {why or 'no reason given'}"})
     else:
         st.transition("hold", it["id"], "held", it["version"], data=data, deadline_s=secs,
-                      event={"text": f"land hold {it['id']} extended by {by}: {why or 'no reason given'}",
+                      event={"cause": "owner", "text": f"land hold {it['id']} extended by {by}: {why or 'no reason given'}",
                              "dedupe": f"hold:{it['id']}:extend:{it['version'] + 1}"})
     return st.item("hold", it["id"])
 
@@ -60,7 +60,7 @@ def land_hold_release(st: Any, by: str) -> list[str]:
     for it in land_holds(st):
         try:
             st.transition("hold", it["id"], "released", it["version"], data={"released_by": by},
-                          event={"text": f"land hold {it['id']} released by {by}"})
+                          event={"cause": "owner", "text": f"land hold {it['id']} released by {by}"})
             out.append(it["id"])
         except (StaleVersion, TerminalState):
             pass

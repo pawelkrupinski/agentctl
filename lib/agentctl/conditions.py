@@ -292,7 +292,7 @@ def close_condition(cond: Any, result: Any, store: Any) -> Any:
     try:
         st.transition("condition", it["id"], "closed", it["version"],
                       data={"closed": ts(), "closed_by": reason},
-                      event={"text": f"{cond.get('kind')} closed: {reason[:200]}", "refs": {"key": cond.get("key")}})
+                      event={"cause": "probe", "text": f"{cond.get('kind')} closed: {reason[:200]}", "refs": {"key": cond.get("key")}})
     except (StaleVersion, TerminalState):
         return None  # another closer won
     _ack_entries(it["data"].get("inbox"))
@@ -365,7 +365,7 @@ def _escalate_overdue(st: Any, it: Any, t: Any) -> None:
     line = f"ESCALATED: {it['data'].get('kind')} open for {age}: {str(it['data'].get('text'))[:200]}"
     with suppress(StaleVersion):
         st.transition("condition", it["id"], "open", it["version"], deadline_s=CONDITION_ESCALATE_EVERY,
-                      event={"text": line, "audience": {"worktree": it["data"].get("cwd")} if it["data"].get("cwd")
+                      event={"cause": "timeout", "text": line, "audience": {"worktree": it["data"].get("cwd")} if it["data"].get("cwd")
                              else {}, "refs": {"verdict": line, "key": it["data"].get("key"), "command": "recover"}})
 
 

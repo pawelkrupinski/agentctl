@@ -101,7 +101,7 @@ class BatchPush:
         depth = self.it["data"].get("depth")
         for e in self.members if depth in DEEP_BATCHES else ():
             if e.get("status") == "checked":
-                set_change(self.st, self.d, e, "pushing",
+                set_change(self.st, self.d, e, "pushing", cause="pushing",
                            event={"text": f"{e['id']}: pushing in batch {self.bid} ({self.tip[:10]})"})
         return None
 

@@ -316,7 +316,7 @@ def queue_join(st, repo, d, e, tree, head, why=None):
     e.update(tip=head, commits=commits, fixes=sorted(fixes_of(repo, commits, st)))
     line = note_waiting(d, os.path.join(d, f"check-{e['id']}"), head, e["id"]) + (f": {why}" if why else "")
     # policy: red-gate
-    set_change(st, d, e, "waiting", event=change_event(e, line, code=None, final=False), decided=ts())
+    set_change(st, d, e, "waiting", cause="gate-red", event=change_event(e, line, code=None, final=False), decided=ts())
     wlog(d, f"{e['id']}: {line}")
     return 0
 

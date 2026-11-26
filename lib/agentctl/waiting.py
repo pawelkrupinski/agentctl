@@ -156,7 +156,7 @@ def supersede(st, d, e, by, why) -> None:
     """The entry gives way to `by` (a newer entry of the same worktree and branch, or one carrying the same change): its
     checker, if running, is stopped; said in the inbox."""
     line = f"SUPERSEDED {e['id']} by {by}: {why}"
-    set_change(st, d, e, "superseded", event=change_event(e, line, code=0), superseded_by=by, why=why, decided=ts())
+    set_change(st, d, e, "superseded", cause="superseded", event=change_event(e, line, code=0), superseded_by=by, why=why, decided=ts())
     cancel_entry_remote(st, e, f"its queue entry was superseded by {by}")
     h = read_record(entry_owned(e["id"]).record) or {}
     if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid") and int(h["pid"]) != os.getpid():
@@ -215,11 +215,11 @@ def cancel_submitted(st: Any, eid: str, how: str = "cancel", repo: str | None = 
         if not it or machine_state("change", it["state"]).terminal:
             raise KeyError(eid)
         st.transition("change", eid, "cancelled", it["version"], data={"why": f"{how}led through the store API"},
-                      event={"text": f"{eid}: {how}led", "refs": {"entry": eid}})
+                      event={"cause": "agent", "text": f"{eid}: {how}led", "refs": {"entry": eid}})
         clear_holds_on(st, eid)
         return {"id": eid, "status": "cancelled"}
     e = hits[0]
-    set_change(st, d, e, "cancelled", event={"text": f"{e['id']}: {how}led"}, why=f"{how}led through the store API",
+    set_change(st, d, e, "cancelled", cause="agent", event={"text": f"{e['id']}: {how}led"}, why=f"{how}led through the store API",
                decided=ts())
     cancel_entry_remote(st, e, f"its queue entry was {how}led")
     clear_holds_on(st, eid)

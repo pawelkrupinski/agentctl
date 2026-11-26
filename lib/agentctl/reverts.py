@@ -161,10 +161,10 @@ def revert_open(st, c, rec, reverted, t):
     v = it["version"]
     if aud:
         v = st.transition("revert", iid, "open", v, event={
-            "kind": "revert.notice", "text": lv, "severity": "info", "audience": aud, "dedupe": f"revert:{iid}:lander",
+            "cause": "ci-verdict", "kind": "revert.notice", "text": lv, "severity": "info", "audience": aud, "dedupe": f"revert:{iid}:lander",
             "refs": {"verdict": lv, "tail": tail, "command": "revert", "exit": 1, "alert_item": f"revert:{iid}"}})
     st.transition("revert", iid, "open", v, event={
-        "kind": "revert.notice", "text": ov, "severity": "info", "dedupe": f"revert:{iid}:owner",
+        "cause": "ci-verdict", "kind": "revert.notice", "text": ov, "severity": "info", "dedupe": f"revert:{iid}:owner",
         "audience": {"to": "owner", **({"session": orch} if orch else {})},
         "refs": {"verdict": ov, "tail": tail, "command": "revert", "exit": 1, "alert_item": f"revert-owner:{iid}"}})
     return iid
@@ -173,7 +173,7 @@ def revert_open(st, c, rec, reverted, t):
 def revert_close(st, it, how, by):
     try:
         st.transition("revert", it["id"], "reworked", it["version"], data={"reworked_by": by, "how": how, "closed_at": ts()},
-                      event={"text": f"revert {it['id']}: reworked ({how})", "severity": "info"})
+                      event={"cause": "agent", "text": f"revert {it['id']}: reworked ({how})", "severity": "info"})
         return True
     except (StaleVersion, TerminalState, IllegalTransition):
         return False
@@ -241,14 +241,14 @@ def revert_deadlines(st, t):
                 lv, _ov, tail = revert_texts(it["id"], d)
                 v = (f"REVERT UNACKED: nobody acknowledged {fmt_age(t - float(it.get('entered_at') or t))} after it was "
                      f"told: " + lv[len("REVERTED: "):].replace("your ", "", 1))
-                st.transition("revert", it["id"], "escalated", it["version"], event={
+                st.transition("revert", it["id"], "escalated", it["version"], event={"cause": "timeout", 
                     "text": v, "severity": "escalate", "audience": {"to": "owner"},
                     "refs": {"verdict": v, "tail": tail, "command": "revert", "exit": 1,
                              "alert_item": f"revert-owner:{it['id']}/escalated"}})
                 out.append(f"revert {it['id']}: unacked past its deadline -> escalated to the owner")
             else:
                 st.transition("revert", it["id"], "expired", it["version"],
-                              event={"text": f"revert {it['id']}: never acknowledged, expired", "severity": "info"})
+                              event={"cause": "timeout", "text": f"revert {it['id']}: never acknowledged, expired", "severity": "info"})
                 out.append(f"revert {it['id']}: expired")
         except (StaleVersion, TerminalState, IllegalTransition):
             continue
@@ -286,7 +286,7 @@ def revert_ack(st, ref, how, note, by):
         return note_closed_reply(st, it, {"by": by, "how": how, "note": note, "at": ts()})
     st.transition("revert", it["id"], "acked", it["version"],
                   data={"acked_by": by, "how": how, "note": note, "closed_at": ts()},
-                  event={"text": f"revert {it['id']} acknowledged by {by}: {how}" + (f" ({note})" if note else ""),
+                  event={"cause": "agent", "text": f"revert {it['id']} acknowledged by {by}: {how}" + (f" ({note})" if note else ""),
                          "severity": "info"})
     return st.item("revert", it["id"]), f"revert {it['id']}: acknowledged ({how})"
 

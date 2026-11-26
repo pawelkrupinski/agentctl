@@ -79,7 +79,8 @@ class LandHoldRaceTest(unittest.TestCase):
         [t.join() for t in ts]
         held = A.land_holds(self.st)
         self.assertEqual(len(held), 1, [h["id"] for h in held])
-        self.assertEqual([e["kind"] for e in self.st.item_events("hold", held[0]["id"])].count("hold.held"), 2,
+        moves = [e for e in self.st.item_events("hold", held[0]["id"]) if e["from_state"] is not None]  # not its opening
+        self.assertEqual([e["kind"] for e in moves].count("hold.held"), 2,
                          "the second holder extended it")
 
     def test_an_expired_hold_is_no_hold_in_force(self):

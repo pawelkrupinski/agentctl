@@ -244,7 +244,7 @@ class WatchTest(Base):
         self.assertIn("WATCH OK", out2)
         [it] = A.process_store().items("watch")
         self.assertEqual((it["id"], it["state"]), (self.sha, "ok"))
-        self.assertEqual([e["to_state"] for e in A.process_store().events() if e["item_type"] == "watch"], ["ok"])
+        self.assertEqual([e["to_state"] for e in A.process_store().events() if e["item_type"] == "watch"], ["watching", "ok"])
 
     def test_a_follower_of_a_sha_another_live_follower_watches_waits_for_its_verdict(self):
         A.start_watch(A.CurrentStore(A.process_store), self.r.path, self.sha, self.pushed_at, o_r=MOVIES,
@@ -253,7 +253,7 @@ class WatchTest(Base):
 
         def theirs_decides(_s):  # the other follower's verdict, on the item
             it = st.item("watch", self.sha)
-            st.transition("watch", self.sha, "ok", it["version"], data={"verdict": "WATCH OK: Main #7 green"})
+            st.transition("watch", self.sha, "ok", it["version"], data={"verdict": "WATCH OK: Main #7 green"}, event={"cause": "agent"})
         self.clock.on_sleep = theirs_decides
         rc, out = self.watch()
         self.assertEqual(rc, 0, out)
@@ -286,7 +286,7 @@ class WatchTest(Base):
         """Review round 8: the re-watch of an `unknown` item ran unclaimed, so its verdict was never stored and every
         later follower watched GitHub again. It claims the item like any follower and keeps its verdict there."""
         it = A.start_watch(A.CurrentStore(A.process_store), self.r.path, self.sha, self.pushed_at, o_r=MOVIES)
-        A.process_store().transition("watch", self.sha, "unknown", it["version"], data={"verdict": "WATCH UNKNOWN: stuck"})
+        A.process_store().transition("watch", self.sha, "unknown", it["version"], data={"verdict": "WATCH UNKNOWN: stuck"}, event={"cause": "agent"})
         self.main, self.conv = [run(11, self.sha)], [run(21, self.sha)]
         claimed = []
         saved = A.watch_look

@@ -2934,6 +2934,31 @@ a protected folder (~/Desktop, ~/Documents, ~/Downloads). `--dry-run` counts wha
 
 ---
 
+### history, analyze: every unit of time attributable (2026-11-26)
+
+```
+agentctl history <change-id|sha|red|branch> [--json]   # one item's timeline: each move, the time in the state it left, cause, actor, commits
+agentctl analyze [--since 7d] [--type change] [--json|--tsv]  # time per state, variants, rework, refusals, waiting by cause, throughput, outliers, coverage
+```
+
+Every event carries `actor` (who: `reconciler`, `agent:<name>`, `session:<id>`, `owner`, `cli:<cmd>`; actors.py, stamped
+by CurrentStore at the composition root), `cause` (why: ONE word of the closed enum `causes.CAUSES` -- `submitted`,
+`check-running`, `check-failed-test|infra`, `gate-red`, `main-moved`, `overlap-hold`, `regen-hold`, `lock-wait`, `batch`,
+`no-longer-applies`, `policy`, `superseded`, `agent`, `owner`, `timeout`, `ci-verdict`, `red-fix`, `probe`, ...) and a
+short `detail`. `Store.transition` REFUSES a move between two states without a cause (MissingCause: a programming
+error; tests/test_causes.py checks every call site); a reminder (self-move) may carry one -- a held change's reminder
+carries its hold kind's (`HOLD_CAUSE`). A store older than the columns migrates in place (old rows NULL); a client older
+than them is written `unattributed` (server.py's shim). Creating an item writes its OPENING event (`<type>.<state>`, from
+no state: a change's queue entry, a condition's open, a watch's start). A reject's cause is THE reject classifier's
+(`causes.reject_cause`, ci-why's own infra signatures), its class (infra | test | policy) the event's detail.
+
+THE BACKFILL never rewrites an event: the server's tick (`timeline` step, hourly) runs `Store.backfill` in-process (idempotent),
+deriving into `event_backfill` (an old event's cause and actor) and `derived_events` (the missing openings, from the
+items' recorded times), each row with its source and confidence (`exact`: a state or a recorded time; `inferred`: text).
+`history` and `analyze` merge them in; analyze's coverage says own / own-or-exact / with-inferred. On the 2026-11-26
+store copy: 0% own (the history predates the columns), 56% own-or-exact, ~100% with inferred. Once a week the tick sends
+the owner the top 3 time sinks (`TIME SINKS (7 d)`).
+
 ### stats: the pipeline's records in VictoriaLogs (2026-11-17)
 
 The owner, 2026-11-17: "keep landing stats -- timings, time between landing and landed in victoria logs, modules touched

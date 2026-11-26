@@ -150,12 +150,12 @@ class CommitKeysTest(Base):
         e = {**fields, "id": "e-b", "status": "queued"}
         d = os.path.join(self.tmp.name, "wd")
         os.makedirs(os.path.join(d, "entries"))
-        A.set_change(st, d, e, "checking")
+        A.set_change(st, d, e, "checking", cause="agent")
         it = st.item("change", "e-b")
         self.assertEqual(it["data"]["lander"]["session"], "sess-b")  # the item, not only the entry file
-        st.transition("change", "e-b", "checked", it["version"])
-        st.transition("change", "e-b", "pushing", st.item("change", "e-b")["version"])
-        st.transition("change", "e-b", "landed", st.item("change", "e-b")["version"])
+        st.transition("change", "e-b", "checked", it["version"], event={"cause": "agent"})
+        st.transition("change", "e-b", "pushing", st.item("change", "e-b")["version"], event={"cause": "agent"})
+        st.transition("change", "e-b", "landed", st.item("change", "e-b")["version"], event={"cause": "agent"})
         self.r.push(at=wt)
         acts = A.lander_note_landed(st, self.r.path, "pawelkrupinski/movies", A.epoch_now(), force=True)
         self.assertTrue(acts, acts)

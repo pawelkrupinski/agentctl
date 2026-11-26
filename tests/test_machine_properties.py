@@ -45,7 +45,7 @@ class TransitionPropertyTest(unittest.TestCase):
                     clock[0] += rng.choice((1, 60, 3600))
                     ok = legal(typ, cur["state"], to)
                     try:
-                        v = st.transition(typ, iid, to, cur["version"], event={"text": f"step {step}"})
+                        v = st.transition(typ, iid, to, cur["version"], event={"cause": "agent", "text": f"step {step}"})
                     except A.TerminalState:
                         self.assertTrue(states[cur["state"]].terminal, (typ, cur["state"], to))
                         self.assertFalse(ok)

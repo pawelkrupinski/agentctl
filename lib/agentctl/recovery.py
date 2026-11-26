@@ -362,8 +362,9 @@ def current_batch(st, d, any_key=False):
     return max(open_, key=lambda it: int(it["id"].rsplit("#", 1)[1])) if open_ else None
 
 
-def batch_move(st, it, to, data=None, text=None, severity=None):
-    ev = {"text": text or f"batch {it['id']}: {it['state']} -> {to}"}
+def batch_move(st, it, to, data=None, text=None, severity=None, cause="batch"):
+    """Batch item `it` moved to `to`; cause: why (the batch's own step unless said: a red gate, a deadline)."""
+    ev = {"text": text or f"batch {it['id']}: {it['state']} -> {to}", "cause": cause}
     if severity:
         ev["severity"] = severity
     st.transition("batch", it["id"], to, it["version"], data=data, event=ev)

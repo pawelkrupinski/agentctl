@@ -238,7 +238,7 @@ class SetChangeTest(unittest.TestCase):
         def run(A):
             def go(st, d, e, to, data, event, fields):
                 try:
-                    got = A.set_change(st, d, e, to, data, event, **fields)
+                    got = A.set_change(st, d, e, to, data, event, **fields, cause="agent")
                 except A.StaleVersion as ex:
                     got = "stale " + str(ex)
                 return got, e

@@ -376,7 +376,7 @@ class FixTest(RedsBase):
         e["status"] = "waiting"
         A.save_entry(d, e)
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": cw, "head": copy, "submitted_at": self.t[0]})
-        self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": copy})
+        self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": copy}, event={"cause": "agent"})
         self.tick(advance=60)
         self.assertEqual(self.only()["state"], "offered")
 
@@ -432,7 +432,7 @@ class FixTest(RedsBase):
         self.tick()
         self.assertEqual(self.only()["data"]["fix"]["entry"], e["id"])
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
-        self.st.transition("change", e["id"], "cancelled", ch["version"])  # the entry file keeps `waiting` (stale)
+        self.st.transition("change", e["id"], "cancelled", ch["version"], event={"cause": "agent"})  # the entry file keeps `waiting` (stale)
         self.tick(advance=60)
         self.assertEqual(self.only()["state"], "fix-pending")  # nothing landed yet: no re-offer while it is re-queued
         nx = self.st.put_item("change", "zz-requeued", "queued", {"worktree": wt, "head": sha,
@@ -441,7 +441,7 @@ class FixTest(RedsBase):
         it = self.only()
         self.assertEqual((it["state"], it["data"]["fix"]["entry"]), ("fix-pending", "zz-requeued"))
         self.r.push(at=wt, ref=f"{sha}:main")  # ...which lands
-        self.st.transition("change", "zz-requeued", "landed", nx["version"], data={"tip": sha})
+        self.st.transition("change", "zz-requeued", "landed", nx["version"], data={"tip": sha}, event={"cause": "agent"})
         self.tick(advance=60)
         it = self.only()
         self.assertEqual((it["state"], it["data"]["fix"]["entry"], it["data"]["fix"]["status"], it["data"]["fix"]["sha"]),
@@ -463,7 +463,7 @@ class FixTest(RedsBase):
         A.save_entry(d, e)
         self.tick()
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
-        self.st.transition("change", e["id"], "cancelled", ch["version"])
+        self.st.transition("change", e["id"], "cancelled", ch["version"], event={"cause": "agent"})
         self.tick(advance=A.RED_FIX_GIVEUP + 60)  # never re-queued, never landed
         self.assertEqual(self.only()["state"], "offered")
 
@@ -516,7 +516,7 @@ class FixTest(RedsBase):
         e, _path, wt, sha = self.queued_fix_pending("rejected")
         ch = self.st.put_item("change", e["id"], "checking", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
         self.st.transition("change", e["id"], "rejected", ch["version"],
-                           data={"why": "NOT LANDED: the pre-push checks failed: deploy.LauncherJvmFlagsSpec"})
+                           data={"why": "NOT LANDED: the pre-push checks failed: deploy.LauncherJvmFlagsSpec"}, event={"cause": "agent"})
         A.save_entry(A.waiting_state(self.r.path)[0], {**e, "status": "rejected"})
         self.tick(advance=60)
         self.assertEqual(self.only()["state"], "fix-pending")  # within the grace: its worktree may queue it again
@@ -591,7 +591,7 @@ class FixTest(RedsBase):
         A.save_entry(d, e)
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
         self.r.push(at=wt, ref=f"{sha}:main")
-        self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": sha})
+        self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": sha}, event={"cause": "agent"})
         return sha
 
     def test_a_refuted_fix_whose_entry_still_reads_open_never_takes_the_red_back(self):
@@ -635,7 +635,7 @@ class FixTest(RedsBase):
         A.save_entry(d, e)
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": name, "head": head or tip,
                                                             "submitted_at": self.t[0]})
-        self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": tip})
+        self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": tip}, event={"cause": "agent"})
         return e
 
     def unlanded_commit(self, name="repo-wt-phantom"):
@@ -686,7 +686,7 @@ class FixTest(RedsBase):
         it = self.only()
         _wt, phantom = self.unlanded_commit()
         self.st.transition("red", it["id"], "fix-pending", it["version"],
-                           data={"fix": {"entry": None, "status": "landed", "sha": phantom, "at": self.t[0]}})
+                           data={"fix": {"entry": None, "status": "landed", "sha": phantom, "at": self.t[0]}}, event={"cause": "agent"})
         self.tick(advance=60)
         it = self.only()
         self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
@@ -704,7 +704,7 @@ class FixTest(RedsBase):
         self.r.push(at=lw, ref=f"{landed}:main")
         e = self.stale_entry_landed_as(phantom)
         self.st.transition("red", it["id"], "fix-pending", it["version"],
-                           data={"fix": {"entry": e["id"], "status": "landed", "sha": phantom, "at": self.t[0]}})
+                           data={"fix": {"entry": e["id"], "status": "landed", "sha": phantom, "at": self.t[0]}}, event={"cause": "agent"})
         self.tick(advance=60)
         it = self.only()
         self.assertEqual((it["state"], it["data"]["fix"]["sha"]), ("fix-pending", landed))
@@ -718,7 +718,7 @@ class FixTest(RedsBase):
         sha = self.r.commit("fix FooSpec (linked by its entry alone)", at=wt)
         self.r.push(at=wt, ref=f"{sha}:main")
         self.st.transition("red", it["id"], "fix-pending", it["version"], data={"fix": {
-            "entry": None, "status": "landed", "sha": sha, "at": float(it["data"]["opened_at"]) - 5 * 86400}})
+            "entry": None, "status": "landed", "sha": sha, "at": float(it["data"]["opened_at"]) - 5 * 86400}}, event={"cause": "agent"})
         self.tick(advance=60)
         it = self.only()
         self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
@@ -732,7 +732,7 @@ class FixTest(RedsBase):
         it = self.only() if other_state in A.RED_TERMINAL else next(
             i for i in self.st.items("red") if i["id"] != other and i["state"] not in A.RED_TERMINAL)
         self.st.transition("red", it["id"], "fix-pending", it["version"], data={"fix": {
-            "entry": None, "status": "waits-on", "sha": sha, "red": other, "at": self.t[0]}})
+            "entry": None, "status": "waits-on", "sha": sha, "red": other, "at": self.t[0]}}, event={"cause": "agent"})
         return it["id"]
 
     def test_a_red_waiting_on_another_reds_fix_waits_while_it_is_not_on_main(self):
@@ -782,7 +782,7 @@ class FixTest(RedsBase):
         self.st.put_item("red", "other", "fix-pending", {"key": "other", "workflow": "Main", "runs": ["2521"], "fix": {
             "entry": None, "status": "waits-on", "sha": sha, "red": mine["data"]["key"], "at": self.t[0]}})
         self.st.transition("red", mine["id"], "fix-pending", mine["version"], data={"fix": {
-            "entry": None, "status": "waits-on", "sha": sha, "red": "other", "at": self.t[0]}})
+            "entry": None, "status": "waits-on", "sha": sha, "red": "other", "at": self.t[0]}}, event={"cause": "agent"})
         self.tick(advance=60)
         it = self.st.item("red", mine["id"])
         self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))

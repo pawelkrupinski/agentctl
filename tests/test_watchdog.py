@@ -156,14 +156,14 @@ class WatchdogTest(unittest.TestCase):
         [c] = [c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"] == "invariant-W1"]
         self.assertIn("old-1", c["text"])
         it = st_.item("change", "old-1")
-        st_.transition("change", "old-1", "landed", it["version"])
+        st_.transition("change", "old-1", "landed", it["version"], event={"cause": "agent"})
         self.run_wd()
         [c] = [c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"] == "invariant-W1"]
         self.assertIn("unlanded change old-2 (queued", c["text"])
         self.assertNotIn("old-1", c["text"])
         self.assertEqual(len([e for e in A.inbox_entries() if e.get("kind") == "INVARIANT"]), 1, "one entry per spell")
         it = st_.item("change", "old-2")
-        st_.transition("change", "old-2", "landed", it["version"])
+        st_.transition("change", "old-2", "landed", it["version"], event={"cause": "agent"})
         self.run_wd()
         self.assertEqual([c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"] == "invariant-W1"], [])
 
@@ -201,7 +201,7 @@ class WatchdogTest(unittest.TestCase):
         ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
         self.assertTrue(ok, detail)
         b = st_.item("batch", "movies#94")  # its batch past ITS deadline: named, never "waiting for green"
-        st_.transition("batch", "movies#94", "checking", b["version"], deadline_s=-60)
+        st_.transition("batch", "movies#94", "checking", b["version"], deadline_s=-60, event={"cause": "agent"})
         ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
         self.assertFalse(ok)
         self.assertIn("carried by batch movies#94 (checking, past its deadline)", detail)
@@ -217,7 +217,7 @@ class WatchdogTest(unittest.TestCase):
         ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
         self.assertTrue(ok, detail)
         b = st_.item("batch", "movies#107")
-        st_.transition("batch", "movies#107", "checking", b["version"], deadline_s=-60)
+        st_.transition("batch", "movies#107", "checking", b["version"], deadline_s=-60, event={"cause": "agent"})
         ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
         self.assertFalse(ok)
         self.assertIn("carried by batch movies#107 (checking, past its deadline)", detail)
@@ -253,7 +253,7 @@ class WatchdogTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("e1 (waiting: waiting for green", detail)
         it = st_.item("change", "e1")
-        st_.transition("change", "e1", "landed", it["version"])
+        st_.transition("change", "e1", "landed", it["version"], event={"cause": "agent"})
         self.assertTrue(A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))[0])  # W2 (step 10): a red with no live lease, open offer, fix or block -- read from the store
         st_.put_item("red", "k9", "leased", {"key": "k9", "workflow": "Main", "last_run": {"number": 9}, "runs": ["9"]})
         self.assertTrue(A.inv_w2(FakeClock(), A.CurrentStore(A.process_store))[0])  # first seen now
@@ -352,7 +352,7 @@ class TableJudgedInvariantsTest(unittest.TestCase):
             "head": "3" * 40, "submitted_at": A.epoch_now() - 3 * 3600,
             "hold": {"kind": "overlap", "why": "its check waits for older", "blocker": "older", "since": A.epoch_now() - 600}})
         it = self.st.item("change", "held-1")
-        self.st.transition("change", "held-1", "queued", it["version"])  # entered now: the 6-h cap is not hit
+        self.st.transition("change", "held-1", "queued", it["version"], event={"cause": "agent"})  # entered now: the 6-h cap is not hit
         ok, why = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
         self.assertTrue(ok, why)
 

@@ -1,6 +1,7 @@
 # agentctl, part `queueclose`: one queue closed by content: bounces, regen-only rows, overdue regen holds.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.causes import hold_attribution
 from agentctl.clock import epoch_now
 import os
 import time
@@ -69,7 +70,7 @@ def close_item_landed(st, cid, why, via = None) -> bool:
         return False
     try:
         st.transition("change", cid, "landed", it["version"], data={"why": why, **({"landed_sha": via} if via else {})},
-                      event={"text": f"LANDED {cid}: {why}", "refs": {"entry": cid}})
+                      event={"cause": "landed", "text": f"LANDED {cid}: {why}", "refs": {"entry": cid}})
         return True
     except (StaleVersion, TerminalState):
         return False
@@ -380,7 +381,7 @@ def mark_checked(st: Any, d: str, e: dict[str, Any], i: int, base: str, head: st
     verified = (f"verified {head[:10]} on {base[:10]} (fully checked on {full_base[:10]}"
                 + (f"; with the area tests: sbt modules both sides touch, {', '.join(areas)}" if areas else "") + ")") \
         if verify else f"checked {head[:10]} on {base[:10]}"
-    set_change(st, d, e, "checked", data={"tip": head, "base": base, "mode": mode, "where": where},
+    set_change(st, d, e, "checked", cause="check-passed", data={"tip": head, "base": base, "mode": mode, "where": where},
                event={"text": f"{e['id']}: {verified} ({where})"
                       + (" -- failing only as its base fails" if known_red else "")},
                tip=head, checked_base=base, full_base=full_base, full_tip=full_tip, checked_mode=mode, checked_where=where, tree=i,
@@ -391,7 +392,7 @@ def mark_checked(st: Any, d: str, e: dict[str, Any], i: int, base: str, head: st
 
 def mark_checking(st: Any, d: str, e: dict[str, Any]) -> None:
     if e.get("status") != "checking":
-        set_change(st, d, e, "checking", event={"text": f"{e['id']}: checking"}, since=ts())
+        set_change(st, d, e, "checking", cause="check-running", event={"text": f"{e['id']}: checking"}, since=ts())
 
 
 def round_base(st: Any, repo: str, d: str, e: dict[str, Any], clock: Clock) -> str | None:
@@ -409,7 +410,7 @@ def _rederive_stuck_hold(st: Any, e: Any, state: Any, it: Any, hold: Any, stuck:
     with suppress(StaleVersion):
         it = st.item("change", e["id"]) or it
         st.transition("change", e["id"], state, it["version"],
-                      event={"kind": "change.rederived", "severity": "info",
+                      event={"kind": "change.rederived", "severity": "info", "cause": "timeout",
                              "text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}; its hold "
                                      f"({hold.get('why')}) was stuck -- {stuck} -- so it is decided afresh"})
 
@@ -452,5 +453,6 @@ def lap_change_deadline(st: Any, e: Any, state: Any, t: Any, note: Any = None) -
         it = st.item("change", e["id"]) or it
         st.transition("change", e["id"], state, it["version"],
                       event={"text": _lap_text(e, state, it, hold, stuck, note, issue, t),
+                             **hold_attribution(hold),  # its "cause": the hold's kind, else its deadline
                              **({} if quiet else {"audience": {"worktree": e.get("worktree")}}),
                              **({} if stuck and not issue else {"severity": "info"})})

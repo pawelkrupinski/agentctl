@@ -60,7 +60,7 @@ def run_check_batch(module, script):
             return ret(*a, **k) if callable(ret) else ret
         return fake
 
-    def batch_move(st, it, to, data=None, text=None, severity=None):
+    def batch_move(st, it, to, data=None, text=None, severity=None, cause=None):  # its cause: test_causes
         log.append(f"batch_move {to} {data} {text!r} {severity}")
         out = copy.deepcopy(script["item"])
         out["state"] = to
