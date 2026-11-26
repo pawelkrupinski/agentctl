@@ -159,5 +159,54 @@ class BlameOpenTest(unittest.TestCase):
         check(self, "blame_open", self.build, lambda A: A.blame_open, 6000)
 
 
+# ------------------------------------------------------------------------------------------------ inbox
+LINES = ["WAITING abc123", "QUEUED q1", "LANDED deadbeef", "NOT LANDED", "WATCH RED x", "WATCH OK", "just a line", "", "  ",
+         "agentctl: oops", "run w#12: red", "file f.py: bad", "info"]
+
+
+class WithInboxTest(unittest.TestCase):
+    def build(self, case):
+        r = case.rng
+        case.fake("inbox_write", lambda rng, *a, **k: None)
+        script = []
+        for _ in range(r.randint(0, 6)):
+            stream = r.choice(["out", "out", "out", "err"])
+            text = r.choice(LINES) + r.choice(["\n", "\n", "\n", ""]) + (r.choice(LINES) + "\n" if r.random() < 0.15 else "")
+            script.append((stream, text))
+        end = r.choice([("return", None), ("return", 0), ("return", 0), ("return", 1), ("return", 2), ("exit", None), ("exit", 0), ("exit", 0),
+                        ("exit", 1), ("exit", 3), ("exit", 130), ("exit", 137), ("exit", 128), ("exit", "agentctl: no clone"),
+                        ("exit", "plain message"), ("raise", RuntimeError("boom")), ("raise", ValueError("")), ("raise", KeyboardInterrupt())])
+        a = types.SimpleNamespace(**r.choice([{}, {"inbox_cwd": "/w/x"}, {"inbox_cwd": None}]))
+        return (r.choice(["land", "waiting wait", "red"]), (script, end), a)
+
+    def test_with_inbox(self):
+        def run(A):
+            def scenario(command, plan, a):
+                script, (how, value) = plan
+                saved = sys.stdout, sys.stderr
+                outer = io.StringIO()
+                errors = io.StringIO()
+                sys.stdout, sys.stderr = outer, errors
+
+                def handler(arg):
+                    for stream, text in script:
+                        (sys.stdout if stream == "out" else sys.stderr).write(text)
+                    if how == "return":
+                        return value
+                    if how == "exit":
+                        raise SystemExit(value)
+                    raise value
+                try:
+                    try:
+                        result = ["ok", A.with_inbox(command, handler, a)]
+                    except BaseException as e:
+                        result = ["raised", type(e).__name__, str(e.code) if isinstance(e, SystemExit) else str(e)]
+                    return [result, outer.getvalue(), errors.getvalue(), sys.stdout is outer, sys.stderr is errors]
+                finally:
+                    sys.stdout, sys.stderr = saved
+            return lambda args: scenario(*args)
+        check(self, "with_inbox", lambda case: (self.build(case),), run, 5000)
+
+
 if __name__ == "__main__":
     unittest.main()

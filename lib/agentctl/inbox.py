@@ -3,6 +3,7 @@
 
 import re
 import sys
+from typing import Any, Callable, List, Optional
 from agentctl.core import tilde
 from agentctl.inboxentry import INBOX_COMMANDS, inbox_write
 
@@ -58,47 +59,85 @@ def inbox_command(a):
     return name if name in INBOX_COMMANDS else None
 
 
-def with_inbox(command, handler, a):
-    """Run handler(a) with its stdout teed; whatever way it ends, write its verdict to the inbox."""
-    waiting_line = []
+def system_exit_code(e: SystemExit) -> int:
+    """A SystemExit's exit code as a number: None is 0, a message is 1."""
+    return e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
 
-    def on_line(line):
+
+def exit_crash(e: SystemExit) -> Optional[str]:
+    """How a SystemExit ended the command, when it did not end it cleanly: a signal (code 128+n), or a message
+    (SystemExit("agentctl: ..."): the message is the cause); else None."""
+    code = system_exit_code(e)
+    if code >= 128:
+        return f"ended by signal {code - 128}"
+    if e.code is not None and not isinstance(e.code, int):
+        return f"exited: {str(e.code).replace('agentctl: ', '')}"
+    return None
+
+
+def last_line(lines: List[str]) -> Optional[str]:
+    """The last non-blank of `lines`, or None."""
+    return next((l for l in reversed(lines) if l.strip()), None)
+
+
+class InboxRun:
+    """One command run with its stdout and stderr teed: its verdict, however it ended, is written to the inbox once."""
+
+    def __init__(self, command: str, a: Any) -> None:
+        self.command, self.a = command, a
+        self.waiting_line: List[str] = []
+        self.tee = VerdictTee(sys.stdout, self.on_line)
+        self.errs = VerdictTee(sys.stderr)  # its last lines name a cause when stdout has no verdict
+        self.code: Any = 1  # a crash that is no SystemExit leaves it: the command ended 1
+        self.crash: Optional[str] = None
+
+    def on_line(self, line: str) -> None:
         if line.startswith(("WAITING ", "QUEUED ")):
-            inbox_write(command, line, [line], tee.tail, None, final=False)
-            waiting_line.append(line)
-    tee = VerdictTee(sys.stdout, on_line)
-    errs = VerdictTee(sys.stderr)  # its last lines name a cause when stdout has no verdict
-    sys.stdout, sys.stderr, code, crash = tee, errs, 1, None
-    try:
-        code = handler(a)
-        return code
-    except SystemExit as e:
-        code = e.code if isinstance(e.code, int) else (0 if e.code is None else 1)
-        if code >= 128:
-            crash = f"ended by signal {code - 128}"
-        elif e.code is not None and not isinstance(e.code, int):  # SystemExit("agentctl: ..."): the message is the cause
-            crash = f"exited: {str(e.code).replace('agentctl: ', '')}"
-        raise
-    except BaseException as e:
-        crash = f"crashed: {type(e).__name__}: {e}"
-        raise
-    finally:
-        sys.stdout, sys.stderr = tee.stream, errs.stream
-        tee.finish()
-        errs.finish()
-        last = next((l for l in reversed(tee.tail) if l.strip()), None)
-        last_err = next((l.replace("agentctl: ", "") for l in reversed(errs.tail) if l.strip()), None)
-        if tee.verdicts:
-            verdict = crash or tee.verdicts[-1]
-        elif crash:
-            verdict = crash
-        elif code:  # never a bare exit: what it said last, on stderr first
-            verdict = f"exit {code} with no verdict line; it said last: {last_err or last or 'nothing'}"
-        else:
-            verdict = last or last_err or "exit 0 with no output"
-        if not (crash is None and code == 0 and waiting_line and verdict == waiting_line[-1]):  # land ended AT WAITING:
-            inbox_write(command, verdict, tee.verdicts, tee.tail, code if crash is None else (code or 1),  # written once
-                        cwd=getattr(a, "inbox_cwd", None), reply=True)
+            inbox_write(self.command, line, [line], self.tee.tail, None, final=False)
+            self.waiting_line.append(line)
+
+    def run(self, handler: Callable[[Any], Any]) -> Any:
+        sys.stdout, sys.stderr = self.tee, self.errs
+        try:
+            self.code = handler(self.a)
+            return self.code
+        except SystemExit as e:
+            self.code, self.crash = system_exit_code(e), exit_crash(e)
+            raise
+        except BaseException as e:
+            self.crash = f"crashed: {type(e).__name__}: {e}"
+            raise
+        finally:
+            self.finish()
+
+    def verdict(self) -> str:
+        """The inbox verdict: the crash, else the last verdict line, else what it said (unstated)."""
+        if self.tee.verdicts:
+            return self.crash or self.tee.verdicts[-1]
+        return self.crash or self.unstated()
+
+    def unstated(self) -> str:
+        """A verdict for a run that printed no verdict line: never a bare exit, what it said last, on stderr first."""
+        last = last_line(self.tee.tail)
+        last_err = (last_line(self.errs.tail) or "").replace("agentctl: ", "") or None
+        if self.code:  # (a run with a crash never gets here: its verdict is the crash)
+            return f"exit {self.code} with no verdict line; it said last: {last_err or last or 'nothing'}"
+        return last or last_err or "exit 0 with no output"
+
+    def finish(self) -> None:
+        sys.stdout, sys.stderr = self.tee.stream, self.errs.stream
+        self.tee.finish()
+        self.errs.finish()
+        verdict = self.verdict()
+        if not (self.code == 0 and self.waiting_line and verdict == self.waiting_line[-1]):
+            # land ended AT WAITING: its entry is written once
+            inbox_write(self.command, verdict, self.tee.verdicts, self.tee.tail, self.code,
+                        cwd=getattr(self.a, "inbox_cwd", None), reply=True)
+
+
+def with_inbox(command: str, handler: Callable[[Any], Any], a: Any) -> Any:
+    """Run handler(a) with its stdout teed; whatever way it ends, write its verdict to the inbox."""
+    return InboxRun(command, a).run(handler)
 
 
 def entry_line(e):

@@ -76,7 +76,6 @@ cognitive	sync_onto_main	18
 cognitive	sync_steps	11
 cognitive	token	34
 cognitive	transcript_paths	26
-cognitive	with_inbox	25
 cognitive	workflow_jobs	26
 cognitive	workflow_timeout_bound	22
 cognitive	workflow_triggers	26
@@ -164,7 +163,6 @@ cyclomatic	sweep_land_refs	17
 cyclomatic	sync_onto_main	16
 cyclomatic	token	16
 cyclomatic	transcript_paths	19
-cyclomatic	with_inbox	26
 cyclomatic	workflow_jobs	19
 cyclomatic	workflow_timeout_bound	21
 cyclomatic	workflow_triggers	12
