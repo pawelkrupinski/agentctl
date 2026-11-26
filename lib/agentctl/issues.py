@@ -54,13 +54,13 @@ MACHINES["issue"] = {
 ISSUE_ESCALATE_GAP = 120  # s between two issues' escalations ($AGENTCTL_ISSUE_ESCALATE_GAP)
 
 
-def issue_escalation_text(it: Any, t: Any) -> Any:
+def issue_escalation_text(it, t):
     d = it.get("data") or {}
     return (f"AGENTCTL ISSUE {it['id']} open {fmt_age(t - float(it.get('entered_at') or t))} "
             f"(filed by {d.get('by') or '?'}): {d.get('text', '')}")[:400]
 
 
-def tick_issues(st: Any, now_: Any = None) -> Any:
+def tick_issues(st, now_ = None):
     """The reconciler's step: the most overdue open issue escalated, at most one per ISSUE_ESCALATE_GAP. Returns what
     it did."""
     t = now_ if now_ is not None else st.clock()
@@ -85,7 +85,7 @@ def status_issues(st: Any, t: float) -> list[dict[str, Any]]:
             for i in sorted(st.items("issue", ("open",)), key=lambda i: i.get("entered_at") or 0, reverse=True)]
 
 
-def _close_issue(a: Any, st: Any, by: Any) -> Any:
+def _close_issue(a, st, by):
     it = issue_close(st, a.close, a.note or "fixed", by)
     if not it:
         print(f"issue {a.close}: no such issue")
@@ -94,7 +94,7 @@ def _close_issue(a: Any, st: Any, by: Any) -> Any:
     return 0
 
 
-def _list_issues(a: Any, st: Any) -> Any:
+def _list_issues(a, st):
     items = st.items("issue", None if a.all else ("open",))
     for i in sorted(items, key=lambda i: i["id"]):
         print(f"{i['id']}  {i['state']:6}  {i['data'].get('by') or '?'}: {i['data'].get('text', '')[:300]}")
@@ -103,7 +103,7 @@ def _list_issues(a: Any, st: Any) -> Any:
     return 0
 
 
-def _not_filed(e: Any) -> Any:
+def _not_filed(e):
     """The line for an issue the store refused."""
     why = str(e).replace("agentctl: ", "")[:200]
     if "machine 'issue'" in why:  # the server runs a pinned revision from before `issue`
@@ -111,7 +111,7 @@ def _not_filed(e: Any) -> Any:
     return f"agentctl issue: NOT FILED: the store refused it ({why})"
 
 
-def cmd_issue(a: Any, st: Any) -> Any:
+def cmd_issue(a, st):
     """agentctl issue "<text>" | --list | --close ID [--note N]"""
     by = claimant()
     try:

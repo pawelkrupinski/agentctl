@@ -43,7 +43,7 @@ WR_MAX = 40 * 60        # a red fix still unlanded this long after it was queued
 W1_HARD_FACTOR = 3
 
 
-def change_progress(st: Any, it: Any, t: Any) -> Any:
+def change_progress(st, it, t):
     """None when open change item `it` progresses as its state's table says (a live checker; a hold within its bound;
     waiting on a red gate is the caller's), else why not."""
     state = it["state"]
@@ -70,7 +70,7 @@ def _red_streak_names(g: Any) -> Any:
     return out
 
 
-def snap_reds(snap: Any) -> Any:
+def snap_reds(snap):
     """The names (numbers and ids) of the gate's red runs on main in a CI snapshot: each red gate workflow's newest
     decided run and the failed runs of its streak since its last green; None when there is no snapshot (unread)."""
     if not snap:
@@ -79,7 +79,7 @@ def snap_reds(snap: Any) -> Any:
     return out - {"None"}
 
 
-def inv_wr(clock: Any, st: Any, reds: Any = None) -> Any:
+def inv_wr(clock, st, reds = None):
     """WR: A RED FIX NEVER WAITS FOR GREEN (the owner, 2026-11-16). No open change whose KIND (changekind.py: its
     `Fixes-Red:` against the gate's reds and every red the store has open) is a gate red's fix is on `waiting`, and no
     fix of any open red -- the gate's or one outside it (08010c, 2026-11-19) -- is still unlanded WR_MAX after it was
@@ -220,7 +220,7 @@ def _recorded_holder(it: Any, d: dict[str, Any], f: dict[str, Any], t: float) ->
     return f"fix {f.get('entry') or (f.get('sha') or '')[:10] or 'verify'} {f.get('status')}"
 
 
-def red_fix_held(it: Any, t: Any, facts: Any = None, store: Any = None) -> Any:
+def red_fix_held(it, t, facts = None, store = None):
     """A fix-pending red's holder, or None: its fix change open in the queue (or ended within RED_FIX_REQUEUE_GRACE:
     its worktree may queue it again, as red_fix_pending waits), or a fix landed / a verify run dispatched (or a gate run
     due) within its give-up of entering fix-pending. With facts the queue decides; without (the watchdog), the fix the
@@ -246,11 +246,11 @@ def red_fix_held(it: Any, t: Any, facts: Any = None, store: Any = None) -> Any:
 HOLDER_CLAIM = re.compile(r"stays the holder|still at work on it|is its holder", re.I)
 
 
-def offer_names_holder(off: Any) -> Any:
+def offer_names_holder(off) -> bool:
     return bool(off and HOLDER_CLAIM.search(str(off.get("reason") or "")))
 
 
-def red_unheld(store: Any, t: Any = None, facts: Any = None) -> Any:
+def red_unheld(store, t = None, facts = None):
     """The non-terminal reds with NOTHING live behind them: no live lease, no open offer, no fix on its way (red_fix_held),
     no live block. The tick's invariant (never NOBODY), enforced by red_enforce; a red the tick has not looked at yet
     (state `red`) counts after 2 min."""
@@ -258,7 +258,7 @@ def red_unheld(store: Any, t: Any = None, facts: Any = None) -> Any:
     return [it for it in red_active(store).values() if not _red_held(store, it, t, facts)]
 
 
-def _offer_holds(store: Any, it: Any, t: Any, facts: Any) -> Any:
+def _offer_holds(store, it, t, facts):
     """An open offer holds an `offered` red unless it names a holder (the dispatcher takes it again)."""
     off = store.offer_of(f"red:{it['id']}")
     return bool(off) and not offer_names_holder(off)
@@ -274,7 +274,7 @@ RED_STATE_HOLDS = {
 }
 
 
-def _red_held(store: Any, it: Any, t: Any, facts: Any) -> Any:
+def _red_held(store, it, t, facts) -> bool:
     """Whether something live is behind the red: a young one (state `red`, under 2 min), a live lease, or its state's hold."""
     st = it["state"]
     if st == "red" and t - it["entered_at"] < 120:
@@ -285,7 +285,7 @@ def _red_held(store: Any, it: Any, t: Any, facts: Any) -> Any:
     return bool(hold and hold(store, it, t, facts))
 
 
-def red_fix_gone_why(store: Any, it: Any, t: Any) -> Any:
+def red_fix_gone_why(store, it, t):
     """Why a fix-pending red has no fix on its way, as its re-offer says it. 2026-11-22, Identity takes #349: "no fix on
     its way for 23 min in fix-pending" read as a queued fix overlooked, while its fix ...-779be4 had been REJECTED at
     04:28 (its landing check's itrest row) and the requeue grace had just run out: the change and its verdict are named."""
@@ -321,7 +321,7 @@ def _enforce_unheld(store: Any, it: Any, t: Any, acts: Any) -> Any:
                   data={"cause": None, "block": None} if st == "blocked-external" else None)
 
 
-def red_enforce(store: Any, facts: Any, t: Any) -> Any:
+def red_enforce(store, facts, t):
     """THE INVARIANT, SELF-RECOVERING (the owner, 2026-10-29): a red with no live holder (red_unheld) is offered again,
     escalated, its dead fix set aside -- the dispatcher, next in the same tick, gives it a fixer. Runs after every red's
     own step, so it only catches what the step's own transitions left resting."""

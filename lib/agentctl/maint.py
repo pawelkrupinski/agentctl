@@ -20,12 +20,12 @@ from agentctl.jvmreap import (
     thread_dump, tree_cpu)
 
 
-def loop_body(cmd: Any) -> Any:
+def loop_body(cmd):
     m = re.search(r"eval '(.*)' < /dev/null", cmd, re.S)
     return m.group(1) if m else cmd
 
 
-def is_wait_loop(cmd: Any) -> Any:
+def is_wait_loop(cmd) -> bool:
     if re.search(r"\bagentctl wait\b", cmd):
         return True
     if not re.match(r"\S*(zsh|bash|sh) ", cmd):
@@ -34,7 +34,7 @@ def is_wait_loop(cmd: Any) -> Any:
     return bool(re.search(r"\bsleep\b", body) and re.search(r"\b(until|while)\b", body))
 
 
-def loop_targets(body: Any) -> Any:
+def loop_targets(body):
     ids = set(re.findall(r"run (?:view|watch) (\d+)", body)) | set(re.findall(r"/runs/(\d+)", body))
     ids |= {i for m in re.findall(r"for \w+ in ((?:\d+\s+)*\d+)\s*;", body) for i in m.split()}
     m = re.search(r"(?:-R|--repo)[ =]([\w.-]+/[\w.-]+)", body) or re.search(r"agentctl wait run (\S+)", body)
@@ -47,7 +47,7 @@ def loop_targets(body: Any) -> Any:
     return repo, sorted(ids, key=int)
 
 
-def missing_tree_paths(text: Any) -> Any:
+def missing_tree_paths(text):
     gone = set()
     for p in re.findall(rf"{re.escape(HOME)}/(?:projects|bitcashier)/[\w.-]+", text):
         if not os.path.exists(p):
@@ -55,7 +55,7 @@ def missing_tree_paths(text: Any) -> Any:
     return sorted(gone)
 
 
-def owner_orphans_dead_only() -> Any:
+def owner_orphans_dead_only() -> None:
     """Cancel a DEAD owner's runs and drop its record (what --kill does to it), and log it; live owners untouched."""
     for rec in owner_records():
         if rec["alive"]:
@@ -64,14 +64,14 @@ def owner_orphans_dead_only() -> Any:
         reap_log(f"removed dead owner {rec.get('kind')} {rec.get('key')} pid {rec.get('pid')}")
 
 
-def _remove_owner_record(rec: Any) -> Any:
+def _remove_owner_record(rec) -> None:
     """An owner's .json and .verdict files."""
     for ext in (".json", ".verdict"):
         with suppress(FileNotFoundError):
             os.unlink(rec["path"][: -len(".json")] + ext)
 
 
-def _stale_owner_reasons(rec: Any, current: Any) -> Any:
+def _stale_owner_reasons(rec, current):
     """Why a live owner is a stray: running old code, or its cwd is gone."""
     reasons = []
     if current and rec.get("code") and rec["code"] != current:
@@ -81,7 +81,7 @@ def _stale_owner_reasons(rec: Any, current: Any) -> Any:
     return reasons
 
 
-def _owner_orphan(rec: Any, current: Any, kill: Any) -> Any:
+def _owner_orphan(rec, current, kill):
     """(the stray row of an owner record, or None); with kill, a dead owner's record is removed and a live stray gets
     SIGTERM."""
     what = f"{rec.get('kind')} {rec.get('key')} ({rec.get('owner')}, since {rec.get('started')})"
@@ -100,7 +100,7 @@ def _owner_orphan(rec: Any, current: Any, kill: Any) -> Any:
     return ("owner", rec.get("pid"), "; ".join(reasons), what)
 
 
-def owner_orphans(kill: Any) -> Any:
+def owner_orphans(kill):
     """Owner records that are strays: a dead process's, an owner on old code, an owner whose cwd is gone. With kill: a
     dead one's record is removed; a live one gets SIGTERM."""
     current = code_version()
@@ -203,7 +203,7 @@ FIXTURE_SERVER = re.compile(r"serve\.py\b|FixtureServerMain")
 FIXTURE_MAX_AGE = 6 * 3600
 
 
-def fixture_reason(cmd: Any, ppid: Any, etime: Any, isdir: Any = os.path.isdir) -> Any:
+def fixture_reason(cmd, ppid, etime, isdir = os.path.isdir):
     """Why a test fixture server (`python -I <tmp>/serve.py`, tools.FixtureServerMain) is stale, or None: its temp dir is
     gone, or it is older than 6 h and orphaned (no live parent test)."""
     if not FIXTURE_SERVER.search(cmd) or "agentctl" in cmd:
@@ -216,7 +216,7 @@ def fixture_reason(cmd: Any, ppid: Any, etime: Any, isdir: Any = os.path.isdir) 
     return None
 
 
-def cmd_orphans(a: Any) -> Any:
+def cmd_orphans(a):
     sbt_only = getattr(a, "sbt_only", False)  # the daily sweep: stuck sbt servers only
     owners = [] if sbt_only else cmd_owner_orphans(a)
     procs = ps()

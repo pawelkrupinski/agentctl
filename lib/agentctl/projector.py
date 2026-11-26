@@ -24,7 +24,7 @@ from agentctl.alerts import alert_write
 from agentctl.alertroute import event_audience
 
 
-def _entry_change_state(e: Any, every: Any) -> Any:
+def _entry_change_state(e, every):
     """(the change state of a queue entry, the waiting entry it follows or None). A pre-step-8 join follows the waiting
     entry that carries it."""
     if e.get("status") != "joined":
@@ -33,7 +33,7 @@ def _entry_change_state(e: Any, every: Any) -> Any:
     return ENTRY_STATE.get((w or {}).get("status"), "landed" if not w else "waiting"), w
 
 
-def project_changes(d: Any, store: Any) -> Any:
+def project_changes(d, store):
     """Each queue entry's change item: created in its state, moved (a transition, with its event) when the entry's
     status moved. Returns the items."""
     st = store
@@ -143,7 +143,7 @@ NOTIFY_LOOKBACK = 500  # events before the notifier's cursor looked at again: th
 NOTIFY_BURST = 3  # more items than this to tell in one pass (a catch-up after a sleep or an outage): ONE summary
 
 
-def escalation_stale(it: Any, ev: Any) -> Any:
+def escalation_stale(it, ev) -> bool:
     """The escalation no longer describes its item: the item is gone, closed, in another state than the event put it
     in (a red escalated UNCLAIMED and leased since), or re-entered that state after it (a new spell). Nothing to tell."""
     if not it:
@@ -158,7 +158,7 @@ def escalation_stale(it: Any, ev: Any) -> Any:
     return float(it.get("entered_at") or 0) > float(ev["at"])
 
 
-def notify_failure(store: Any) -> Any:
+def notify_failure(store):
     """{at, cause} of the notifier's last failed delivery (both channels failed), or None: invariant WN's reading."""
     try:
         return json.loads(store.meta_get("notify_failed") or "null") or None
@@ -166,7 +166,7 @@ def notify_failure(store: Any) -> Any:
         return None
 
 
-def _escalation_line(ev: Any) -> Any:
+def _escalation_line(ev):
     return (ev.get("refs") or {}).get("verdict") or ev.get("text") or ev["kind"]
 
 
@@ -301,7 +301,7 @@ def notify_escalations(store: Any) -> int:
     return EscalationPass(store).run()
 
 
-def maybe_archive_leases(d: Any, st: Any, every: Any = 3600) -> Any:
+def maybe_archive_leases(d, st, every: int = 3600):
     """Once an hour: the leases free for over a day go to the events (Store.archive_free_leases)."""
     if epoch_now() - float(st.meta_get("lease_archive_at", 0) or 0) < every:
         return 0

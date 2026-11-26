@@ -26,7 +26,7 @@ CHECK_LEASE_TTL = 10 * 60
 CHECK_LEASE_MAX = 3 * 3600
 
 
-def tree_slot(st: Any, d: Any, i: Any, max_hold: Any = None) -> Any:
+def tree_slot(st, d, i, max_hold = None):
     """THE lease of check tree i: whoever touches the tree -- a checker, the batch, a push -- holds it."""
     return LeaseHold(f"slot/check/{os.path.basename(d.rstrip('/'))}/{i}",
                      env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), max_hold or CHECK_LEASE_MAX,
@@ -48,7 +48,7 @@ RED_FIX_TREE = "redfix"  # <clone>-wt-check-redfix, under its own lease: only a 
 # (kind red_fix); where the GATE decides (waiting for green, a known red), only a fix of a gate red still does (gate_fix).
 
 
-def check_tree_slot(st: Any, repo: Any, d: Any, fix: Any = False) -> Any:
+def check_tree_slot(st, repo, d, fix: bool = False):
     """(index, LeaseHold) of a free check tree slot, or None when all QUEUE_POOL are busy; a red fix (fix) tries the
     red-fix tree first."""
     for i in ([RED_FIX_TREE] if fix else []) + list(range(1, int(env_num("AGENTCTL_CHECK_TREES", QUEUE_POOL)) + 1)):
@@ -58,17 +58,17 @@ def check_tree_slot(st: Any, repo: Any, d: Any, fix: Any = False) -> Any:
     return None
 
 
-def checker_lease(st: Any, eid: Any) -> Any:
+def checker_lease(st, eid):
     return LeaseHold(f"check/{eid}", env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL), CHECK_LEASE_MAX,
                      meta={"entry": eid}, store=st)
 
 
-def checker_alive(st: Any, eid: Any) -> Any:
+def checker_alive(st, eid):
     """The live checker lease of entry eid (meta: its pid), or None."""
     return lease_live(f"check/{eid}", st)
 
 
-def check_tree(repo: Any, i: Any, sha: Any) -> Any:
+def check_tree(repo, i, sha):
     """The detached worktree <clone>-wt-check-<i> at sha (kept between checks: its build stays warm)."""
     _d, clone, _w = waiting_state(repo)
     tree = mark_internal(f"{clone}-wt-check-{i}")
@@ -105,7 +105,7 @@ ENTRY_STATUS = {"queued": "queued", "checking": "checking", "checked": "checked"
 PUSH_ATTEMPTS_MAX = 3
 
 
-def change_item_fields(e: Any) -> Any:
+def change_item_fields(e):
     """A change item's data at its creation, from its queue entry: where it is, its lander, the reds it claims to fix
     (`fixes`: the watchdog's WR reads them; a red fix never waits for green), and when it was submitted (`submitted_at`:
     its queue age -- an entry queued again after a conflict keeps its first one, entry_queued_since)."""
@@ -135,12 +135,12 @@ def entry_queued_since(e: dict[str, Any]) -> float | None:
     return entry_created_at(e)
 
 
-def _landed_fields(fields: Any) -> Any:
+def _landed_fields(fields):
     return {k: fields[k] for k in ("landed_sha", "pushed_at", "batch", "batch_id", "superseded_by", "decided_on")
             if fields.get(k) is not None}
 
 
-def _item_data(cur: Any, to: Any, data: Any, fields: Any) -> Any:
+def _item_data(cur, to, data, fields):
     """The data set_change puts on the change's item: the decided why (a fixer's land reads it there, await_queued),
     where and when it landed or what superseded it (an awaiter on any host reads it, await_entry, verdict_still_holds),
     and a hold of the state it leaves cleared (a new state's wait is said anew, note_hold: no stale reason)."""
@@ -176,7 +176,7 @@ def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any]
     joined_verdicts(st, e, joined, to, event, data)
 
 
-def joined_changes(d: Any, w: Any, st: Any) -> Any:
+def joined_changes(d, w, st):
     """The queued changes that joined waiting entry w and are still open: entries from before ONE CHANGE, ONE ITEM
     (queue_join), when a queued change meeting a red gate became a waiting entry of its own, the queued one `joined`."""
     out = []
@@ -200,7 +200,7 @@ def _finish_joined(st: Any, w: Any, q: Any, it: Any, to: Any, refs: Any, data: A
                       event=ev)
 
 
-def joined_verdicts(st: Any, w: Any, joined: Any, to: Any, event: Any, data: Any) -> Any:
+def joined_verdicts(st, w, joined, to, event, data) -> None:
     """Waiting entry w's final state on each queued change that joined it, under the QUEUED id -- the one its `land`
     printed -- its line the projection's (joined_verdict), its author told there alone (review round 7:
     20261116-184811-movies-r2-ci-ac68b8's batch LANDED went to its waiting entry's id; its own item only followed later,
@@ -210,7 +210,7 @@ def joined_verdicts(st: Any, w: Any, joined: Any, to: Any, event: Any, data: Any
         _finish_joined(st, w, q, it, to, refs, data)
 
 
-def queue_verdict(st: Any, d: Any, e: Any, status: Any, verdict: Any, tail: Any = (), code: Any = 1, **fields: Any) -> Any:
+def queue_verdict(st, d, e, status, verdict, tail = (), code: int = 1, **fields) -> None:
     """A change's final verdict: its state (set_change), whose event the projector makes its author's inbox entry.
     `decided_on`: the main it was decided on (else the base it was checked on, else the one it was queued on): a land
     replays the verdict only while main is still that (verdict_still_holds)."""

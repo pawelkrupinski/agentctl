@@ -22,7 +22,7 @@ from agentctl.checkslot import check_slot
 from agentctl.remote import remote_check, remote_checks_supported
 
 
-def assemble(st: Any, repo: Any, d: Any, wt: Any, entries: Any, base: Any, alone: Any = False, autoresolve: Any = False) -> Any:
+def assemble(st, repo, d, wt, entries, base, alone: bool = False, autoresolve: bool = False):
     """The batch's tip in check tree wt = base + each entry's commits, in order; a conflicting entry is rejected alone
     (alone: a backlog batch's queued change, left out and checked alone -- its own check says whether it applies),
     one already on main LANDED, a duplicate superseded. autoresolve (a backlog batch: its check is the full landing
@@ -47,7 +47,7 @@ def assemble(st: Any, repo: Any, d: Any, wt: Any, entries: Any, base: Any, alone
     return kept
 
 
-def _drop_conflicting(st: Any, d: Any, wt: Any, e: Any, base: Any, files: Any, alone: Any, autoresolve: Any) -> Any:
+def _drop_conflicting(st, d, wt, e, base, files, alone, autoresolve) -> None:
     """Entry e does not apply: alone, left out and checked alone (one whose generated files could not be resolved: held
     as before, strict); else rejected."""
     if alone:
@@ -63,7 +63,7 @@ def _drop_conflicting(st: Any, d: Any, wt: Any, e: Any, base: Any, files: Any, a
                   conflict_files=conflict_paths(files))
 
 
-def _supersede_duplicate(st: Any, d: Any, wt: Any, e: Any, twin_tip: Any, kept: Any) -> Any:
+def _supersede_duplicate(st, d, wt, e, twin_tip, kept) -> None:
     """Entry e carries the very same change as an earlier kept entry (the one whose tip is twin_tip's descendant)."""
     owner = next((k for k in kept if twin_tip and git(wt, "merge-base", "--is-ancestor", twin_tip, k["tip"],
                                                       check=False).returncode == 0), None)
@@ -71,7 +71,7 @@ def _supersede_duplicate(st: Any, d: Any, wt: Any, e: Any, twin_tip: Any, kept: 
               "the same change already waits" + (f" as {owner['id']}" if owner else ""))
 
 
-def sbt_stop(tree: Any) -> Any:
+def sbt_stop(tree) -> None:
     """A FRESH sbt server for the batch check: stop the tree's server and keeper (scripts/sbt-warm --stop), if any."""
     script = os.path.join(tree, "scripts", "sbt-warm")
     if os.access(script, os.X_OK):
@@ -84,7 +84,7 @@ def sbt_stop(tree: Any) -> Any:
 STALL_SIGNAL = re.compile(r"(^|\s)(pre-push |sbt-warm )?STALLED:", re.M)
 
 
-def batch_mode(hook: Any) -> Any:
+def batch_mode(hook):
     """The combined check's hook mode: `--fast-only` (compile of every test config, the fast tests, the touched files'
     lints and the checks a touched merge=union file selects: each change was checked in full alone, on an older main,
     and the rebase writes a union-merged file no member's check saw) when the hook has it, else the full `--range` dry run."""
@@ -97,7 +97,7 @@ RED_PRECHECK_MODE = "--checks-only"  # a waiting batch's pre-check while main is
 BATCH_FULL_MODE = "--range"  # a backlog batch's check: the full landing check a change gets (check/batch-<tip> on CI)
 
 
-def batch_check(repo: Any, d: Any, tree: Any, base: Any, tip: Any, clock: Any, st: Any, cls="check", depth: Any = "fast", runs: Any = None, range_base: Any = None) -> Any:
+def batch_check(repo, d, tree, base, tip, clock, st, cls="check", depth: str = "fast", runs = None, range_base = None):
     """The hook's dry run over base..tip in `tree` (depth fast: batch_mode's; full, a backlog batch: the full landing
     check, BATCH_FULL_MODE; verify, a push batch: the combined tree's VERIFY_MODE over range_base..tip, range_base the
     oldest member's full base), on a fresh sbt server, under the stall abort. (ok, output, stalled): a stall -- land's
@@ -115,7 +115,7 @@ def batch_check(repo: Any, d: Any, tree: Any, base: Any, tip: Any, clock: Any, s
     return _local_batch_check(repo, d, tree, base, tip, rng_base, hook, mode, cls)
 
 
-def _remote_batch_check(repo: Any, tip: Any, base: Any, rng_base: Any, mode: Any, depth: Any, cls, clock: Any, st: Any, runs: Any) -> Any:
+def _remote_batch_check(repo, tip, base, rng_base, mode, depth, cls, clock, st, runs):
     """The batch's check on CI. (a push batch's branch: check/verify-<range base>-batch-<tip>, the workflow's
     --verify-only <range base>..HEAD)"""
     e = {"id": f"batch-{tip[:10]}", "head": tip, **({"full_base": rng_base} if depth == "verify" else {})}
@@ -126,7 +126,7 @@ def _remote_batch_check(repo: Any, tip: Any, base: Any, rng_base: Any, mode: Any
     return (ok, out, False) if ok is not None else (False, out, True)
 
 
-def _local_batch_check(repo: Any, d: Any, tree: Any, base: Any, tip: Any, rng_base: Any, hook: Any, mode: Any, cls) -> Any:
+def _local_batch_check(repo, d, tree, base, tip, rng_base, hook, mode, cls):
     """The hook's dry run here, twice at most: a stall is retried once on a fresh sbt server."""
     out = ""
     for attempt in (1, 2):
@@ -163,7 +163,7 @@ def _first_failing_prefix(check: Any, batch: Any, out_hi: Any) -> Any:
     return lo, out_hi
 
 
-def bisect(repo: Any, d: Any, batch: Any, base: Any, bwt: Any, clock: Any, st: Any, depth: Any = "fast", runs: Any = None, failed_out: Any = None, range_base: Any = None, cls="check") -> Any:
+def bisect(repo, d, batch, base, bwt, clock, st, depth: str = "fast", runs = None, failed_out = None, range_base = None, cls="check"):
     """The batch failed: the first entry whose prefix fails (binary search over the prefixes' tips, in the batch's tree
     bwt). (index, output) of the culprit; (None, output) when the whole batch passes on its own again (flaky or infra).
     A backlog or push batch (failed_out: its check's output) is not checked whole again first: each check is a landing
@@ -188,7 +188,7 @@ def bisect(repo: Any, d: Any, batch: Any, base: Any, bwt: Any, clock: Any, st: A
     return lo, out_hi
 
 
-def unread_note(d: Any, reds: Any, entries: Any, st: Any) -> Any:
+def unread_note(d, reds, entries, st) -> None:
     """The gate unread while changes wait: once per unread spell, an UNKNOWN inbox entry (they would wait unseen)."""
     if GATE_UNREAD not in reds or condition_item_of(st, "gate-unread-waiting"):
         return

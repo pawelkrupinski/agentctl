@@ -25,7 +25,7 @@ from agentctl.redobserve import local_red, local_stale
 from agentctl.checkslot import check_slot
 
 
-def check_failures(out: Any) -> Any:
+def check_failures(out):
     """{failed check: {normalized failure lines}} of a hook run's output."""
     fails, seg = {}, []
     for raw in (out or "").splitlines():
@@ -40,12 +40,12 @@ def check_failures(out: Any) -> Any:
     return fails
 
 
-def check_passes(out: Any) -> Any:
+def check_passes(out):
     return {m.group(1) for m in (HOOK_STATUS.search(ANSI.sub("", l)) for l in (out or "").splitlines())
             if m and m.group(2) == "ok"}
 
 
-def write_baseline_out(main: Any, out: Any) -> Any:
+def write_baseline_out(main, out) -> None:
     """reds/baseline-out/<main>: the hook's output on plain main (appended to a run for other paths on the same main),
     for the hook's known-red baseline; files older than 3 days go."""
     d = reds_dir("baseline-out")
@@ -68,7 +68,7 @@ def write_baseline_out(main: Any, out: Any) -> Any:
 
 
 @contextlib.contextmanager
-def local_lock() -> Any:
+def local_lock():
     """One writer of reds/local.json at a time."""
     os.makedirs(reds_dir(), exist_ok=True)
     with open(reds_dir("local.lock"), "a+") as f:
@@ -79,7 +79,7 @@ def local_lock() -> Any:
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def note_local_red(main: Any, fails: Any, passes: Any) -> Any:
+def note_local_red(main, fails, passes) -> None:
     """Keep reds/local.json: the checks failing on plain origin/main (added), those seen passing (cleared)."""
     with local_lock():
         rec = local_red()
@@ -102,7 +102,7 @@ def note_local_red(main: Any, fails: Any, passes: Any) -> Any:
 # processor's patrol (the governor's check class), synchronously by `red patrol`, or by the next land's dry run. A pass
 # clears the red, releases its claims, stops its dispatched fixer (process groups) and puts FIX OK in the inbox; the
 # fixer's worktrees whose commits are patch-equivalent on main are removed, any other is listed in the inbox.
-def recheck_local(repo: Any, wait: Any = True) -> Any:
+def recheck_local(repo, wait: bool = True):
     """Recompute a stale local red on the current origin/main. Returns action lines (when it ran synchronously)."""
     main = local_stale(repo)
     if not main:
@@ -119,7 +119,7 @@ def recheck_local(repo: Any, wait: Any = True) -> Any:
     return _recheck_guarded(repo, main)
 
 
-def _recheck_guarded(repo: Any, main: Any) -> Any:
+def _recheck_guarded(repo, main):
     """One recheck at a time across processes (the processor's and a `red patrol`): the second one leaves it."""
     os.makedirs(reds_dir("local"), exist_ok=True)
     try:
@@ -134,7 +134,7 @@ def _recheck_guarded(repo: Any, main: Any) -> Any:
         return []
 
 
-def run_local_recheck(repo: Any, main: Any) -> Any:
+def run_local_recheck(repo, main):
     """Run the recorded failing checks on main's tree (the hook over <recorded main>..main, every other check skipped)."""
     failing = sorted(local_red().get("checks") or {})
     hook = precheck_hook(repo)
@@ -160,7 +160,7 @@ def run_local_recheck(repo: Any, main: Any) -> Any:
     return apply_local_recheck(repo, main, rc, out)
 
 
-def _recheck_base(repo: Any) -> Any:
+def _recheck_base(repo):
     """The main the red FIRST appeared on (first_main; the record's `main` moves with every recheck): the checks judge what
     changed since (shellcheck fails only on warnings a change ADDS, so against an empty base the whole tree would
     count). Unknown to this clone: a commit on the empty tree."""
@@ -172,7 +172,7 @@ def _recheck_base(repo: Any) -> Any:
     return git(repo, "commit-tree", empty, "-m", "agentctl recheck base").strip()
 
 
-def _recheck_in_tree(repo: Any, main: Any, hook: Any, tree: Any, base: Any, synth: Any, failing: Any) -> Any:
+def _recheck_in_tree(repo, main, hook, tree, base, synth, failing):
     """The hook of the recheck tree over base..synth with every check but the failing ones skipped: (rc, output)."""
     log_path = reds_dir("local", "recheck.log")
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -187,7 +187,7 @@ def _recheck_in_tree(repo: Any, main: Any, hook: Any, tree: Any, base: Any, synt
     return rc, out
 
 
-def apply_local_recheck(repo: Any, main: Any, rc: Any, out: Any) -> Any:
+def apply_local_recheck(repo, main, rc, out):
     """Record a recheck's outcome (also what land's passing dry run does): still failing -> re-keyed to main; passed ->
     cleared and released."""
     failing = dict(local_red().get("checks") or {})
@@ -203,7 +203,7 @@ def apply_local_recheck(repo: Any, main: Any, rc: Any, out: Any) -> Any:
     return local_cleared(repo, main)
 
 
-def local_cleared(repo: Any, main: Any) -> Any:
+def local_cleared(repo, main):
     """The local red is gone (its red item clears at the next tick, its holder told to stop): FIX OK to the inbox, the
     fixer's worktrees tidied."""
     line = f"FIX OK: Local checks pass on {remote()}/main {main[:10]}; the red is cleared"
@@ -230,7 +230,7 @@ def _tidy_local_fixer(r: Any) -> Any:
     return acts
 
 
-def release_local_leftovers(repo: Any) -> Any:
+def release_local_leftovers(repo):
     """With no local red: each ended local fixer's worktree is removed when its commits are patch-equivalent on main
     (git cherry); anything else is listed in the inbox, never deleted. Once per fixer record."""
     if local_red().get("checks"):

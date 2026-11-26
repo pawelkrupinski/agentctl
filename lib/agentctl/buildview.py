@@ -95,7 +95,7 @@ def starts_statement(depth: int, ind: int, col: Any, stripped: str, cur: Any) ->
     return bool(depth == 0 and ind <= col and not re.match(r"[.)}\]+\-*/|&=<>:,]", stripped) and cur)
 
 
-def scala_statements(code: Any, first: Any = None) -> Any:
+def scala_statements(code, first = None):
     """The top-level statements of comment-free code: a statement starts on a line at the indentation of the block's
     first line, outside any bracket, that is no continuation (`.`, `)`, `}`, `]`, an operator). first: the column a
     statement starts at (None: the first non-blank line's). Returns [(text, normalized text)]."""
@@ -118,7 +118,7 @@ def scala_statements(code: Any, first: Any = None) -> Any:
     return [(s, " ".join(s.split())) for s in stmts]
 
 
-def scala_object_parts(code: Any, name: Any) -> Any:
+def scala_object_parts(code, name):
     """(header, {member: text}) of object `name` in comment-free code: its members are its body's statements that
     declare a name; the header is the rest (imports, the signature, a body statement declaring nothing). None when the
     object's body cannot be found."""
@@ -333,7 +333,7 @@ def _selection_words(selection: Any) -> Any:
             yield from " ".join(words or []).split()
 
 
-def selection_modules(selection: Any, module_dirs: Any) -> Any:
+def selection_modules(selection, module_dirs):
     """The module directories a hook selection (hook_selection: {mode: words}, local-tests lines) names: a word or line
     token `<module>/...` of a known module. The compile and lint plans are left out: the verification runs them, under
     the new build."""
@@ -345,12 +345,12 @@ def selection_modules(selection: Any, module_dirs: Any) -> Any:
     return out
 
 
-def change_module_dirs(paths: Any, module_dirs: Any) -> Any:
+def change_module_dirs(paths, module_dirs):
     """The module directories the change's own paths are under."""
     return {p.split("/", 1)[0] for p in paths if "/" in p and p.split("/", 1)[0] in module_dirs}
 
 
-def build_view_change(tree: Any, full_tip: Any, tip: Any, paths: Any, selection: Any) -> Any:
+def build_view_change(tree, full_tip, tip, paths, selection):
     """None when the build's view for the change (its modules and the modules its selection at tip names) is the same
     at full_tip and at tip; else why not, in words (THE VIEW above)."""
     if any(BUILD_VIEW_PATHS.match(p) for p in paths):
@@ -368,7 +368,7 @@ def build_view_change(tree: Any, full_tip: Any, tip: Any, paths: Any, selection:
     return _moved_view_words(old, new, modules)
 
 
-def _moved_view_words(old: Any, new: Any, modules: Any) -> Any:
+def _moved_view_words(old, new, modules):
     """None when the two views are alike; else the units that moved, in words."""
     moved = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
     if not moved:
@@ -377,7 +377,7 @@ def _moved_view_words(old: Any, new: Any, modules: Any) -> Any:
     return f"what {', '.join(sorted(modules)) or 'every module'} build{'s' if len(modules) == 1 else ''} with changes ({what})"
 
 
-def build_view_unit_words(k: Any) -> Any:
+def build_view_unit_words(k):
     """A view unit's key in words: `def:worker` -> worker, `global:<text>` -> a build-wide setting, `member:O:m` -> O.m."""
     kind, _, rest = k.partition(":")
     return {"global": "a build-wide setting", "def": rest, "file": rest, "header": rest,

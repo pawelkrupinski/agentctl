@@ -45,7 +45,7 @@ def sync_outbox_dir() -> str:
     return state_root("outbox")
 
 
-def submit_remote(st: Any, e: Any) -> Any:
+def submit_remote(st, e):
     """Submit a change to the remote store; unreachable: kept in the outbox (QUEUED-LOCAL) for the sync to send."""
     try:
         return st.submit(e)
@@ -77,7 +77,7 @@ def flush_outbox(st: Any) -> int:
 class _SyncDuties:
     """The steps of the laptop's sync loop that keep state or wrap a collaborator: clock and store are the process's (cli's)."""
 
-    def __init__(self, repo: str, o_r: str, clock: Clock, store: Any):
+    def __init__(self, repo: str, o_r: str, clock: Clock, store):
         self.repo, self.o_r, self.clock, self.store = repo, o_r, clock, store
         self.last_mirror = 0.0
         self.role: bool | None = None  # None: not claimed in this loop yet (a step run on its own: a test)
@@ -105,7 +105,7 @@ class _SyncDuties:
                            env_num("AGENTCTL_STEP_BOUND", 120)):
             err("drift explorer: still running from an earlier cycle")
 
-    def dispatch(self) -> Any:
+    def dispatch(self):
         if os.path.exists(reds_dir("DISPATCH_OFF")):
             return []
         return red_dispatcher(self.store, self.o_r, self.repo, self.clock.time())
@@ -212,7 +212,7 @@ def _root_checkout_ff_safe(repo: Any) -> Any:
     return not git(repo, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip()
 
 
-def root_checkout_ff(repo: Any) -> Any:
+def root_checkout_ff(repo):
     """Fast-forward clone repo's own checkout (its root, not a worktree) to <remote>/main when that is safe; its lines."""
     if not repo or not os.path.isdir(repo) or not _root_checkout_ff_safe(repo):
         return []

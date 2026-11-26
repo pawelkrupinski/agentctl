@@ -54,7 +54,7 @@ def root_checkout(wt: Any, o_r: Any) -> Any:
     return os.path.realpath(wt) in roots
 
 
-def bind_fixer_session(sid: Any, record: Any) -> Any:
+def bind_fixer_session(sid, record):
     """The session -> fixer record binding (reds/sessions/<session id>.json): written by the wrapper once `claude
     agents` names its session, and by the fixer's own first command (`red claim N --fixer <record>`, in its prompt).
     Refused (None) for a record that ended or names another session."""
@@ -134,7 +134,7 @@ def _claim_one(store: Any, it: dict[str, Any], holder: str, wt: str, who: str, n
                f"your worktree; release: ~/bin/agentctl red release {it['data']['key']}")
 
 
-def _claim_worktree(wt: Any, fixer_wt: Any, here: Any) -> Any:
+def _claim_worktree(wt, fixer_wt, here):
     """The worktree a claim is renewed by: the one named, the fixer record's, the cwd's, the cwd itself."""
     return os.path.realpath(wt or fixer_wt or worktree_of(here) or here)
 
@@ -161,7 +161,7 @@ def red_claim(store: Any, o_r: Any, target: Any, note: str = "", wt: Any = None)
     return max(rc for rc, _line in claims), [line for _rc, line in claims]
 
 
-def red_beat(store: Any, o_r: Any, target: Any, note: Any) -> Any:
+def red_beat(store, o_r, target, note):
     if own_fixer_record_path():
         return red_claim(store, o_r, target, note)
     out, rc = [], 1
@@ -215,7 +215,7 @@ def red_release(store: Any, o_r: Any, target: Any, any_: bool = False) -> tuple[
 
 
 # -- interactive holders: the tick renews a claim from its worktree's activity; imported claim files lapse unless busy
-def red_wt_mark(wt: Any) -> Any:
+def red_wt_mark(wt):
     """An interactive claim's progress mark: its worktree's HEAD, `git status` and the newest change's mtime."""
     if not allowed_dir(wt):
         return ""
@@ -228,7 +228,7 @@ def red_wt_mark(wt: Any) -> Any:
     return f"{head[:12]}:{hashlib.sha1(st.encode()).hexdigest()[:10]}:{int(newest)}"
 
 
-def red_joined_progress(store: Any, row: Any, why: Any) -> Any:
+def red_joined_progress(store, row, why) -> None:
     """Mark a joined (or owner-held) red's lease as worked on (why: `note: ...`, `commit <sha>`, `fix <entry>`): a joined
     red's backstop is done; an owner-held one's RED_HELD_IDLE counts from now."""
     store.set_meta(row["name"], row["epoch"], row["secret"], {"progressed": str(why)[:200], "progressed_at": epoch_now()})

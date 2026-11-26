@@ -46,7 +46,7 @@ GATE_UNREAD = "unread"  # gate_reds' member when the gate could not be read: nev
 gate_unread_why = [""]
 
 
-def waiting_commits(repo: Any, base: Any, head: Any) -> Any:
+def waiting_commits(repo, base, head):
     return git(repo, "rev-list", "--reverse", f"{base}..{head}").split()
 
 
@@ -140,7 +140,7 @@ def drop_landed(d: Any, e: dict[str, Any], on_main: Any) -> Any:
     return None
 
 
-def apply_entry(d: Any, wt: Any, e: Any, base: Any, regen: Any = True, autoresolve: Any = False) -> Any:
+def apply_entry(d, wt, e, base, regen: bool = True, autoresolve: bool = False):
     """Pick the entry's commits onto wt's HEAD (base, or base plus earlier entries): ('ok', None), ('conflict', files),
     ('landed', via) or ('duplicate', via). A commit already on MAIN (base's history) is dropped from the entry for good
     (a partly landed entry keeps only the rest); one only an earlier entry carries is left out of this build alone (that
@@ -158,7 +158,7 @@ def apply_entry(d: Any, wt: Any, e: Any, base: Any, regen: Any = True, autoresol
     return _after_drops(d, wt, e, base, first, dropped)
 
 
-def _after_drops(d: Any, wt: Any, e: Any, base: Any, first: Any, dropped: Any) -> Any:
+def _after_drops(d, wt, e, base, first, dropped):
     """apply_entry's verdict when some commits were dropped: 'landed' (nothing left of it on main), 'duplicate' (all of
     it on an earlier entry), else 'ok' with the rest."""
     on_main = dropped_on_main(wt, dropped, base, first)
@@ -170,7 +170,7 @@ def _after_drops(d: Any, wt: Any, e: Any, base: Any, first: Any, dropped: Any) -
     return "ok", None
 
 
-def already_landed(st: Any, d: Any, e: Any, via: Any) -> Any:
+def already_landed(st, d, e, via) -> None:
     """Every commit of the entry is on main already (an earlier entry, or someone, landed it): LANDED, nothing pushed."""
     queue_verdict(st, d, e, "landed", f"LANDED {e['head']} (already on main via {via or 'an equivalent commit'}): "
                                   "nothing left to push", code=0, landed_sha=via, already=True)
@@ -186,7 +186,7 @@ def cancel_entry_remote(st: Any, e: dict[str, Any], why: str) -> None:
             err(f"could not cancel run {rem['run']} of {e['id']}: {str(ex)[:120]}")
 
 
-def supersede(st: Any, d: Any, e: Any, by: Any, why: Any) -> Any:
+def supersede(st, d, e, by, why) -> None:
     """The entry gives way to `by` (a newer entry of the same worktree and branch, or one carrying the same change): its
     checker, if running, is stopped; said in the inbox."""
     line = f"SUPERSEDED {e['id']} by {by}: {why}"
@@ -201,11 +201,11 @@ def supersede(st: Any, d: Any, e: Any, by: Any, why: Any) -> Any:
     wlog(d, line)
 
 
-def tail_of(out: Any, n: Any = 25) -> Any:
+def tail_of(out, n: int = 25):
     return "\n  ".join([l for l in out.splitlines() if l.strip()][-n:])
 
 
-def diagnoses_of(repo: Any, commits: Any) -> Any:
+def diagnoses_of(repo, commits):
     """The run ids/numbers the commits' `Diagnoses-Red:` trailers name (DIAGNOSTICS ARE NO FIX, redmove.py)."""
     out = set()
     for c in commits:
@@ -214,12 +214,12 @@ def diagnoses_of(repo: Any, commits: Any) -> Any:
     return out
 
 
-def batch_order(repo: Any, entries: Any, reds: Any, store: Any) -> Any:
+def batch_order(repo, entries, reds, store):
     """The order a batch is built in: a fix for the current red first, then (main red) what may land while red -- tools
     only, or every commit carrying a Fixes-Red for a red run -- then the rest; by join order within each."""
     facts = queue_facts(reds, store)
 
-    def rank(e: Any) -> Any:
+    def rank(e):
         if reds and classify_change(e, facts)["gate_fix"]:  # its KIND: a fix of the gate's red (changekind.py)
             return 0
         if reds and not must_wait(repo, e["commits"], reds, store):
@@ -228,14 +228,14 @@ def batch_order(repo: Any, entries: Any, reds: Any, store: Any) -> Any:
     return sorted(entries, key=lambda e: (rank(e), e["seq"]))
 
 
-def supersede_older_waiting(st: Any, d: Any, worktree: Any, branch: Any, eid: Any) -> Any:
+def supersede_older_waiting(st, d, worktree, branch, eid) -> None:
     """Waiting again replaces this worktree and branch's older waiting entry: only the newest (eid) lands."""
     for old in waiting_entries(d):
         if old["id"] != eid and same_change_source(old, worktree, branch):
             supersede(st, d, old, eid, f"{worktree} waits again; only the newest entry lands")
 
 
-def note_waiting(d: Any, log_path: Any, head: Any, eid: Any) -> Any:
+def note_waiting(d, log_path, head, eid):
     """The change's `=== waiting` line in its log, and its verdict line `WAITING <head> (entry <id>, n waiting)` (n:
     the waiting entries, it among them, saved yet or not)."""
     n = len({x["id"] for x in waiting_entries(d)} | {eid})
@@ -263,7 +263,7 @@ def cancel_submitted(st: Any, eid: str, how: str = "cancel", repo: str | None = 
     return {"id": eid, "status": "cancelled"}
 
 
-def clear_holds_on(st: Any, eid: Any) -> Any:
+def clear_holds_on(st, eid) -> None:
     """Every open change's recorded hold naming change eid as its blocker, cleared (eid is gone: the next tick reads
     each one's hold again); never a phantom blocker in `land status`."""
     for it in st.items("change"):

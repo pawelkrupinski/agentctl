@@ -39,13 +39,13 @@ _live_reg_lock = threading.Lock()
 _live_info = process_cache({})                 # transcript -> ((size, mtime), tail info)
 
 
-def live_globs() -> Any:
+def live_globs():
     v = os.environ.get("AGENTCTL_LIVE_GLOBS")
     return [g for g in (v.split(os.pathsep) if v is not None
                         else [f"/private/tmp/claude-{os.getuid()}/*/*/tasks/*.output"]) if g]
 
 
-def live_transcript_ok(p: Any) -> Any:
+def live_transcript_ok(p):
     """The real path of a transcript the page may stream: a regular .jsonl file owned by this user under the Claude
     projects root (after symlinks); else None."""
     if not isinstance(p, str) or not p or "\0" in p or not os.path.isabs(p):
@@ -61,12 +61,12 @@ def live_transcript_ok(p: Any) -> Any:
     return real
 
 
-def live_slug(wt: Any) -> Any:
+def live_slug(wt):
     """Claude Code's project dir name of a working directory: every non-alphanumeric character a '-'."""
     return re.sub(r"[^A-Za-z0-9]", "-", str(wt or ""))
 
 
-def live_session_transcript(session: Any, wt: Any = None) -> Any:
+def live_session_transcript(session, wt = None):
     if not session or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", str(session)):
         return None
     if wt:
@@ -76,14 +76,14 @@ def live_session_transcript(session: Any, wt: Any = None) -> Any:
     return bg_transcript(session)
 
 
-def live_id_part(s: Any) -> Any:
+def live_id_part(s):
     return re.sub(r"[^A-Za-z0-9_-]", "_", str(s))[:100]
 
 
 _live_metas = process_cache({})                # subagent .meta.json -> (mtime, its JSON)
 
 
-def live_meta(p: Any) -> Any:
+def live_meta(p):
     m = mtime(p)
     hit = _live_metas.get(p)
     if not hit or hit[0] != m:
@@ -174,14 +174,14 @@ def live_registry_read(t: float | None = None) -> dict[str, dict[str, Any]]:
     return read.reg
 
 
-def live_registry(fresh: Any = False) -> Any:
+def live_registry(fresh: bool = False):
     with _live_reg_lock:
         if fresh or _live_reg["reg"] is None or epoch_now() - _live_reg["at"] >= LIVE_REGISTRY_TTL:
             _live_reg["reg"], _live_reg["at"] = live_registry_read(), epoch_now()
         return _live_reg["reg"]
 
 
-def live_lookup(aid: Any) -> Any:
+def live_lookup(aid):
     """The registry entry of a known agent id, else None (an id that is not one is never looked up)."""
     if not isinstance(aid, str) or not LIVE_ID_RE.fullmatch(aid):
         return None
@@ -196,7 +196,7 @@ def live_lookup(aid: Any) -> Any:
 LIVE_TALK = ("user", "assistant", "queue-operation")
 
 
-def live_track(info: Any, rec: Any) -> Any:
+def live_track(info, rec):
     """Fold one transcript entry into the tail info: the last conversational entry (an assistant's stop_reason or
     None for a user/tool result) and the last timestamp."""
     if not isinstance(rec, dict):
@@ -213,7 +213,7 @@ def live_track(info: Any, rec: Any) -> Any:
     return info
 
 
-def live_tail_info(path: Any, max_bytes: Any = 256 << 10) -> Any:
+def live_tail_info(path, max_bytes = 256 << 10):
     """{stop, last_ts, api_error, size, mtime} from the transcript's last max_bytes, cached by its size and mtime."""
     try:
         sig = (os.path.getsize(path), mtime(path))
