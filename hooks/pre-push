@@ -13,8 +13,8 @@ while read -r _lref lsha _rref _rsha; do
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/agentctl-prepush.XXXXXX")
   git worktree add -q --detach "$tmp/tree" "$lsha" || { rm -rf "$tmp"; exit 1; }
   echo "pre-push: tests/run.py on ${lsha%"${lsha#????????????}"} ..." >&2
-  # --foreground: the suite stays in the push's process group, where `agentctl land` reads its CPU as progress (GNU
-  # timeout's own group hid it: land ended the push as stalled, 2026-11-06); run.py's own bound ends its workers.
+  # govstep keeps the suite in the push's process group, where `agentctl land` reads its CPU as progress (GNU timeout's
+  # own group hid it: land ended the push as stalled, 2026-11-06); run.py's own bound ends its workers.
   # THE BOUND GROWS WITH THE LAPTOP'S LOAD (2026-11-21: d2be9d3 refused twice as SUITE TIMEOUT after 280 s, no test
   # failing, while other agents' what-ifs held load 30 on 18 cores): 280 s times load per core, 1x to 4x
   cores=${AGENTCTL_PREPUSH_CORES:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)}
@@ -27,22 +27,34 @@ try: print(float(json.load(open(os.path.expanduser("~/.cache/agentctl-tests/suit
 except Exception: print(0)' 2>/dev/null)
   bound=$(awk -v l="${load:-0}" -v c="$cores" -v w="${wall:-0}" 'BEGIN { f = (c > 0) ? l / c : 1; if (f < 1) f = 1; if (f > 4) f = 4;
                                                      b = 1.5 * w; if (b < 280) b = 280; printf "%d", b * f }')
-  # run.py takes the suite's governor ticket itself, waiting at most 900 s (govpool.py POOL_TICKET_WAIT) before its own
-  # --suite-timeout starts: the KILL bound below leaves that wait room (2026-11-22, ticketless suites at load 150)
-  # the per-test timeout grows the same way (2026-11-22: queue_sim's mutation 1, ~40 s idle, timed out at load 290)
+  # EVERY STEP RUNS UNDER devtools/govstep.py (2026-11-26: the stress lane's 300 s kill bound counted a 686 s wait for
+  # cores, and a push was refused with no test failing): it takes the step's governor ticket, waiting at most
+  # $AGENTCTL_GOV_WAIT (30 min) -- past that "governor busy", exit 75, not a test failure -- and starts the step's own
+  # bound (--run) when the ticket is GRANTED. The runners inside run under that ticket and take none.
+  gstep="python3 $tmp/tree/devtools/govstep.py"
+  refuse() { # refuse <exit status> <what failed>: a governor that never admitted the step is no verdict on the code
+    if [ "$1" -eq 75 ]; then
+      echo "pre-push: REFUSED -- governor busy: no cores for $2 within ${AGENTCTL_GOV_WAIT:-1800} s (load, NOT a failure of $lsha; nothing was judged; push again when 'agentctl gov status' shows room)" >&2
+    else
+      echo "pre-push: REFUSED -- $3" >&2
+    fi
+  }
   per_test=$(awk -v b="$bound" 'BEGIN { printf "%d", 60 * b / 280 }')
-  if ! (cd "$tmp/tree" && timeout --foreground -s KILL $((bound + 920)) python3 tests/run.py --suite-timeout "$bound" --timeout "$per_test" >"$tmp/out" 2>&1); then
+  [ -f "$tmp/tree/devtools/govstep.py" ] || gstep=""  # a pushed tree older than the tool
+  (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-suite --cores 8 --run $((bound + 120)) --} python3 tests/run.py --suite-timeout "$bound" --timeout "$per_test" >"$tmp/out" 2>&1); st=$?
+  if [ $st -ne 0 ]; then
     tail -40 "$tmp/out" >&2
-    echo "pre-push: REFUSED -- the suite fails on $lsha (fix forward; never --no-verify)" >&2
+    refuse $st "the suite" "the suite fails on $lsha (fix forward; never --no-verify)"
     rc=1
   else
     tail -2 "$tmp/out" >&2
     # THE STRESS LANE (tests/stress.py, 2026-11-25): the tests this push touches, 5 more times each, shuffled, under a
     # raised test-clock lag, at most ~45 s: a newly flaky test fails the push (its seed and REPLAY line are printed).
     if [ $rc -eq 0 ] && [ "$_rsha" != "$z" ] && git cat-file -e "$_rsha^{commit}" 2>/dev/null && [ -f "$tmp/tree/tests/stress.py" ]; then
-      if ! (cd "$tmp/tree" && timeout --foreground -s KILL 300 python3 tests/stress.py --range "$_rsha..$lsha" >"$tmp/stress" 2>&1); then
+      (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-stress --cores 8 --run 300 --} python3 tests/stress.py --range "$_rsha..$lsha" >"$tmp/stress" 2>&1); st=$?
+      if [ $st -ne 0 ]; then
         tail -30 "$tmp/stress" >&2
-        echo "pre-push: REFUSED -- the stress lane fails on $lsha (a test of this push is flaky: replay with the REPLAY line)" >&2
+        refuse $st "the stress lane" "the stress lane fails on $lsha (a test of this push is flaky: replay with the REPLAY line)"
         rc=1
       else
         tail -2 "$tmp/stress" >&2
@@ -50,13 +62,15 @@ except Exception: print(0)' 2>/dev/null)
     fi
     # THE SIMULATOR GATE (tests/sim_gate.py): no invariant kind's violations rise against the remote's main, and no
     # invariant changes beside the code it measures. Against the remote's sha when this clone has it, else alone. Its
-    # chunks run under a suite ticket of their own (THE GOVERNED FAN-OUT): the KILL bound leaves its 900 s wait room.
+    # chunks run under the step's ticket (THE GOVERNED FAN-OUT); the 1220 s bound starts at the grant.
     base=""
     [ "$_rsha" != "$z" ] && git cat-file -e "$_rsha^{commit}" 2>/dev/null && base="--base $_rsha"
     # shellcheck disable=SC2086
-    if [ -f "$tmp/tree/tests/sim_gate.py" ] && ! (cd "$tmp/tree" && timeout --foreground -s KILL 1220 python3 tests/sim_gate.py $base >"$tmp/gate" 2>&1); then
+    st=0
+    [ -f "$tmp/tree/tests/sim_gate.py" ] && { (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-gate --cores 8 --run 1220 --} python3 tests/sim_gate.py $base >"$tmp/gate" 2>&1); st=$?; }
+    if [ $st -ne 0 ]; then
       tail -20 "$tmp/gate" >&2
-      echo "pre-push: REFUSED -- the simulator gate fails on $lsha (tests/sim_gate.py; fix forward)" >&2
+      refuse $st "the simulator gate" "the simulator gate fails on $lsha (tests/sim_gate.py; fix forward)"
       rc=1
     elif [ -f "$tmp/gate" ]; then
       tail -1 "$tmp/gate" >&2

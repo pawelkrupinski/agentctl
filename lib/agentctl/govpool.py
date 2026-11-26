@@ -22,12 +22,46 @@ from typing import Callable, Iterator, Mapping, Optional
 #   what it asks and what the ticket above it allows.
 # - Its workers run with $AGENTCTL_GOV_WIDTH=1 (Fanout.env): each holds one core of this pool's ticket, so a fan-out
 #   inside one of them runs one wide and takes no ticket either.
-# - The governor's wait is bounded (POOL_TICKET_WAIT, a hook's bound leaves it room); past it, or with the governor
-#   failing, the pool runs ONE wide -- never its full width ticketless (2026-11-25: a suite that waited 900 s ran its
-#   8 workers beside everything the governor held).
+# - The governor's wait is bounded on its own (GOV_WAIT, $AGENTCTL_GOV_WAIT, 30 min) and is NEVER part of a step's run
+#   bound (2026-11-26: a self-push refused because the stress lane waited 686 s for cores against a 300 s kill bound,
+#   no test failing): devtools/govstep.py takes the ticket, then starts the step's clock. Past the wait the pool raises
+#   GovernorBusy ("governor busy: waited N s for M cores (holders: ...)"), exit 75 through run_main: load, not a test
+#   failure, never retried silently. The governor FAILING (not waiting) leaves the pool ONE wide -- never its full width
+#   ticketless (2026-11-25: a suite that waited 900 s ran its 8 workers beside everything the governor held).
 # - No governor here (another machine's checkout, $AGENTCTL_SUITE_GOVERNOR=-): its full width, as before.
 WIDTH_ENV = "AGENTCTL_GOV_WIDTH"
-POOL_TICKET_WAIT = 900
+GOV_WAIT = 1800
+GOV_WAIT_ENV = "AGENTCTL_GOV_WAIT"
+BUSY_EXIT = 75  # EX_TEMPFAIL: the governor never admitted the pool; no code was judged
+
+
+class GovernorBusy(Exception):
+    """The governor did not admit the pool within its wait: the message names the wait, the cores and the holders."""
+
+
+def gov_wait(env: Mapping[str, str]) -> float:
+    try:
+        return float(env.get(GOV_WAIT_ENV) or GOV_WAIT)
+    except ValueError:
+        return GOV_WAIT
+
+
+def run_main(main: Callable[[], int]) -> int:
+    """A runner's exit code: `main`'s, or BUSY_EXIT with the refusal printed when the governor never admitted it."""
+    try:
+        return main()
+    except GovernorBusy as busy:
+        print(busy, file=sys.stderr, flush=True)
+        return BUSY_EXIT
+
+
+def holders(gov: str, env: Mapping[str, str]) -> str:
+    """The governor's holders, one line each (`gov status`), best effort."""
+    try:
+        out = subprocess.run([gov, "gov", "status"], capture_output=True, text=True, timeout=30, env=dict(env)).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return "unknown"
+    return "; ".join(" ".join(line.split()) for line in out.splitlines()[1:6] if line.startswith("  ")) or "none listed"
 
 
 def held_width(env: Mapping[str, str]) -> Optional[int]:
@@ -62,7 +96,7 @@ def admit_args(gov: str, fd: int, ticket: str, cls: str, want: int, job: str, la
 
 def take_ticket(gov: str, gov_dir: str, cls: str, want: int, job: str, label: str, wait: float,
                 run: Callable[..., "subprocess.CompletedProcess[bytes]"], env: Mapping[str, str]) -> Optional[tuple[int, str]]:
-    """(descriptor, ticket path) once the governor admits the pool, or None (refused, failed or past `wait`)."""
+    """(descriptor, ticket path) once the governor admits the pool, or None (refused or failed); GovernorBusy past `wait`."""
     os.makedirs(gov_dir, exist_ok=True)
     ticket = os.path.join(gov_dir, f"t-{job}-{os.getpid()}-{time.monotonic_ns()}.lock")
     fd = os.open(ticket, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
@@ -70,7 +104,10 @@ def take_ticket(gov: str, gov_dir: str, cls: str, want: int, job: str, label: st
         if run(admit_args(gov, fd, ticket, cls, want, job, label), pass_fds=(fd,), timeout=wait,
                env=dict(env)).returncode == 0:
             return fd, ticket
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        give_back((fd, ticket))
+        raise GovernorBusy(f"governor busy: waited {int(wait)} s for {want} cores (holders: {holders(gov, env)})")
+    except OSError:
         pass
     give_back((fd, ticket))
     return None
@@ -87,7 +124,7 @@ def give_back(held: Optional[tuple[int, str]]) -> None:
 
 @contextlib.contextmanager
 def governed(job: str, want: int, label: str, cls: str = "suite", env: Optional[Mapping[str, str]] = None,
-             wait: float = POOL_TICKET_WAIT, run: Callable[..., "subprocess.CompletedProcess[bytes]"] = subprocess.run,
+             wait: Optional[float] = None, run: Callable[..., "subprocess.CompletedProcess[bytes]"] = subprocess.run,
              say: Callable[[str], object] = sys.stderr.write) -> Iterator[Fanout]:
     """A parallel runner's width for `want` workers, under a ticket of the governor for as long as it runs."""
     env = os.environ if env is None else env
@@ -101,9 +138,9 @@ def governed(job: str, want: int, label: str, cls: str = "suite", env: Optional[
         yield Fanout(want, None, "no governor here")
         return
     gov_dir = env.get("AGENTCTL_GOV_DIR") or os.path.expanduser("~/.cache/agentctl/gov")
-    held = take_ticket(gov, gov_dir, cls, want, job, label, wait, run, env)
+    held = take_ticket(gov, gov_dir, cls, want, job, label, gov_wait(env) if wait is None else wait, run, env)
     if held is None:
-        say(f"{job}: no governor ticket for {want} cores within {int(wait)} s: running one wide\n")
+        say(f"{job}: the governor refused or failed: no ticket for {want} cores, running one wide\n")
     try:
         yield Fanout(want, held[1], "admitted") if held else Fanout(1, None, "no ticket: one wide")
     finally:

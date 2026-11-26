@@ -320,4 +320,6 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.path.insert(0, os.path.join(os.path.dirname(HERE), "lib"))
+    from agentctl.govpool import run_main
+    sys.exit(run_main(main))

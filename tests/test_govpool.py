@@ -9,7 +9,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "lib"))
 from test_agentctl import TOOL  # noqa: E402  (the hermetic harness: HOME, PATH, the fixed 12-core machine)
-from agentctl.govpool import WIDTH_ENV, governed  # noqa: E402
+from agentctl.govpool import WIDTH_ENV, GovernorBusy, governed  # noqa: E402
 
 
 def quiet(_msg):
@@ -68,10 +68,19 @@ class FakeGovernorTest(unittest.TestCase):
             self.assertIsNone(pool.ticket)
         self.assertIn("one wide", said[0])
 
-    def test_a_governor_past_its_wait_leaves_it_one_wide(self):
+    def test_a_governor_past_its_wait_is_governor_busy_never_a_ticketless_run(self):
         self.write_gov("sleep 5")
-        with governed("suite", 8, "x", env=self.env(), wait=0.5, say=quiet) as pool:
-            self.assertEqual(pool.width, 1)
+        with self.assertRaisesRegex(GovernorBusy, r"governor busy: waited 1 s for 8 cores \(holders: "):
+            with governed("suite", 8, "x", env=self.env(), wait=1, say=quiet):
+                self.fail("the pool ran")
+        self.assertEqual(os.listdir(self.d).count("calls"), 1)
+        self.assertFalse([f for f in os.listdir(self.d) if f.startswith("t-")], "the ticket file was left behind")
+
+    def test_the_wait_comes_from_the_environment_when_not_given(self):
+        self.write_gov("sleep 5")
+        with self.assertRaisesRegex(GovernorBusy, "waited 1 s"):
+            with governed("suite", 2, "x", env=self.env(AGENTCTL_GOV_WAIT="1"), say=quiet):
+                pass
 
     def test_no_governor_here_keeps_its_width(self):
         with governed("suite", 8, "x", env=self.env(AGENTCTL_SUITE_GOVERNOR="-"), say=quiet) as pool:

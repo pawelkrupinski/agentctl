@@ -15,7 +15,10 @@ included (an edit in ~/bin trips watchdog WB; `hooks/pre-commit` refuses any com
 origin/main and `git push origin HEAD:main`, so the pre-push hook's full suite runs ONCE on the tree that lands: main
 cannot move under the lock. A rebase conflict is aborted and the lock released; a push still refused (a pusher that
 skipped the lock moved main) is reported and not retried. A direct `git push` still works, gated by the same hook,
-which prints a hint to use this tool. Brief other agents with this command.
+which prints a hint to use this tool. The hook's steps (suite, stress lane, simulator gate) run through
+`devtools/govstep.py`: the governor-ticket wait has its own bound (30 min, `$AGENTCTL_GOV_WAIT`) and each step's run
+bound starts when the ticket is granted; a wait past it is the distinct refusal "governor busy" (exit 75: load, nothing
+was judged), never a test failure. Brief other agents with this command.
 Push in small, coherent steps (a regression must be easy to bisect and revert); after a push check
 `~/bin/agentctl status` and `~/bin/agentctl red status` still work.
 

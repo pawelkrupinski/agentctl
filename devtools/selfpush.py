@@ -6,7 +6,9 @@ because main moved meanwhile was rebased and run AGAIN. Here every pusher takes 
 under ~/.cache; waiting costs nothing, it holds no cores), then under it: fetch, rebase onto origin/main, push (the
 pre-push hook, still the gate, runs the suite once on exactly that rebased tree). Main cannot move under the lock
 unless a push bypassed it: then the push is rejected, this tool says so and stops (no loop). A rebase conflict is
-aborted and the lock released. $AGENTCTL_PUSH_LOCK overrides the lock file; the hook's hint is silenced by
+aborted and the lock released. The hook's steps wait for governor cores up to 30 min WHILE this lock is held (others
+queue behind it at no cores); that cannot deadlock: a ticket holder that runs this tool is under its own ticket, so the
+hook's steps take none and never wait. A wait past the bound is the hook's "governor busy" refusal, load not a failure. $AGENTCTL_PUSH_LOCK overrides the lock file; the hook's hint is silenced by
 AGENTCTL_SELFPUSH=1, which this tool sets for its push."""
 import argparse
 import fcntl

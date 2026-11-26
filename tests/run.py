@@ -162,7 +162,7 @@ def surviving(procs):
 # class `suite`, charged its workers' cores; under a ticket already ($AGENTCTL_GOV_WIDTH: a check's hook) it takes none
 # and runs at most that wide; past the governor's bounded wait it runs one wide, never ticketless at full width.
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "lib"))
-from agentctl.govpool import governed  # noqa: E402
+from agentctl.govpool import governed, run_main  # noqa: E402
 
 
 def load_durations():
@@ -317,4 +317,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run_main(main))
