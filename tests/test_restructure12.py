@@ -189,7 +189,7 @@ class LandStatusEntryTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
         items = []
-        for i in range(r.randint(0, 4)):
+        for i in range(r.choice([0, 1, 2, 3, 4, 4, 10, 11])):
             d = {}
             for key, gen in (("worktree", lambda: r.choice(["/w/a", None])), ("head", lambda: r.choice(["abcdef0123456789", None, ""])),
                              ("landed_sha", lambda: r.choice([None, "ff00ff00ff00"])),
