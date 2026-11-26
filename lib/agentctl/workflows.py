@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import re
-from typing import Any
+from typing import Any, Iterator
 from agentctl.core import git
 
 
@@ -11,30 +11,41 @@ from agentctl.core import git
 STEP_TIMED_OUT = "ending what a timed-out step left running"
 
 
+ON_LINE = re.compile(r"^[\"']?on[\"']?:\s*(.*?)\s*(#.*)?$")
+ON_KEY_LINE = re.compile(r"^(\s+)(?:-\s*)?[\"']?([A-Za-z_]+)[\"']?\s*(:|$)")
+
+
+def _inline_triggers(inline: str) -> set[str]:
+    """The trigger names of an `on:` value written on its own line (a scalar, a [list], a {flow: mapping})."""
+    while re.search(r"\{[^{}]*\}", inline[1:]):  # a {flow: mapping}: its keys, not their values
+        inline = inline[0] + re.sub(r"\{[^{}]*\}", "", inline[1:])
+    return set(re.findall(r"[A-Za-z_]+", re.sub(r"\[[^\]]*\]", "", inline) if inline[0] == "{" else inline))
+
+
+def _block_triggers(following: list[str]) -> set[str]:
+    """The trigger names of an `on:` block: the keys (or `- items`) at the indent of the first, up to the next top-level key."""
+    names: set[str] = set()
+    indent: int | None = None
+    for sub in following:
+        if not sub.strip() or sub.lstrip().startswith("#"):
+            continue
+        k = ON_KEY_LINE.match(sub)
+        if not k:
+            break  # the next top-level key
+        if indent is None:
+            indent = len(k.group(1))
+        if len(k.group(1)) == indent:
+            names.add(k.group(2))
+    return names
+
+
 def workflow_triggers(txt: str) -> set[str]:
     """The trigger names of a workflow file's `on:` (a scalar, a [list], a block of keys or of `- items`)."""
     lines = txt.splitlines()
     for i, line in enumerate(lines):
-        m = re.match(r"^[\"']?on[\"']?:\s*(.*?)\s*(#.*)?$", line)
-        if not m:
-            continue
-        inline = m.group(1)
-        if inline:
-            while re.search(r"\{[^{}]*\}", inline[1:]):  # a {flow: mapping}: its keys, not their values
-                inline = inline[0] + re.sub(r"\{[^{}]*\}", "", inline[1:])
-            return set(re.findall(r"[A-Za-z_]+", re.sub(r"\[[^\]]*\]", "", inline) if inline[0] == "{" else inline))
-        names, indent = set(), None
-        for sub in lines[i + 1:]:
-            if not sub.strip() or sub.lstrip().startswith("#"):
-                continue
-            k = re.match(r"^(\s+)(?:-\s*)?[\"']?([A-Za-z_]+)[\"']?\s*(:|$)", sub)
-            if not k:
-                break  # the next top-level key
-            if indent is None:
-                indent = len(k.group(1))
-            if len(k.group(1)) == indent:
-                names.add(k.group(2))
-        return names
+        m = ON_LINE.match(line)
+        if m:
+            return _inline_triggers(m.group(1)) if m.group(1) else _block_triggers(lines[i + 1:])
     return set()
 
 
@@ -109,45 +120,69 @@ JOB_NAME_LINE = re.compile(r"^( +)name:[ \t]*(.*?)[ \t]*$")
 JOB_TIMEOUT_LINE = re.compile(r"^ +timeout-minutes:[ \t]*(\d+)[ \t]*(?:#.*)?$")
 
 
-def workflow_jobs(text: str) -> list[dict[str, Any]]:
-    """The jobs of a workflow, as its text declares them: [{name, timeout_s}] -- name its template (a job without
-    `name:` is named by its key), timeout_s its own `timeout-minutes` in s or None."""
-    jobs: list[dict[str, Any]] = []
+JOBS_HEADER = re.compile(r"^jobs:[ \t]*(?:#.*)?$")
+
+
+def _jobs_body(text: str) -> Iterator[tuple[int, str]]:
+    """(indent, line) of each significant line of a workflow's `jobs:` block, up to the next top-level key."""
     lines = text.splitlines()
-    try:
-        i = next(n for n, l in enumerate(lines) if re.match(r"^jobs:[ \t]*(?:#.*)?$", l)) + 1
-    except StopIteration:
-        return []
-    job: dict[str, Any] | None = None
-    job_indent = -1  # the jobs' indent, once the first job key sets it
-    props_indent: int | None = None
-    for line in lines[i:]:
+    start = next((n for n, l in enumerate(lines) if JOBS_HEADER.match(l)), None)
+    if start is None:
+        return
+    for line in lines[start + 1:]:
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         indent = len(line) - len(line.lstrip(" "))
         if indent == 0:
-            break
+            return
+        yield indent, line
+
+
+def _read_job_property(job: dict[str, Any], line: str) -> None:
+    """A job's `name:` (quoted, or plain up to a ` #` comment) or `timeout-minutes:` line, read into job."""
+    named, bound = JOB_NAME_LINE.match(line), JOB_TIMEOUT_LINE.match(line)
+    if named:
+        value = named.group(2)
+        quoted = re.match(r"""^(['"])(.*?)\1""", value)
+        job["name"] = quoted.group(2) if quoted else value.split(" #", 1)[0].rstrip()
+    elif bound:
+        job["timeout_s"] = int(bound.group(1)) * 60
+
+
+class _JobsScan:
+    """The jobs of a `jobs:` block, line by line: the first job key sets the jobs' indent, the first line below a job
+    sets the indent of its properties, and only a line at that indent is read."""
+
+    def __init__(self) -> None:
+        self.jobs: list[dict[str, Any]] = []
+        self.job: dict[str, Any] | None = None
+        self.job_indent = -1
+        self.props_indent: int | None = None
+
+    def feed(self, indent: int, line: str) -> None:
         key = JOB_KEY_LINE.match(line)
-        if job_indent < 0 and key:
-            job_indent = indent
-        if indent == job_indent and key:
-            job, props_indent = {"name": key.group(2), "timeout_s": None}, None
-            jobs.append(job)
-            continue
-        if job is None or indent <= job_indent:
-            continue
-        if props_indent is None:
-            props_indent = indent
-        if indent != props_indent:
-            continue
-        named, bound = JOB_NAME_LINE.match(line), JOB_TIMEOUT_LINE.match(line)
-        if named:
-            value = named.group(2)
-            quoted = re.match(r"""^(['"])(.*?)\1""", value)
-            job["name"] = quoted.group(2) if quoted else value.split(" #", 1)[0].rstrip()
-        elif bound:
-            job["timeout_s"] = int(bound.group(1)) * 60
-    return jobs
+        if self.job_indent < 0 and key:
+            self.job_indent = indent
+        if key and indent == self.job_indent:
+            self.job, self.props_indent = {"name": key.group(2), "timeout_s": None}, None
+            self.jobs.append(self.job)
+        elif self.job is not None and indent > self.job_indent:
+            self._property(self.job, indent, line)
+
+    def _property(self, job: dict[str, Any], indent: int, line: str) -> None:
+        if self.props_indent is None:
+            self.props_indent = indent
+        if indent == self.props_indent:
+            _read_job_property(job, line)
+
+
+def workflow_jobs(text: str) -> list[dict[str, Any]]:
+    """The jobs of a workflow, as its text declares them: [{name, timeout_s}] -- name its template (a job without
+    `name:` is named by its key), timeout_s its own `timeout-minutes` in s or None."""
+    scan = _JobsScan()
+    for indent, line in _jobs_body(text):
+        scan.feed(indent, line)
+    return scan.jobs
 
 
 def workflow_job_names(text: str) -> list[str]:

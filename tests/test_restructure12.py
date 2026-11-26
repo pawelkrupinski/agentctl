@@ -85,7 +85,7 @@ JOB_STARTS = ["jobs:", "jobs:  # c", "jobs: x", " jobs:", "jobs:\t"]
 JOB_LINES = ["  build:", "  test-1:", "  lint:  # why", "  9bad:", "    name: Build (${{ matrix.x }})", "    name: 'Quoted name' # c", "    name: \"Dq\"",
              "    name: plain # c", "    name:", "    timeout-minutes: 30", "    timeout-minutes: 5 # c", "    timeout-minutes: x", "    runs-on: ubuntu",
              "    steps:", "      - name: step", "        timeout-minutes: 9", "      name: deeper", "", "  # note", "    # c", "      timeout-minutes: 4",
-             "   name: shallow", "\tname: tab", "    needs: [a]", "name: top", "on: push", "    name: Build & Test", "  deploy:", "    uses: ./x.yml", "    name: ${{ inputs.n }}"]
+             "   name: shallow", "\tname: tab", "    needs: [a]", "name: top", "on: push", "    name: Build & Test", "  deploy:", "    uses: ./x.yml", "    name: ${{ inputs.n }}", "    name: dbl  # c", "    name: 'q' 'r'", "    name:   spaced   "]
 
 
 def a_jobs_workflow(r):
