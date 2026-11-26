@@ -369,8 +369,8 @@ MUTATIONS = {
     "a kept verdict needs its checks to read nothing main changed": (
         "        verify_why = read_overlap(", "        verify_why = None and read_overlap(", "random"),
     "overlapping changes are checked as one": (
-        '    if e.get("backlog_batch"):\n        return None\n    together, first = None, None',
-        '    return None  # MUTATION\n    together, first = None, None', "collisions"),
+        '    if e.get("backlog_batch"):\n        return None\n    return OverlapScan(',
+        '    return None  # MUTATION\n    return OverlapScan(', "collisions"),
 }
 RUNNER = """import json, sys
 sys.path.insert(0, sys.argv[1])
