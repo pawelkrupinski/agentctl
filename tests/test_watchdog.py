@@ -21,14 +21,23 @@ class FakeProcessor:
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.bind(path)
         self.sock.listen(4)
-        threading.Thread(target=self.serve, daemon=True).start()
+        # its serving thread ends with close(): Linux does not wake an accept() blocked on a socket another thread closes
+        # (macOS does), so it polls a stop flag (tests #294: the harness's no-stray-thread rule caught two left serving)
+        self.sock.settimeout(0.05)
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self.serve, daemon=True, name="fake-processor")
+        self.thread.start()
 
     def serve(self):
-        while True:
+        import socket
+        while not self.stop.is_set():
             try:
                 conn, _ = self.sock.accept()
+            except socket.timeout:
+                continue
             except OSError:
                 return
+            conn.settimeout(5)
             with conn:
                 got = conn.recv(4096).decode().strip()
                 if got == A.TOKEN_REQUEST.decode().strip():
@@ -38,6 +47,8 @@ class FakeProcessor:
                     self.handed.set()
 
     def close(self):
+        self.stop.set()
+        self.thread.join(5)
         self.sock.close()
 
 
