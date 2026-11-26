@@ -44,7 +44,7 @@ def waiting_entries(d: str, open_only: bool = True) -> list[dict[str, Any]]:
             continue
         if not open_only or e.get("status") == "waiting":
             out.append(e)
-    return sorted(out, key=lambda e: e["seq"])
+    return sorted(out, key=lambda e: (e.get("seq") is None, e.get("seq") or 0))  # an entry with no seq: last
 
 
 ENTRY_FINAL = ("landed", "rejected", "superseded", "cancelled", "joined", "migrated")  # migrated: the laptop's, to ci-runner

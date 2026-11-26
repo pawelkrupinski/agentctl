@@ -55,5 +55,27 @@ class BatchRetryLineTest(unittest.TestCase):
             self.assertIn("retry 1/5", f.read())
 
 
+class WaitingEntriesTest(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.d, "entries"))
+
+    def put(self, **e):
+        A.write_json(os.path.join(self.d, "entries", f"{e['id']}.json"), e)
+
+    def test_an_entry_without_a_seq_is_listed_last_not_a_keyerror(self):
+        self.put(id="b", status="waiting", seq=2)
+        self.put(id="x", status="waiting")
+        self.put(id="a", status="waiting", seq=1)
+        self.assertEqual([e["id"] for e in A.waiting_entries(self.d)], ["a", "b", "x"])
+
+    def test_a_batch_member_that_is_gone_is_logged_not_dropped_silently(self):
+        self.put(id="a", status="waiting", seq=1)
+        got = A.batch_members(self.d, {"id": "k#1", "data": {"members": ["a", "ghost"]}})
+        self.assertEqual([e["id"] for e in got], ["a"])
+        with open(os.path.join(self.d, "processor.log")) as f:
+            self.assertIn("ghost", f.read())
+
+
 if __name__ == "__main__":
     unittest.main()
