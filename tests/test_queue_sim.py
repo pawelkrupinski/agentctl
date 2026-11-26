@@ -327,7 +327,43 @@ class TwoHoldersTest(unittest.TestCase):
                 self.assertEqual(set(queue_sim.landing_waits(sim)), {"a", "late"})
 
 
-class Timeline08010cTest(unittest.TestCase):
+class EscalationsTest(unittest.TestCase):
+    """THE ESCALATION DISPATCHER (queue_sim.ESCALATIONS, 2026-11-26) beside the queue: agent kinds whose fixer clears,
+    fails then clears, never clears, or hangs past its wall time, two subjects of one kind, more agent kinds than the
+    cap, owner-only kinds, and the repo untrusted for a while -- IE (one fixer per kind, the cap), IO (an owner-only
+    kind never dispatches) and IG (every dispatched escalation ends cleared or the owner's within its budget) hold,
+    and each catches the dispatcher with its rule undone."""
+
+    def run_all(self):
+        return [queue_sim.Sim(seed, calm=True, trees=2, script=list(script)).run(stop=False)
+                for script in (queue_sim.ESCALATIONS, queue_sim.ESCALATIONS_UNTRUSTED) for seed in range(2)]
+
+    def test_the_invariants_hold_and_the_changes_land(self):
+        sims = self.run_all()
+        self.assertEqual(failures(sims), [])
+        for sim in sims:
+            self.assertEqual(set(queue_sim.landing_waits(sim)), {"a", "b"})
+            self.assertTrue(sim.escalations.sessions)
+
+    def mutant(self, name, value):
+        saved = getattr(queue_sim.A, name)
+        setattr(queue_sim.A, name, value)
+        self.addCleanup(setattr, queue_sim.A, name, saved)
+
+    def test_two_fixers_of_a_kind_or_past_the_cap_break_ie(self):
+        self.mutant("fixer_live", lambda lease, t: False)
+        self.assertIn("IE", {k for sim in self.run_all() for k in sim.kinds_seen})
+
+    def test_an_owner_only_kind_dispatched_breaks_io(self):
+        self.mutant("escalation_route", lambda condition: queue_sim.A.agent_route("anything"))
+        self.assertIn("IO", {k for sim in self.run_all() for k in sim.kinds_seen})
+
+    def test_tries_never_handed_to_the_owner_break_ig(self):
+        self.mutant("give_to_owner", lambda *a: None)
+        self.assertIn("IG", {k for sim in self.run_all() for k in sim.kinds_seen})
+
+
+
     """THE 08010c TIMELINE (queue_sim.TIMELINE_08010C; 2026-11-19): a fix of a red OUTSIDE the gate, checked while two
     ordinary changes owed combined-tree verifications and made a push batch, sat ~2 h. Replayed over 8 seeds: it is
     classified a red fix (changekind.py), never held behind a batch, a push batch or a verification, lands within

@@ -49,6 +49,9 @@ INVARIANT_KINDS = {
     "IR": "the queue never lands on a red gate a production commit naming no run of the open red",
     "IH": "two holders reading no hold at once make exactly one hold, both report it and both moves are said",
     "IT": "no overlap hold outlives its TTL while its holder is not in flight",
+    "IE": "never two escalation fixers of one kind, nor more than the cap in all",
+    "IO": "an owner-only escalation kind never dispatches",
+    "IG": "every dispatched escalation ends cleared or handed to the owner within its budget",
 }
 VIOLATIONS_MAX = 50  # lines one scenario keeps in the gate's count mode
 ROOT = "0" * 40
@@ -376,6 +379,7 @@ class Sim:
         self.kept_pushes = 0  # pushes of a tree whose checks' verdict was kept (MINIMAL RECHECKS)
         self.batch_checks = 0  # batch check rounds run (a bisect's prefixes included)
         self.autoresolved = []  # entry ids a batch's assembly auto-resolved a source conflict of (THE BATCH TIERS)
+        self.escalations = None  # the escalation world (SimEscalations), made by the first `escalate` arrival
 
     # ---------------------------------------------------------------- the model's git
     def anc(self, sha):
@@ -919,6 +923,8 @@ class Sim:
         self.conns = conns
 
     def uninstall(self):
+        if self.escalations:
+            self.escalations.close()
         for t in self.tasks:  # an executor still blocked: unwound, its leases released
             if not t.done:
                 t.abort = True
@@ -1073,6 +1079,9 @@ class Sim:
             if spec.get("kind") == "two-holders":
                 self.two_holders(spec["order"])
                 continue
+            if spec.get("kind") in ("escalate", "trust"):
+                self.escalation_arrives(spec)
+                continue
             if spec.get("kind") == "learn-run":
                 self.name_older_run()
                 continue
@@ -1192,6 +1201,40 @@ class Sim:
     def refresh_episode_snap(self):
         if self.episode_snap and self.reds:
             A.state_update(ci={**self.episode_snap, "at": A.epoch_now()})
+
+    def escalation_arrives(self, spec):
+        """An `escalate` arrival opens a condition the escalation dispatcher sees (its agent's behaviour scripted);
+        a `trust` one sets whether claude trusts the repo."""
+        if self.escalations is None:
+            self.escalations = SimEscalations(self)
+        if spec["kind"] == "trust":
+            self.escalations.gap = None if spec.get("trusted") else "claude does not trust ~/bin (sim)"
+        else:
+            self.escalations.open_condition(spec)
+
+    def check_escalations(self):
+        """E. THE ESCALATION DISPATCHER'S INVARIANTS, by the simulation's own truth (the sessions it ran):
+        IE one live fixer per kind and at most ESCALATION_FIXERS in all; IO an owner-only kind never started; IG every
+        dispatched escalation cleared or handed to the owner within its budget (its tries' wall times and backoffs)."""
+        w = self.escalations
+        alive = [x for x in w.sessions.values() if x["alive"]]
+        kinds = [x["kind"] for x in alive]
+        for k in set(kinds):
+            if kinds.count(k) > 1:
+                self.violate("IE", f"{kinds.count(k)} escalation fixers of {k} at once")
+        if len(alive) > A.ESCALATION_FIXERS:
+            self.violate("IE", f"{len(alive)} escalation fixers alive, past the cap {A.ESCALATION_FIXERS}")
+        for x in w.sessions.values():
+            if x["owner"] and not x.get("io_said"):
+                x["io_said"] = True
+                self.violate("IO", f"owner-only {x['kind']} ({x['key']}) dispatched")
+        for key, c in w.conditions.items():
+            if c["first_dispatch"] is None or c.get("ig_said") or w.settled(key):
+                continue
+            if self.clock[0] - c["first_dispatch"] > w.budget(c["route"]):
+                c["ig_said"] = True
+                self.violate("IG", f"escalation {c['kind']} ({key}) neither cleared nor handed to the owner "
+                             f"{int(self.clock[0] - c['first_dispatch']) // TICK} ticks after its first dispatch")
 
     def name_older_run(self):
         """The red's item names its older run now (a tick attached it)."""
@@ -1319,6 +1362,9 @@ class Sim:
                         and self.clock[0] - float(hold.get("since") or self.clock[0]) > A.knob_hold_idle_ttl() + 2 * TICK:
                     self.violate("IT", f"change {it['id']} held {int((self.clock[0] - float(hold['since'])) // TICK)} "
                                  f"ticks behind {hold.get('blocker')} ({blocker.get('status')}), which is not in flight")
+        if self.escalations:
+            self.escalations.tick()
+            self.check_escalations()
         self.check_invariants(before, reds)
         self.tick += 1
         self.clock[0] += TICK
@@ -1347,7 +1393,8 @@ class Sim:
 
     def quiet(self):
         return not self.reds and not self.outside and not [e for e in A.waiting_entries(self.d, open_only=False)
-                                      if e.get("status") not in A.ENTRY_FINAL] and not self.arrivals
+                                      if e.get("status") not in A.ENTRY_FINAL] and not self.arrivals \
+            and not (self.escalations and self.escalations.open())
 
     # ---------------------------------------------------------------- the invariants
     def check_invariants(self, before, reds):
@@ -1740,3 +1787,116 @@ def landing_waits(sim):
     on_main = sim.patches_of(sim.main)
     return {c.label: sim.done_at[c.cid] - c.arrived for c in sim.changes
             if c.cid in sim.done_at and set(c.patches) <= on_main}
+
+
+class SimEscalations:
+    """THE ESCALATION WORLD (2026-11-26, the escalation dispatcher): conditions opened by `escalate` arrivals, probed by
+    the simulation's own probe, and the agents the real dispatcher (escalations.py escalation_pass, each tick, over the
+    simulation's store and clock) starts through this launcher. A scripted agent `clears` its condition after its
+    work, `fails` (its session ends, the condition open), or `hangs` (works until it is stopped); `clears_on` N clears
+    on its Nth try only; `owner` marks a kind the scenario says is the owner's alone. The sessions and those marks are
+    the simulation's truth for the invariants (Sim.check_escalations), never the table under test."""
+
+    def __init__(self, sim):
+        self.sim, self.rng = sim, random.Random(f"escalations-{sim.seed}")
+        self.conditions, self.sessions, self.failing, self.gap = {}, {}, set(), None
+        self.saved = dict(A.PROBES), dict(A.PROBE_EVERY)
+        A.PROBES["sim_escalation"] = lambda a: (a["key"] not in self.failing, f"sim probe of {a['key']}")
+        A.PROBE_EVERY["sim_escalation"] = 60
+        self.repo = os.path.join(sim.tmp, "bin")
+
+    def close(self):
+        A.PROBES.clear()
+        A.PROBES.update(self.saved[0])
+        A.PROBE_EVERY.clear()
+        A.PROBE_EVERY.update(self.saved[1])
+
+    def open_condition(self, spec):
+        key = spec["key"]
+        self.failing.add(key)
+        c = A.open_condition(spec["condition"], spec["text"], A.run_probe("sim_escalation", {"key": key}), [], key=key,
+                             store=self.sim.store, grace=0)
+        self.conditions[key] = {"id": c["id"], "kind": A.escalation_kind(c), "route": A.escalation_route(c),
+                                "agent": spec.get("agent", "clears"), "clears_on": spec.get("clears_on", 1),
+                                "owner": bool(spec.get("owner")),
+                                "first_dispatch": None, "tries": 0}
+
+    def budget(self, route):
+        """The longest a dispatched escalation may take to end: every try's wall time and lease, every backoff, and a
+        few ticks of slack."""
+        return sum(route.runtime + A.LEASE_TTL + A.RETRY_BACKOFF * 2 ** i for i in range(route.tries)) + 5 * TICK
+
+    def settled(self, key):
+        st = self.sim.store.item("condition", self.conditions[key]["id"])
+        return st["state"] == "closed" or bool(((st.get("data") or {}).get("escalation") or {}).get("owner_told"))
+
+    def open(self):
+        return any(not self.settled(k) and not v["owner"] for k, v in self.conditions.items())
+
+    def tick(self):
+        """The dispatcher's pass, then each live agent's work this tick."""
+        A.escalation_pass(self.sim.store, self.sim.clock[0], self)
+        for sid, x in self.sessions.items():
+            if not x["alive"]:
+                continue
+            x["left"] -= 1
+            if x["left"] > 0 or x["behaviour"] == "hangs":
+                continue
+            if x["behaviour"] == "clears" and x["key"] in self.failing:
+                self.failing.discard(x["key"])
+                c = next(c for c in A.open_conditions(self.sim.store) if c["key"] == x["key"])
+                A.close_condition(c, A.run_probe("sim_escalation", {"key": x["key"]}), self.sim.store)
+            x["over"] = True
+
+    # the launcher (escalations.py EscalationLauncher)
+    def host(self):
+        return "sim"
+
+    def blocker(self):
+        return None
+
+    def repo_path(self, repo):
+        return self.repo
+
+    def trust_gap(self, path):
+        return self.gap
+
+    def start(self, route, kind, condition, prompt, repo):
+        key = condition["data"]["key"]
+        c = self.conditions[key]
+        c["tries"] += 1
+        c["first_dispatch"] = c["first_dispatch"] or self.sim.clock[0]
+        behaviour = c["agent"] if c["tries"] >= c["clears_on"] else "fails"
+        sid = f"esc{len(self.sessions) + 1}"
+        self.sessions[sid] = {"kind": kind, "key": key, "owner": c["owner"], "alive": True,
+                              "over": False, "behaviour": behaviour, "left": self.rng.randint(2, 12)}
+        return {"session": sid, "worktree": f"{repo}-wt-escalation-{sid}"}, f"sim session {sid}"
+
+    def session_over(self, session):
+        x = self.sessions.get(session)
+        return True if x is None else x["over"]
+
+    def stop(self, session):
+        x = self.sessions.get(session)
+        if x:
+            x["alive"], x["over"] = False, True
+
+
+# THE ESCALATIONS (2026-11-26): agent kinds whose fixer clears, fails then clears, never clears (handed to the owner),
+# hangs past its wall time; two subjects of one kind; more agent kinds than the cap; owner-only kinds beside them
+ESCALATIONS = [
+    (0, {"kind": "escalate", "condition": "INVARIANT", "key": "invariant-W2", "text": "INVARIANT W2 violated: red 7"}),
+    (0, {"kind": "escalate", "condition": "INVARIANT", "key": "invariant-WB", "text": "INVARIANT WB violated: edits",
+         "owner": True}),
+    (0, {"kind": "escalate", "condition": "NETWORK", "key": "route", "text": "NETWORK: offline", "owner": True}),
+    (0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
+    (1, {"kind": "escalate", "condition": "STALLED", "key": "queue-stall", "text": "STALLED: queue", "clears_on": 2}),
+    (2, {"kind": "escalate", "condition": "STALLED", "key": "batch-x", "text": "STALLED: batch", "agent": "fails"}),
+    (3, {"kind": "escalate", "condition": "CLONE", "key": "clone-movies", "text": "CLONE: unhealthy", "agent": "hangs"}),
+    (4, {"kind": "escalate", "condition": "INVARIANT", "key": "invariant-WT", "text": "INVARIANT WT violated: roots"}),
+    (5, {"kind": "escalate", "condition": "INVARIANT", "key": "invariant-WP", "text": "INVARIANT WP violated: Google "
+         "Chrome pid 9: 12 GB -- the owner's to look at (agentctl never stops a process it did not start)", "owner": True}),
+    (6, {"label": "b", "worktree": "b", "paths": ["docs/b.md"]}),
+]
+# the repo untrusted for the first 40 ticks: NOT DISPATCHABLE, no try counted, dispatched once trusted
+ESCALATIONS_UNTRUSTED = [(0, {"kind": "trust", "trusted": False})] + ESCALATIONS + [(40, {"kind": "trust", "trusted": True})]

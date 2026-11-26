@@ -77,6 +77,11 @@ def scenarios():
     # v7 (2026-11-26): a hold on a change parked on `waiting` past HOLD_IDLE_TTL (IT)
     out += [(f"hold-on-parked-{s}", {"seed": s, "calm": True, "trees": 2, "script": "HOLD_ON_PARKED",
                                          "profile": "PARKED"}) for s in range(4)]
+    # v8 (2026-11-26): the escalation dispatcher beside the queue -- clears, fails then clears, never clears, hangs, two
+    # subjects of a kind, past the cap, owner-only kinds, the repo untrusted a while (IE, IO, IG)
+    out += [(f"escalations-{s}", {"seed": s, "calm": True, "trees": 2, "script": "ESCALATIONS"}) for s in range(4)]
+    out += [(f"escalations-untrusted-{s}", {"seed": s, "calm": True, "trees": 2, "script": "ESCALATIONS_UNTRUSTED"})
+            for s in range(2)]
     return out
 
 
