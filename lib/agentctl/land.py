@@ -13,13 +13,17 @@ from typing import Any, Iterator
 from agentctl.procrunner import process_runner
 from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import Clock
-from agentctl.knobs import env_num, knob_land_stall_min, knob_stall_cpu_seconds
+from agentctl.queueknobs import knob_land_stall_min
+from agentctl.fixerknobs import knob_stall_cpu_seconds
 from agentctl.leasetable import LeaseLost
 from agentctl.core import HOME, SHORT, err, git, process_cache, reds_dir, slug, spawn_detached
 from agentctl.forge import forge_env
 from agentctl.procs import ps_rows
 from agentctl.store import StoreUnavailable
 from agentctl.leases import LeaseHold, _landing, lock_beat
+from agentctl.queueknobs import (
+    knob_land_lease_max, knob_land_lease_ttl, knob_land_lock_timeout, knob_land_wait_report_min,
+    knob_push_stall_secs, knob_push_wall_min)
 
 
 # ---------------------------------------------------------------- land / env
@@ -31,12 +35,6 @@ REDGATE = re.compile(r"main is red: only a fix|carries no Fixes-Red")
 TUNNEL_TROUBLE = re.compile(r"GitOps manifests STALE|Connection to localhost closed|"
                             r"Could not read from remote repository|Connection refused", re.I)
 LAND_RETRIES = 3
-# One lander per repository: with no pre-merge CI left (movies, 2026-10-26) a landing is the hook's local tests --
-# minutes for an identity change -- and two landers would each test a base the other is about to move, then
-# race, rebase, and test again. Agents wait for the lock instead (land runs in the background), and it caps the
-# laptop at one landing hook's JVM at a time.
-LAND_LOCK_TIMEOUT = 4 * 3600
-LAND_WAIT_REPORT_MIN = 10
 LAND_PRECHECK_ROUNDS = 2  # main moved under the lock this often: the next check runs under it, so a lander finishes
 
 
@@ -288,28 +286,11 @@ def tool_env():
     return env
 
 
-# EVERY PUSH IS BOUNDED (the owner, 2026-10-28, "fix root cause in a structural way": a queued change's `git push` over
-# the ssh tunnel died with "Connection to localhost closed by remote host" when the hotspot dropped, then hung -- no
-# progress, no exit -- holding the landing lock 30+ min while a checked batch waited behind it with the gate green): a
-# push gets a no-progress bound (no output and no CPU) of PUSH_STALL_SECS and a wall bound of PUSH_WALL_MIN, its group
-# killed on either; a stalled or dead-transport push is infra (re-queued), never a hang.
-# THE HOOK INSIDE A PUSH IS JUDGED BY THE HOOK'S BOUND (2026-11-16: movies 040934987's push lost its landing lease
-# 3 min in -- a gate run had completed since the check outside the lock, so the hook could not reuse that pass and ran
-# its checks again, silent, their CPU in a kept sbt server and a Docker container, out of the push's process group): while
-# a pre-push hook process runs in the push's group, its leases renew at every poll and the hook's own bound (the check
-# outside the lock's, LAND_STALL_MIN; movies' hook bounds each step itself) applies; the transport around it keeps
-# PUSH_STALL_SECS and progress-only renewal, so a push hung on a dead tunnel still loses the lock within minutes.
-PUSH_STALL_SECS = 180
-
-
-PUSH_WALL_MIN = 45
-
-
 def push_bounds():
     """A push's bounds: `stall` for its transport; while its pre-push hook runs, the hook's own -- the check outside the
     lock's (LAND_STALL_MIN), its leases renewed at every poll (run_watched hook_stall); `wall` over all of it."""
-    return {"stall": env_num("AGENTCTL_PUSH_STALL_SECS", PUSH_STALL_SECS),
-            "wall": env_num("AGENTCTL_PUSH_WALL_MIN", PUSH_WALL_MIN) * 60,
+    return {"stall": knob_push_stall_secs(),
+            "wall": knob_push_wall_min() * 60,
             "hook_stall": knob_land_stall_min() * 60}
 
 
@@ -317,17 +298,6 @@ def push_argv(remote, src, dst: str = "main"):
     argv = ["git", "push", remote, f"{src}:refs/heads/{dst}"]
     assert not any(a in ("--no-verify", "-n", "--force", "-f") or a.startswith("--force") for a in argv)
     return argv
-
-
-# THE LANDING LOCK IS A LEASE (design §6, phase 1 step 3; the owner, 2026-10-28: a push hung on a dropped tunnel held
-# the flock 30+ min and a checked batch waited behind it). `land/<repo>` in the store: TTL LAND_LEASE_TTL, renewed only
-# on real progress (run_watched's output / CPU), capped at LAND_LEASE_MAX; a holder that stops progressing simply
-# loses it, and a waiter takes it. No flock, no heartbeat file, no killing another process: expiry IS the release.
-# A holder that lost the lease stops its work (run_watched ends its group: LeaseLost).
-LAND_LEASE_TTL = 120
-
-
-LAND_LEASE_MAX = 45 * 60  # the design's 300 s once checks no longer run in the push's hook under the lease (step 6)
 
 
 def land_lease_name(repo: str) -> str:
@@ -342,8 +312,8 @@ def land_lease_name(repo: str) -> str:
 
 
 def land_lease_hold(repo: str, store: Any) -> LeaseHold:
-    return LeaseHold(land_lease_name(repo), env_num("AGENTCTL_LAND_LEASE_TTL", LAND_LEASE_TTL),
-                     env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX), meta={"repo": repo},
+    return LeaseHold(land_lease_name(repo), knob_land_lease_ttl(),
+                     knob_land_lease_max(), meta={"repo": repo},
                      store=store)
 
 
@@ -379,8 +349,8 @@ def waited_for_lease(h: LeaseHold, clock: Clock) -> bool:
         return (f"{r['holder']} (pid {meta.get('pid')}), {meta.get('note') or 'working'}; "
                 f"expires in {int(r['expires_at'] - clock.time())} s")
     err(f"waiting for the landing lease {h.name}, held by {said(h.held)}")
-    deadline = clock.monotonic() + env_num("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT)
-    every = env_num("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN) * 60
+    deadline = clock.monotonic() + knob_land_lock_timeout()
+    every = knob_land_wait_report_min() * 60
     report_at = clock.monotonic() + every
     while not h.acquire():
         if clock.monotonic() > deadline:

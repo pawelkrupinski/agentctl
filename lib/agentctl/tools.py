@@ -18,8 +18,10 @@ from agentctl.patches import ALLOW_EMPTY_TRAILER, deliberate_empty, is_empty_com
 from agentctl.tunnel import tunnel_ports
 from agentctl.storestate import port_open
 from agentctl.netwatch import TUNNEL_LABEL
-from agentctl.knobs import knob_max_foreign
-from agentctl.textknobs import knob_red_fixer, knob_store_token
+from agentctl.queueknobs import knob_max_foreign
+from agentctl.redknobs import knob_red_fixer
+from agentctl.storeknobs import knob_store_token
+from agentctl.fixerknobs import knob_allow
 
 
 # ---------------------------------------------------------------- queue (retired)
@@ -414,7 +416,7 @@ def hook_ranges(repo: str, remote: str, lines: list[str]) -> Iterator[tuple[str,
 
 def cmd_prepush(a):
     repo = os.getcwd()
-    allow = (a.allow or []) + os.environ.get("AGENTCTL_ALLOW", "").split()
+    allow = (a.allow or []) + knob_allow().split()
     max_foreign = a.max_foreign if a.max_foreign is not None else int(knob_max_foreign())
     if a.hook:
         ranges = hook_ranges(repo, a.hook[0], sys.stdin.read().splitlines())

@@ -6,6 +6,7 @@ import os
 import re
 from agentctl.timefmt import ts
 from agentctl.statefile import load_record, write_json
+from agentctl.storeknobs import knob_store_secret
 
 
 # THE STORE'S OWN TOKENS (github-return plan §4.1 W5b): `store serve` checks each caller's token itself -- no forge in
@@ -24,7 +25,7 @@ STORE_AUTHS = ("store-tokens",)  # `store serve --auth`: the one way the store c
 
 
 def store_secret_path():
-    return os.environ.get("AGENTCTL_STORE_SECRET") or STORE_SECRET
+    return knob_store_secret() or STORE_SECRET
 
 
 def store_tokens_path():

@@ -12,6 +12,7 @@ from agentctl.waitingdir import waiting_state
 from agentctl.land import SDKMAN_BINS
 from agentctl.launchd import SERVICE_LABEL, launch_agents_dir, launchctl
 from agentctl.processorlink import waiting_processor_alive
+from agentctl.storeknobs import knob_store_url
 
 
 def service_plist(repo, log):
@@ -19,8 +20,8 @@ def service_plist(repo, log):
     argv = [sys.executable, TOOL_PATH, "waiting", "run", "--service", "--repo", repo]
     args = "".join(f"\n        <string>{escape(x)}</string>" for x in argv)
     # phase 2: installed with $AGENTCTL_STORE_URL set, the agent is the laptop's SYNC against ci-runner's store
-    store_env = (f"\n        <key>AGENTCTL_STORE_URL</key>\n        <string>{escape(os.environ['AGENTCTL_STORE_URL'])}</string>"
-                 if os.environ.get("AGENTCTL_STORE_URL") else "")
+    store_env = (f"\n        <key>AGENTCTL_STORE_URL</key>\n        <string>{escape(knob_store_url())}</string>"
+                 if knob_store_url() else "")
     path_env = ":".join(SDKMAN_BINS + ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"])
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

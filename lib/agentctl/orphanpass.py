@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from agentctl.timefmt import parse_time, ts
 from agentctl.statefile import read_record, write_json
-from agentctl.knobs import env_num
 from agentctl.core import branch_of, git, reds_dir, remote, slug, tilde
 from agentctl.classify import NETWORK_CHECK_FAILURE
 from agentctl.repos import movies_repo_path
@@ -24,7 +23,8 @@ from agentctl.superseded import superseded_duty, worktree_change_items
 from agentctl.park import park_duty
 from agentctl.orphans import land_entries_once, orphan_candidates, orphan_covered_by, orphan_land_entry
 from agentctl.fixerland import spawn_fixer
-from agentctl.knobs import knob_orphan_idle
+from agentctl.fixerknobs import knob_orphan_idle
+from agentctl.fixerknobs import knob_orphan_fixers
 
 
 ORPHAN_PER_PASS = 3
@@ -49,9 +49,6 @@ ORPHAN_INFRA_BACKOFF = (900, 1800, 3600, 7200, 21600)
 # own, `orphan · <worktree>` in `claude agents`), once per worktree -- whatever its later rebases do to its commits.
 # Only when that fixer ended without landing it does UNLANDED ORPHAN go to a person. A parked worktree gets none.
 ORPHAN_REAL_FAILURE = re.compile(r"^NOT LANDED: (the pre-push checks failed|rebase onto \S+ conflicts)")
-
-
-ORPHAN_FIXERS_MAX = 2  # orphan fixers alive at once ($AGENTCTL_ORPHAN_FIXERS); one dispatched a pass
 
 
 def orphan_infra(verdict: Optional[str]) -> bool:
@@ -288,7 +285,7 @@ class OrphanPass:
         self.did += orphan_escalate(self.store, self.repo, o.wt, o.name, o.commits, o.key, o.rec, real)
 
     def _fixer(self, o: Orphan, rw: str, real: str) -> None:
-        if self.fixer_sent or len(orphan_fixers_alive()) >= env_num("AGENTCTL_ORPHAN_FIXERS", ORPHAN_FIXERS_MAX):
+        if self.fixer_sent or len(orphan_fixers_alive()) >= knob_orphan_fixers():
             self.did.append(f"orphan {o.name}: a fixer waits for a free slot ({real[:80]})")
             return
         _ok, line = orphan_dispatch(self.repo, o.wt, o.name, real)

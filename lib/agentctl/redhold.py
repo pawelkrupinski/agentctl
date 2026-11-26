@@ -5,9 +5,10 @@ import re
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.timefmt import parse_time
 from agentctl.statemachines import StaleVersion, machine_state
-from agentctl.knobs import env_num
+from agentctl.timefmt import parse_time
+from agentctl.watchknobs import knob_wr_max
+from agentctl.redknobs import RED_FIX_REQUEUE_GRACE, knob_red_fix_requeue_grace, knob_red_liveness_max
 from agentctl.core import SHORT, fmt_age
 from agentctl.repos import red_repo_of
 from agentctl.cistate import snapshot_gate_reds
@@ -15,23 +16,19 @@ from agentctl.ciwhy import ci_state_load
 from agentctl.policy import HOLDS
 from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_active, red_lease, red_what
 from agentctl.leases import red_block_of
-from agentctl.queueslots import checker_alive
 from agentctl.redfixread import FIX_OPEN
+from agentctl.red import red_fix_giveup
+from agentctl.queuehold import change_hold_stuck
+from agentctl.queueslots import checker_alive
 from agentctl.fixchange import CHANGE_ENDED, red_change, red_change_read
 from agentctl.redfixes import red_fix_of
-from agentctl.red import red_fix_giveup
 from agentctl.redmove import red_put_offer
-from agentctl.changekind import HOLD_SHOWN, change_hold_visible, classify_change, kind_text, facts_for
+from agentctl.changekind import HOLD_SHOWN, change_hold_visible, classify_change, facts_for, kind_text
 from agentctl.redopen import red_offer
 from agentctl.redverify import red_fix_since, red_fix_unverifiable
 from agentctl.reddispatch import repo_dispatch_off
 from agentctl.redwaits import RED_WAITS_ON
 from agentctl.redlease import red_lease_ended
-from agentctl.redfollow import RED_FIX_REQUEUE_GRACE
-from agentctl.queuehold import change_hold_stuck
-
-
-WR_MAX = 40 * 60        # a red fix still unlanded this long after it was queued ($AGENTCTL_WR_MAX; a CI-tier check ~17 min)
 
 
 # W1 AND WR READ THE TABLES (2026-11-20, the owner: "fix agentctl issues structurally"; W1 fired 18 times in three weeks,
@@ -99,7 +96,7 @@ def inv_wr(clock, st, reds = None):
 
 def red_fix_stalls(st: Any, t: float, facts: dict[str, Any]) -> list[str]:
     """Why each open red fix does not move, as WR words it: [text], the changes WR violates on (inv_wr, the liveness line)."""
-    lim = env_num("AGENTCTL_WR_MAX", WR_MAX)
+    lim = knob_wr_max()
     out = []
     for it in st.items("change"):
         k = None if machine_state("change", it["state"]).terminal else classify_change(it.get("data") or {}, facts, t)
@@ -135,9 +132,6 @@ def slow_stall(st: Any, it: Any, data: dict[str, Any], t: float, lim: float, rul
     return None
 
 
-RED_LIVENESS_MAX = 60 * 60  # the gate red this long with a red fix stalled: the status line says so ($AGENTCTL_RED_LIVENESS_MAX)
-
-
 def red_fix_liveness(st: Any, t: float, snap: Any = None) -> str | None:
     """THE LIVENESS LINE (the owner, 2026-11-25: the gate sat red for hours with its fix waiting and nothing said): ONE line
     when the gate has been red for over RED_LIVENESS_MAX while a red-fix change is not progressing -- the change and the
@@ -147,7 +141,7 @@ def red_fix_liveness(st: Any, t: float, snap: Any = None) -> str | None:
     if not rows:
         return None
     red_for = t - min(parse_time(g["since"]).timestamp() for g in rows)
-    if red_for <= env_num("AGENTCTL_RED_LIVENESS_MAX", RED_LIVENESS_MAX):
+    if red_for <= knob_red_liveness_max():
         return None
     stalls = red_fix_stalls(st, t, facts_for(snap_reds(snap), st))
     if not stalls:
@@ -162,7 +156,7 @@ _UNDECIDED: Any = object()  # a stage of red_fix_held with no verdict: the next 
 def _requeue_pending(ch: Any, t: float) -> bool:
     """The fix's change ended only just now: its worktree may queue it again (as red_fix_pending waits)."""
     return bool(ch and ch["state"] in CHANGE_ENDED
-                and t - float(ch.get("entered_at") or 0) < env_num("AGENTCTL_RED_FIX_REQUEUE_GRACE", RED_FIX_REQUEUE_GRACE))
+                and t - float(ch.get("entered_at") or 0) < knob_red_fix_requeue_grace())
 
 
 def _change_open(ch: Any) -> bool:

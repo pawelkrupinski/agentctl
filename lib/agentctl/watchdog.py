@@ -7,7 +7,6 @@ import os
 import re
 import time
 from typing import Any, Dict
-from agentctl.knobs import env_num
 from agentctl.core import attempt, fmt_age, pid_alive, state_root
 from agentctl.statefile import write_json
 from agentctl.repos import movies_repo_path
@@ -19,17 +18,14 @@ from agentctl.beats import beat_age, beat_path, write_beat
 from agentctl.conditions import close_condition, open_condition, open_conditions, run_probe
 from agentctl.changekind import file_unheld_change, unheld_changes
 from agentctl.invariants import INVARIANTS, watchdog_state
-from agentctl.knobs import W5_MAX
+from agentctl.watchknobs import W5_MAX
 from agentctl.alertroute import ALERT_SELF_HEALING_INVARIANTS
-from agentctl.knobs import knob_w5_max
+from agentctl.watchknobs import knob_w5_max
+from agentctl.watchknobs import (
+    knob_kick_handoff_wait, knob_watchdog_misses, knob_watchdog_retell, knob_watchdog_sleep_gap)
 
 
 WATCHDOG_KICK_GAP = 600
-WATCHDOG_SLEEP_GAP = 180  # s since the watchdog's own last pass (launchd: every 60 s) that mean the laptop slept
-KICK_HANDOFF_WAIT = 30    # s a kick waits for launchd's new processor to listen before handing it the token
-
-
-WATCHDOG_MISSES = 2  # consecutive passes a self-healing invariant (W5, WM, W7) fails before its condition opens
 
 
 def awake_since(st, now_=None):
@@ -38,7 +34,7 @@ def awake_since(st, now_=None):
     0 when the watchdog has never seen a gap (no evidence of sleep). Call before this pass's write_beat."""
     t = now_ if now_ is not None else epoch_now()
     gap = beat_age("watchdog")
-    if gap is not None and gap > env_num("AGENTCTL_WATCHDOG_SLEEP_GAP", WATCHDOG_SLEEP_GAP):
+    if gap is not None and gap > knob_watchdog_sleep_gap():
         return t
     return float(st.get("awake_since") or 0)
 
@@ -56,13 +52,13 @@ def kick_processor() -> str:
     launchctl("kickstart", "-k", f"gui/{os.getuid()}/{SERVICE_LABEL}")
     if not TOKEN_SHAPE.fullmatch(held):
         return "it held no token"
-    end = wall_epoch() + env_num("AGENTCTL_KICK_HANDOFF_WAIT", KICK_HANDOFF_WAIT)
+    end = wall_epoch() + knob_kick_handoff_wait()
     while wall_epoch() < end:
         if not (old_pid and old_pid != os.getpid() and pid_alive(old_pid)):
             if hand_token(path, held) is not None:
                 return "its token handed to the new processor"
         time.sleep(0.5)  # wall: waits on and times real processes and threads
-    return f"the new processor did not listen within {fmt_age(env_num('AGENTCTL_KICK_HANDOFF_WAIT', KICK_HANDOFF_WAIT))}: its token is lost"
+    return f"the new processor did not listen within {fmt_age(knob_kick_handoff_wait())}: its token is lost"
 
 
 def watchdog_unheld(st, entries=None, now_=None):
@@ -81,12 +77,6 @@ def watchdog_unheld(st, entries=None, now_=None):
             f"{file_unheld_change(st, it, t, 'agentctl watchdog')}" for it, _e in unheld_changes(st, entries, t)]
 
 
-# ONE EPISODE, ONE NOTIFICATION (2026-11-23: W1 told "unlanded change ...-what-if-py-edef9e (queued: nothing holds it,
-# yet it has not started)" every few minutes -- its condition closed whenever the next pass found the hold recorded
-# again, and each re-open notified). An invariant's violation is told once per SUBJECT (the change, red or run it names:
-# its detail less the ages and counts that move pass to pass) within WATCHDOG_RETELL; the condition still opens and
-# closes with the facts, `status` and the conditions say it each pass. Tests: tests/test_watchdog_episode.py.
-WATCHDOG_RETELL = 6 * 3600  # s ($AGENTCTL_WATCHDOG_RETELL)
 EPISODE_ID = re.compile(r"\b\d{8}-\d{6}-[\w.-]+")
 
 
@@ -102,7 +92,7 @@ def new_episode(st: Dict[str, Any], wid: str, detail: str, t: float) -> bool:
     told = dict(st.get("told") or {})
     subject = episode_subject(detail)
     last = told.get(wid) or [None, 0]
-    if last[0] == subject and t - float(last[1]) < env_num("AGENTCTL_WATCHDOG_RETELL", WATCHDOG_RETELL):
+    if last[0] == subject and t - float(last[1]) < knob_watchdog_retell():
         return False
     told[wid] = [subject, t]
     st["told"] = told
@@ -161,7 +151,7 @@ def report_violation(wid: Any, r: Any, cond: Any, st: Any, missed: Any, clock: A
     (2026-11-16: invariant-W1.6 named a change landed 6 h before, while another one violated W1): its text, escalations
     and the ESCALATED line say what violates it now."""
     heals = wid in ALERT_SELF_HEALING_INVARIANTS
-    if cond or not heals or missed >= env_num("AGENTCTL_WATCHDOG_MISSES", WATCHDOG_MISSES):
+    if cond or not heals or missed >= knob_watchdog_misses():
         open_condition("INVARIANT", f"INVARIANT {wid} violated: {r.detail}", r, [], key=f"invariant-{wid}",
                        command="watchdog", store=store)
         tell_violation(st, wid, r.detail, cond, heals, clock.time())

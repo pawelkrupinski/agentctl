@@ -8,11 +8,12 @@ import os
 import re
 from zoneinfo import ZoneInfo
 from agentctl.core import HOME
+from agentctl.fixerknobs import knob_claude_jobs, knob_claude_projects
 
 
 # -- 1. the lander: who ran `agentctl land`
 def claude_projects_root() -> str:
-    return os.environ.get("AGENTCTL_CLAUDE_PROJECTS") or os.path.join(HOME, ".claude", "projects")
+    return knob_claude_projects() or os.path.join(HOME, ".claude", "projects")
 
 
 FIXER_VERDICT = re.compile(r"^\W*(LANDED [0-9a-f]{7,40}|WAITS ON [0-9a-f]{7,40}.*|NOT LANDED\b.*|GAVE UP:.*|"
@@ -44,7 +45,7 @@ def fixer_verdict(text: str) -> str | None:
 
 
 def claude_jobs_root() -> str:
-    return os.environ.get("AGENTCTL_CLAUDE_JOBS") or os.path.join(HOME, ".claude", "jobs")
+    return knob_claude_jobs() or os.path.join(HOME, ".claude", "jobs")
 
 
 def bg_transcript(session: str) -> str | None:

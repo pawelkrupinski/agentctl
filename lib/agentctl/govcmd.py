@@ -18,7 +18,8 @@ from agentctl.govfits import gov_capacity, gov_charged, gov_committed, gov_ramp
 from agentctl.pressure import pressure_report
 from agentctl.govusage import GOV_USAGE_MIN_WALL, gov_job_cores, gov_measured_cores, gov_record_usage, gov_usage
 from agentctl.govroute import gov_replay, gov_route
-from agentctl.knobs import knob_gov_cpu_factor
+from agentctl.govknobs import knob_gov_cpu_factor
+from agentctl.govknobs import knob_max_checks
 
 
 # THE GOVERNOR'S FEATURES, for a caller in another repository (movies' scripts/jvm-gate.sh governor_bin, bitcashier's
@@ -190,7 +191,7 @@ def _checks_stats(a: Any) -> Any:
     runs = check_runs(a.days)
     cap = checks_cap()
     st = cap_state()
-    print(f"check slots: cap {cap}" + (" ($AGENTCTL_MAX_CHECKS)" if os.environ.get("AGENTCTL_MAX_CHECKS") else
+    print(f"check slots: cap {cap}" + (" ($AGENTCTL_MAX_CHECKS)" if knob_max_checks() else
                                       f" (auto; last change: {st.get('reason', 'none')})")
           + f"; running now: {len(slot_holders(cap))}; {len(runs)} check run(s) in {a.days} d")
     print(f"{'running':>7} {'runs':>5} {'p50 dur':>8} {'p90 dur':>8} {'p50 wait':>9} {'p90 wait':>9} {'max mem%':>8} {'max swap':>8}")

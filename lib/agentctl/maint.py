@@ -18,7 +18,7 @@ from agentctl.procs import process_cwds, ps, ps_rows
 from agentctl.jvmreap import (
     awake_now, is_sbt, jvm_candidates, jvm_reap, jvm_scan, reap_log, sbt_serving, sbt_stuck_reasons, swap_free_mb,
     thread_dump, tree_cpu)
-from agentctl.textknobs import knob_jvm_ps, knob_sbt_reap
+from agentctl.govknobs import knob_jvm_ps, knob_sbt_reap
 
 
 def loop_body(cmd):
@@ -107,9 +107,6 @@ def owner_orphans(kill):
     current = code_version()
     rows = (_owner_orphan(rec, current, kill) for rec in owner_records())
     return [row for row in rows if row]
-
-
-MAINTAIN_SWEEP_HOUR = 9  # local time: the daily sweep runs at the first maintain pass from 09:00 ($AGENTCTL_SWEEP_HOUR)
 
 
 # NO SPOTLIGHT IN WORKTREES (2026-11-19 15:35Z: mds_stores and mds took ~1.5 cores indexing ~26 movies worktrees and

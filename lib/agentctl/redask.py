@@ -3,11 +3,11 @@
 
 import re
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import tilde
 from agentctl.leases import red_block_of
 from agentctl.conditions import PROBES
-from agentctl.knobs import knob_ask_remind_max
+from agentctl.blameknobs import knob_ask_remind_max
+from agentctl.blameknobs import knob_ask_hold, knob_ask_remind_first
 
 
 # BLOCKED ON OWNER IS FOR THE OWNER'S CAUSES ONLY (the owner, 2026-10-28: "fix this: main #2283 → BLOCKED ON OWNER ...
@@ -103,9 +103,6 @@ def ask_category(m):
     return OWNER_CAUSE_CATEGORY.get(m.get("owner_cause"))
 
 
-ASK_REMIND_FIRST = 3600       # the first reminder this long after the owner was told ($AGENTCTL_ASK_REMIND_FIRST)
-
-
 def decide_cmd(key, answer="<your answer>"):
     return f'~/bin/agentctl decide {key} "{answer}"'
 
@@ -147,7 +144,7 @@ def red_ask(it, b):
 
 def ask_interval(n):
     """The wait before reminder n+1 (n reminders so far, the first telling included): 1 h, 2 h, 4 h, 4 h, ..."""
-    first = env_num("AGENTCTL_ASK_REMIND_FIRST", ASK_REMIND_FIRST)
+    first = knob_ask_remind_first()
     return min(first * 2 ** max(0, int(n) - 1), knob_ask_remind_max())
 
 
@@ -168,9 +165,6 @@ def ask_split(decide):
     return (m.group(1).lower(), str(decide)[m.end():].strip()) if m else (None, str(decide or "").strip())
 
 
-ASK_HOLD = 3600               # s a question its block's probe may answer is held (recorded, not told) ($AGENTCTL_ASK_HOLD)
-
-
 def ask_blocks_work(b):
     """Block b (red_block_of) waits on the owner alone: no probe of its own can lift it (ONLY A QUESTION THE WORLD MAY
     ANSWER IS HELD, above), so its reds' work stops until he answers."""
@@ -180,7 +174,7 @@ def ask_blocks_work(b):
 def ask_held_until(members, spell, t, store):
     """Until when the owner's question for these reds ((item, ask) pairs) is held (THE QUESTION IS HELD, above), or
     None: tell now (no hold, a gate red, a deadline inside the hold, a block only the owner lifts, or the hold over)."""
-    hold = env_num("AGENTCTL_ASK_HOLD", ASK_HOLD)
+    hold = knob_ask_hold()
     until = float(spell) + hold
     if hold <= 0 or t >= until or any(m[0]["data"].get("gate") for m in members):
         return None

@@ -13,7 +13,7 @@ from agentctl.core import NoReadAccess, err, process_cache, state_root
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_record, write_json
 from agentctl.selfcode import TOOL_PATH
-from agentctl.textknobs import knob_github_api, knob_github_app, knob_github_lander_repos, knob_identity
+from agentctl.storeknobs import knob_github_api, knob_github_app, knob_github_lander_repos, knob_identity
 
 
 # ---------------------------------------------------------------- github-app (github-return plan §4.1 W5b, §4.2)

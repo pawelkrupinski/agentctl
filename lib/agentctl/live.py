@@ -12,6 +12,7 @@ from agentctl.core import attempt, dispatches_dir, process_cache, reds_dir
 from agentctl.statefile import mtime, read_json_file, read_record, tail_bytes
 from agentctl.procs import record_alive
 from agentctl.claudefiles import bg_transcript, claude_projects_root
+from agentctl.watchknobs import knob_live_globs
 
 
 # ---------------------------------------------------------------- live agent output (2026-10-29)
@@ -40,7 +41,7 @@ _live_info = process_cache({})                 # transcript -> ((size, mtime), t
 
 
 def live_globs():
-    v = os.environ.get("AGENTCTL_LIVE_GLOBS")
+    v = knob_live_globs()
     return [g for g in (v.split(os.pathsep) if v is not None
                         else [f"/private/tmp/claude-{os.getuid()}/*/*/tasks/*.output"]) if g]
 

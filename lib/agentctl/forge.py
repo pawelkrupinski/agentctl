@@ -21,6 +21,7 @@ from agentctl.ghapp import ghapp_enabled, ghapp_token
 from agentctl.classify import net_run
 from agentctl.core import HOME
 from agentctl.ghtally import gh_tally, gh_tally_as, gh_tally_shape
+from agentctl.storeknobs import knob_gh_cli, knob_runners_page_cache
 
 
 # ---------------------------------------------------------------- forge: the read side
@@ -32,7 +33,7 @@ from agentctl.ghtally import gh_tally, gh_tally_as, gh_tally_shape
 #   forge_release_asset / forge_run_url
 #                                       the calls whose answers are folded into agentctl's run record (run_record)
 # The push remote is core's remote(); the landing identity on ci-runner is ghapp.py's (github-app).
-GH_CLI = os.environ.get("AGENTCTL_GH_CLI", "gh")  # the GitHub CLI
+GH_CLI = knob_gh_cli()  # the GitHub CLI
 GITHUB_WEB = "https://github.com"
 
 
@@ -413,7 +414,7 @@ RUNNERS_PAGE_MAX_AGE = 5 * 60  # ci-runners-page reads GitHub's runners and jobs
 def runner_queue(now_=None):
     """ci-runners-page's last good read of ci-runner (`running` tasks per runner, `waiting_jobs` per label, each runner's
     `limits`), or None when it is missing or older than RUNNERS_PAGE_MAX_AGE."""
-    path = os.environ.get("AGENTCTL_RUNNERS_PAGE_CACHE", f"{HOME}/.cache/ci-runners-page/last-good.json")
+    path = knob_runners_page_cache() or f"{HOME}/.cache/ci-runners-page/last-good.json"
     q = read_record(path)
     try:
         fresh = (now_ if now_ is not None else epoch_now()) - float(q["ok"]) <= RUNNERS_PAGE_MAX_AGE

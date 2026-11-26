@@ -5,23 +5,13 @@ from agentctl.clock import epoch_now
 import os
 import re
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import process_cache
 from agentctl.timefmt import parse_time
 from agentctl.forge import gh_json
 from agentctl.workflows import fix_workflow_jobs, workflow_triggers
+from agentctl.redknobs import knob_red_stale_days
 
 
-# -- RETIRED CHECKS (agentctl issue 20261031T210634-c53375): core 2b4d9c905 removed every dev/sandbox target, and the
-# reds of their last runs (Playwright Tests (deployed) #1080/#1081, Run Post Deployment Tests #1362) could never clear:
-# no run of a retired check comes again. A red whose check no longer exists on main is CLEARED by the same probe that
-# would re-raise it -- main's workflow files, read through the API at main's head: its workflow gone (by name and by
-# the run's file), its job gone (no current job produces its name, and no job of the same key holds its matrix row), or
-# the input branch its job took gone (a step it ran under an `if:` on inputs/matrix, absent from the job now); or
-# STALE: its workflow made no run on main for RED_STALE_DAYS while main moved (workflow_call-only workflows excepted:
-# red_callable_evidence settles those). Conservative: a job renamed in place (same key, no matrix row) still matches,
-# and anything unreadable or unparseable keeps the red (fail safe).
-RED_STALE_DAYS = 14          # $AGENTCTL_RED_STALE_DAYS
 RETIRE_MAIN_TTL = 60         # s: main's head is read again after this
 RETIRE_FAIL_TTL = 60         # s: an unreadable repo is not asked again before this
 _retire_cache = process_cache({})
@@ -325,7 +315,7 @@ class RetiredRun:
             return None
         newest = retire_newest(self.o_r, cpath) or self.r
         at = newest.get("created_at") or self.r.get("created_at")
-        days = env_num("AGENTCTL_RED_STALE_DAYS", RED_STALE_DAYS)
+        days = knob_red_stale_days()
         if at and self.main_date and t - parse_time(at).timestamp() > days * 86400 \
                 and parse_time(self.main_date) > parse_time(at) and newest.get("head_sha") != self.sha:
             return f"stale: no run of {self.workflow} on main since {at[:10]} (main moved to {self.sha[:10]})"

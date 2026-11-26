@@ -35,7 +35,7 @@ from agentctl.storeauth import (
 from agentctl.blamerecords import blame_land_refusal
 from agentctl.redhold import red_unheld
 from agentctl.statemachines import MACHINES, StaleVersion, TerminalState, machine_state
-from agentctl.knobs import knob_tick
+from agentctl.tickknobs import knob_tick
 
 
 # ---------------------------------------------------------------- phase 2: the store over HTTP (design §6.3, §13 phase 2)

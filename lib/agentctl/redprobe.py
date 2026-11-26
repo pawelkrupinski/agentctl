@@ -14,11 +14,12 @@ from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
 from agentctl.owned import backoff
 from agentctl.remote import delete_check_branch, remote_poll
 from agentctl.remotejobs import REMOTE_WORKFLOW
-from agentctl.knobs import knob_blame_probe_wall
+from agentctl.blameknobs import knob_blame_probe_wall
+from agentctl.redknobs import knob_drift_ci
 
 
 def drift_ci_path(repo):
-    return os.environ.get("AGENTCTL_DRIFT_CI") or os.path.join(repo, "scripts", "identity-drift-ci")
+    return knob_drift_ci() or os.path.join(repo, "scripts", "identity-drift-ci")
 
 
 DRIFT_OVERLAY = (".github", "scripts/ci")  # main's CI laid over an old commit, so its drift rows honour forced seeds

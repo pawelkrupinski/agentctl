@@ -12,6 +12,7 @@ from agentctl.waitingdir import waiting_entries
 from agentctl.queue import (
     SELECTION_PATHS, forces_full_recheck, hook_query, named_reader, range_paths, selection_at, selection_change)
 from agentctl.generated import without_generated
+from agentctl.queueknobs import knob_queue
 
 
 # OUT OF THE BUILD'S REACH (the owner, 2026-11-21: "narrow the 27 'build' rechecks (about 24 min each)"; 26 of them in
@@ -364,4 +365,4 @@ def queue_mode(repo, a):
     (scripts) or AGENTCTL_QUEUE=0. A dispatched red fixer queues too (RED FIX LANDS THROUGH THE QUEUE, below)."""
     if getattr(a, "follow", False) or getattr(a, "no_watch", False):
         return False
-    return os.environ.get("AGENTCTL_QUEUE", "1") != "0" and batching(repo)
+    return knob_queue() != "0" and batching(repo)

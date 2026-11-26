@@ -4,17 +4,18 @@
 import os
 import re
 from typing import Any
+from agentctl.selfcode import TOOL_PATH
+from agentctl.fixerknobs import FIXER_UNLANDED_NUDGE
 from agentctl.core import remote, tilde
 from agentctl.classify import is_regression
-from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import RED_PRIMARY, red_repo_clone, red_repo_of
 from agentctl.workflows import LOCAL_FLOW
-from agentctl.redrecord import RED_RECURRING
-from agentctl.fixerenv import BRIEF_SRC
-from agentctl.redfixes import red_refuted
-from agentctl.redreplay import FIX_REPLAY_NONE_MIN, red_replay_command
 from agentctl.redrepos import red_owner_only
-from agentctl.fixerland import FIXER_UNLANDED_NUDGE, LAND_BRIEF
+from agentctl.redrecord import RED_RECURRING
+from agentctl.redreplay import FIX_REPLAY_NONE_MIN, red_replay_command
+from agentctl.fixerland import LAND_BRIEF
+from agentctl.redfixes import red_refuted
+from agentctl.redknobs import knob_brief_src
 
 
 # THE FIXER BRIEF (the owner, 2026-10-30): the rules every dispatched fixer and family owner gets -- fast reproducer
@@ -46,7 +47,7 @@ def fixer_brief(o_r=None):
     """(path, text) of the fixer brief: $AGENTCTL_BRIEF_SRC when it names a readable file (an override, for trying a
     wording out), else the tracked docs/fixer-brief.md -- with only o_r's per-repo section (default the primary). Never
     raises: a missing brief is said in the prompt."""
-    for p in (os.environ.get("AGENTCTL_BRIEF_SRC", BRIEF_SRC), FIXER_BRIEF):
+    for p in (knob_brief_src(), FIXER_BRIEF):
         if p:
             try:
                 with open(p) as f:

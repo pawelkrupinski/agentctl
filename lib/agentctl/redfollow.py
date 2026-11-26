@@ -2,15 +2,12 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import remote
 from agentctl.landstate import landed_state
 from agentctl.queueslots import ENTRY_STATUS
 from agentctl.fixchange import CHANGE_ENDED, red_change
 from agentctl.queuesubmit import entry_id_age
-
-
-RED_FIX_REQUEUE_GRACE = 900  # $AGENTCTL_RED_FIX_REQUEUE_GRACE
+from agentctl.redknobs import knob_red_fix_requeue_grace
 
 
 # A FOLLOWED FIX IS A LATER CHANGE (2026-11-19, Alert backtest #4, 5254bffda9d2): its fix ...-8b34c0 was cancelled and
@@ -50,8 +47,7 @@ def red_fix_requeue_wait(store: Any, f: dict[str, Any], t: float) -> bool:
     """Fix f's change ended within RED_FIX_REQUEUE_GRACE: a re-queue of its worktree may follow the cancel -- never for
     a linked change's (it carries no fix on, red_fix_follow)."""
     ch = red_change(store, f.get("entry")) or {}
-    return not f.get("linked") and t - float(ch.get("entered_at") or 0) < env_num("AGENTCTL_RED_FIX_REQUEUE_GRACE",
-                                                                                  RED_FIX_REQUEUE_GRACE)
+    return not f.get("linked") and t - float(ch.get("entered_at") or 0) < knob_red_fix_requeue_grace()
 
 
 def _change_fix(f: dict[str, Any], o: dict[str, Any], t: float) -> dict[str, Any] | None:

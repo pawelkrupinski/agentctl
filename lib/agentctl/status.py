@@ -8,7 +8,6 @@ import json
 import os
 import threading
 import time
-from agentctl.knobs import env_num
 from agentctl.core import HOME, SHORT, process_cache, reds_dir, slug
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_json_file, read_record
@@ -43,9 +42,9 @@ from agentctl.cireport import ci_why
 from agentctl.recovery import escalated_now
 from agentctl.ownerleases import owners_status
 from agentctl.statusline import render_status_line, status_gate_text
+from agentctl.watchknobs import knob_status_bound
 
 
-STATUS_SOURCE_BOUND = 8         # s a source may take ($AGENTCTL_STATUS_BOUND); the agents' source twice that
 STATUS_STORE_TIMEOUT = 5        # s per remote store call
 STATUS_CACHE = 5                # s an assembled status is served again
 STATUS_EVENTS = 50
@@ -411,7 +410,7 @@ def status_data(store=None, now_=None, bound=None, keep=False, only=None):
     """THE STATUS MODEL (/api/status): every section from its own bounded source; a failing one is {"error": ...} in
     its place. only: just these sections (a renderer's)."""
     t = now_ if now_ is not None else epoch_now()
-    b = bound if bound is not None else env_num("AGENTCTL_STATUS_BOUND", STATUS_SOURCE_BOUND)
+    b = bound if bound is not None else knob_status_bound()
     d = state_read()
     repo = (d.get("ci") or {}).get("repo") or SHORT["movies"]
     st, st_err = open_status_store(store, only)

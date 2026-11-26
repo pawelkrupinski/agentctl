@@ -3,6 +3,7 @@
 
 import os
 from agentctl.core import HOME, err, process_cache
+from agentctl.fixerknobs import knob_allowed_roots
 
 
 # BACKGROUND CODE TOUCHES ONLY THESE ROOTS. A path learned from another process (its cwd) or from a git registry
@@ -12,7 +13,7 @@ def allowed_roots() -> list[str]:
     h = HOME
     roots = [f"{h}/projects", f"{h}/bitcashier", f"{h}/.cache/agentctl", f"{h}/.cache", f"{h}/Library/Logs", "/tmp", "/private/tmp",
              "/var/folders", "/private/var/folders", os.path.realpath(os.environ.get("TMPDIR") or "/tmp")]
-    return roots + [x for x in os.environ.get("AGENTCTL_ALLOWED_ROOTS", "").split(":") if x]
+    return roots + [x for x in knob_allowed_roots().split(":") if x]
 
 
 _skipped_paths: set[str] = process_cache(set())

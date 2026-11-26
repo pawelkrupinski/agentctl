@@ -7,7 +7,6 @@ from agentctl.timefmt import hhmmz, parse_time
 from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import change_exits_unannounced
 from agentctl.clock import Clock
-from agentctl.knobs import env_num
 from agentctl.core import SHORT, fmt_age, git, host_role, run_cmd, state_root
 from agentctl.repos import movies_repo_path
 from agentctl.procs import process_cwds, ps
@@ -25,32 +24,9 @@ from agentctl.queueclose import change_rows, close_landed_changes
 from agentctl.selfci import inv_wa
 from agentctl.redhold import W1_HARD_FACTOR, change_progress, inv_wr, red_unheld
 from agentctl.queuehold import hold_recovers_itself
-from agentctl.knobs import knob_w5_max
-
-
-# ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)
-# A separate, cheap, dumb launchd job (net.bitcashier.agentctl-watchdog, every 60 s): `agentctl watchdog` reads today's
-# files only -- the queue entries, the published gate line, the processor's beat file, the inbox -- and checks the
-# invariants the reconciler must converge to. A violation is a condition (INVARIANT, its probe the invariant itself:
-# it closes when the invariant holds again) and a macOS notification; on W5 (the processor's duties stopped) it also
-# kickstarts the processor (silent over awake time; the kick keeps its token), at most once per WATCHDOG_KICK_GAP. It
-# shares no code path with the processor beyond the registry and the read-only readers.
-W1_MAX = 2 * 3600       # the oldest unlanded change ($AGENTCTL_W1_MAX); while main is red, counted from the red's start
-
-
-W2_MAX = 10 * 60        # a gate red with nobody on it
-
-
-W6_MAX = 5 * 60         # a due escalation not notified
-
-
-W8_WINDOW = 3600         # W8 looks at the change items that closed within this ($AGENTCTL_W8_WINDOW)
-
-
-W7_MAX = 5 * 60         # phase 2: an event ci-runner wrote that the laptop's sync has not projected (60x its 5 s tick)
-
-
-WM_MAX = 45 * 60        # maintain's last pass (launchd every 15 min)
+from agentctl.watchknobs import knob_w5_max
+from agentctl.watchknobs import (
+    knob_w1_max, knob_w2_max, knob_w6_max, knob_w7_max, knob_w8_window, knob_wb_max, knob_wf_pct, knob_wm_max)
 
 
 def watchdog_state():
@@ -115,7 +91,7 @@ class W1Judge:
 
     def __init__(self, st: Any, t: float, red_since: float, holding: Any) -> None:
         self.st, self.t, self.red_since, self.holding = st, t, red_since, holding
-        self.lim = env_num("AGENTCTL_W1_MAX", W1_MAX)
+        self.lim = knob_w1_max()
         self.conds = open_conditions(st)
 
     def _off(self, r: dict[str, Any], it: dict[str, Any], carried: Optional[str]) -> Optional[str]:
@@ -207,7 +183,7 @@ def inv_w2(clock, st):
         first = now_
         write_json(state_root("watchdog.json"), {**ws, "w2_since": first})
     it = bad[0]
-    return now_ - first < env_num("AGENTCTL_W2_MAX", W2_MAX), \
+    return now_ - first < knob_w2_max(), \
         f"{red_what(it['data'])} ({it['state']}) has no lease, offer, fix or block for {fmt_age(now_ - first)}"
 
 
@@ -244,7 +220,7 @@ def inv_w6(clock, st):
             return None, "the notifier cannot deliver (see WN)"
         t = st.clock()
         late = [e for e in st.events(after=max(0, int(st.meta_get("notifier_seq", 0) or 0) - 500), limit=5000)
-                if e["severity"] == "escalate" and not e.get("notified_at") and t - e["at"] > env_num("AGENTCTL_W6_MAX", W6_MAX)]
+                if e["severity"] == "escalate" and not e.get("notified_at") and t - e["at"] > knob_w6_max()]
     except Exception as e:
         return None, f"cannot read the store ({str(e)[:120]})"
     return not late, (f"{len(late)} escalation(s) not notified: {str(late[0].get('text'))[:100]}" if late
@@ -264,7 +240,7 @@ def inv_w7(clock, st):
     if not behind:
         return True, "the sync is up to date with the event feed"
     age = clock.time() - float(behind[0]["at"])
-    return age <= env_num("AGENTCTL_W7_MAX", W7_MAX), \
+    return age <= knob_w7_max(), \
         f"the sync is behind ci-runner's events: #{behind[0]['seq']} unprojected for {fmt_age(age)}"
 
 
@@ -273,7 +249,7 @@ def inv_w8(clock, st):
     author's inbox -- Store.transition completes every such event (change_exit_event); this catches a writer around it.
     Looks at the items closed within W8_WINDOW, so it clears itself once a stray one ages out (and the fix lands)."""
     try:
-        silent = change_exits_unannounced(st, st.clock() - env_num("AGENTCTL_W8_WINDOW", W8_WINDOW))
+        silent = change_exits_unannounced(st, st.clock() - knob_w8_window())
     except Exception as e:
         return None, f"cannot read the store ({str(e)[:120]})"
     return not silent, (f"{len(silent)} change(s) left the queue with no inbox entry: {', '.join(silent[:3])}"
@@ -287,11 +263,8 @@ def inv_wm(clock, st):
     age = beat_age("maintain")
     if age is None:
         return None, "no maintain beat yet"
-    return age < env_num("AGENTCTL_WM_MAX", WM_MAX), \
+    return age < knob_wm_max(), \
         f"maintain last ran {fmt_age(age) + ' ago' if age is not None else 'never'}"
-
-
-WB_MAX = 10 * 60
 
 
 def _pids_working_in(br: Any) -> Any:
@@ -317,15 +290,12 @@ def inv_wb(clock, st):
     if not files:
         return True, f"{br} is clean"
     newest = max((os.path.getmtime(os.path.join(br, f)) for f in files if os.path.exists(os.path.join(br, f))), default=0)
-    if clock.time() - newest < env_num("AGENTCTL_WB_MAX", WB_MAX):
+    if clock.time() - newest < knob_wb_max():
         return True, f"{br}: {len(files)} file(s) edited just now"
     who = _pids_working_in(br)
     return False, (f"{br} has uncommitted edits ({', '.join(files[:4])}) unchanged for {fmt_age(clock.time() - newest)}"
                    + (f"; working there: {'; '.join(who[:3])}" if who else "; nobody works there now") +
                    ": commit them in a worktree of ~/bin")
-
-
-WF_PCT = 70  # % of kern.maxfiles open system-wide past which WF is violated ($AGENTCTL_WF_PCT)
 
 
 WF_VM = "com.apple.Virtualization"
@@ -367,7 +337,7 @@ def inv_wf(clock, st, reading=False, lsof_out=None):
     if not reading:
         return True, "no kern.num_files here"
     num, most = reading
-    pct, bound = 100 * num // most, env_num("AGENTCTL_WF_PCT", WF_PCT)
+    pct, bound = 100 * num // most, knob_wf_pct()
     said = f"{num} of {most} open ({pct}%)"
     if pct < bound:
         return True, said

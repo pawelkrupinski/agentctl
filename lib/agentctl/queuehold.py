@@ -5,28 +5,10 @@ from contextlib import suppress
 from typing import Any, Optional
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.holdgraph import cycle_breaker, cycle_text, hold_cycles, hold_record, recorded_hold_edges
-from agentctl.knobs import env_num
 from agentctl.core import fmt_age
 from agentctl.waitingdir import save_entry, wlog
 from agentctl.policy import HOLDS, hold_kind
-
-
-# A HELD WAIT IS NO ESCALATION (2026-11-19: phase3-agreement, -f2 and -enrichment2 each escalated to the owner every
-# 15 min -- "queued for 45 min, waiting on a check slot" -- while each was held behind an older change it overlaps:
-# F2 behind agreement on coupling-baseline.tsv, E2 behind F2 on TestWiring.scala). `queued`'s deadline loops into
-# itself, and every lap raised the level and notified. Now each tick records WHY a queued change waits on its item
-# (`hold`: the overlap and its blocking change and files, the batch, every check tree busy, the governor) -- `land
-# status` and `status` show it -- and a lap past the deadline is QUIET while that hold is live: its blocker still in
-# flight (whose own machine escalates should IT stick), a batch or busy trees (their holders' deadlines bound them).
-# It escalates only when the hold is stuck: nothing named holds it, its blocking change is gone, or it is older than
-# CHANGE_HOLD_MAX (the `waiting` state's own bound).
-CHANGE_HOLD_MAX = 6 * 3600  # s ($AGENTCTL_CHANGE_HOLD_MAX)
-
-
-# NO HOLD YET IS NO STUCK HOLD (2026-11-23 04:19Z/04:44Z: py-restore-corpus, checked, was pushed by the next tick 40 s
-# and 27 s later; W1 read it in between as "nothing holds it, yet it has not pushed"). A change that has just entered
-# its state has no recorded hold until a tick pushes, starts or holds it: past this grace with none, it is stuck.
-UNHELD_GRACE = 10 * 60  # s ($AGENTCTL_UNHELD_GRACE)
+from agentctl.queueknobs import knob_change_hold_max, knob_unheld_grace
 
 
 def note_hold(st: Any, e: Any, kind: Any, why: Any, t: Any, blocker: Any = None, files: Any = None, batch: Any = None) -> None:
@@ -87,7 +69,7 @@ def restart_hold(st: Any, e: Any, t: Any) -> Any:
 def unheld_stuck(it: dict[str, Any], t: float) -> Optional[str]:
     """Why a change with no recorded hold is stuck, or None within UNHELD_GRACE in its state (NO HOLD YET IS NO STUCK
     HOLD: a tick pushes, starts or holds it)."""
-    grace = env_num("AGENTCTL_UNHELD_GRACE", UNHELD_GRACE)
+    grace = knob_unheld_grace()
     if grace > 0 and t - float(it.get("entered_at") or t) < grace:
         return None
     return "nothing holds it, yet it has not " + ("pushed" if it["state"] == "checked" else "started")
@@ -99,8 +81,8 @@ def change_hold_stuck(st: Any, hold: Any, it: Any, t: Any) -> Any:
         return unheld_stuck(it, t)
     if hold_recovers_itself(hold):
         return None  # its own recovery runs at its bound (regen_hold_overdue): never a stuck lap, the owner told once
-    if t - float(it.get("entered_at") or t) > env_num("AGENTCTL_CHANGE_HOLD_MAX", CHANGE_HOLD_MAX):
-        return f"held for over {fmt_age(env_num('AGENTCTL_CHANGE_HOLD_MAX', CHANGE_HOLD_MAX))}"
+    if t - float(it.get("entered_at") or t) > knob_change_hold_max():
+        return f"held for over {fmt_age(knob_change_hold_max())}"
     return _hold_blocker_or_bound_stuck(st, hold, t)
 
 

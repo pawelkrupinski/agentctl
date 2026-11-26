@@ -7,6 +7,7 @@ from typing import Any
 from agentctl.core import state_root
 from agentctl.statefile import read_json_file, write_json
 from agentctl.forge import RED_CONCLUSIONS
+from agentctl.storeknobs import knob_state_file
 
 
 # THE ONE CI-STATE SNAPSHOT (the owner, 2026-10-27: the watch, the gate summary, ci-why's outside list and the red patrol
@@ -24,7 +25,7 @@ _state_lock = __import__("threading").Lock()
 
 
 def state_path() -> str:
-    return os.environ.get("AGENTCTL_STATE_FILE") or state_root("state.json")
+    return knob_state_file() or state_root("state.json")
 
 
 def state_read() -> dict[str, Any]:

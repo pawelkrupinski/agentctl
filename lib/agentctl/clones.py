@@ -11,6 +11,7 @@ from agentctl.repos import server_repo
 import contextlib
 import fcntl
 import threading
+from agentctl.storeknobs import knob_movies_remote
 
 
 def _clone_of_existing(path: Any) -> Any:
@@ -52,7 +53,7 @@ CORRUPT_GIT = re.compile(r"did not send all necessary objects|Could not read [0-
 
 
 def heal_enabled(repo: str) -> bool:
-    return bool(os.environ.get("AGENTCTL_MOVIES_REMOTE")) and \
+    return bool(knob_movies_remote()) and \
         os.path.realpath(repo) == os.path.realpath(server_repo())
 
 

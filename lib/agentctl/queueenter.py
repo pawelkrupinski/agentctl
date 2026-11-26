@@ -9,7 +9,6 @@ import subprocess
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
 from agentctl.core import (
     NO_SIGN, branch_of, err, fmt_age, git, git_ok, host_role, process_cache, remote, scratch)
 from agentctl.policy import policy_blocks
@@ -24,8 +23,7 @@ from agentctl.worktrees import WorktreeGuard
 from agentctl.conflicts import conflict_resolve
 from agentctl.redfixes import fixes_of
 from agentctl.redreplay import fix_replay_refusal, run_fix_replays
-from agentctl.queueuntil import (
-    UNTIL_DONE_AGAIN, UNTIL_DONE_DEADLINE, next_command, own_change_item, until_done_finish)
+from agentctl.queueuntil import UNTIL_DONE_AGAIN, next_command, own_change_item, until_done_finish
 from agentctl.waiting import diagnoses_of, waiting_commits
 from agentctl.queuesubmit import (
     FAST_PRECHECK, FAST_PRECHECK_BOUND, await_queued, await_verdict, change_decided, landed_sha_of, note_precheck,
@@ -39,7 +37,8 @@ from agentctl.syncsteps import submit_remote
 from agentctl.processorlink import offer_token, spawn_waiting_processor
 from agentctl.landqueue import queue_command
 from agentctl.statemachines import machine_state
-from agentctl.knobs import knob_max_foreign
+from agentctl.queueknobs import knob_max_foreign
+from agentctl.queueknobs import knob_land_before_queue_seconds, knob_until_done_deadline
 
 
 def change_fields(repo, main_ref, head, a, store):
@@ -260,7 +259,7 @@ def until_done_verdict(repo: Any, a: Any, clock: Any, store: Any, eid: Any, it: 
 def land_until_done(repo, main_ref, sh, a, clock, store):
     """`land --until-done` (LAND --UNTIL-DONE above)."""
     t0 = clock.time()
-    bound = a.deadline if a.deadline is not None else env_num("AGENTCTL_UNTIL_DONE_DEADLINE", UNTIL_DONE_DEADLINE)
+    bound = a.deadline if a.deadline is not None else knob_until_done_deadline()
     head = git(repo, "rev-parse", "HEAD").strip()
     it = own_change_item(repo, head, store)
     eid, rc = until_done_entry(repo, main_ref, sh, a, clock, store, head, it)
@@ -384,9 +383,6 @@ def sync_onto_main(repo, main_ref, sh, clock, store, release_hold=False):
 LAND_BEFORE_QUEUE = "scripts/land-before-queue"
 
 
-LAND_BEFORE_QUEUE_SECONDS = 1200
-
-
 def land_before_queue(repo, head):
     """The head after the repo's LAND_BEFORE_QUEUE step: head itself, or a descendant the step committed onto it."""
     tool = os.path.join(repo, LAND_BEFORE_QUEUE)
@@ -396,7 +392,7 @@ def land_before_queue(repo, head):
     branch = git(repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
     try:
         r = process_runner().run([tool, base, head], cwd=repo, capture_output=True, text=True, env=tool_env(),
-                           timeout=env_num("AGENTCTL_LAND_BEFORE_QUEUE_SECONDS", LAND_BEFORE_QUEUE_SECONDS))
+                           timeout=knob_land_before_queue_seconds())
         for line in (r.stdout + r.stderr).strip().splitlines()[-12:]:
             err(f"{LAND_BEFORE_QUEUE}: {line}")
     except subprocess.TimeoutExpired:

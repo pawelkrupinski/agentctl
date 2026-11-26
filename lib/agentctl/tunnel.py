@@ -1,7 +1,6 @@
 # agentctl, part `tunnel`: the store's ssh tunnel: its ports, its state file, a probe of it, the default route it rides
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-import os
 import re
 import subprocess
 import urllib.error
@@ -9,6 +8,7 @@ import urllib.request
 from agentctl.procrunner import process_runner
 from agentctl.core import state_root
 from agentctl.remotestore import default_store_url, store_url
+from agentctl.storeknobs import knob_tunnel_state
 
 
 # ---------------------------------------------------------------- env
@@ -27,7 +27,7 @@ TUNNEL_PROBE_TIMEOUT = 5
 
 
 def tunnel_state_path():
-    return os.environ.get("AGENTCTL_TUNNEL_STATE") or state_root("tunnel-health.json")
+    return knob_tunnel_state() or state_root("tunnel-health.json")
 
 
 def tunnel_probe():

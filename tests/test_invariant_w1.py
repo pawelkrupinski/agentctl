@@ -51,7 +51,7 @@ def run(module, script):
     patches = {
         "movies_repo_path": lambda: "/repo", "close_landed_changes": rec("close_landed_changes"),
         "change_rows": lambda st: rows, "w1_gate_reds": rec("w1_gate_reds", lambda o_r, t: script.get("gate", (0.0, ""))),
-        "env_num": lambda name, default: default, "open_conditions": lambda st: script.get("conds", []),
+        "open_conditions": lambda st: script.get("conds", []),
         "change_progress": rec("change_progress", lambda st, it, t: script.get("progress", {}).get(it["id"])),
         "hold_recovers_itself": lambda hold: script.get("recovers", False),
         "change_hold_visible": rec("change_hold_visible", "HOLD"),

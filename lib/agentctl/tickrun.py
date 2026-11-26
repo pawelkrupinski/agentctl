@@ -2,20 +2,11 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, Callable
-from agentctl.knobs import env_num
 from agentctl.core import NoToken, _bounded, err, process_cache, run_bounded
+from agentctl.tickknobs import knob_step_join
 
 
 ROUND_ERRORS_MAX = 3
-
-
-# EVERY STEP OF THE TICK IS BOUNDED (2026-10-29, RECONCILER STALLED 05:37-05:41: during a tunnel hang the gate's
-# forge reads -- gh calls of up to 90 s each, one kickstart and a retry, ten workflows -- held the loop for minutes,
-# and state.json's tick_at aged past 2 min). A step runs in a thread of its own and the tick waits at most STEP_JOIN s
-# for it; one still running is not started again until it ends (run_bounded), and the tick goes on to the next step.
-# Its error, when it ends, is reported at the next look. The steps' writes are store transitions (compare-and-set) and
-# atomic entry files, so a slow step overlapping the next tick's other steps is safe.
-STEP_JOIN = 20
 
 
 _step_errors = process_cache({})
@@ -37,8 +28,8 @@ def run_step(name: str, step: Callable[[], Any]) -> bool | None:
         return None
     if _step_errors.get(name):  # it failed after the tick stopped waiting for it
         step_failed(name, _step_errors.pop(name))
-    if not run_bounded(f"step:{name}", work, env_num("AGENTCTL_STEP_JOIN", STEP_JOIN)):
-        err(f"{name}: still running after {env_num('AGENTCTL_STEP_JOIN', STEP_JOIN):.0f} s; the tick goes on (it ends "
+    if not run_bounded(f"step:{name}", work, knob_step_join()):
+        err(f"{name}: still running after {knob_step_join():.0f} s; the tick goes on (it ends "
             "in its own thread)")
         return None
     why = _step_errors.pop(name, None)

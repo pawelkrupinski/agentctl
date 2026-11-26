@@ -22,6 +22,7 @@ from agentctl.redhold import red_fix_liveness
 from agentctl.livepage import AGENT_PAGE_HTML, STATUS_PAGE_HTML
 from agentctl.livestream import (
     LIVE_SEND_TIMEOUT, LIVE_STREAMS, _live_streams, live_mask_text, live_peer_closed, live_stream)
+from agentctl.watchknobs import knob_status_page, knob_status_port
 
 
 # ---------------------------------------------------------------- the status page (2026-10-29)
@@ -255,9 +256,9 @@ def status_page_start() -> Any:
     or None. Never raises."""
     if _status_page.get("url"):
         return _status_page["url"]
-    if os.environ.get("AGENTCTL_STATUS_PAGE", "").lower() in ("0", "off", "no"):
+    if knob_status_page().lower() in ("0", "off", "no"):
         return None
-    ports = ([int(os.environ["AGENTCTL_STATUS_PORT"])] if os.environ.get("AGENTCTL_STATUS_PORT")
+    ports = ([int(knob_status_port())] if knob_status_port()
              else [STATUS_PAGE_PORT, STATUS_PAGE_FALLBACK])
     why: list[str] = []
     for p in ports:

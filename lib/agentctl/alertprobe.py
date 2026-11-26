@@ -4,7 +4,6 @@
 from typing import Any, Callable
 import os
 import re
-from agentctl.knobs import env_num
 from agentctl.core import remote
 from agentctl.landstate import landed_state
 from agentctl.timefmt import iso_epoch
@@ -19,6 +18,7 @@ from agentctl.conditions import open_conditions
 from agentctl.redask import red_ask
 from agentctl.alertroute import (
     ALERT_OWNER_KINDS, ALERT_RED_KINDS, alert_condition_audience, alert_kind_of, alert_red_audience)
+from agentctl.watchknobs import knob_alert_network_grace, knob_alert_orphan_probe
 
 
 # ---------------------------------------------------------------- the probes: each live alert closes itself
@@ -106,19 +106,6 @@ def alert_probe(st: Any, item: str, e: dict[str, Any], t: float, ctx: dict[str, 
     return _probe_store_item(st, item) or (alert_probe_cleared(st, item, e, t, ctx if ctx is not None else {}), None)
 
 
-# ---------------------------------------------------------------- an owner alert whose condition has cleared
-# The owner, 2026-11-06: "why is there always 30 unread in inbox" -- 44 owner alerts, nearly all for what had cleared
-# days before: 20 RED BLOCKED ON OWNER whose reds were closed, 17 UNLANDED ORPHAN of Forgejo-era worktrees, 3 NETWORK
-# long recovered, 3 WATCH UNKNOWN whose commits later runs had decided, a HELD batch that moved on. Their items were
-# keyed before the probes knew them (`run:`, `text:`, `orphan:`), so nothing ever closed them. Now each such alert's
-# CONDITION is probed from its kind and verdict, whatever its item, and closed with the reason once it has cleared.
-# What cannot be told (no red named, no gate read, git failing) stays as it is: never closed on a guess.
-ALERT_ORPHAN_PROBE_EVERY = 600  # s between git probes of one orphan's worktree ($AGENTCTL_ALERT_ORPHAN_PROBE)
-
-
-ALERT_NETWORK_GRACE = 600       # s a NETWORK alert stays before "no NETWORK condition open" closes it
-
-
 ALERT_RED_PROBED = {"BLOCKED", "RED_BUDGET", "DIAGNOSED", "FIXER_FAILED", "FIX_FAILED", "FIX_UNVERIFIED",
                     "FIX_NOT_COUNTED", "RED_DISPATCHED", "LAUNCH_FAILED", "RED_FLAKE", "RED_AUTHOR", "RED_REVERT",
                     "RED_BLAME", "RED_RELAND"} | ALERT_RED_KINDS
@@ -203,7 +190,7 @@ class AlertClearing:
         if not os.path.isdir(wt):
             return "its worktree is gone"
         probed = self.ctx.setdefault("probed", {})
-        if self.t - float(probed.get(self.item) or 0) < env_num("AGENTCTL_ALERT_ORPHAN_PROBE", ALERT_ORPHAN_PROBE_EVERY):
+        if self.t - float(probed.get(self.item) or 0) < knob_alert_orphan_probe():
             return None
         probed[self.item] = self.t
         state = landed_state(wt, f"refs/remotes/{remote()}/main", "HEAD")
@@ -220,7 +207,7 @@ class AlertClearing:
         return self.kind == "NETWORK"
 
     def network_back(self) -> str | None:
-        if self.t - self.at < env_num("AGENTCTL_ALERT_NETWORK_GRACE", ALERT_NETWORK_GRACE):
+        if self.t - self.at < knob_alert_network_grace():
             return None
         conds = alert_ctx_get(self.ctx, "conditions", lambda: open_conditions(self.st))
         return None if any(c.get("kind") == "NETWORK" for c in conds) else "the network is back (no NETWORK condition open)"

@@ -7,7 +7,6 @@ import json
 import os
 import time
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import err, pct
 from agentctl.timefmt import ts
 from agentctl.statefile import write_json
@@ -15,9 +14,11 @@ from agentctl.inboxentry import inbox_write
 from agentctl.machine import machine_sample
 from agentctl.govbudget import (
     CHECKS_DEFAULT_CAP, GOV_MEM_GB, cap_state, check_runs, checks_cap, checks_dir, gov_max_checks, slot_holders)
-from agentctl.gov import GOV_ADMIT_MAX, gov_admit
+from agentctl.gov import gov_admit
 from agentctl.govpool import WIDTH_ENV
 from agentctl.govusage import GOV_JOB_CORES
+from agentctl.govknobs import knob_gov_admit_max
+from agentctl.govknobs import knob_max_checks
 
 
 class Slot:
@@ -52,7 +53,7 @@ def check_slot(repo, label, cls="check"):
     admitted). Records the run in runs.jsonl and adjusts the cap afterwards."""
     slot = Slot(label, cls)
     slot.ticket = gov_admit(cls, GOV_MEM_GB["check"], label, kind="check",
-                            max_wait=env_num("AGENTCTL_GOV_ADMIT_MAX", GOV_ADMIT_MAX))
+                            max_wait=knob_gov_admit_max())
     slot.waited, slot.cap = slot.ticket.waited, checks_cap()
     slot.running = len(slot_holders())
     slot.t0, slot.rc = time.monotonic(), None  # wall: waits on and times real processes and threads
@@ -151,7 +152,7 @@ class CapReview:
 
 
 def maybe_adjust_cap(now=None):
-    if os.environ.get("AGENTCTL_MAX_CHECKS"):
+    if knob_max_checks():
         return None
     now = epoch_now() if now is None else now
     st = cap_state()

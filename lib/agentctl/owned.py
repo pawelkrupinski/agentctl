@@ -13,7 +13,6 @@ import sys
 import time
 from typing import Any, Sequence
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
 from agentctl.core import SHORT, err, git, process_cache, run_cmd, slug, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import load_record, read_record, write_json
@@ -22,23 +21,8 @@ from agentctl.procs import Terminated, process_start, safe_cwd
 from agentctl.selfcode import TOOL_PATH, code_files, code_version
 from agentctl.inboxentry import caller_owner, inbox_write
 from agentctl.runverdict import file_verdict, foreign_loops_on, run_verdict
-from agentctl.textknobs import knob_owners_dir
-
-
-# ---------------------------------------------------------------- owned: every long-running mode
-# The owner (2026-10-26), after a day of strays: a zombie processor blocking the next one, duplicate waiters, a processor
-# still running old code after a fix, orphaned shells, abandoned CI runs, landing slots held by dead loops. So every
-# long-running mode -- `wait`, land's watch and its wait on `waiting`, the `waiting` processor -- runs OWNED:
-#   * one flock per (kind, key) under ~/.cache/agentctl/owners/ ($AGENTCTL_OWNERS_DIR): the kernel frees it when the
-#     process dies, however it dies, so a second instance can never run beside a live one and never waits on a dead one;
-#   * beside it a record (<kind>-<key>.json): owner (the Claude session, else user@cwd), pid, the process's start time,
-#     argv, cwd and the code version (agentctl's sha256); a SIGTERM/SIGHUP/SIGINT ends it with a verdict (Terminated).
-#     (Owners once cancelled the CI runs they started; d073975, 2026-10-27, gave a remote check's run to its change
-#     entry instead -- an owner's end cancelled a run its replacement still needed -- and the path is gone.)
-#   * at each poll it compares agentctl's file with the version it started on and, when a fix has landed, re-execs
-#     itself on the new code with the same pid;
-#   * `agentctl orphans` reads the records: a dead process's record, an owner on old code, an owner whose cwd is gone.
-OWNERS_RESTART_CHECK = 30  # seconds between code-version checks ($AGENTCTL_RESTART_CHECK)
+from agentctl.fixerknobs import knob_owners_dir
+from agentctl.tickknobs import knob_attach_poll, knob_min_interval, knob_restart_check
 
 
 def owners_dir():
@@ -256,7 +240,7 @@ def restart_if_changed(owned: Sequence["Owned"] = (), argv: list[str] | None = N
     """Re-exec this process on agentctl's new code (same pid; argv: given, else the first owner's, else this process's)
     once the file on disk changed.
     The owned locks are released with their records kept: the new process takes them back."""
-    every = env_num("AGENTCTL_RESTART_CHECK", OWNERS_RESTART_CHECK)
+    every = knob_restart_check()
     if epoch_now() - _last_code_check[0] < every:
         return
     _last_code_check[0] = epoch_now()
@@ -363,7 +347,7 @@ class WaitLoop:
     def __init__(self, waiters: list[Any], timeout: float, floor: float, cap: float) -> None:
         self.waiters, self.timeout = waiters, timeout
         self.deadline = wall_epoch() + timeout
-        self.attach_poll = env_num("AGENTCTL_ATTACH_POLL", 15)
+        self.attach_poll = knob_attach_poll()
         self.delays = backoff(floor, cap)
         self.next_check = 0.0
         self.last: dict[str, Any] = {}
@@ -466,7 +450,7 @@ def wait_run(a: Any, floor: float, cap: float) -> Any:
 
 
 def cmd_wait(a):
-    floor = env_num("AGENTCTL_MIN_INTERVAL", 60)
+    floor = knob_min_interval()
     cap = max(floor, min(300, a.interval))
     if a.kind == "run":
         return wait_run(a, floor, cap)

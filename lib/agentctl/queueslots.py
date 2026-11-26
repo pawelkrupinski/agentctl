@@ -6,19 +6,18 @@ import subprocess
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
-from agentctl.core import err, git
+from agentctl.statemachines import (
+    ENTRY_STATE, StaleVersion, TerminalState, change_event, joined_verdict, machine_state)
 from agentctl.timefmt import parse_time, ts
-from agentctl.waitingdir import QUEUE_POOL, save_entry, waiting_entries, waiting_state, wlog
+from agentctl.govknobs import QUEUE_POOL, knob_check_lease_ttl, knob_check_trees
+from agentctl.core import err, git
+from agentctl.causes import checked_cause, reject_cause, reject_class
+from agentctl.waitingdir import save_entry, waiting_entries, waiting_state, wlog
+from agentctl.worktrees import mark_internal
 from agentctl.lander import lander_fields
 from agentctl.leases import LeaseHold, lease_live
 from agentctl.land import tool_env
-from agentctl.causes import checked_cause, reject_cause, reject_class
 from agentctl.owned import Owned
-from agentctl.worktrees import mark_internal
-from agentctl.statemachines import (
-    ENTRY_STATE, StaleVersion, TerminalState, change_event, joined_verdict, machine_state)
-from agentctl.knobs import knob_check_lease_ttl
 
 
 CHECK_LEASE_MAX = 3 * 3600
@@ -49,7 +48,7 @@ RED_FIX_TREE = "redfix"  # <clone>-wt-check-redfix, under its own lease: only a 
 def check_tree_slot(st, repo, d, fix: bool = False):
     """(index, LeaseHold) of a free check tree slot, or None when all QUEUE_POOL are busy; a red fix (fix) tries the
     red-fix tree first."""
-    for i in ([RED_FIX_TREE] if fix else []) + list(range(1, int(env_num("AGENTCTL_CHECK_TREES", QUEUE_POOL)) + 1)):
+    for i in ([RED_FIX_TREE] if fix else []) + list(range(1, int(knob_check_trees()) + 1)):
         h = tree_slot(st, d, i)
         if h.acquire():
             return i, h

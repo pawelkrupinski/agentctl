@@ -7,7 +7,6 @@ import subprocess
 import sys
 from typing import Any, Callable, Sequence
 from contextlib import suppress
-from agentctl.knobs import env_num
 from agentctl.core import (
     NoToken, err, git, git_ok, process_cache, reap_children, reds_dir, remote, run_bounded,
     spawn_detached, state_root)
@@ -36,10 +35,8 @@ from agentctl.reddispatch import red_renew_holders
 from agentctl.netwatch import network_watch, tunnel_watch
 from agentctl.redstatus import write_red_status_snapshot
 from agentctl.offerdispatch import red_dispatcher
-from agentctl.knobs import knob_step_bound
-
-
-SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json
+from agentctl.tickknobs import knob_step_bound
+from agentctl.tickknobs import knob_sync_mirror
 
 
 # ---- the laptop's sync (role "sync")
@@ -85,7 +82,7 @@ class _SyncDuties:
         self.role: bool | None = None  # None: not claimed in this loop yet (a step run on its own: a test)
 
     def mirror(self) -> None:
-        if self.clock.time() - self.last_mirror >= env_num("AGENTCTL_SYNC_MIRROR", SYNC_MIRROR_EVERY):
+        if self.clock.time() - self.last_mirror >= knob_sync_mirror():
             self.last_mirror = self.clock.time()
             mirror_state(self.store)
 

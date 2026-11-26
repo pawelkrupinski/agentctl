@@ -7,13 +7,14 @@ import re
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import attempt
 from agentctl.inboxentry import CONDITION_KINDS, INBOX_COMMANDS, inbox_kind
 from agentctl.redfamilies import red_family
 from agentctl.statemachines import machine_state
 from agentctl.redrecord import lease_is_live, red_lease
 from agentctl.owners import owner_alive
+from agentctl.watchknobs import knob_alert_red_owner_level
+from agentctl.watchknobs import knob_alert_after
 
 
 ALERT_OWNER_KINDS = {"BLOCKED", "RED_BUDGET", "UNLANDED_ORPHAN", "ORPHAN_SUBMITTED", "REVERT_NOTICE"}  # a decision, what its bounded fixer
@@ -36,9 +37,6 @@ ALERT_FIXER_KINDS = {"FIXER_FAILED", "DIAGNOSED", "RED_DISPATCHED", "ORPHAN_FIXE
 
 
 ALERT_RED_KINDS = {"RED_UNCLAIMED", "RED_STARVED", "RED_ESCALATE"}  # whose audience depends on who holds the red
-
-
-ALERT_RED_OWNER_LEVEL = 2  # offer rounds a red goes untaken (nobody holding it, no family owner) before it is the owner's
 
 
 # a condition the machinery repairs itself is the owner's only once it outlives its bound (the hysteresis's second half)
@@ -166,7 +164,7 @@ def alert_red_audience(rec, red, st, t):
         return "fixer"
     if _fixers_hold(st, red, t):
         return "fixer"
-    return "owner" if int(red.get("level") or 0) >= env_num("AGENTCTL_ALERT_RED_OWNER_LEVEL", ALERT_RED_OWNER_LEVEL) \
+    return "owner" if int(red.get("level") or 0) >= knob_alert_red_owner_level() \
         else "fixer"
 
 
@@ -181,7 +179,7 @@ def alert_condition_audience(kind, rec, opened_at, t):
     bound = ALERT_CONDITION_OWNER_AFTER.get(kind)
     if bound is None:
         return "owner"
-    return "owner" if opened_at and t - float(opened_at) >= env_num(f"AGENTCTL_ALERT_{kind}_AFTER", bound) else "fixer"
+    return "owner" if opened_at and t - float(opened_at) >= knob_alert_after(kind, bound) else "fixer"
 
 
 def _stated_audience(rec: Any, kind: str) -> str | None:

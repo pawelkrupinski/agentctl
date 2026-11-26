@@ -9,17 +9,15 @@ import re
 import time
 from typing import Any, Callable
 from contextlib import suppress
-from agentctl.knobs import env_num
 from agentctl.core import attempt, err, fmt_age, host_role, reds_dir, remote, state_root
 from agentctl.timefmt import iso_at, ts
 from agentctl.statefile import read_record
 from agentctl.gating import mark_gate_dirty
 from agentctl.inboxentry import ConditionBypass, _OPENING, inbox_dir, inbox_write
 from agentctl.statemachines import StaleVersion, TerminalState
-from agentctl.textknobs import knob_recovery_dir, knob_reds_dir
-
-
-RECOVER_BACKOFF_MAX = 600  # a probe is re-run at most this far apart, however often it failed ($AGENTCTL_RECOVER_MAX)
+from agentctl.redknobs import knob_reds_dir
+from agentctl.blameknobs import knob_recovery_dir
+from agentctl.blameknobs import knob_condition_pending_lapse, knob_recover_max, knob_unknown_grace
 
 
 class ProbeResult:
@@ -127,20 +125,8 @@ def condition_dict(it: Any) -> Any:
     return {**it["data"], "id": it["id"], "version": it["version"], "deadline": it["deadline"], "level": it["level"]}
 
 
-# A BLIP OPENS NOTHING (the owner, 2026-11-17: 19 UNKNOWN spells in a week, 18 closed by themselves in ~70 s --
-# "movies token present" -- each an inbox entry and a notification for nothing): a kind in CONDITION_GRACE opens only
-# once it is seen failing again at least that long after it was first seen (one sighting run: sightings no more than
-# CONDITION_PENDING_LAPSE apart; a run that lapsed starts again). Until then the sighting is a pending mark in the
-# store's meta (`condition_pending:<key>`), and open_condition answers None as for a passing probe. A store that cannot
-# keep the mark opens the condition at once, as before: loud over silent.
-UNKNOWN_GRACE = 300  # s an UNKNOWN condition must keep failing (seen again past this) before it opens
-
-
-CONDITION_PENDING_LAPSE = 1800  # s between two sightings after which a pending condition's sighting run starts again
-
-
 def condition_grace(kind: Any) -> Any:
-    return env_num("AGENTCTL_UNKNOWN_GRACE", UNKNOWN_GRACE) if kind == "UNKNOWN" else 0
+    return knob_unknown_grace() if kind == "UNKNOWN" else 0
 
 
 def condition_pending(st: Any, key: Any, grace: Any, t: Any) -> Any:
@@ -150,7 +136,7 @@ def condition_pending(st: Any, key: Any, grace: Any, t: Any) -> Any:
     mk = f"condition_pending:{key}"
     try:
         p = json.loads(st.meta_get(mk) or "null") or {}
-        lapse = env_num("AGENTCTL_CONDITION_PENDING_LAPSE", CONDITION_PENDING_LAPSE)
+        lapse = knob_condition_pending_lapse()
         if not p or t - float(p.get("last") or 0) > lapse:
             p = {"first": t}
         if t - float(p["first"]) < grace:
@@ -349,7 +335,7 @@ def _reprobe(st: Any, it: Any, c: Any, t: Any, out: list[str]) -> Any:
     try:
         st.update_item("condition", it["id"], it["version"], {
             "fails": fails, "last_checked": t, "last_result": {"ok": r.ok, "detail": r.detail},
-            "next_check": t + min(every, env_num("AGENTCTL_RECOVER_MAX", RECOVER_BACKOFF_MAX))})
+            "next_check": t + min(every, knob_recover_max())})
     except StaleVersion:
         return None
     return st.item("condition", it["id"])

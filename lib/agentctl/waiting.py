@@ -19,7 +19,6 @@ from agentctl.changekind import facts_for
 from agentctl.statemachines import StaleVersion, change_event, machine_state
 
 
-WAITING_AWAIT_TIMEOUT = 24 * 3600
 WAITING_HELP = """The processor (one loop of ticks, launchd net.bitcashier.agentctl-waiting) and its queue: every landed change is
 an item -- queued, checking, checked, pushing, landed; or waiting while main is red. At green the waiting changes are ONE
 batch item: its tip assembled in a check tree (main plus the changes, Fixes-Red first), checked once (pre-push

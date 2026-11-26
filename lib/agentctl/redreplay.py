@@ -6,7 +6,6 @@ import re
 import subprocess
 from typing import Any, Iterator
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
 from agentctl.core import err, git, remote, state_root
 from agentctl.repos import red_repo_conf, red_repo_of
 from agentctl.trailers import commit_trailers, trailer_values
@@ -15,12 +14,14 @@ from agentctl.storetoken import no_vault
 from agentctl.redrecord import RED_TERMINAL, red_names, red_what
 from agentctl.fixerenv import BRIEF
 from agentctl.redworkflows import RED_WORKFLOWS_FILE, red_workflow_policy, red_workflows_on_main
+from agentctl.redknobs import knob_fix_replay_timeout
+from agentctl.redknobs import knob_brief
 
 
 def sync_brief():
     """The movies agents' preamble a fixer reads first (~/bin/briefs/movies-agent-preamble.md, $AGENTCTL_BRIEF). The
     fixer's own rules are docs/fixer-brief.md, in its prompt (fixer_brief); nothing is copied from a scratchpad."""
-    return os.environ.get("AGENTCTL_BRIEF", BRIEF)
+    return knob_brief() or BRIEF
 
 
 # FIX REPLAY (2026-11-19, Alert backtest #1-#5, 5254bffda9d2): seven fixes landed and were refuted, one per run of the
@@ -44,7 +45,6 @@ FIX_REPLAY_ANY = re.compile(r"(?i)^Fix-Replay:\s*(.*?)\s*$")
 FIX_REPLAY_NONE = re.compile(r"(?i)^none\b\s*(?:—|–|--|-|:)\s*(.*)$")
 FIX_REPLAY_NONE_MIN = 30  # characters of a `Fix-Replay: none — <why>` reason
 FIX_REPLAY_VAGUE = re.compile(r"(?i)(?<![\w/])n/?a(?![\w/])|flak|can'?t|cannot")
-FIX_REPLAY_TIMEOUT = 30 * 60  # s one side of agentctl's replay may run ($AGENTCTL_FIX_REPLAY_TIMEOUT)
 
 
 def agentctl_revert_fix_replay(reason):
@@ -158,7 +158,7 @@ def fix_replay_once(repo, sha, cmd, side):
             try:
                 rc = process_runner().run(["bash", "-c", cmd], cwd=wt, stdin=subprocess.DEVNULL, stdout=f,
                                     stderr=subprocess.STDOUT, env=tool_env(),
-                                    timeout=env_num("AGENTCTL_FIX_REPLAY_TIMEOUT", FIX_REPLAY_TIMEOUT)).returncode
+                                    timeout=knob_fix_replay_timeout()).returncode
             except subprocess.TimeoutExpired:
                 return "TIMEOUT"
         return "PASS" if rc == 0 else "FAIL"

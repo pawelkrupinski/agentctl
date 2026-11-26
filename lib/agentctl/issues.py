@@ -4,15 +4,14 @@
 from agentctl.clock import epoch_now
 import datetime as dt
 import os
-import time
 from typing import Any, Optional
-from agentctl.knobs import env_num
 from agentctl.core import fmt_age, hashlib_sha1
 from agentctl.timefmt import ts
 from agentctl.store import StoreUnavailable
 from agentctl.procs import safe_cwd
 from agentctl.worktrees import claimant
 from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec, TerminalState
+from agentctl.blameknobs import knob_issue_escalate_gap
 
 
 ISSUE_TEXT_MAX = 4000
@@ -47,14 +46,6 @@ MACHINES["issue"] = {
 }
 
 
-# THE WEEKLY ESCALATION (the owner, 2026-11-11, issue 20261111T143441-75a957: ONE NOTIFICATION PER ISSUE, never a
-# digest). An open issue past its deadline re-enters `open`: one escalate event naming its id, filer and text, its
-# level up, its deadline a week on. One issue per ISSUE_ESCALATE_GAP, the most overdue first: a backlog (69 overdue on
-# 2026-11-12, none ever escalated) reaches the notifier one at a time -- more than NOTIFY_BURST in one notifier pass
-# become one summary -- and their weekly deadlines stay that far apart afterwards.
-ISSUE_ESCALATE_GAP = 120  # s between two issues' escalations ($AGENTCTL_ISSUE_ESCALATE_GAP)
-
-
 def issue_escalation_text(it, t):
     d = it.get("data") or {}
     return (f"AGENTCTL ISSUE {it['id']} open {fmt_age(t - float(it.get('entered_at') or t))} "
@@ -65,7 +56,7 @@ def tick_issues(st, now_ = None):
     """The reconciler's step: the most overdue open issue escalated, at most one per ISSUE_ESCALATE_GAP. Returns what
     it did."""
     t = now_ if now_ is not None else st.clock()
-    if t - float(st.meta_get("issue_escalated_at", 0) or 0) < env_num("AGENTCTL_ISSUE_ESCALATE_GAP", ISSUE_ESCALATE_GAP):
+    if t - float(st.meta_get("issue_escalated_at", 0) or 0) < knob_issue_escalate_gap():
         return []
     due = sorted((i for i in st.items("issue", ("open",)) if i["deadline"] <= t), key=lambda i: i["deadline"])
     for it in due:

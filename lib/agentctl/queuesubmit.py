@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 from typing import Any, Optional
-from agentctl.knobs import env_num
 from agentctl.core import err, fmt_age, git, git_ok, remote, scratch, spawn_detached
 from agentctl.classify import (
     TransientNetwork, credential_failure, is_transient_network, net_retry, redact_credentials)
@@ -20,13 +19,10 @@ from agentctl.land import push_bounds, run_watched, tool_env
 from agentctl.owned import backoff
 from agentctl.waiting import tail_of
 from agentctl.statemachines import MACHINES, StaleVersion, machine_state
+from agentctl.queueknobs import (
+    knob_fixer_land_wait, knob_land_ref_sweep, knob_land_ref_unknown_age, knob_note_precheck_wait)
 
 
-# SUBMISSION BY REF (design §13 step 14, §14.2): a queued change is also pushed to the remote as refs/heads/land/<entry>
-# (its own ref: the movies hook checks nothing on it, no workflow runs on it), so the change no longer lives only in a
-# worktree -- an author that ends, a worktree removed, leave it reachable. The tick deletes every land/* ref whose change
-# is decided (or unknown). Checks rebuild from the commits, never from the worktree.
-LAND_REF_SWEEP_EVERY = 600
 _last_ref_sweep = [0.0]
 
 
@@ -51,9 +47,6 @@ def push_failure_why(text: object) -> str:
     return f"git said `{said[:240]}` -- {whose}"
 
 
-LAND_REF_UNKNOWN_AGE = 24 * 3600  # s: a ref of a change neither the entries nor the store know is deleted only past this
-
-
 def entry_id_age(eid, t):
     """Seconds since the entry id's YYYYMMDD-HHMMSS stamp (UTC), or None when the id carries none."""
     at = entry_stamp_epoch(eid)
@@ -62,7 +55,7 @@ def entry_id_age(eid, t):
 
 def _ref_sweep_due(t: float) -> bool:
     """Whether a sweep is due (marked done by this call)."""
-    if t - _last_ref_sweep[0] < env_num("AGENTCTL_LAND_REF_SWEEP", LAND_REF_SWEEP_EVERY):
+    if t - _last_ref_sweep[0] < knob_land_ref_sweep():
         return False
     _last_ref_sweep[0] = t
     return True
@@ -79,7 +72,7 @@ def _land_ref_unneeded(eid: str, every: Any, items: Any, t: float) -> Optional[s
     if e or it:
         return ""
     age = entry_id_age(eid, t)
-    if age is None or age < env_num("AGENTCTL_LAND_REF_UNKNOWN_AGE", LAND_REF_UNKNOWN_AGE):
+    if age is None or age < knob_land_ref_unknown_age():
         return None
     return f": unknown to entries and store, {int(age // 3600)} h old"
 
@@ -183,7 +176,6 @@ def precheck_outcome(rc, out):
 # note died on one `POST /v1/store/item: timed out`, and a change submitted through the outbox has no item yet when its
 # 60-s precheck ends): an unreachable store or a missing item is tried again, NOTE_PRECHECK_DELAYS apart.
 NOTE_PRECHECK_DELAYS = (5, 15, 30, 60)
-NOTE_PRECHECK_WAIT = 110  # s a precheck's note waits at most for the store or its item (the delays above, cut at this)
 
 
 def _note_precheck_once(store: Any, eid: Any, rec: Any) -> Any:
@@ -208,7 +200,7 @@ def note_precheck(eid, secs, rc, out, store, sleep=time.sleep):  # wall: waits o
     before a refusal cancels it; never fatal."""
     outcome, step = precheck_outcome(rc, out)
     rec = {"precheck": {"duration_s": round(secs, 1), "outcome": outcome, **({"step": step} if step else {})}}
-    cap, delays = env_num("AGENTCTL_NOTE_PRECHECK_WAIT", NOTE_PRECHECK_WAIT), []
+    cap, delays = knob_note_precheck_wait(), []
     for d in NOTE_PRECHECK_DELAYS:
         if sum(delays) + d <= cap:
             delays.append(d)
@@ -309,13 +301,6 @@ def precheck_reason(lines: list[str]) -> str:
     return "; ".join(out[:2])[:400]
 
 
-# A RED FIX LANDS THROUGH THE QUEUE (2026-11-16, Main #2515: a fixer's land, in-process since the queue began, ran the
-# whole pre-push hook on the laptop -- its identitydrift step waited 75 min on the starved measure queue -- while its
-# fixer's own `timeout` killed it twice and its 180-min turn ran out; the queue's 45-s precheck would have refused the
-# missing Drift-Slice: trailer at once). A fixer's change is queued like every change -- the CI tier, red fixes first
-# -- and its land runs the fast precheck in the FOREGROUND (its refusal is the fixer's NOT LANDED in seconds), then
-# waits for the change's verdict, bounded: LANDED <sha> / NOT LANDED: <why>, the lines its wrapper reads.
-FIXER_LAND_WAIT = 2 * 3600  # s a fixer's land waits for its queued change's verdict ($AGENTCTL_FIXER_LAND_WAIT)
 FIXER_LAND_POLL = (15, 60)  # s: the await's backoff, first and cap
 
 
@@ -381,7 +366,7 @@ def verdict_still_holds(repo, main_ref, it):
 def await_queued(eid, clock, store):
     """Block until queued change eid is decided, bounded by FIXER_LAND_WAIT: LANDED <sha> (0), NOT LANDED: <why> (1),
     or NOT LANDED (still queued) (1)."""
-    state, data, waited = await_verdict(eid, env_num("AGENTCTL_FIXER_LAND_WAIT", FIXER_LAND_WAIT), clock, store)
+    state, data, waited = await_verdict(eid, knob_fixer_land_wait(), clock, store)
     if state == "landed":
         print(f"LANDED {landed_sha_of(eid, data)} (queued {eid})", flush=True)
         return 0

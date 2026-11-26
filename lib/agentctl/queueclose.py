@@ -12,7 +12,7 @@ from agentctl.statefile import read_record
 from agentctl.statemachines import StaleVersion, TerminalState, machine_state
 from agentctl.clock import Clock
 from agentctl.landstate import UNKNOWN, LandState, landed_state
-from agentctl.core import env_num, fmt_age, git, git_ok, host_role, process_cache, remote
+from agentctl.core import fmt_age, git_ok, host_role, process_cache, remote
 from agentctl.repos import movies_repo_path, precheck_hook, waiting_supported
 from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries, waiting_state, wlog
 from agentctl.procs import safe_cwd
@@ -34,15 +34,9 @@ from agentctl.queuecheck import (
     adopted_run, check_mode, commits_here, fetched_main, judge_check_failure, requeued_for_infra, round_ended,
     round_head, tip_refused)
 from agentctl.queuehold import change_hold_stuck, restart_hold, stuck_recovery
+from agentctl.queueknobs import knob_landed_look, knob_regen_recovery_wait
 
 
-# ONE QUEUE, CLOSED BY CONTENT (2026-10-30 split brain: six pre-cutover entries in the laptop's local waiting dir and
-# four store items mirrored from them sat "waiting" for 11 h, every one already on main under rebased shas, and W1
-# escalated). A change whose commits are on main BY CONTENT (`git cherry`: landing rebases, so never by sha) is LANDED,
-# looked at every LANDED_LOOK_EVERY s per change, every tick: the server's entries and items, and on the laptop the
-# store's items its clone has the commits of. The laptop holds no queue of its own: what its local dir still holds
-# goes to ci-runner's queue (migrate_local_queue). A store item no queue carries is a STRANDED CHANGE condition.
-LANDED_LOOK_EVERY = 600
 _landed_looked = process_cache({})
 
 
@@ -56,7 +50,7 @@ def change_state(repo, head, commits = None):
 
 
 def landed_look_due(cid, t) -> bool:
-    if t - _landed_looked.get(cid, 0) < env_num("AGENTCTL_LANDED_LOOK", LANDED_LOOK_EVERY):
+    if t - _landed_looked.get(cid, 0) < knob_landed_look():
         return False
     _landed_looked[cid] = t
     return True
@@ -224,15 +218,6 @@ def change_rows(store: Any) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda r: r["id"])
 
 
-# AN OVERDUE REGEN HOLD RECOVERS (the owner, 2026-11-20: "1 approve, 2 drop the reject"; lane F2b's 24-h NOT LANDED is
-# struck). Past CONFLICT_PLACE_KEPT the change tick runs the regeneration AGAIN: a new round on the change's item
-# (`regen_round`), which the laptop's sync answers by starting `agentctl land` in its worktree once more (server.py
-# answer_regen_holds, once per change, head and round; it says so in `regen_answered`). When the hold still stands
-# REGEN_RECOVERY_WAIT later -- the laptop unreachable, its JVM down, the regen failing -- the owner is told ONCE (an
-# escalation on the change: what is held and why, whether the laptop answered). The change stays held in its place.
-REGEN_RECOVERY_WAIT = 2 * 3600  # s from the re-run to the owner's one escalation ($AGENTCTL_REGEN_RECOVERY_WAIT)
-
-
 def _regen_round(e: Any, h: Any, it: Any, t: Any, files: str, cmd: Any) -> Any:
     """The overdue hold's first recovery: a new regeneration round on the change's item. (its update, its event, the text)"""
     rnd = int((it.get("data") or {}).get("regen_round") or 0) + 1
@@ -285,7 +270,7 @@ def regen_hold_overdue(st: Any, d: Any, e: Any, t: Any) -> bool:
     if not h or t - float(h.get("since") or t) < CONFLICT_PLACE_KEPT:
         return False
     rec = h.get("recovery") or {}
-    wait = env_num("AGENTCTL_REGEN_RECOVERY_WAIT", REGEN_RECOVERY_WAIT)
+    wait = knob_regen_recovery_wait()
     if _recovery_settled(rec, t, wait):
         return True
     it = _open_change_item(st, e["id"])

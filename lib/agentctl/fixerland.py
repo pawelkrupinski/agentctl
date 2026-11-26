@@ -13,7 +13,6 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.landstate import landed_state
-from agentctl.knobs import env_num
 from agentctl.core import attempt, git, on_ci_runner, reds_dir, remote, spawn_detached, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -31,6 +30,10 @@ from agentctl.fixerenv import fixer_env
 from agentctl.redrepos import red_is_other, red_owner_only, red_repo_tag
 from agentctl.redfamilies import red_family
 from agentctl.laptoprole import laptop_role_standby
+from agentctl.queueknobs import knob_fixer_land_watch
+from agentctl.fixerknobs import knob_fixer_unlanded_escalate, knob_fixer_unlanded_nudge
+from agentctl.storeknobs import knob_bin_repo
+from agentctl.fixerknobs import knob_claude_tmp
 
 
 # HOW A FIXER LANDS (2026-11-16, Main #2515: the fixer wrapped `agentctl land` in `timeout -s KILL` twice, then ran
@@ -46,7 +49,7 @@ LAND_BRIEF = (" `~/bin/agentctl land` QUEUES your fix like every change (red fix
 # THE agentctl REPOSITORY (~/bin): a fixer never edits it (`agentctl issue`); watchdog WB checks its checkout stays clean.
 # $AGENTCTL_BIN_REPO ('-': none, the tests').
 def bin_repo() -> str | None:
-    r = os.environ.get("AGENTCTL_BIN_REPO") or os.path.dirname(TOOL_PATH)
+    r = knob_bin_repo() or os.path.dirname(TOOL_PATH)
     return None if r == "-" or not os.path.isdir(os.path.join(r, ".git")) else r
 
 
@@ -227,20 +230,12 @@ def previous_fixer_tree(u: Any) -> Any:
     return {"worktree": wt, "note": _continue_note((u.get("run") or {}).get("number"), wt, found)}
 
 
-# LAND AS YOU GO (the owner, 2026-10-29: fixer -7 of #2473 sat on five unlanded commits for hours, and the import that
-# took its lease away left them stranded). The laptop watches every working fixer's worktree: commits not on
-# origin/main for FIXER_UNLANDED_NUDGE (by author time: a rebase keeps it) get a RED-NUDGE.md there, which its prompt
-# tells it to act on; still unlanded at FIXER_UNLANDED_ESCALATE, one RED ESCALATE inbox entry. Both clear themselves
-# once the commits are on main (RECOVERED after an escalation).
-FIXER_UNLANDED_NUDGE = 45 * 60
-FIXER_UNLANDED_ESCALATE = 90 * 60
-FIXER_LAND_WATCH_EVERY = 60
 _last_land_watch = [0.0]
 
 
 def fixers_land_watch(now_: Any = None, force: Any = False) -> Any:
     t = now_ if now_ is not None else wall_epoch()  # against git author times
-    if not force and t - _last_land_watch[0] < env_num("AGENTCTL_FIXER_LAND_WATCH", FIXER_LAND_WATCH_EVERY):
+    if not force and t - _last_land_watch[0] < knob_fixer_land_watch():
         return []
     _last_land_watch[0] = t
     out = []
@@ -293,10 +288,10 @@ class FixerLandWatch:
     def _due(self, count: Any, mins: Any, shas: Any, age: Any) -> Any:
         """The nudge once the oldest is FIXER_UNLANDED_NUDGE old, else the escalation after a nudge."""
         st = self.state
-        if age >= env_num("AGENTCTL_FIXER_UNLANDED_NUDGE", FIXER_UNLANDED_NUDGE) and not st.get("nudged_at"):
+        if age >= knob_fixer_unlanded_nudge() and not st.get("nudged_at"):
             return [self._nudge(count, mins, shas)]
         if st.get("nudged_at") and not st.get("escalated_at") and \
-                age >= env_num("AGENTCTL_FIXER_UNLANDED_ESCALATE", FIXER_UNLANDED_ESCALATE):
+                age >= knob_fixer_unlanded_escalate():
             return [self._escalate(count, mins, shas)]
         return []
 
@@ -354,7 +349,7 @@ SESSION_ACTIVITY_FILES = 2000  # files looked at per session at most (a job dir 
 
 def claude_tmp_root():
     """claude's per-user tmp root (<root>/<project dir>/<session>/tasks/<task>.output), $AGENTCTL_CLAUDE_TMP."""
-    env = os.environ.get("AGENTCTL_CLAUDE_TMP")
+    env = knob_claude_tmp()
     if env:
         return env
     for d in (f"/private/tmp/claude-{os.getuid()}", f"/tmp/claude-{os.getuid()}"):

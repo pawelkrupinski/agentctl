@@ -3,13 +3,14 @@
 
 import os
 from agentctl.core import HOME, run_cmd
+from agentctl.tickknobs import knob_launch_agents
 
 
 SERVICE_LABEL = "net.bitcashier.agentctl-waiting"
 
 
 def launch_agents_dir():
-    return os.environ.get("AGENTCTL_LAUNCH_AGENTS") or os.path.join(HOME, "Library", "LaunchAgents")
+    return knob_launch_agents() or os.path.join(HOME, "Library", "LaunchAgents")
 
 
 def launchctl(*args):

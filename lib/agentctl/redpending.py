@@ -4,7 +4,7 @@
 
 from typing import Any
 from agentctl.timefmt import iso_at, parse_time, ts
-from agentctl.core import env_num, fmt_age
+from agentctl.core import fmt_age
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.inboxentry import inbox_write
 from agentctl.redworkflows import verify_dispatchable
@@ -17,8 +17,7 @@ from agentctl.redfixes import (
     fix_failed_said, red_set_aside)
 from agentctl.redask import red_decision
 from agentctl.red import (
-    RED_FIX_GIVEUP, RED_FIX_RUN_START, red_fix_giveup, red_verify_plan, red_verify_run_on_way,
-    red_waits_for_its_run)
+    RED_FIX_RUN_START, red_fix_giveup, red_verify_plan, red_verify_run_on_way, red_waits_for_its_run)
 from agentctl.redmove import red_close, red_keep_holder, red_move, red_stop_holder
 from agentctl.landwatch import WATCH_SLACK
 from agentctl.rundispatch import red_verify_dispatch
@@ -29,6 +28,7 @@ from agentctl.blame import blame_refuted
 from agentctl.redwaits import RED_WAITS_ON, red_waits_on_step
 from agentctl.redfollow import red_fix_follow, red_fix_requeue_wait
 from agentctl.redfixcheck import fix_reaches_red
+from agentctl.redknobs import knob_red_fix_giveup
 
 
 class FixPending:
@@ -64,7 +64,7 @@ class FixPending:
         return bool(self.obs is not None and self.gone)
 
     def give_up_after(self) -> float:
-        return float(env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP))
+        return float(knob_red_fix_giveup())
 
     def history_with(self, h: dict[str, Any]) -> list[Any]:
         return (self.d.get("history") or []) + [h]

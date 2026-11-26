@@ -9,12 +9,14 @@ import shlex
 from typing import Any, Dict, List, Optional
 from agentctl.core import HOME, REPOS, err, git_ok, host_role, process_cache, remote, slug
 from agentctl.selfcode import TOOL_PATH
+from agentctl.storeknobs import knob_movies_repo
+from agentctl.redknobs import knob_red_repo, knob_red_repos
 
 
 def movies_repo_path() -> str:
     """THE movies clone of this host: $AGENTCTL_MOVIES_REPO, else the server's own clone (~/movies) on ci-runner, else
     ~/projects/movies. Every invariant, probe and step resolves the repository here."""
-    return os.environ.get("AGENTCTL_MOVIES_REPO") or os.path.join(
+    return knob_movies_repo() or os.path.join(
         HOME, "movies" if host_role() == "server" else os.path.join("projects", "movies"))
 
 
@@ -48,7 +50,7 @@ _red_repos_cache = process_cache({})
 
 
 def red_repos_path():
-    return os.environ.get("AGENTCTL_RED_REPOS") or os.path.join(os.path.dirname(TOOL_PATH), "red-repos.json")
+    return knob_red_repos() or os.path.join(os.path.dirname(TOOL_PATH), "red-repos.json")
 
 
 def red_repo_name(x: Dict[str, Any]) -> str:
@@ -257,14 +259,14 @@ def server_repo() -> Any:
 
 def red_repo(o_r):
     """The clone whose worktrees, landers and waiting entries name the fixers ($AGENTCTL_RED_REPO; '-' for none)."""
-    v = os.environ.get("AGENTCTL_RED_REPO")
+    v = knob_red_repo()
     if v == "-":
         return None
     return v or repo_path_for(o_r)
 
 
 def scan_repo_for(o_r, repo=None):
-    if os.environ.get("AGENTCTL_RED_REPO"):
+    if knob_red_repo():
         return red_repo(o_r)
     return repo or repo_path_for(o_r)
 

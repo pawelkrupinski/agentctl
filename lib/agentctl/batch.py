@@ -10,13 +10,12 @@ from agentctl.timefmt import ts
 from agentctl.statefile import read_json_file, write_json_file
 from agentctl.selfcode import TOOL_PATH
 from agentctl.statemachines import StaleVersion, machine_state
-from agentctl.knobs import env_num
 from agentctl.core import err, fmt_age, git, remote, spawn_detached
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, wlog
 from agentctl.storetoken import detached_env
 from agentctl.queueslots import check_tree, check_tree_slot, set_change
-from agentctl.knobs import CHECK_LEASE_TTL
+from agentctl.govknobs import CHECK_LEASE_TTL
 from agentctl.conditions import open_condition, run_probe
 from agentctl.queue import VERIFY_MODE, forces_full_recheck, range_paths, verify_supported
 from agentctl.generated import without_generated
@@ -25,8 +24,10 @@ from agentctl.changekind import classify_change, kind_text, facts_for
 from agentctl.waiting import batch_order, must_wait, must_wait_why
 from agentctl.batchrun import assemble
 from agentctl.recovery import batch_key, batch_move
-from agentctl.queuebatchsel import BACKLOG_BATCH_MAX, drift_serialize
-from agentctl.knobs import knob_waiting_green_ticks
+from agentctl.queuebatchsel import drift_serialize
+from agentctl.queueknobs import BACKLOG_BATCH_MAX
+from agentctl.queueknobs import knob_waiting_green_ticks
+from agentctl.queueknobs import knob_backlog_batch_max
 
 
 # EVERY CHANGE IS A MEMBER (2026-11-20, the owner: "batching waiting changes ... structurally"): an identity change joins
@@ -229,7 +230,7 @@ def batch_ready(repo, waiting, reds, st):
 # the p90 wait from arrival to LANDED doubled). It takes at most BACKLOG_BATCH_MAX waiting changes a round, in batch
 # order -- its red pre-check the same ones --; the rest wait for the next round.
 def waiting_batch_max():
-    return int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))
+    return int(knob_backlog_batch_max())
 
 
 # THE BATCH IS THE MECHANISM (the owner, 2026-11-20: "batching waiting changes ... structurally, not just now"). While

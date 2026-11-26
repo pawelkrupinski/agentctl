@@ -4,7 +4,6 @@
 from typing import Any
 import glob
 import os
-from agentctl.knobs import env_num
 from agentctl.core import fmt_age, on_ci_runner, pid_alive, reds_dir
 from agentctl.clock import wall_epoch
 from agentctl.statefile import mtime, read_record
@@ -17,7 +16,8 @@ from agentctl.redrecord import lease_is_live
 from agentctl.leases import lease_meta
 from agentctl.owners import owner_record_path
 from agentctl.redmove import tail_lines
-from agentctl.knobs import knob_red_orphan_grace, knob_red_stall
+from agentctl.redknobs import knob_red_orphan_grace, knob_red_stall
+from agentctl.fixerknobs import knob_bg_spent_grace
 
 
 def _wrapper_verdict(rec: Any, pid: Any, holder_pid: Any) -> Any:
@@ -212,9 +212,6 @@ def revoke_orphan(store: Any, row: Any, why: str) -> str | None:
 BG_LABELS = ("red owner · ", "red fixer #", "orphan · ", "lander · ")  # owner_turn's -n and fixer_label's
 
 
-BG_SPENT_GRACE = 120  # s a session must have run before the reaper judges it ($AGENTCTL_BG_SPENT_GRACE)
-
-
 def bg_live_turns():
     """The background ids that are the current turn of a live wrapper (an owner in its turn, a fixer running)."""
     live = set()
@@ -230,7 +227,7 @@ def bg_live_turns():
 def bg_spent(rows, live, t):
     """The rows of `claude agents --json --all` that are agentctl's spent sessions: launched by it (BG_LABELS), waiting
     idle with their process alive (bg_waiting), not a live wrapper's current turn, and older than BG_SPENT_GRACE."""
-    grace = env_num("AGENTCTL_BG_SPENT_GRACE", BG_SPENT_GRACE)
+    grace = knob_bg_spent_grace()
     return [x for x in rows if _agentctl_background(x) and _outside(x, live)
             and bg_waiting(x) and t - float(x.get("startedAt") or 0) / 1000 >= grace]
 

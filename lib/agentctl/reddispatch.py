@@ -6,7 +6,6 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import NO_SIGN, fmt_age, git, git_ok, reds_dir, remote
 from agentctl.timefmt import parse_time, ts
 from agentctl.trailers import trailer_values
@@ -19,15 +18,17 @@ from agentctl.fixerenv import fixer_env
 from agentctl.redrepos import red_owner_only, red_repo_note
 from agentctl.redfamilies import red_identity
 from agentctl.statemachines import StaleVersion
-from agentctl.redrecord import RED_JOIN_IDLE, RED_TERMINAL, lease_is_live, red_active, red_names, red_what
+from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_active, red_names, red_what
 from agentctl.leases import LeaseKinds, lease_meta
 from agentctl.land import spawn_land
 from agentctl.redreplay import agentctl_revert_fix_replay
 from agentctl.fixerland import red_dispatch
-from agentctl.red import DECIDED_REVERT, RED_CLAIM_TTL, RED_DECIDED_REVERT_MAX, RED_FIXER_TTL
+from agentctl.red import DECIDED_REVERT, RED_CLAIM_TTL, RED_FIXER_TTL
 from agentctl.culpritfix import blame_note, blame_reland, lander_spawn
 from agentctl.redclaim import red_joined_progress, red_wt_mark
 from agentctl.redcrash import red_queue_family
+from agentctl.redknobs import (
+    knob_red_decided_revert_max, knob_red_fixers, knob_red_held_idle, knob_red_join_idle, knob_red_starve)
 
 
 def red_commits_naming(wt: str | None, names: Any, keys: tuple[str, ...] = ("Fixes-Red",)) -> list[tuple[str, float]]:
@@ -51,15 +52,6 @@ def red_fixes_red_commits(wt: str | None, names: Any) -> str | None:
     return next((sha for sha, _ct in red_commits_naming(wt, names)), None)
 
 
-# A RED IN AN OWNER'S HAND SHOWS ITS OWN PROGRESS (the owner, 2026-11-22: Alert backtest #21, 5254bffda9d2.4, held by
-# the outside-gate owner from 16:05Z with no diagnosis or commit for ~3 h). The owner wrapper renews every red lease it
-# holds with each beat of a turn not stalled: the TURN's progress (its transcript, its worktree), the family's -- turn 85
-# ran 16:38-18:54Z on its other red, and "lapses ... without progress" moved on with each beat. A red held under an
-# owner's lease with no progress on IT -- a DIAGNOSED or LANDED verdict in its history, a commit in the owner's worktree
-# whose `Fixes-Red:` or `Diagnoses-Red:` names it, a note on it (`red claim <it> --note`) -- for RED_HELD_IDLE since the
-# later of its lease's start and that progress is released STALLED (an attempt), the reason in the inbox, and goes on
-# up the ladder like any ended lease.
-RED_HELD_IDLE = 45 * 60  # s a red in its owner's hand may go with no progress of its own before it is released
 RED_PROGRESS_VERDICT = re.compile(r"^(DIAGNOSED|LANDED)\b")
 
 
@@ -84,7 +76,7 @@ def red_owned_idle(store: Any, row: dict[str, Any], t: float) -> str | None:
         return None
     d = it["data"]
     since = max(float(row.get("acquired_at") or t), red_owned_progress_at(row, d))
-    idle = float(env_num("AGENTCTL_RED_HELD_IDLE", RED_HELD_IDLE))
+    idle = float(knob_red_held_idle())
     if t - since < idle:
         return None
     why = (f"STALLED: no progress on {red_what(d)} for {fmt_age(t - since)} in {row['holder']}'s hand (no DIAGNOSED "
@@ -136,7 +128,7 @@ def red_joined_idle(store, row, t):
     if note:
         red_joined_progress(store, row, note)
         return None
-    idle = env_num("AGENTCTL_RED_JOIN_IDLE", RED_JOIN_IDLE)
+    idle = knob_red_join_idle()
     if t - float(m["joined_at"]) < idle or (it and not _release_joined(store, it, d, row)):
         return None
     return (f"RELEASED: no progress on it {fmt_age(t - float(m['joined_at']))} after it joined {row['holder']}'s lease "
@@ -182,21 +174,6 @@ def red_fixers_alive(store, t):
     return list(out.values())
 
 
-# ONE RED MODEL (docs/simplification-2026-10.md item 5; replaces the gate/other/overflow capacity classes, the borrow
-# and the separate one-run and one-family rules). A red is (workflow, failing job, signature) -- `key` hashes the
-# workflow and the signature (the normalized first error line; the job when none was read), `jobs` are every job
-# failing that way. Every red belongs to ONE QUEUE FAMILY:
-# its configured family (red-families.json: convergence, ...), else its run (`run:<workflow>#<number>`). The open
-# fixer offers are ONE PRIORITY QUEUE (gate < fix < outside < flake, then a test failure first, then the oldest), and
-# the dispatcher keeps EXACTLY ONE FIXER PER FAMILY: a family whose fixer is at work gets each new red under that
-# fixer's lease (a sibling, told in RED-INBOX.md); a family with none gets one fixer, its other open offers taken with
-# it, while fewer than RED_FIXERS fixers are alive in all. One family never holds two slots, so no class reserves are
-# needed for fairness; an offer that waits RED_STARVE with no slot escalates as STARVED (then every cycle). Every wait
-# names what it waits for and when.
-RED_FIXERS = 5           # live fixers at once, every family together ($AGENTCTL_RED_FIXERS)
-RED_STARVE = 45 * 60     # an offer waiting this long for a slot is STARVED ($AGENTCTL_RED_STARVE)
-
-
 RED_MODEL = 2  # the store's red data model (meta red_model): 2 = the queue (item 5); red_migrate brings older data up
 
 
@@ -225,7 +202,7 @@ def red_migrate(store):
 
 
 def red_cap():
-    return int(env_num("AGENTCTL_RED_FIXERS", RED_FIXERS))
+    return int(knob_red_fixers())
 
 
 def red_capacity(store, waited, t, alive=None):
@@ -239,7 +216,7 @@ def red_capacity(store, waited, t, alive=None):
     hm = lambda x: time.strftime("%H:%M", time.localtime(x))
     eta = f"; next slot when {first['holder']} ends by {hm(float(first.get('max_until') or first.get('expires_at')))}" \
         if first else ""
-    starve = env_num("AGENTCTL_RED_STARVE", RED_STARVE)
+    starve = knob_red_starve()
     head = f"capacity {n}/{cap}, waiting {fmt_age(waited)}"
     if waited >= starve:
         return False, f"STARVED: {head}, past its {fmt_age(starve)} window{eta}"
@@ -315,7 +292,7 @@ def _spawn_revert(store: Any, o_r: str, repo: str, off: dict[str, Any], took: di
     if DECIDED_REVERT.match(str(dec.get("answer") or "")):
         u["revert_why"] = (f"the owner decided {u['workflow']} #{u['run'].get('number')} is fixed by this revert "
                            f"({str(dec.get('answer'))[:120]!r}) and no fixer landed it within "
-                           f"{fmt_age(env_num('AGENTCTL_RED_DECIDED_REVERT_MAX', RED_DECIDED_REVERT_MAX))} "
+                           f"{fmt_age(knob_red_decided_revert_max())} "
                            "(decided_revert).")
     ok, msg = red_revert(o_r, repo, u, pic.get("culprit"))
     store.note(off["lease"], took["epoch"], took["secret"], msg)

@@ -11,40 +11,6 @@ from agentctl.core import git, host_role, process_cache, slug
 from agentctl.repos import red_repo_conf
 
 
-# GENERATED FILES ARE NO OVERLAP (2026-11-19 ~06:05Z: six movies changes from parallel refactoring lanes -- agreement,
-# f2, datalayer3, resolver2-b1, enrichment2, resolver2 -- sat in single file, each `held: its check waits for <prev>`
-# because each edits test/resources/coupling-baseline.tsv, several complexity- and length-baseline.tsv too: every
-# coupling or complexity lane landed strictly one at a time, hours of serial checks). Those files are GENERATED (one
-# row a class, package or method; `scripts/coupling-report --update`, `scripts/quality-report --update`), and the
-# ratchets in the pre-push hook recompute them over the tree they check, so a combined tree's right content is "the
-# rows regenerated over it" -- and two changes touching DISJOINT rows do not conflict at all. A repo registers them in
-# red-repos.json (`generated`: {paths, regen: its own --update command, timeout}); a registered file is
-# - NO OVERLAP: the hold (OVERLAPPING CHANGES ARE CHECKED AS ONE, queuebatch.py), backlog-batch membership, the conflict a
-#   queued change is told of, `no longer applies on main` and the push's full-recheck rule all leave it out -- a
-#   source both change (TestWiring.scala) still holds the younger (ONLY A VOIDED CHECK HOLDS, below);
-# - RESOLVED, when a rebase, a batch's assembly or land's own rebase conflicts in it: its rows merged three-way (each
-#   row keyed by its columns but the value: a row one side changed takes that side's value; disjoint rows always
-#   merge), else -- a row both sides changed differently -- the repo's own regen command run in the tree, which IS
-#   the combined tree at that commit (the other files picked), and its files staged into the commit being picked (on
-#   the laptop: ci-runner's reconciler has no JVM, its checks run on CI, so there a same-row conflict is MAIN'S ROW,
-#   below; the push's own rebase, under the landing lock, never runs one: a new verify round instead). The
-#   commit keeps its message and trailers (a `Coupling:`/`Complexity:` rise still carries its own), and the hook's
-#   ratchet judges the result as it judges any baseline; a member so resolved that its batch then fails is checked
-#   alone (batch_alone), never rejected for it;
-# - MAIN'S ROW, PROVISIONALLY, where no regen command runs (2026-11-19 06:58Z: lane F2b's queued change NOT LANDED --
-#   "no longer applies on origin/main 2cfa0ee95e" -- because c3922ba26 had re-measured the very baseline rows its own
-#   baseline commit changed, and ci-runner's reconciler, the server role, has no JVM: a rebase by hand and a new place
-#   at the back of the queue, for a file no agent edits by hand): a row both sides changed keeps the side already in
-#   the tree (main's, or the earlier batch members'), every other row merged as above; the files are named
-#   (`provisional`) and the checks judge the combined tree -- the ratchet passes a fall not yet recorded and fails a
-#   rise, naming the rows, and a failure is reported as the change's own with the regen command to run;
-# - a SET table (a key on many lines: coupling-fanout-refs.tsv's `<class><TAB><target>`) is merged line by line;
-# - else, the merge and the regen failing (a side not a table, the command's exit, its timeout), the member
-#   is left out of the batch and checked alone (batch_alone `regen`, the files and why in the log), held as before
-#   behind the change it overlaps. Tests: tests/test_generated.py, tests/test_queue_sim.py GeneratedOverlapTest.
-GENERATED_REGEN_TIMEOUT = 1200  # s a generated file's regen command may run before the conflict is the author's ($AGENTCTL_GENERATED_REGEN_TIMEOUT)
-
-
 _generated_slugs = process_cache({})  # repo path -> its GitHub slug (None: unknown)
 
 

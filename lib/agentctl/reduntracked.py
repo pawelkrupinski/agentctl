@@ -5,7 +5,6 @@ from agentctl.clock import epoch_now
 import json
 import time
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import attempt, err, process_cache
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.redrecord import RED_TERMINAL
@@ -15,6 +14,7 @@ from agentctl.red import canon_job, red_obs_for
 from agentctl.redmove import red_move, red_stop_holder
 from agentctl.ciwhy import _gate_lists, _outside_lists, decided_runs, registry_name
 from agentctl.redseen import red_obs_of_units
+from agentctl.redknobs import knob_ever_green_recheck
 
 
 # A CHECK THAT HAS NEVER BEEN GREEN IS NOT TRACKED (the owner, 2026-11-19, of "Alert backtest #9 -> IN PROGRESS ... fix
@@ -32,7 +32,6 @@ from agentctl.redseen import red_obs_of_units
 # reds of runs on main (gate, outside, stuck, a branch's prediction); main's local checks and flakes are tracked as ever.
 EVER_GREEN_META = "ever_green"        # store meta: {repo: {"flows": {workflow: run id}, "jobs": {workflow: {job: run id}}}}
 UNTRACKED_META = "red_untracked"      # store meta: {repo: [{key, workflow, jobs, run, why}]}: red status -v's list
-EVER_GREEN_RECHECK = 10 * 60          # s before a never-green answer is asked of GitHub again
 EVER_GREEN_JOB_RUNS = 10              # runs of the snapshot's list read for a job's success, at most
 UNTRACKED_KINDS = ("gate", "outside", "stuck-run", "predicts")
 _UNREAD = object()  # newest_green_main raised: the answer is unknown, not 'never green'
@@ -116,7 +115,7 @@ def workflow_ever_green(store, o_r, workflow, runs=(), now_=None):
 def _never_green_recently(key: tuple[str, ...], t: float) -> bool:
     """True when the workflow (or job) of `key` was found never green within EVER_GREEN_RECHECK before t."""
     at = _never_green_at.get(key)
-    return at is not None and t - at < env_num("AGENTCTL_EVER_GREEN_RECHECK", EVER_GREEN_RECHECK)
+    return at is not None and t - at < knob_ever_green_recheck()
 
 
 def _has_success(runs: list[Any]) -> bool:

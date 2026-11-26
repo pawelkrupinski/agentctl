@@ -5,7 +5,6 @@ from agentctl.clock import wall_epoch
 import os
 import re
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import attempt, git, git_ok
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.allowedpaths import allowed_path
@@ -14,9 +13,7 @@ from agentctl.inboxentry import inbox_entries
 from agentctl.worktrees import gitdir_activity
 from agentctl.dispatches import worktree_holding
 from agentctl.jvmreap import AGENT_WORK
-
-
-AUTHOR_ACTIVE_MIN = 15   # live = a pid alive and activity within this ($AGENTCTL_AUTHOR_ACTIVE_MIN)
+from agentctl.blameknobs import knob_author_active_min
 
 
 def _green_older_than(runs: Any, rid: Any) -> Any:
@@ -133,7 +130,7 @@ def _author_liveness(repo: Any, by_wt: Any, t: Any) -> Any:
     """by_wt's authors with their pids, activity and liveness (an agent process alive and active lately) filled in."""
     entries = attempt(inbox_entries, [], catch=(OSError,))
     running = agent_pids_in(list(by_wt))
-    active = env_num("AGENTCTL_AUTHOR_ACTIVE_MIN", AUTHOR_ACTIVE_MIN) * 60
+    active = knob_author_active_min() * 60
     out: list[Any] = []
     for k, a in by_wt.items():
         a["pids"] = sorted(set(a["pids"]) | set(running.get(k, [])))

@@ -11,7 +11,6 @@ import time
 import urllib.parse
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
 from agentctl.core import dispatches_dir, git_ok, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -29,6 +28,7 @@ from agentctl.dispatches import (
     record_dispatch, save_dispatch, tracked_branch)
 from agentctl.recordingpins import pinned_recording, pinned_runs
 from agentctl.runexplain import explain_run_jobs
+from agentctl.tickknobs import knob_dispatch_find, knob_dispatch_find_poll
 
 
 # inputs that change where or how a run runs, or how much of it, never what main's run of the same workflow would decide
@@ -415,7 +415,7 @@ def dispatch_run(a: Any, o_r: str, inputs: Any) -> int:
 
 def dispatched_run_id(o_r: str, a: Any, t0: Any) -> Any:
     """The newest run of a.workflow on a.ref created since t0, or None once DISPATCH_FIND polls found none yet."""
-    for _ in range(int(env_num("AGENTCTL_DISPATCH_FIND", 12))):
+    for _ in range(int(knob_dispatch_find())):
         try:
             # listing: the run just dispatched, created since t0; not listed yet is retried (DISPATCH_FIND), never 'none'
             runs = gh_json(o_r, "run", "list", "--workflow", a.workflow, "--branch", a.ref, "--limit", "5", "--json", RUN_FIELDS)
@@ -425,5 +425,5 @@ def dispatched_run_id(o_r: str, a: Any, t0: Any) -> Any:
         except (Exception, SystemExit):
             pass
         # wall: waits on and times real processes and threads
-        time.sleep(env_num("AGENTCTL_DISPATCH_FIND_POLL", 5))
+        time.sleep(knob_dispatch_find_poll())
     return None

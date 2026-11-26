@@ -2,23 +2,12 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import remote
 from agentctl.repos import repo_of_waiting
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, wlog
 from agentctl.conditions import open_condition, run_probe
 from agentctl.recovery import batch_key, batch_move, current_batch
-
-
-# The batch is an ITEM, not a branch: while main is red, checked changes wait (entries `waiting`); at green -- or with a
-# Fixes-Red fix for the red among them -- the tick ASSEMBLES the batch in a check tree (main + each waiting change, in
-# batch order: a conflict rejects that change alone, one already on main is LANDED), and the batch executor (`waiting
-# check-batch <id>`, holding check/batch-<id> and the tree's slot) checks it once (--fast-only, a fresh sbt server, a
-# stall retried once) and, failing, bisects it (a culprit confirmed before it is rejected). The tick pushes a passing
-# batch under the landing lease (PREPUSH_REUSE_FAST) and verifies it on main: every change LANDED. A batch that fails to
-# land BATCH_RETRY_MAX times, or stalls twice, is held for 30 min (its deadline), then assembled again. Every state has
-# its deadline and its exit (MACHINES["batch"]); nothing loops, nothing waits on a lock.
-BATCH_RETRY_MAX = 3
+from agentctl.queueknobs import knob_batch_retry_max
 
 
 def status_batch(st: Any, d: str) -> Any:
@@ -36,7 +25,7 @@ def batch_fail(st, d, it, why, n_changes=0):
     """A batch that did not land: assembled again, or after BATCH_RETRY_MAX tries held (with a condition on the git
     route, cleared by git answering)."""
     n = int(it["data"].get("retries") or 0) + 1
-    limit = env_num("AGENTCTL_BATCH_RETRY_MAX", BATCH_RETRY_MAX)
+    limit = knob_batch_retry_max()
     if n < limit:
         wlog(d, f"the batch {it['id']} did not land ({why}): retry {n}/{limit}")
         return batch_move(st, it, "assembling", {"retries": n})

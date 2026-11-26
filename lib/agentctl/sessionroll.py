@@ -4,24 +4,15 @@
 import json
 import os
 from typing import Any, BinaryIO, Optional
-from agentctl.knobs import env_num
 from agentctl.core import git, tilde
 from agentctl.timefmt import ts
 from agentctl.claudefiles import bg_transcript
 from agentctl.fixersession import turn_entry
 from agentctl.redrecord import red_active, red_what
 from agentctl.issues import status_issues
+from agentctl.fixerknobs import knob_context_fresh
 
 
-# A SESSION PAST ITS CONTEXT LIMIT STARTS FRESH (the owner, 2026-11-25: "fix"). Every turn of a family owner resumed the
-# SAME session: outside-gate reached ~985k tokens of context by turn 134, so each resume reloaded close to a million
-# tokens (a large share of the weekly limit) and one took 32 min to write its first transcript line. Before a resume
-# agentctl reads the session's context from its transcript -- the last assistant turn's input + cache-read +
-# cache-creation tokens -- and past CONTEXT_FRESH it starts a fresh session instead, its first prompt carrying a short
-# handover built from agentctl's own store and records (never asked of the old session): the reds in hand, the
-# worktree's branch and dirty files, the last verdicts, the open issues and the old session's last answers. An
-# unreadable transcript, or one with no usage figures, resumes as before.
-CONTEXT_FRESH = 300000       # tokens: a session whose last turn's context is past this is not resumed but started fresh
 HANDOVER_MAX = 7000          # characters (~2k tokens): the handover's budget
 TAIL_CHUNK = 1 << 18         # bytes read from a transcript's end at a time, doubled until the figures are found
 
@@ -84,7 +75,7 @@ def last_answers(path: Optional[str], n: int = 3, cut: int = 600) -> list[str]:
 def fresh_due(path: Optional[str]) -> tuple[bool, Optional[int]]:
     """(the session is past the context limit, its context in tokens or None)."""
     tokens = context_tokens(path)
-    return tokens is not None and tokens > env_num("AGENTCTL_CONTEXT_FRESH", CONTEXT_FRESH), tokens
+    return tokens is not None and tokens > knob_context_fresh(), tokens
 
 
 def worktree_lines(wt: Optional[str]) -> list[str]:
@@ -120,7 +111,7 @@ def issue_lines(store: Any, wt: Optional[str], words: tuple[str, ...]) -> list[s
 def handover_text(old: str, tokens: Optional[int], parts: dict[str, list[str]]) -> str:
     """The fresh session's handover: why it is fresh, then each part's lines, cut to HANDOVER_MAX characters."""
     out = [f"A FRESH SESSION, HANDED OVER (agentctl, {ts()}): the previous session {old[:8]} had {tokens} tokens of "
-           f"context, past the {int(env_num('AGENTCTL_CONTEXT_FRESH', CONTEXT_FRESH))} limit, so you start fresh. "
+           f"context, past the {int(knob_context_fresh())} limit, so you start fresh. "
            "What it left, from agentctl's records:"]
     for title, lines in parts.items():
         out += [f"{title}:"] + (lines or ["  (none)"])

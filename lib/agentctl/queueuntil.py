@@ -5,38 +5,13 @@ import argparse
 import os
 import re
 from typing import Any
-from agentctl.knobs import env_num
-from agentctl.core import attempt, git, remote
-from agentctl.landstate import landed_state
-from agentctl.waitingdir import waiting_entries, waiting_state
-from agentctl.worktrees import worktrees
-from agentctl.cleanup import FREE_WAIT, close_worktree, free_worktree
 from agentctl.statemachines import ENTRY_STATE, machine_state
-
-
-# LAND --UNTIL-DONE (the owner, 2026-11-18): agents kept ending badly -- stopping after the rebase without landing,
-# handing back partial reports or the same report twice, leaving worktrees behind, and `git branch -D` by hand after a
-# landing rebased their commits (never merged by ancestry). This mode owns the whole tail, bounded by --deadline:
-# submit (or, called again after an interruption, find its own entry by worktree and head: never queued twice), the
-# fast precheck in the foreground, the wait for the verdict, and then
-#   NOT LANDED -> the exact reason and the next command (rebase / fix / land again), exit 1;
-#   LANDED     -> every local commit's patch proven on origin/main (git cherry, content twins), the worktree clean and
-#                 this agent's own (the change's worktree, not the root checkout, no other session's) -> the worktree
-#                 removed and its branch deleted (the force delete only after that patch check, close_worktree):
-#                 `DONE <sha> (...): ... worktree removed`, exit 0. Not provable -> `LANDED <sha> ... NOT DONE: <why>`,
-#                 the worktree kept, exit 3. The caller's own processes in it (its kept sbt server) are stopped first
-#                 (cleanup.py free_worktree); still held by another's -> each holder named and the command, exit 4;
-#   the deadline -> `NOT DONE: <id> is <state> ...`, the command to resume, exit 2.
-# A VERDICT IS DURABLE (2026-11-19: subagents' `--until-done` waits died with a Claude session restart, and they handed
-# back "queued, waiting" with no verdict). The change's item holds it, and its exit event reaches the inbox naming the
-# worktree and the change (the projector), whether or not a call waited; `land status <entry>` prints it after the
-# fact; and a call again from the worktree at that head finds its entry (own_change_item): open -> RESUMING, landed ->
-# the cleanup, REJECTED -> that verdict and the next command (before, a rejection decided while nothing waited was
-# silently queued again unchanged) -- but only while it STILL HOLDS (verdict_still_holds; 2026-11-21,
-# movies-devpanel-oauth: a rejection from 17:02, already printed to its waiter, was replayed at 17:35 as decided "while
-# no --until-done waited" though main had moved and fixed the main-side bug behind it): never delivered to a waiter and
-# decided on the main of today. Otherwise the change is queued, so checked, again.
-UNTIL_DONE_DEADLINE = 4 * 3600  # s (--deadline): a batch at green, a verify round and a push fit well inside it
+from agentctl.queueknobs import knob_free_wait
+from agentctl.core import attempt, git, remote
+from agentctl.waitingdir import waiting_entries, waiting_state
+from agentctl.landstate import landed_state
+from agentctl.worktrees import worktrees
+from agentctl.cleanup import close_worktree, free_worktree
 
 
 def parse_duration(text):
@@ -90,7 +65,7 @@ def next_command(repo, why):
 def _report_held_worktree(repo: Any, eid: Any, sha: Any, held: Any) -> Any:
     """The LAND --UNTIL-DONE lines for a worktree still held by processes not this session's: exit code 4."""
     print(f"LANDED {sha} (queued {eid}); NOT DONE: the worktree {repo} is kept: still held after "
-          f"{int(env_num('AGENTCTL_FREE_WAIT', FREE_WAIT))} s by processes not this session's to stop:", flush=True)
+          f"{int(knob_free_wait())} s by processes not this session's to stop:", flush=True)
     for pid, cmd in sorted(held.items()):
         print(f"  pid {pid}: {cmd[:200]}", flush=True)
     print(f"next: ask their owner to stop them (or `kill {' '.join(map(str, sorted(held)))}` if they are yours), "

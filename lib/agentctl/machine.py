@@ -7,6 +7,7 @@ import re
 from typing import Any, Optional
 from agentctl.statefile import read_text_or
 from agentctl.core import HOME, run_cmd
+from agentctl.govknobs import knob_disk_path
 
 
 def read_meminfo(path: str = "/proc/meminfo") -> dict[str, int]:
@@ -114,10 +115,10 @@ def disk_free_gb(path: Optional[str] = None) -> float:
     """GB free on path ($AGENTCTL_DISK_PATH, else HOME); the fixed machine's disk_free_gb for the default path."""
     import shutil
     fixed = machine_fixed()
-    if path in (None, "", HOME) and not os.environ.get("AGENTCTL_DISK_PATH") and fixed and \
+    if path in (None, "", HOME) and not knob_disk_path() and fixed and \
             fixed.get("disk_free_gb") is not None:  # the default path (maybe_upkeep names HOME itself)
         return float(fixed["disk_free_gb"])
-    return shutil.disk_usage(path or os.environ.get("AGENTCTL_DISK_PATH") or HOME).free / 1e9
+    return shutil.disk_usage(path or knob_disk_path() or HOME).free / 1e9
 
 
 def machine_sample() -> tuple[float, float, Any, Any]:

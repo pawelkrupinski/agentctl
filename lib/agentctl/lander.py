@@ -12,7 +12,6 @@ from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.procs import ps_rows
-from agentctl.knobs import env_num
 from agentctl.core import branch_of, err, git, git_ok, process_cache, remote, slug, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime
@@ -20,7 +19,8 @@ from agentctl.repos import RED_PRIMARY
 from agentctl.storetoken import no_vault
 from agentctl.claudefiles import claude_projects_root
 from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec
-from agentctl.textknobs import knob_red_fixer
+from agentctl.redknobs import knob_red_fixer
+from agentctl.queueknobs import knob_lander_landed_every
 
 
 # ---------------------------------------------------------------- the lander (the owner, 2026-11-01: "remember which
@@ -33,7 +33,6 @@ from agentctl.textknobs import knob_red_fixer
 # restarts and batches (one push carries several changes: each commit maps to its own change). Once a change has
 # landed, the tick notes its commits on main (`landed_commits`: main sha -> patch-id). The blame part reads it.
 LANDER_TRANSCRIPT_WINDOW = 600   # s: a transcript written this recently that ran `agentctl land` is the lander's
-LANDER_LANDED_EVERY = 300        # s between the tick's notes of landed changes' commits on main ($AGENTCTL_LANDER_LANDED_EVERY)
 LANDER_KEEP = 14 * 86400         # s a lander record is kept (the store's ARCHIVE)
 MACHINES["lander"] = {
     "recorded": StateSpec(LANDER_KEEP, "gone", ("gone",)),
@@ -322,7 +321,7 @@ def _note_landed_commits(store: Any, it: Any, keys: Any) -> Any:
 def lander_note_landed(store, repo, o_r, t, force=False):
     """Every LANDER_LANDED_EVERY s: each change landed in the last day whose commits on main are not noted yet gets them
     (`landed_commits`: main sha -> patch-id), found by the keys it recorded at submission. Returns what it noted."""
-    if not force and t - _lander_landed_at.get(repo, 0) < env_num("AGENTCTL_LANDER_LANDED_EVERY", LANDER_LANDED_EVERY):
+    if not force and t - _lander_landed_at.get(repo, 0) < knob_lander_landed_every():
         return []
     _lander_landed_at[repo] = t
     todo = [it for it in store.items("change") if _landed_unnoted(it, t)]

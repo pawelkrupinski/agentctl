@@ -14,7 +14,6 @@ import os
 import re
 import time
 from typing import Any, Callable
-from agentctl.knobs import env_num
 from agentctl.core import fmt_age, git, host_role, run_cmd, state_root
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record, write_json
@@ -22,13 +21,11 @@ from agentctl.cistate import state_read
 from agentctl.forge import gh_json
 from agentctl.redrepos import diagnosis, read_failure
 from agentctl.fixerland import bin_repo
-from agentctl.knobs import knob_wa_red_max
+from agentctl.watchknobs import knob_wa_red_max
+from agentctl.watchknobs import knob_wa_read_every, knob_wa_undecided_max, knob_wa_unpinned_max
 
 SELF_REPO = "pawelkrupinski/agentctl"
-WA_UNPINNED_MAX = 15 * 60  # s the newest green run may stay unpinned ($AGENTCTL_WA_UNPINNED_MAX)
-WA_UNDECIDED_MAX = 60 * 60  # s main's head may go without a decided run ($AGENTCTL_WA_UNDECIDED_MAX)
 DECIDED = ("success", "failure", "timed_out", "startup_failure")
-WA_READ_EVERY = 300        # s a gh list is kept ($AGENTCTL_WA_READ_EVERY)
 WA_SSH_EVERY = 1800        # s the ssh fallback's reading is kept at least (each new ssh auth may cost the owner a Touch ID)
 PIN_LINK = "/var/lib/agentctl-src/current"  # the export the auto-pin runs: a link to the directory named by the full rev
 
@@ -129,7 +126,7 @@ def unpinned_problem(runs: list[dict[str, Any]], pin_rev: str | None, now_: floa
     """The newest green run left unpinned for over WA_UNPINNED_MAX: the auto-pin is stuck."""
     green = newest_unpinned_green(runs, pin_rev) if pin_rev else None
     done = iso_epoch((green or {}).get("updatedAt") or (green or {}).get("createdAt"))
-    if green is None or done is None or now_ - done <= env_num("AGENTCTL_WA_UNPINNED_MAX", WA_UNPINNED_MAX):
+    if green is None or done is None or now_ - done <= knob_wa_unpinned_max():
         return None
     return (f"ci-runner's pin {str(pin_rev)[:7]} has not followed the green run #{green.get('number')} at "
             f"{str(green.get('headSha'))[:7]} for {fmt_age(now_ - done)}: the auto-pin is stuck")
@@ -143,7 +140,7 @@ def undecided_problem(runs: list[dict[str, Any]], now_: float) -> str | None:
             break
         leading.append(r)
     began = iso_epoch(leading[-1].get("createdAt")) if leading else None
-    if began is None or now_ - began <= env_num("AGENTCTL_WA_UNDECIDED_MAX", WA_UNDECIDED_MAX):
+    if began is None or now_ - began <= knob_wa_undecided_max():
         return None
     return f"no tests.yml run has decided for main's head in {fmt_age(now_ - began)}: CI is stuck or queued"
 
@@ -164,7 +161,7 @@ def red_why(runs: list[dict[str, Any]], now_: float, failure: Callable[[Any], st
 
 def readings(now_: float, runs: Callable[[], Any] | None, pin: Callable[[], str | None] | None) -> tuple[Any, str | None]:
     """(tests.yml's runs, the pin's rev), each kept WA_READ_EVERY seconds."""
-    every = env_num("AGENTCTL_WA_READ_EVERY", WA_READ_EVERY)
+    every = knob_wa_read_every()
     pin_rev = pin_from_state() if pin is None else None
     if pin_rev is None:
         pin_rev = cached(state_root("selfci-pin.json"), now_, pin or read_pin_over_ssh, max(every, WA_SSH_EVERY))

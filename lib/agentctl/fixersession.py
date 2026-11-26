@@ -12,17 +12,16 @@ from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.procs import proc_alive
-from agentctl.knobs import env_num
 from agentctl.core import HOME, SHORT, _tokens, git, state_root, tilde
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.repos import red_repo_clone, red_repos
 from agentctl.inboxentry import inbox_write
 from agentctl.storetoken import no_vault, token, token_ns
 from agentctl.claudefiles import bg_transcript, claude_jobs_root, fixer_verdict
+from agentctl.fixerknobs import knob_bg_idle_grace
 
 
 BG_STARTED = re.compile(r"backgrounded\W+([0-9a-f]{6,})")
-FIXER_CLAIM_WITHIN = 600  # s a started session has to start its transcript / run `red claim` ($AGENTCTL_FIXER_CLAIM_WITHIN)
 
 
 def bg_row_brief(ent):
@@ -183,16 +182,6 @@ def bg_ended(ent):
     return ent.get("state") in BG_WAITING_STATES and not proc_alive(pid)
 
 
-# A FINISHED TURN WHOSE PROCESS LIVES ON (2026-11-01, convergence #579 / Verify #1 `fixer-crash-loop`): claude now keeps
-# a background session's process (`claude bg-spare`) after its turn, its row `blocked` / `idle` with a live pid. bg_ended
-# read that as "maybe waiting on its own background work" and the wrapper waited for progress that never came: the
-# owner's turns ended with GAVE UP / DIAGNOSED, the wrapper never read it, each red's lease lapsed OWNER_TTL later as
-# "lease expired", and three such lapses blocked the red on the owner as a crash loop. The transcript decides now
-# (bg_turn): a waiting session whose turn's final answer carries a verdict has ended its turn; one with no background
-# task of its own pending, quiet for BG_IDLE_GRACE, has ended it with no verdict; one waiting on its own background task
-# (`agentctl wait`, backgrounded before it ended its turn, as agents are told) is at work, and each beat of that wait is
-# progress (bg_wait_mark), so its lease never lapses under it.
-BG_IDLE_GRACE = 60   # s a waiting session with no pending task of its own and no verdict stays quiet: its turn ended
 # a backgrounded shell, or a backgrounded subagent (2026-11-25, Alert backtest #28: an owner waiting on its own agent)
 BG_TASK_STARTED = re.compile(r'"backgroundTaskId": ?"([\w-]+)"|Command running in background with ID: ([\w-]+)'
                              r'|"status": ?"async_launched", ?"agentId": ?"([\w-]+)"')
@@ -312,7 +301,7 @@ def bg_turn_over(ent, path, now=None):
     if turn["pending"]:
         return False
     quiet = (wall_epoch() if now is None else now) - mtime(path)
-    return quiet >= env_num("AGENTCTL_BG_IDLE_GRACE", BG_IDLE_GRACE)
+    return quiet >= knob_bg_idle_grace()
 
 
 def bg_wait_mark(ent, path, now, every):

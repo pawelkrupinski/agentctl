@@ -9,27 +9,12 @@ import re
 import time
 from contextlib import suppress
 from typing import Any, Iterator
-from agentctl.knobs import env_num
 from agentctl.core import HOME, attempt, hashlib_sha1
 from agentctl.statefile import read_record, write_json
 from agentctl.claudefiles import claude_projects_root
 from agentctl.live import live_slug
 from agentctl.conditions import recovery_dir
-
-
-# OWNERSHIP FOLLOWS ACTIVITY (the owner, 2026-11-03: movies-wt-unmatched-imdbslip escalated UNLANDED ORPHAN four times
-# while an agent was landing it -- the agent's Claude session runs from another directory and works in the worktree by
-# absolute path, so no process had its cwd there). A LIVE Claude session -- any transcript of it (the session's own or
-# one of its subagents') written within OWNER_ACTIVE -- owns every worktree a tool call of it EVER named (or whose
-# project directory is the worktree's): no orphan action, and an open UNLANDED ORPHAN clears ("a live session works in
-# it"). Ownership lapses when the session goes quiet.
-# 2026-11-06 22:51Z (es-gate-check): the rule used to ask for a tool call naming the worktree within the last 30 min, in
-# the transcript's last 256 KB. The subagent that made ~/projects/movies-wt/es-gate-check had named it last 104 min
-# before while it waited on CI from a sibling worktree, its transcript written minutes before: alive, and its worktree
-# was taken for an orphan, rebased and queued. Every transcript of a live session is now read whole -- incrementally,
-# from where the last pass stopped (SESSION_PATHS, a cache of the paths each one named) -- and `~/` / `$HOME/` paths
-# count as the absolute paths they are.
-OWNER_ACTIVE = 2 * 3600
+from agentctl.fixerknobs import knob_owner_active
 
 
 SESSION_PATHS = "session-paths.json"
@@ -73,7 +58,7 @@ def session_transcripts(t=None, active=None):
     """{session key: [(path, mtime)]} of every LIVE session's transcripts (its own and its subagents'): a session is live
     while any of them was written within `active` s."""
     t = wall_epoch() if t is None else t  # against transcript mtimes
-    active = env_num("AGENTCTL_OWNER_ACTIVE", OWNER_ACTIVE) if active is None else active
+    active = knob_owner_active() if active is None else active
     root = claude_projects_root()
     groups = {}
     for g in (os.path.join(glob.escape(root), "*", "*.jsonl"), os.path.join(glob.escape(root), "*", "*", "subagents", "*.jsonl")):

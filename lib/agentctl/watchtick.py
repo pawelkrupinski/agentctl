@@ -3,7 +3,6 @@
 
 import os
 from typing import Any, Optional, Sequence
-from agentctl.knobs import env_num
 from agentctl.core import NoToken, err, slug
 from agentctl.timefmt import iso_at
 from agentctl.procs import safe_cwd
@@ -12,13 +11,15 @@ from agentctl.clones import main_clone
 from agentctl.cleanup import close_worktree
 from agentctl.redfixes import fixes_of
 from agentctl.ciwhy import red_for
-from agentctl.landwatch import WATCH, WATCH_FOLLOW_LEASE, WATCH_STALL_MIN, start_watch, watch_clone, watch_eval, watch_event, watch_look, watch_outcome, watch_verdict
-from agentctl.knobs import WATCH_TIMEOUT
+from agentctl.landwatch import (
+    WATCH, start_watch, watch_clone, watch_eval, watch_event, watch_look, watch_outcome, watch_verdict)
+from agentctl.watchknobs import WATCH_TIMEOUT
 from agentctl.redopen import red_attach
 from agentctl.cireport import ci_why
 from agentctl.statemachines import StaleVersion, TerminalState
 from agentctl.clock import Clock
-from agentctl.knobs import knob_watch_conv_start, knob_watch_poll, knob_watch_timeout
+from agentctl.watchknobs import knob_watch_conv_start, knob_watch_poll, knob_watch_timeout
+from agentctl.watchknobs import knob_watch_error_poll, knob_watch_follow_lease, knob_watch_stall_min
 
 
 def landed_fixes(repo: str, sha: str, fixes: Sequence[str], store: Any) -> list[str]:
@@ -74,7 +75,7 @@ def watch_landed(repo: str, sha: str, pushed_at: float | None, clock: Clock, sto
         how, it = claim.wait_theirs(it)
     if how == "theirs":  # still another follower's at our bound
         print(f"WATCH UNKNOWN: {sha[:10]} is watched by {(it.get('data') or {}).get('followed_by')}, undecided after "
-              f"{int(env_num('AGENTCTL_WATCH_TIMEOUT', WATCH_TIMEOUT) // 60)} min; check `agentctl ci-why` later", flush=True)
+              f"{int(knob_watch_timeout() // 60)} min; check `agentctl ci-why` later", flush=True)
         return 2
     rc = decided_by_follower(sha, it) if how == "decided" else \
         watch_unclaimed(repo, sha, pushed_at, clock, store, o_r, flows, how, claim, close, fixes)
@@ -90,7 +91,7 @@ class WatchClaim:
         self.me = f"{os.uname().nodename}:{os.getpid()}"
 
     def lease(self, t):
-        return {"followed_by": self.me, "followed_until": t + env_num("AGENTCTL_WATCH_FOLLOW_LEASE", WATCH_FOLLOW_LEASE)}
+        return {"followed_by": self.me, "followed_until": t + knob_watch_follow_lease()}
 
     def held(self, it: Any, t: Any) -> Any:
         """'decided' | 'mine' | 'theirs' when the watch item is settled or leased now, None when it is ours to claim."""
@@ -193,7 +194,7 @@ class WatchLoop:
         self.said: set[Any] = set()
         # NO PROGRESS: nothing about the followed runs (which run, its status, its last update) changed for this long ends
         # the watch with a named verdict (a queue no runner serves, a runner lost mid-run), not a silent 3 h wait
-        self.stall = env_num("AGENTCTL_WATCH_STALL_MIN", WATCH_STALL_MIN) * 60
+        self.stall = knob_watch_stall_min() * 60
         self.state, self.changed = None, clock.time()
         self.delays = backoff(knob_watch_poll(), 300)
         # UNREACHABLE: a failed read backs off (to 5 min) and is retried until the watch's own bound; only then UNKNOWN,
@@ -237,7 +238,7 @@ class WatchLoop:
             self.last_error = str(e)[:160]
             if self.unreachable is None:
                 self.unreachable = self.clock.time()
-                self.err_delays = backoff(env_num("AGENTCTL_WATCH_ERROR_POLL", 30), 300)
+                self.err_delays = backoff(knob_watch_error_poll(), 300)
             err(f"watch: could not read the runs ({self.last_error}) [{self.failures} failed, unreachable for "
                 f"{red_for(iso_at(self.unreachable))}]")
         return None
@@ -291,7 +292,7 @@ class WatchLoop:
 
 def _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None, *, store):
     err(f"watching Main and the convergence for {sha[:10]} (up to "
-        f"{int(env_num('AGENTCTL_WATCH_TIMEOUT', WATCH_TIMEOUT) // 60)} min; `--no-watch` skips this)"
+        f"{int(knob_watch_timeout() // 60)} min; `--no-watch` skips this)"
         + (f"; its Fixes-Red {', '.join(fixes)} is verified by the red's own item (`agentctl red status`)" if fixes else ""))
     return WatchLoop(repo, sha, pushed_at, o_r, flows, own, clock, claim, store).run()
 

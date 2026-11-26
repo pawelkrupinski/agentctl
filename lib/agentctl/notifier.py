@@ -7,8 +7,9 @@ import shlex
 import subprocess
 import sys
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
 from agentctl.core import HOME
+from agentctl.watchknobs import knob_notify_timeout
+from agentctl.watchknobs import knob_notifier, knob_notify
 
 
 def applescript_str(text):
@@ -18,7 +19,7 @@ def applescript_str(text):
 def notifier_bin():
     """terminal-notifier (clickable), from $AGENTCTL_NOTIFIER, PATH or the nix profile; None when absent."""
     import shutil
-    return os.environ.get("AGENTCTL_NOTIFIER") or shutil.which("terminal-notifier") \
+    return knob_notifier() or shutil.which("terminal-notifier") \
         or next((p for p in (f"{HOME}/.nix-profile/bin/terminal-notifier",) if os.path.exists(p)), None)
 
 
@@ -31,13 +32,6 @@ def notifier_argv(tn, title, text, url=None, group=None):
     if url:
         argv += ["-execute", f"open -a 'Google Chrome' {shlex.quote(url)}"]
     return argv
-
-
-# WHAT THE OWNER DOES ABOUT A FAILED DELIVERY, per channel and cause (2026-11-22: WN told the owner to "allow
-# terminal-notifier" -- not installed -- for an osascript killed by its 10 s timeout: the laptop at load ~150, osascript's
-# cold start (XProtect, trustd) took the whole 10 s and was killed at its TCC request; the same command takes 0.5 s on an
-# idle machine). Each channel's failure carries its own fix; WN names them.
-NOTIFY_TIMEOUT = 30  # s, each channel: an overloaded laptop's osascript cold start takes 10 s and more
 
 
 NOTIFY_FIX_TIMEOUT = ("{ch} timed out: the laptop was overloaded (`agentctl gov status`, `uptime`); the notifier tries "
@@ -89,7 +83,7 @@ def _run_said(e):
 def _channel(ch, argv, fix):
     """Runs one channel: None when it got through, else (channel, what it said, the owner's fix)."""
     try:
-        r = process_runner().run(argv, capture_output=True, timeout=env_num("AGENTCTL_NOTIFY_TIMEOUT", NOTIFY_TIMEOUT))
+        r = process_runner().run(argv, capture_output=True, timeout=knob_notify_timeout())
     except subprocess.TimeoutExpired as e:
         return ch, _run_said(e), NOTIFY_FIX_TIMEOUT.format(ch=ch)
     except (OSError, subprocess.SubprocessError) as e:
@@ -103,7 +97,7 @@ def notify(title, text, url=None, group=None):
     (title, text, url) instead (the tests'). Returns True only when one of them got through (exit 0); else False, the
     cause in notify_cause() and the owner's fix in notify_fix() -- the notifier records a delivery only on True
     (2026-11-03). Each channel is bounded by $AGENTCTL_NOTIFY_TIMEOUT (NOTIFY_TIMEOUT); none is retried."""
-    cmd = os.environ.get("AGENTCTL_NOTIFY")
+    cmd = knob_notify()
     if cmd:
         f = _channel(cmd, [cmd, title, text, url or ""], "fix the notification command ($AGENTCTL_NOTIFY)")
         return _delivered(f is None, [f] if f else ())

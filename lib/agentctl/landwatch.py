@@ -11,7 +11,7 @@ from agentctl.repos import movies_repo_path, red_repo_clone
 from agentctl.clones import main_clone
 from agentctl.ancestry import contains
 from agentctl.ciwhy import main_runs, run_no_verdict
-from agentctl.knobs import knob_watch_conv_start
+from agentctl.watchknobs import knob_watch_conv_start
 
 
 # ---------------------------------------------------------------- land: the watch after LANDED
@@ -24,7 +24,6 @@ WATCH = {"pawelkrupinski/movies": {"main": ("Main", "main.yml"),
                                    "convergence": ("Identity model convergence", "identity-model-convergence.yml"),
                                    "takes": ("Identity takes", "identity-takes.yml")}}
 WATCH_SLACK = 120                 # clock skew between the laptop and GitHub's createdAt
-WATCH_STALL_MIN = 120  # a watch with no change in its runs for this long ends WATCH STALLED
 
 
 def pick_main_run(repo, sha, runs):
@@ -45,15 +44,6 @@ def pick_convergence_run(repo, sha, runs, pushed_at, o_r=None):
     ok = [r for r in sorted(after, key=lambda r: r["databaseId"]) if not is_cancelled(r) and contains(repo, sha, r.get("headSha"))
           and not (o_r and run_no_verdict(o_r, r))]
     return ok[0] if ok else None
-
-
-# ONE WATCH PER SHA (review round 6): the sha's watch is its store item (start_watch, created once). ci-runner's batch
-# cannot see a laptop follower's await lock, so it makes the item too: a `land --follow` CLAIMS the item (followed_by,
-# a lease it renews each look; the tick leaves a live claim alone) and writes its verdict there (finish_watch); a
-# second follower, on any host, reads that verdict instead of watching GitHub again; a lapsed claim is taken over. An
-# item that ended `unknown` (a stuck run past its 3 h) is claimed and re-watched the same way, its verdict kept as its
-# `outcome` (watch_outcome): a terminal item keeps its state.
-WATCH_FOLLOW_LEASE = 600  # s a follower's claim on a sha's watch item lasts unrenewed; then the tick (or another follower) takes it
 
 
 def failed_jobs(o_r, rid):

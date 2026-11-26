@@ -7,12 +7,12 @@ import subprocess
 import sys
 from typing import Any, Callable, Dict, List, Optional
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
 from agentctl.core import git
 from agentctl.land import tool_env
 from agentctl.generated import (
-    GENERATED_REGEN_TIMEOUT, block_merge, conflict_stages, explained, generated_entry, generated_registry,
-    regen_only, regen_runs, rows_merge, tracked, unmerged)
+    block_merge, conflict_stages, explained, generated_entry, generated_registry, regen_only, regen_runs,
+    rows_merge, tracked, unmerged)
+from agentctl.queueknobs import knob_generated_regen_timeout
 
 
 # SNAPSHOTS ARE REGENERATED, NEVER MERGED (2026-11-21 ~07:40Z: split-shared-js `held: its check waits for scrapers-2`,
@@ -56,7 +56,7 @@ def regen_env():
 
 def run_regen(wt, g):
     """Run registry entry g's regen command in wt: None, or why it failed, in words."""
-    limit = g.get("timeout") or env_num("AGENTCTL_GENERATED_REGEN_TIMEOUT", GENERATED_REGEN_TIMEOUT)
+    limit = g.get("timeout") or knob_generated_regen_timeout()
     cmd = " ".join(shlex.quote(x) for x in g["regen"])
     try:
         r = process_runner().run(g["regen"], cwd=wt, capture_output=True, text=True, timeout=limit, env=regen_env(),

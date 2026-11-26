@@ -9,10 +9,10 @@ import re
 import threading
 import time
 from contextlib import suppress
-from agentctl.knobs import env_num
 from agentctl.core import attempt
 from agentctl.statefile import mtime
 from agentctl.live import live_registry, live_state, live_tail_info, live_track
+from agentctl.watchknobs import knob_live_poll
 
 
 # /stream?agent=<id>[&from=<offset>]: Server-Sent Events following the transcript as it grows, from its first byte
@@ -33,9 +33,6 @@ LIVE_STREAMS = 12
 
 
 LIVE_SEND_TIMEOUT = 10          # s
-
-
-LIVE_POLL = 1.0                 # s between looks at a quiet file ($AGENTCTL_LIVE_POLL)
 
 
 LIVE_PING = 15                  # s between keep-alive comments
@@ -243,7 +240,7 @@ def live_stream(e: Any, start: Any, write: Any, closed: Any = lambda: False, pol
                 max_secs: Any = LIVE_STREAM_MAX) -> Any:
     """Write the transcript of entry e from `start` as SSE frames through write() until closed(), max_secs, or a write
     raises (a gone or slow client)."""
-    poll = poll if poll is not None else env_num("AGENTCTL_LIVE_POLL", LIVE_POLL)
+    poll = poll if poll is not None else knob_live_poll()
     stream = LiveStream(e, start, write, ping)
     t0 = wall_epoch()
     try:

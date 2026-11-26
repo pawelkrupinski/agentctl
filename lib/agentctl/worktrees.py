@@ -12,10 +12,11 @@ from agentctl.waitingdir import waiting_state
 from agentctl.fixerrecords import agent_name
 from agentctl.allowedpaths import allowed_path
 from agentctl.core import err
+from agentctl.storeknobs import knob_internal_trees_dir
 
 
 def internal_trees_dir(*parts: str) -> str:
-    d = os.environ.get("AGENTCTL_INTERNAL_TREES_DIR") or state_root("internal-trees")
+    d = knob_internal_trees_dir() or state_root("internal-trees")
     return os.path.join(d, *parts)
 
 

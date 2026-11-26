@@ -6,7 +6,6 @@ import os
 import re
 import sys
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import attempt, run_cmd
 from agentctl.procs import ps_rows
 from agentctl.psparse import PsRow, parse_ps
@@ -14,8 +13,8 @@ from agentctl.statefile import read_record, write_json
 from agentctl.cpu import cpu_pressure, machine_busy_cores
 from agentctl.machine import machine_cores, machine_fixed, read_meminfo, run_queue
 from agentctl.govtickets import gov_dir
-from agentctl.knobs import LAPTOP_SWAP_WINDOW, knob_laptop_free_pct, knob_laptop_pressure_level, knob_laptop_swap_growth_mb, knob_laptop_swap_window
-from agentctl.textknobs import knob_gov_busy_probe, knob_gov_load_probe, knob_gov_ps_probe, knob_laptop_pressure
+from agentctl.govknobs import LAPTOP_SWAP_WINDOW, knob_laptop_free_pct, knob_laptop_pressure_level, knob_laptop_swap_growth_mb, knob_laptop_swap_window
+from agentctl.govknobs import knob_gov_busy_probe, knob_gov_load_probe, knob_gov_ps_probe, knob_laptop_pressure
 
 
 GOV_IDLE_CLAUDE = 10.0  # %CPU under which a Claude session is idle (not work)
@@ -143,7 +142,7 @@ def _swap_pressure(r: Any) -> Any:
     bar = knob_laptop_swap_growth_mb()
     if r.get("swap_growth_mb") is not None and r["swap_growth_mb"] >= bar:
         why.append(f"swap growing +{r['swap_growth_mb'] / 1024:.1f} GB in {r['swap_span'] / 60:.0f} min (holds at "
-                   f"+{bar / 1024:.1f} GB in {env_num('AGENTCTL_LAPTOP_SWAP_WINDOW', LAPTOP_SWAP_WINDOW) / 60:.0f} min)")
+                   f"+{bar / 1024:.1f} GB in {knob_laptop_swap_window() / 60:.0f} min)")
     return why
 
 

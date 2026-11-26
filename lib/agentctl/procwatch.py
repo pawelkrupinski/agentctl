@@ -36,10 +36,10 @@ from agentctl.statefile import read_record, read_text_or, write_json
 from agentctl.machine import machine_fixed, ram_gb
 from agentctl.govtickets import gov_tickets
 from agentctl.testtmp import TEST_TMP_MAX_AGE
+from agentctl.watchknobs import knob_wp_rss_by_name
 
 
 WP_RSS_GB = 4.0
-WP_RSS_BY_NAME = "idea=8"  # comma list of name=GB: the RSS limit of the process of that name, others WP_RSS_GB (IntelliJ's JVM sits at 4-5 GB)
 WP_CPU_PCT = 90.0
 WP_CPU_MIN = 20
 WP_PERSIST_MIN = 30  # minutes the RSS growth must have held before it is a trend
@@ -193,7 +193,7 @@ def _ticket_of(pid: int, ppids: dict[int, int], tickets: list[dict[str, Any]]) -
 
 def wp_rss_gb(name: str) -> float:
     """The RSS limit in GB of the process called `name`: its `name=GB` entry of AGENTCTL_WP_RSS_BY_NAME, else WP_RSS_GB."""
-    for entry in os.environ.get("AGENTCTL_WP_RSS_BY_NAME", WP_RSS_BY_NAME).split(","):
+    for entry in knob_wp_rss_by_name().split(","):
         key, _, gb = entry.partition("=")
         try:
             if key.strip() == name:

@@ -12,6 +12,7 @@ from agentctl.repos import RED_PRIMARY, red_repo_conf, red_repo_of
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.redrepos import red_gate_flows
 from agentctl.classify import norm_line
+from agentctl.redknobs import knob_red_families
 
 
 # RED FAMILIES (the owner, 2026-10-29: "give all convergence red work to one agent"): the reds of one family -- by
@@ -25,7 +26,7 @@ _families_cache = process_cache({})
 
 
 def red_families():
-    path = os.environ.get("AGENTCTL_RED_FAMILIES") or os.path.join(os.path.dirname(TOOL_PATH), "red-families.json")
+    path = knob_red_families() or os.path.join(os.path.dirname(TOOL_PATH), "red-families.json")
     try:
         m = os.path.getmtime(path)
     except OSError:

@@ -5,14 +5,13 @@ import os
 import sys
 from typing import Any
 from agentctl.clock import stopwatch
-from agentctl.knobs import env_num
 from agentctl.core import PROTECTED_BRANCHES, REPOS, err, git, remote, scratch, slug
 from agentctl.forge import forge_branch_sha, forge_delete_branch, gh_json
 from agentctl.procs import process_cwds
 from agentctl.worktrees import merged_reason, worktrees
 from agentctl.deletions import log_deletion
-from agentctl.cleanup import (
-    CLEANUP_REMOVE_RESERVE, bounded_fetch, cleanup_left, plan_measure, plan_worktrees, still_in_use)
+from agentctl.cleanup import bounded_fetch, cleanup_left, plan_measure, plan_worktrees, still_in_use
+from agentctl.tickknobs import knob_cleanup_remove_reserve
 
 
 def cmd_cleanup(a: Any) -> int:
@@ -28,7 +27,7 @@ class CleanupPass:
         self.a = a
         self.dry = a.dry_run or (sys.stdin.isatty() and not a.execute)
         self.watch = stopwatch(getattr(a, "deadline", None))
-        self.reserve = env_num("AGENTCTL_CLEANUP_REMOVE_RESERVE", CLEANUP_REMOVE_RESERVE)
+        self.reserve = knob_cleanup_remove_reserve()
         self.cwds = process_cwds()
         self.rc = 0
         self.took: list[str] = []

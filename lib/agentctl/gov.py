@@ -6,13 +6,11 @@ import fcntl
 import glob
 import json
 import os
-import re
 import subprocess
 import sys
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
 from agentctl.core import attempt, err, pid_alive, process_cache, run_cmd
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -20,18 +18,18 @@ from agentctl.procs import proc_alive, process_start
 from agentctl.owned import lock_held
 from agentctl.machine import free_gb, machine_cores, machine_sample
 from agentctl.govtickets import gov_bump, gov_change_mark, gov_dir, gov_log, gov_log_end, gov_tickets, gov_wait_change
-from agentctl.knobs import GOV_POLL
 from agentctl.jvmreap import sbt_warm_state
 from agentctl.govbudget import GOV_MEM_GB, gov_budget
-from agentctl.store import LeaseLost
+from agentctl.leasetable import LeaseLost
 from agentctl.leases import lock_beat
 from agentctl.changekind import facts_for
 from agentctl.redland import may_land_on_red
 from agentctl.pressure import laptop_pressure, pressure_reading
 from agentctl.govusage import gov_job_cores
 from agentctl.govfits import gov_charged, gov_committed, gov_fits
-from agentctl.knobs import knob_gov_poll
-from agentctl.textknobs import knob_laptop_pressure
+from agentctl.govknobs import knob_gov_poll
+from agentctl.govknobs import knob_laptop_pressure
+from agentctl.govknobs import knob_gov_evict_settle, knob_gov_idle_max
 
 
 # ---------------------------------------------------------------- the governor: ONE admission control for memory and CPU
@@ -86,13 +84,6 @@ def gov_machine():
     return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": machine_cores(), "laptop": laptop}
 
 
-# WAITING IS CHEAP (2026-11-19 15:35Z: ~13 sbt-warm waiters each re-read every waiter's liveness -- two `ps` per waiter
-# -- and the machine's memory -- four more processes -- every GOV_POLL: ~170 short processes a second, a load of ~60 on 18
-# cores that held them all on the load factor, a loop feeding itself). Now a waiter behind the head re-reads the queue
-# only when the CHANGE MARK moves (gov_bump: a waiter or ticket leaving) or its backoff (GOV_POLL doubling to
-# GOV_IDLE_MAX) runs out, a stat of one file meanwhile; and a waiter's liveness is its pid (a signal 0, no process) with
-# its start time read once per GOV_ALIVE_TTL.
-GOV_IDLE_MAX = 30.0     # s a waiter behind the head waits at most between two reads of the queue
 GOV_ALIVE_TTL = 60.0    # s a waiter's start time, once read, vouches for its pid
 _gov_alive = process_cache({})
 
@@ -206,9 +197,6 @@ class GovTimeout(RuntimeError):
     """The governor did not admit the work within its bound (audit #12: an unbounded wait hid a stuck queue entry)."""
 
 
-GOV_ADMIT_MAX = 2 * 3600  # a check waits this long for the governor at most ($AGENTCTL_GOV_ADMIT_MAX)
-
-
 class GovWait:
     """One unit of work waiting its turn at the governor: the loop that polls until it is the head and fits."""
 
@@ -253,13 +241,13 @@ class GovWait:
             time.sleep(self.idle)  # wall: waits on and times real processes and threads
         else:
             gov_wait_change(mark, self.idle)
-            self.idle = min(self.idle * 2, env_num("AGENTCTL_GOV_IDLE_MAX", GOV_IDLE_MAX))
+            self.idle = min(self.idle * 2, knob_gov_idle_max())
 
     def evicted(self, head: Any, on_mem: Any, why: Any) -> Any:
         """The head, held on memory, freed some by evicting idle work (the freed memory shows in vm_stat)."""
         if head and on_mem and self.cls != "measure" and gov_evict(f"{self.cls} {self.label} ({why})"):
             # wall: waits on and times real processes and threads
-            time.sleep(env_num("AGENTCTL_GOV_EVICT_SETTLE", 3))
+            time.sleep(knob_gov_evict_settle())
             return True
         return False
 

@@ -13,14 +13,15 @@ import threading
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
 from agentctl.core import err, git, git_ok, pid_alive, process_cache, remote
 from agentctl.statefile import read_record
 from agentctl.repos import server_repo
 from agentctl.clones import CORRUPT_GIT, clone_gated, clone_shared, clone_side, heal_enabled
 from agentctl.conditions import open_condition, recovery_recheck, run_probe
 from agentctl.sdnotify import SD_READY, sd_notify
-from agentctl.knobs import knob_clone_keepalive
+from agentctl.govknobs import knob_clone_keepalive
+from agentctl.storeknobs import knob_clone_lock_wait, knob_clone_repair_retry, knob_clone_timeout
+from agentctl.storeknobs import knob_movies_remote
 
 
 # THE SERVER CLONE IS ATOMIC (2026-10-29: the reconciler crash-looped at 11:33 mid-clone; the half clone's .git -- an
@@ -65,9 +66,6 @@ def clone_verify(path):
     return True, f"{remote()}/main resolves and is connected"
 
 
-CLONE_TIMEOUT = 1800
-
-
 def clone_keepalive(what, started):
     """One keepalive for a clone running since started (a Stopwatch)."""
     status = f"STATUS={what} ({int(started.elapsed())} s)"  # wall: waits on and times real processes and threads
@@ -80,7 +78,7 @@ def clone_keepalive(what, started):
 def run_clone(cmd, what):
     """The clone, bounded by CLONE_TIMEOUT, with systemd keepalives meanwhile: CompletedProcess; raises
     subprocess.TimeoutExpired (the clone killed) past the bound."""
-    bound = env_num("AGENTCTL_CLONE_TIMEOUT", CLONE_TIMEOUT)
+    bound = knob_clone_timeout()
     every = knob_clone_keepalive()
     started = stopwatch()
     got = {}
@@ -128,7 +126,7 @@ def clone_into_tmp(repo, url):
 
 def _clone_server_repo(repo: str) -> None:
     """Make the server's clone at repo from $AGENTCTL_MOVIES_REMOTE, whatever is there kept aside."""
-    url = os.environ.get("AGENTCTL_MOVIES_REMOTE")
+    url = knob_movies_remote()
     if not url:
         raise SystemExit(f"agentctl tick: no clone at {repo} and no $AGENTCTL_MOVIES_REMOTE to clone it from")
     tmp = clone_into_tmp(repo, url)
@@ -160,7 +158,7 @@ def ensure_server_clone(repo: str | None, store: Any) -> str:
 def server_clone_remote(repo):
     """The clone's remote() must exist and point at $AGENTCTL_MOVIES_REMOTE: added (and fetched once) or re-pointed
     here (a clone made under another remote name keeps working without a re-clone)."""
-    url = os.environ.get("AGENTCTL_MOVIES_REMOTE")
+    url = knob_movies_remote()
     if not url:
         return
     have = git(repo, "remote", "get-url", remote(), check=False)
@@ -169,12 +167,6 @@ def server_clone_remote(repo):
         git(repo, "fetch", "--quiet", remote(), "main", check=False)
     elif have.stdout.strip() != url:
         git(repo, "remote", "set-url", remote(), url)
-
-
-CLONE_REPAIR_RETRY = 15 * 60  # a repair that failed is tried again after this
-
-
-CLONE_LOCK_WAIT = 300         # the swap waits this long for the clone's users to finish, then tries again next tick
 
 
 _clone_repairing = threading.Lock()
@@ -186,7 +178,7 @@ _clone_repair_at = process_cache({})
 @contextlib.contextmanager
 def clone_exclusive(repo, wait=None):
     """The swap's hold: the gate (no new user), then the lock once every user let go. Yields False after wait s."""
-    wait = env_num("AGENTCTL_CLONE_LOCK_WAIT", CLONE_LOCK_WAIT) if wait is None else wait
+    wait = knob_clone_lock_wait() if wait is None else wait
     with clone_gated(repo) as (gate, lk):
         try:
             deadline = stopwatch(wait)
@@ -291,7 +283,7 @@ def repair_clone(repo, why, store):
         return None
     try:
         _clone_repair_at[os.path.realpath(repo)] = epoch_now()
-        url = os.environ.get("AGENTCTL_MOVIES_REMOTE")
+        url = knob_movies_remote()
         if not url:
             raise SystemExit(f"agentctl: cannot repair {repo}: no $AGENTCTL_MOVIES_REMOTE")
         try:
@@ -306,7 +298,7 @@ def repair_clone(repo, why, store):
             if not held:
                 shutil.rmtree(tmp, ignore_errors=True)
                 err(f"clone repair: {repo} stayed in use for "
-                    f"{env_num('AGENTCTL_CLONE_LOCK_WAIT', CLONE_LOCK_WAIT):.0f} s; tried again next tick")
+                    f"{knob_clone_lock_wait():.0f} s; tried again next tick")
                 _clone_repair_at.pop(os.path.realpath(repo), None)
                 return None
             os.rename(repo, broken)
@@ -337,8 +329,7 @@ def clone_heal_tick(repo, store):
     sus = read_record(clone_side(repo, "suspect.json"))
     if not sus:
         return None
-    if epoch_now() - _clone_repair_at.get(os.path.realpath(repo), 0) < env_num("AGENTCTL_CLONE_REPAIR_RETRY",
-                                                                               CLONE_REPAIR_RETRY):
+    if epoch_now() - _clone_repair_at.get(os.path.realpath(repo), 0) < knob_clone_repair_retry():
         return None
     r = run_probe("clone_health", {"repo": repo})
     if r.ok:

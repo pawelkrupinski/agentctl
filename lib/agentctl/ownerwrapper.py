@@ -6,7 +6,6 @@ import os
 import signal
 import time
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import fmt_age
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -14,24 +13,23 @@ from agentctl.claudefiles import bg_transcript, fixer_verdict
 from agentctl.procs import process_start
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import bg_failure, bg_session, bg_start, bg_stop, bg_turn, bg_turn_over
-from agentctl.knobs import RED_STALL
+from agentctl.redknobs import RED_STALL
 from agentctl.inbox import INBOX_TAIL
 from agentctl.dispatchblock import claude_cli, interactive_mode
 from agentctl.store import StoreAuthFailed, StoreUnavailable
 from agentctl.owners import OWNER_TTL, owner_lease, owner_record_path
 from agentctl.laptoprole import laptop_role_standby
 from agentctl.fixer import FIXER_IDENTITY_ENV
-from agentctl.knobs import RED_FIXER_WALL
+from agentctl.redknobs import RED_FIXER_WALL
 from agentctl.redclaim import bind_fixer_session
 from agentctl.redcrash import keep_awake, verdict_cut
 from agentctl.ownerleases import owner_drop, owner_hand, owner_holder, owner_leases, owner_tell_leases
 from agentctl.sessionroll import owner_rollover, owner_turn_line, session_seen
 from agentctl.fixerlife import HeldLease, TurnProgress, store_failure_stop
 from agentctl.owner import owner_meta, owner_resume_target, owner_take_heartbeat, owner_turn_prompt
-from agentctl.knobs import knob_bg_poll, knob_red_fixer_wall, knob_red_renew, knob_red_stall
-
-
-OWNER_IDLE = 6 * 3600        # no red held this long: the owner ends ($AGENTCTL_OWNER_IDLE)
+from agentctl.fixerknobs import knob_bg_poll
+from agentctl.redknobs import knob_red_fixer_wall, knob_red_renew, knob_red_stall
+from agentctl.fixerknobs import knob_owner_idle
 
 
 OWNER_EMPTY_TURNS = 2        # turns in a row ending with no verdict line: the owner ends (its reds are offered again)
@@ -94,7 +92,7 @@ class OwnerWrapper:
         self.env = {k: v for k, v in os.environ.items() if k not in FIXER_IDENTITY_ENV and k != "AGENTCTL_DETACHED"}
         self.every = knob_red_renew()
         self.poll = knob_bg_poll()
-        self.idle_max = env_num("AGENTCTL_OWNER_IDLE", OWNER_IDLE)
+        self.idle_max = knob_owner_idle()
         self.wall = knob_red_fixer_wall()
         self.stall = knob_red_stall()
         self.bid = None

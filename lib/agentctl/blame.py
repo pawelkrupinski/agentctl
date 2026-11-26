@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import fmt_age, git, reds_dir, spawn_detached
 from agentctl.statefile import read_record
 from agentctl.procs import process_start, record_alive
@@ -20,47 +19,9 @@ from agentctl.redrecord import red_what
 from agentctl.redrepos import red_repo_tag
 from agentctl.fixerland import red_dispatch_log
 from agentctl.blameopen import CONVERGENCE_FLOWS, PATHISH, TEST_TOKEN
-from agentctl.knobs import BLAME_MAX
 from agentctl.redopen import red_offer
-from agentctl.knobs import knob_blame_max, knob_blame_probe_wall
-
-
-# ---------------------------------------------------------------- blame (the owner, 2026-11-01)
-# "change agentctl to: remember which agent landed what change, when a build fails: revert the offending change and
-# revive the landing agent to fix it" -- and "only if it can't be determined spinup a new agent".
-#
-# THE DECISION RULE (one place: blame_decision): a gate red whose offending change AND its lander are determined goes
-# back to that lander -- the change is reverted and the lander's own Claude session is revived to fix it. A fresh fixer
-# is spun up ONLY when that cannot be determined: no single culprit (the parent fails the same check too, the bisect is
-# inconclusive or found no verdict), no recorded lander, or the lander's session cannot be resumed.
-#
-# 1. THE LANDER. Every `agentctl land` records who ran it (lander_record): the Claude session ($CLAUDE_CODE_SESSION_ID),
-#    the subagent when the land ran inside one (its transcript under <session>/subagents/; the session id alone would
-#    name the orchestrator), the transcript, the worktree, the branch, the cwd -- and each commit's KEYS (sha, patch-id,
-#    subject, author time: a landing rebases, so a commit on main is found by its patch-id or its subject and time,
-#    never by its sha alone). Queued changes carry it in their change item; a direct land (no queue) writes a `lander`
-#    item. Both live in the reconciler's store, for 14 days, across restarts and batches; once a change is landed the
-#    tick notes its commits on main (`landed_commits`: main sha -> patch-id).
-# 2. THE CULPRIT. A gate test red's range is (the newest green run's head, the first red run's head]; its commits are
-#    grouped into changes by the registry (a commit no change carries is the owner's, by hand). The search keeps an
-#    invariant -- boundary lo PASSES the same check, boundary hi FAILS it -- and a change is the culprit only when its
-#    parent passes and its end fails. Boundary 0 (the green head) passes for free only for an unseeded check (Main's
-#    green run there IS the same check on the same inputs); convergence drift seeds rotate per run, so it is re-run with
-#    the red run's own seeds (`scripts/identity-drift-ci <parent> --for-red <run>`). Between boundaries: a decided run of
-#    the workflow on exactly that commit, else a probe on CI, never on the laptop (drift: identity-drift-ci; Main:
-#    precommit-check.yml on a `check/blame-*` branch holding the boundary's tree, its pass counted only when its log
-#    names the failing test). The failing test's files hint which boundary to probe first; at most BLAME_PROBES probes.
-#    Infra-shaped reds, flakes, outside-the-gate reds and a bot's change (Dependabot, Renovate, Scala Steward) are never
-#    blamed or reverted.
-# 3. THE REVERT (tier `lander`): one `git revert` of the change's commits with `Reverts-Change: <id>` and
-#    `Fixes-Red: <run>`, landed by `agentctl land` (a gate fix: it lands on red and is never throttled). It does not
-#    clear the red (FIX FAILED): the culprit was wrong -- the revert is reverted (`Relands-Change: <id>`) and the red goes
-#    to the normal fixer.
-# 4. THE LANDER REVIVED: `claude --bg --resume <session>` in its own worktree (a subagent: a session in its worktree
-#    briefed with its transcript), told the red run, the failing step and lines, that its change was reverted, and to
-#    fix, rebase, re-apply its change with the fix and land again (a revert that conflicts: fix forward). It holds the
-#    red's lease (tier `lander`), which the revert's own fix never takes from it.
-BLAME_PROBES = 4                 # CI probes one red's culprit search may start ($AGENTCTL_BLAME_PROBES)
+from agentctl.blameknobs import knob_blame_max, knob_blame_probe_wall
+from agentctl.blameknobs import knob_blame_probes
 
 
 def blame_boundary(b, i):
@@ -89,7 +50,7 @@ def blame_waiting(b):
     judged = len(b.get("probes") or [])
     what = (f"probing {str(p.get('commit'))[:10]} ({p.get('kind')}) on CI" if p else "reading its range")
     return (f"deciding the culprit among {len(b.get('groups') or [])} change(s): {what}; {judged} boundary(ies) judged "
-            f"(at most {fmt_age(env_num('AGENTCTL_BLAME_MAX', BLAME_MAX))}, then a fixer)")
+            f"(at most {fmt_age(knob_blame_max())}, then a fixer)")
 
 
 def blame_free(o_r, d, b, i, runs):
@@ -234,7 +195,7 @@ def _blame_search(store: Any, it: Any, repo: Any, o_r: Any, t: Any, b: Any) -> A
 def _blame_unprobeable(d: Any, b: Any, i: Any) -> Any:
     """Why boundary i cannot be probed on CI (the probes are spent, or no check repeats this red), or None."""
     started = len([x for x in b.get("probes") or [] if x.get("ci")])
-    if started >= env_num("AGENTCTL_BLAME_PROBES", BLAME_PROBES):
+    if started >= knob_blame_probes():
         return f"inconclusive within {started} CI probes"
     if b.get("kind") in ("drift", "checks"):
         return None

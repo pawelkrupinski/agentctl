@@ -7,18 +7,17 @@ import subprocess
 import sys
 import threading
 from typing import Any
-from agentctl.clock import Clock
-from agentctl.knobs import env_num
-from agentctl.core import err, slug, spawn_detached
-from agentctl.store import StoreUnavailable
 from agentctl.selfcode import TOOL_PATH
+from agentctl.statemachines import machine_state
+from agentctl.clock import Clock
+from agentctl.queueknobs import knob_waiting_timeout
+from agentctl.core import err, slug, spawn_detached
 from agentctl.waitingdir import WAITING_BRANCH, waiting_state
 from agentctl.storetoken import (
     TOKEN_REQUEST, TOKEN_SHAPE, detached_env, hand_token, token, token_back, token_env_name, token_ns,
     token_sock_path)
+from agentctl.store import StoreUnavailable
 from agentctl.owned import Owned, backoff, lock_held, restart_if_changed
-from agentctl.waiting import WAITING_AWAIT_TIMEOUT
-from agentctl.statemachines import machine_state
 
 
 def processor_owned(d: str, repo: str | None = None) -> Owned:
@@ -206,7 +205,7 @@ def _await_entry(repo: str, eid: str, own: Owned, clock: Clock, store: Any) -> t
     runs it -- ci-runner's for every change since ONE QUEUE (2026-11-16: `waiting await` on the laptop crashed with
     FileNotFoundError on one). A joined change's item follows its waiting entry (project_changes)."""
     t0, delays = clock.time(), backoff(15, 60)
-    timeout = env_num("AGENTCTL_WAITING_TIMEOUT", WAITING_AWAIT_TIMEOUT)
+    timeout = knob_waiting_timeout()
     said = None
     while True:
         it, state = _observe_change(store, eid)

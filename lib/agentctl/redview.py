@@ -4,25 +4,24 @@
 import json
 import time
 from typing import Any
-from agentctl.timefmt import hhmmz, ts
 from agentctl.statefile import read_record
-from agentctl.knobs import env_num
+from agentctl.timefmt import hhmmz, ts
+from agentctl.redknobs import RED_HELD_IDLE, knob_red_fix_giveup, knob_red_held_idle
 from agentctl.core import state_root, tilde
 from agentctl.cistate import snapshot_gate_reds
 from agentctl.dispatchblock import short_flow
 from agentctl.redrecord import RED_RECURRING, red_active, red_lease, red_names
 from agentctl.leases import LeaseKinds, lease_meta, red_block_of
 from agentctl.redfixread import FIX_OPEN
-from agentctl.redfixes import red_refuted
 from agentctl.owners import owner_record_path
 from agentctl.redask import red_ask, red_decision
-from agentctl.red import RED_FIX_GIVEUP
-from agentctl.redmove import red_settled_runs
 from agentctl.culpritfix import blame_status
 from agentctl.runsigs import run_names
+from agentctl.redfixes import red_refuted
+from agentctl.redmove import red_settled_runs
 from agentctl.redseen import red_obs_of_units
 from agentctl.ask import red_decided_view, trim_words
-from agentctl.reddispatch import RED_HELD_IDLE, REPO_DISPATCH_OFF, red_owned_progress_at, repo_dispatch_off_all
+from agentctl.reddispatch import REPO_DISPATCH_OFF, red_owned_progress_at, repo_dispatch_off_all
 from agentctl.redwaits import RED_WAITS_ON
 
 
@@ -57,8 +56,7 @@ def red_lease_lapses(row: dict[str, Any], d: dict[str, Any], t: float) -> float:
     """When red d's live lease row lapses with no progress: its expiry -- or, held by an owner (renewed by its beat), its
     RED_HELD_IDLE past the red's own progress (reddispatch.py)."""
     if LeaseKinds.is_owned(row):
-        return max(float(row.get("acquired_at") or t), red_owned_progress_at(row, d)) + float(env_num(
-            "AGENTCTL_RED_HELD_IDLE", RED_HELD_IDLE))
+        return max(float(row.get("acquired_at") or t), red_owned_progress_at(row, d)) + float(knob_red_held_idle())
     return float(row.get("expires_at") or t)
 
 
@@ -130,7 +128,7 @@ class RedViewer:
                 f"waits on red {f.get('red')}'s fix {str(f.get('sha'))[:10]}")
 
     def fix_verifying(self, f: dict[str, Any]) -> tuple[str, str]:
-        giveup = time.strftime("%H:%M", time.localtime(self.it["entered_at"] + env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP)))
+        giveup = time.strftime("%H:%M", time.localtime(self.it["entered_at"] + knob_red_fix_giveup()))
         return (f"verifying: the next decided {self.d.get('workflow')} run says whether it is fixed ({f.get('verify') or 'awaiting it'}); "
                 f"offered again if none by {giveup}{self.rec}", "verifying")
 

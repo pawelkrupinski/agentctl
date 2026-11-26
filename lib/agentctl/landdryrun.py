@@ -5,7 +5,6 @@ import os
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import err, git, host_role, reds_dir, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -15,7 +14,6 @@ from agentctl.waitingdir import waiting_state
 from agentctl.worktrees import mark_internal
 from agentctl.leases import lock_note
 from agentctl.land import REDGATE, TUNNEL_TROUBLE, run_watched, stall_reason, tool_env
-from agentctl.knobs import LAND_STALL_MIN
 from agentctl.queue import requeue_infra
 from agentctl.waiting import must_wait, tail_of, waiting_commits
 from agentctl.queuesubmit import queued_tail, submit_ref
@@ -29,10 +27,12 @@ from agentctl.cireport import ci_why
 from agentctl.server import queue_change
 from agentctl.queueenter import change_fields, submit_to_server, sync
 from agentctl.queuecheck import NETWORK_REASON
+from agentctl.queueknobs import knob_land_stall_min
+from agentctl.queueknobs import knob_baseline
 
 
 def stalled(step, output, log_path):
-    why = stall_reason(output) or f"no output and no CPU for {env_num('AGENTCTL_LAND_STALL_MIN', LAND_STALL_MIN):g} min"
+    why = stall_reason(output) or f"no output and no CPU for {knob_land_stall_min():g} min"
     print(f"NOT LANDED: stalled {step}: {why}, so it was ended (the landing lock is free again). Last lines (full log "
           f"{log_path}):\n  {tail_of(output)}")
     return 1
@@ -84,7 +84,7 @@ class DryRun:
     def _failed(self, out: Any) -> Any:
         """Land's rc for a failed run: judged against plain main's baseline unless the red gate refused it."""
         repo = self.repo
-        if not REDGATE.search(out) and os.environ.get("AGENTCTL_BASELINE", "1") != "0":
+        if not REDGATE.search(out) and knob_baseline() != "0":
             main_at = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
             new, known = judge_against_baseline(repo, self.hook, self.head, out, self.log_path)
             if known is NETWORK_SHAPED:

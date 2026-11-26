@@ -4,18 +4,18 @@
 from agentctl.clock import epoch_now
 import os
 import json
-from agentctl.knobs import env_num
 from agentctl.core import state_root
 from agentctl.statefile import read_record
 from agentctl.machine import ram_gb
 from agentctl.govtickets import gov_tickets
+from agentctl.govknobs import knob_checks_dir, knob_gov_budget_gb, knob_max_checks
 
 
 GOV_MEM_GB = {"red": 5.0, "check": 5.0, "agent": 5.0, "measure": 6.0, "hook": 1.0, "suite": 1.0}
 
 
 def gov_budget():
-    return env_num("AGENTCTL_GOV_BUDGET_GB", round(0.6 * ram_gb(), 1))
+    return knob_gov_budget_gb(ram_gb())
 
 
 # ---------------------------------------------------------------- check slots
@@ -33,7 +33,7 @@ CHECKS_DEFAULT_CAP = 3
 
 
 def checks_dir():
-    d = os.environ.get("AGENTCTL_CHECKS_DIR") or state_root("checks")
+    d = knob_checks_dir() or state_root("checks")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -48,8 +48,8 @@ def cap_state():
 
 
 def checks_cap():
-    if os.environ.get("AGENTCTL_MAX_CHECKS"):
-        return max(1, int(os.environ["AGENTCTL_MAX_CHECKS"]))
+    if knob_max_checks():
+        return max(1, int(knob_max_checks()))
     return max(1, min(gov_max_checks(), int(cap_state().get("cap", CHECKS_DEFAULT_CAP))))
 
 

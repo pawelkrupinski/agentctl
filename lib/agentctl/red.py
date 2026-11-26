@@ -5,7 +5,6 @@ from agentctl.clock import epoch_now
 import os
 import re
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import err, pct, process_cache, remote
 from agentctl.timefmt import parse_time
 from agentctl.classify import norm_line
@@ -18,6 +17,9 @@ from agentctl.redrepos import red_is_other, red_repo_key
 from agentctl.redask import red_decision
 from agentctl.ancestry import contains_local
 from agentctl.statemachines import ARCHIVE, MACHINES, StateSpec
+from agentctl.redknobs import (
+    RED_FIX_DECIDE, knob_red_decided_revert_max, knob_red_fix_decide, knob_red_fix_giveup, knob_red_fix_next_run,
+    knob_red_verify_slack)
 
 
 # ---------------------------------------------------------------- red: every red build held by a lease, or offered
@@ -58,12 +60,6 @@ RED_CLAIM_TTL, RED_CLAIM_MAX = 30 * 60, 8 * 3600      # an interactive claim
 RED_FIXER_TTL, RED_FIXER_MAX = 15 * 60, 3 * 3600      # a dispatched fixer
 RED_OFFER = {"author": 10 * 60, "gate": 10 * 60, "other": 30 * 60, "flake": 2 * 3600}
 RED_FIX_RUN_START = 30 * 60  # a landed fix's verifying run must exist by then (outside the gate: dispatched)
-RED_FIX_DECIDE = 3 * 3600
-# THE STATE MACHINE IS TOTAL (the owner, 2026-10-29): no red state waits on an event that may never come. A fix-pending
-# whose fix is not proven by RED_FIX_GIVEUP after it entered fix-pending (a landed fix no run checks, a verify run an
-# on-demand workflow never gets, a fix id that is None) is offered again with that fix set aside (`unverified`): a
-# fixer decides, never a resting state.
-RED_FIX_GIVEUP = 2 * RED_FIX_DECIDE
 # §5.3 a red (keyed by its failing test or step), phase 1 step 10; -> verified outside fix-pending: red_callable_evidence
 MACHINES["red"] = {
     "red": StateSpec(60, "offered", ("offered", "fix-pending", "leased", "blocked-external", "cleared", "verified",
@@ -91,11 +87,6 @@ MACHINES["branch-red"] = {
     "orphaned": StateSpec(ARCHIVE, "gone", ("open", "gone")),
     "gone": StateSpec(ARCHIVE, "gone", (), terminal=True),
 }
-# A NIGHTLY'S FIX WAITS FOR THE NIGHT (2026-11-13, Verify scrape recording #26): a landed fix of a red OUTSIDE the gate
-# is proven only by its workflow's next run -- a nightly's is up to a day away, and no push brings it sooner (its verify
-# dispatch may be refused). Such a fix holds its red, quietly, up to RED_FIX_NEXT_RUN: the next decided run containing
-# it verifies (green) or refutes it (the same failure: back to a fixer, never to the owner).
-RED_FIX_NEXT_RUN = 30 * 3600  # s an outside red's landed fix waits unproven for its workflow's next run
 
 
 def red_fix_giveup(d):
@@ -106,10 +97,10 @@ def red_fix_giveup(d):
     if red_waits_for_its_run(d):
         if f.get("verify_by"):
             since = float(f.get("verify_since") or f.get("at") or 0)
-            return max(env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP),
-                       float(f["verify_by"]) - since + env_num("AGENTCTL_RED_FIX_DECIDE", RED_FIX_DECIDE))
-        return env_num("AGENTCTL_RED_FIX_NEXT_RUN", RED_FIX_NEXT_RUN)
-    return env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP)
+            return max(knob_red_fix_giveup(),
+                       float(f["verify_by"]) - since + knob_red_fix_decide())
+        return knob_red_fix_next_run()
+    return knob_red_fix_giveup()
 
 
 def red_waits_for_its_run(d):
@@ -118,21 +109,6 @@ def red_waits_for_its_run(d):
     return not d.get("gate") and d.get("red_kind") == "outside" and f.get("status") == "landed" and bool(f.get("sha"))
 
 
-# A SCHEDULED WORKFLOW'S FIX WAITS FOR ITS SLOT (2026-11-19, Record scrape fixtures #198, 50bc15cd7369): its fix
-# 123dd6524 landed at 04:23Z; the workflow runs nightly at 23:31Z (its `on.schedule` cron, dispatched by the movies
-# scheduler, infra/nix/files/scheduled_dispatch.py, which reads the same crons), so no run could contain the fix before
-# ~23:31Z -- yet a fixed RED_FIX_DECIDE timer showed it "fix-pending escalated" at 07:23Z, and the landing itself had
-# raised its level. Now a landed fix of a red outside the gate whose workflow has a schedule is VERIFIED BY the first
-# slot after the landing plus the workflow's p90 duration (its recent finished runs) plus RED_VERIFY_SLACK, and until
-# then it rests quietly: "awaiting next scheduled run at HH:MMZ", no level, no inbox line. At that deadline a run
-# containing the fix still queued or running holds it (re-deadlined, quiet); none is an escalation: the slot passed with
-# no run verifying it, or the scheduler never dispatched it.
-# A VERIFY DISPATCH IS PER WORKFLOW (the owner, 2026-11-19): Record scrape fixtures scrapes every cinema through paid
-# proxies -- its 04:34Z verify dispatch (#200) was not cheap. A workflow WITH a schedule is dispatched to verify a fix
-# unless the repo's ONE per-workflow policy registry, RED_WORKFLOWS_FILE on main, says `verify_dispatch` no (VERIFY
-# PROMPTLY BY DEFAULT, 2026-11-21: no row is yes, and the dispatch goes at once); a `no` workflow waits for its slot. A
-# workflow with no schedule is dispatched as before (no other run will come). The same row's `replay` is the command a fixer runs before landing (FIX REPLAY, below).
-RED_VERIFY_SLACK = 2 * 3600     # s past a slot's expected end before its fix is called unverified ($AGENTCTL_RED_VERIFY_SLACK)
 RED_VERIFY_DURATION = 2 * 3600  # s a scheduled run is taken to last when none of its runs finished
 RED_VERIFY_HOLD = 30 * 60       # s a run that will decide the fix, still undecided at the deadline, holds it again
 CRON_HORIZON_DAYS = 32
@@ -237,7 +213,7 @@ def red_verify_plan(o_r, repo, workflow, after):
         return None
     runs = [r for r in workflow_main_runs(o_r, os.path.basename(path)) if not is_cancelled(r)]
     duration = pct(stuck_durations(runs), 0.9) or RED_VERIFY_DURATION
-    return {"slot": slot, "by": slot + duration + env_num("AGENTCTL_RED_VERIFY_SLACK", RED_VERIFY_SLACK),
+    return {"slot": slot, "by": slot + duration + knob_red_verify_slack(),
             "file": os.path.basename(path)}
 
 
@@ -260,7 +236,6 @@ def run_since_slot(r: Any, f: Any) -> Any:
 
 
 RED_PRIORITY = {"gate": 0, "fix": 1, "outside": 2, "flake": 3}
-RED_TICK_INTERVAL = 15       # seconds between the processor's red ticks ($AGENTCTL_RED_TICK)
 RED_RELEASE_ASKS = 12        # ...and asks a store that does not answer this many times, a poll apart, to release it
 STUCK_FACTOR, STUCK_FLOOR = 3, 30 * 60  # audit #8: a run undecided past max(3 x its workflow's p90, 30 min) is a red
 
@@ -273,13 +248,6 @@ RED_LADDER = ((0, "author", "author"), (0, None, "fresh"),
               (3, None, "deep"))
 
 
-# A DECIDED REVERT THE FIXERS DID NOT LAND IS LANDED BY AGENTCTL (the owner, 2026-11-22: "fix this structurally, so
-# it recovers by itself"; Identity takes #349: the owner decided "revert f64d8a73a" at ~07:00Z, the fixer's revert was
-# rejected at 07:52Z and the gate stayed red, every land waiting behind it). A gate red whose in-progress decision is
-# `revert <sha>`, offered again RED_DECIDED_REVERT_MAX after the owner decided it, goes to the revert tier: agentctl's
-# own revert of that commit (red_revert: Fixes-Red, a specific `Fix-Replay: none`, landed by `agentctl land` under the
-# normal checks), once -- `reverted` set, the ladder goes on as before if it does not land.
-RED_DECIDED_REVERT_MAX = 45 * 60
 DECIDED_REVERT = re.compile(r"^\W*revert\s+([0-9a-f]{7,40})\b", re.I)
 
 
@@ -291,7 +259,7 @@ def decided_revert(d, t=None):
     if not m or not d.get("gate") or d.get("reverted") or d.get("early"):  # an early red: no verdict to revert on
         return None
     age = (epoch_now() if t is None else t) - float(dec.get("at") or 0)
-    return m.group(1) if age >= env_num("AGENTCTL_RED_DECIDED_REVERT_MAX", RED_DECIDED_REVERT_MAX) else None
+    return m.group(1) if age >= knob_red_decided_revert_max() else None
 
 
 def red_tier(d, culprit=None, t=None):

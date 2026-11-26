@@ -10,7 +10,6 @@ import sys
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
 from agentctl.core import HOME, _bounded, reds_dir, run_bounded, state_root, tilde
 from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
@@ -20,21 +19,11 @@ from agentctl.cleanup import close_worktree
 from agentctl.machine import disk_free_gb
 from agentctl.testtmp import TEST_TMP_MAX_AGE, sweep_test_tmp
 from agentctl.conditions import open_condition, run_probe
+from agentctl.tickknobs import knob_log_rotate_keep, knob_log_rotate_max, knob_upkeep_every
+from agentctl.govknobs import DISK_MIN_GB, knob_disk_min_gb
+from agentctl.govknobs import knob_disk_path
 
 
-# ---------------------------------------------------------------- upkeep: the tick keeps the laptop's disk (2026-10-29)
-# The owner's coordinator, 2026-10-29: the Data volume filled up (739 MB free) -- 109 proven-merged idle worktrees
-# (mostly finished fixers' movies-wt-red-*) piled up because nothing ran `cleanup` on its own, and the test suite had
-# leaked 3,009 `agentctl-*` temp dirs. Now, at most every UPKEEP_EVERY s (and at once when the disk runs low), the
-# laptop's processor runs:
-#   - `cleanup --execute --no-remote`, the STANDING-OK scope only (clean, idle, proven-merged worktrees and their
-#     branches; every deletion re-verified and logged in agentctl-deleted.log);
-#   - each ended fixer's worktree whose red is closed (no open red item with its key) closed by close_worktree (only
-#     when proven merged, clean and unused);
-#   - the test suite's own leftovers: `agentctl-*` dirs in the user's temp dir and `agentctl-sock-*` in /tmp older than
-#     TEST_TMP_MAX_AGE (a run removes its own at exit; these are killed runs').
-UPKEEP_EVERY = 3600
-DISK_MIN_GB = 50  # the Data volume's free space below which the upkeep runs at once, then WD opens ($AGENTCTL_DISK_MIN_GB)
 _last_upkeep = [0.0]
 
 
@@ -62,16 +51,6 @@ def close_finished_fixer_trees(st):
     return out
 
 
-# LOGS ROTATE BY SIZE (2026-10-30: the laptop processor's service.log had grown to 141 MB, never rotated). Every
-# agentctl log -- each *.log under the state root and the reds dir (a check's own run output, in *.d / work / target,
-# is its check's and expires with it), and launchd's ~/Library/Logs/agentctl-*.log -- over LOG_ROTATE_MAX bytes is
-# rotated by COPY-TRUNCATE: its newest LOG_ROTATE_MAX bytes (from a line start) become <log>.1, the older parts shift
-# to .2 .. .LOG_ROTATE_KEEP (the oldest goes), and the file itself is truncated IN PLACE. In place because its writers
-# (launchd's StandardOutPath, the processor's appends) hold it open with O_APPEND: they go on writing at its new end,
-# where a rename would leave them writing into .1. The status page's /log serves .1's tail before a short current
-# file's, and a live pane reads a truncated file again from 0. Run by `maintain` (every 15 min) and the upkeep.
-LOG_ROTATE_MAX = 10 << 20  # bytes over which an agentctl log is rotated (copy-truncate; its newest part kept as .1)
-LOG_ROTATE_KEEP = 3  # rotated parts kept per log (<log>.1 newest .. <log>.N oldest)
 LOG_ROTATE_PRUNE = ("work", "target", ".git")
 
 
@@ -110,8 +89,8 @@ def rotate_log(path, max_bytes=None, keep=None):
     """Rotate one log when it is over max_bytes (see LOGS ROTATE BY SIZE): its newest max_bytes become .1, older parts
     shift, the file is truncated in place (no line lost to an O_APPEND writer but those appended in the instant between
     the last read and the truncate). Returns what it did, or None."""
-    max_bytes = int(max_bytes or env_num("AGENTCTL_LOG_ROTATE_MAX", LOG_ROTATE_MAX))
-    keep = max(1, int(keep or env_num("AGENTCTL_LOG_ROTATE_KEEP", LOG_ROTATE_KEEP)))
+    max_bytes = int(max_bytes or knob_log_rotate_max())
+    keep = max(1, int(keep or knob_log_rotate_keep()))
     try:
         size = os.path.getsize(path)
     except OSError:
@@ -207,11 +186,11 @@ def maybe_upkeep(store, now_=None):
     WD, the disk invariant: still low with the last upkeep done, an INVARIANT condition whose probe is that same
     free-space check (it closes itself once space is back; it escalates only while it stays open)."""
     t = now_ if now_ is not None else epoch_now()
-    min_gb = env_num("AGENTCTL_DISK_MIN_GB", DISK_MIN_GB)
-    pr = run_probe("disk_free", {"path": os.environ.get("AGENTCTL_DISK_PATH") or HOME, "min_gb": min_gb})
+    min_gb = knob_disk_min_gb()
+    pr = run_probe("disk_free", {"path": knob_disk_path() or HOME, "min_gb": min_gb})
     low = pr.ok is False
     out = []
-    if t - _last_upkeep[0] >= env_num("AGENTCTL_UPKEEP_EVERY", UPKEEP_EVERY) or (low and t - _last_upkeep[0] >= 600):
+    if t - _last_upkeep[0] >= knob_upkeep_every() or (low and t - _last_upkeep[0] >= 600):
         _last_upkeep[0] = t
         # in its thread (minutes of git): the tick goes on; it logs to upkeep.log
         done = run_bounded("upkeep", lambda: run_upkeep(store), 1)

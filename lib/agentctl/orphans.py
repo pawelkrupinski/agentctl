@@ -24,7 +24,7 @@ from agentctl.recovery import reland_tree_path
 from agentctl.superseded import superseded_mark, worktree_change_items
 from agentctl.park import parked_mark
 from agentctl.blamerecords import blame_land_refusal, blame_records
-from agentctl.knobs import knob_orphan_idle
+from agentctl.fixerknobs import knob_orphan_idle
 
 
 def orphan_key(repo: str, wt: str) -> tuple[Any, Optional[str]]:

@@ -3,7 +3,6 @@
 
 import datetime as dt
 import json
-import os
 import urllib.request
 from typing import Any, Optional
 from agentctl.core import err, tilde
@@ -14,6 +13,7 @@ from agentctl.wait import (
     MAX_JOB_LOG_FETCHES, choose_job_lines, drift_key, failed_jobs_log, failed_steps, hook_lines, job_log_lines,
     log_entries, raw_tails, relevant_lines)
 from agentctl.ciwhy import commit_line, job_is_verdict_report, jobs_no_verdict, queue_full, timed_out_jobs
+from agentctl.storeknobs import knob_githubstatus_url
 
 
 RUN_VIEW_FIELDS = "jobs,headSha,url,number,status,conclusion,workflowName,workflowDatabaseId,attempt,createdAt,updatedAt"
@@ -80,13 +80,10 @@ def jobs_never_created(wf_jobs: list[GhJson], run_jobs: list[GhJson]) -> list[st
     return missing
 
 
-GITHUB_STATUS_URL = "https://www.githubstatus.com/api/v2/incidents.json"
-
-
 def github_incidents(since: Any, until: Any) -> list[str]:
     """githubstatus.com incidents naming Actions that overlap since..until (+1 h): ['<name> (<shortlink>)']; [] when
     unread ($AGENTCTL_GITHUBSTATUS_URL names another source; empty turns it off)."""
-    url = os.environ.get("AGENTCTL_GITHUBSTATUS_URL", GITHUB_STATUS_URL)
+    url = knob_githubstatus_url()
     if not url or not since:
         return []
     try:

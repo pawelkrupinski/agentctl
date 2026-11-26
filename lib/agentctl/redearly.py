@@ -4,7 +4,6 @@
 import os
 import re
 from typing import Any, Callable
-from agentctl.knobs import env_num
 from agentctl.core import err, fmt_age, reds_dir
 from agentctl.timefmt import ts
 from agentctl.statefile import read_json_file, write_json_file
@@ -18,22 +17,9 @@ from agentctl.redmove import red_close
 from agentctl.redseen import red_obs_of_units, red_units
 from agentctl.redopen import red_culprit_search
 from agentctl.runexplain import explain_run_jobs
+from agentctl.redknobs import knob_early_max_runs
 
 
-# THE OWNER (2026-11-22): "teach agentctl to react to parts of workflow failing and notifying / spinning the agents right
-# away". Main takes ~20 min and the identity runs longer; a job can fail in minute 3 while the rest runs on. Each red
-# tick (every gate publish, ~45 s) reads the jobs of the in-progress runs on main of the gate and the outside
-# workflows (one GET of actions/runs/<id>/jobs?filter=latest per run, conditional: an unchanged list is a free 304).
-# A job concluded `failure` / `timed_out` is read the way ci-why reads a completed run's (explain_run_jobs: the one
-# classifier), and only when the set of failed jobs changed. A TEST failure (test or compile, in the commit's code)
-# is an EARLY RED: an ordinary red item with `early` in its data, opened, offered and dispatched now. An infra-shaped
-# or unclear one opens nothing: the completed run decides it, as before.
-# What an early red never does: blame or revert (red_tier, red_open: only a completed run's verdict decides a
-# culprit), or hold a push (the gate reads completed runs). Its end: the run completes failing (SETTLED in place, one
-# red: the completed observation of the same key attaches to it and its culprit search opens then; a key the
-# completed read words otherwise stays beside it, joined to the same fixer by its queue family), or does not fail
-# (cancelled, superseded, a rerun clearing it: WITHDRAWN, its fixer told to stand down, never a revert).
-EARLY_MAX_RUNS = 6            # in-progress runs read per tick, the gate's first ($AGENTCTL_EARLY_MAX_RUNS)
 EARLY_BACKOFF_FIRST = 60      # s the early reads pause after a rate-limit or 5xx answer; doubled each time
 EARLY_BACKOFF_MAX = 900
 EARLY_JOB_PAGES = 3           # pages of 100 jobs read at most per run
@@ -63,7 +49,7 @@ def early_runs(snap: dict[str, Any] | None) -> list[tuple[str, Run, bool]]:
     """(workflow, run, gate) of every run on main the snapshot shows in progress: the gate's first, at most
     EARLY_MAX_RUNS."""
     out = [(name, r, gate) for name, runs, gate in snap_runs(snap) for r in runs if early_running(r)]
-    return out[:int(env_num("AGENTCTL_EARLY_MAX_RUNS", EARLY_MAX_RUNS))]
+    return out[:int(knob_early_max_runs())]
 
 
 def snap_run(snap: dict[str, Any] | None, workflow: str | None, rid: Any) -> Run | None:

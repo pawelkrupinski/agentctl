@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 from typing import Any
 from agentctl.core import SHORT, err, process_cache, reds_dir
-from agentctl.knobs import knob_streak_rereads
+from agentctl.redknobs import knob_streak_rereads
 from agentctl.statefile import read_record
 from agentctl.classify import norm_line
 from agentctl.forge import RED_CONCLUSIONS

@@ -7,7 +7,6 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import attempt, err, hashlib_sha1
 from agentctl.statefile import read_record, write_json
 from agentctl.inboxentry import inbox_dir, inbox_entries, inbox_kind
@@ -15,7 +14,8 @@ from agentctl.inbox import WAIT_KINDS_DEFAULT, entry_line
 from agentctl.alertroute import (
     ALERT_AUTHOR_VERDICT_KINDS, alert_audience, alert_kind_of, alert_norm, alert_route, alert_tier)
 from agentctl.alertprobe import alert_probe
-from agentctl.knobs import knob_alert_quiet_max
+from agentctl.watchknobs import knob_alert_quiet_max
+from agentctl.watchknobs import knob_alert_reconcile, knob_inbox_poll
 
 
 # ---------------------------------------------------------------- the alert model (the owner, 2026-11-04)
@@ -42,7 +42,6 @@ from agentctl.knobs import knob_alert_quiet_max
 ALERT_INDEX_VERSION = 1
 ALERT_CLOSES = {"LANDED": ("land",), "SUPERSEDED": ("land",), "OK": ("watch",), "FIX_OK": ("red",),
                 "RED_CLEARED": ("red",), "FIXER_LANDED": ("red",)}
-ALERT_RECONCILE_EVERY = 60  # s between reconcile passes ($AGENTCTL_ALERT_RECONCILE)
 ALERT_SEEN_MAX = 2000       # merged entry ids remembered (a re-projected event is merged once)
 
 
@@ -394,7 +393,7 @@ def reconcile_alerts(store, force=False):
     d = inbox_dir()
     t = epoch_now()
     last = _reconciled_at(d)
-    if not force and t - last < env_num("AGENTCTL_ALERT_RECONCILE", ALERT_RECONCILE_EVERY):
+    if not force and t - last < knob_alert_reconcile():
         return []
     with alert_lock(d):
         idx = alert_index(d)
@@ -404,9 +403,6 @@ def reconcile_alerts(store, force=False):
         idx["probed"] = {k: v for k, v in reconcile.ctx["probed"].items() if k in (idx.get("items") or {})}
         alert_index_save(d, idx)
     return out
-
-
-INBOX_WAIT_POLL = 1.0  # seconds between stat()s of the inbox directory ($AGENTCTL_INBOX_POLL)
 
 
 def inbox_wait(kinds=None, since_ack=False, timeout=0, verbose=False, forever=False, audience="owner"):
@@ -428,7 +424,7 @@ def inbox_wait(kinds=None, since_ack=False, timeout=0, verbose=False, forever=Fa
     want, auds = wanted_kinds(kinds), wanted_audiences(audience)
     with alert_lock(d):
         alert_index(d)  # the first use migrates the backlog into the model: no flood
-    poll = env_num("AGENTCTL_INBOX_POLL", INBOX_WAIT_POLL)
+    poll = knob_inbox_poll()
     t0, seen, printed = wall_epoch(), None, set()
     while True:
         stamp = inbox_stamp(d)

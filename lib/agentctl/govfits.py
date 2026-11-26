@@ -6,31 +6,18 @@ from contextlib import suppress
 from typing import Any
 from agentctl.statefile import read_record, write_json
 from agentctl.clock import wall_epoch
-from agentctl.knobs import env_num
 from agentctl.cpu import GOV_SATURATED
 from agentctl.machine import machine_cores
 from agentctl.govtickets import gov_dir, gov_log, gov_tickets
 from agentctl.govbudget import checks_cap, gov_budget
 from agentctl.pressure import gov_busy_cores
-from agentctl.knobs import GOV_CPU_FACTOR, knob_gov_cpu_factor
+from agentctl.govknobs import knob_gov_cpu_factor
+from agentctl.govknobs import (
+    knob_gov_free_need_gb, knob_gov_reserve_gb, knob_gov_resume, knob_gov_spare, knob_gov_starved, knob_suite_cap)
 
 
-SUITE_CAP = 1  # agentctl's own test-suite runs at once ($AGENTCTL_SUITE_CAP): parallel agents queue, never pile up
 GOV_RAMP = 120          # seconds a new ticket's JVM is still growing into its expected memory
-GOV_RESERVE_GB = 1.0
-GOV_FREE_NEED_GB = 2.5  # free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later
 GOV_PRESSURE_DEFAULT = 75  # memory pressure (100 - free %) at which every class but red waits
-
-
-# THE CAPACITY (the owner, 2026-11-19: "if cpu is starved then pause until we have enough resources and resume when we
-# have too much"): BUSY is max(the live tickets' charged cores, the cores processes use now -- ps's %CPU, less the
-# governor's own waiters and idle Claude sessions; never the load average, which read 46 on 18 cores while processes
-# used 5.2). Over GOV_STARVED x the cores the laptop is STARVED: every class but red pauses, its waiters blocking with no
-# CPU; under GOV_RESUME x it is ok again (between the two it keeps its state: no thrashing at one line); under GOV_SPARE x
-# it has SPARE capacity. `agentctl gov capacity` prints it in one line.
-GOV_STARVED = 1.0       # x the cores: over it, starved ($AGENTCTL_GOV_STARVED)
-GOV_RESUME = 0.8        # x the cores: under it, admitting again ($AGENTCTL_GOV_RESUME)
-GOV_SPARE = 0.5         # x the cores: under it, spare ($AGENTCTL_GOV_SPARE)
 
 
 def gov_committed(tickets):
@@ -50,16 +37,16 @@ def gov_ramp(tickets, now=None):
 def gov_starved(busy: float, measured: float, n: int) -> bool:
     """Charged or busy past GOV_STARVED x the cores, or the whole machine's CPU saturated (GOV_SATURATED: a tick
     measure never reads past the cores)."""
-    return busy > env_num("AGENTCTL_GOV_STARVED", GOV_STARVED) * n or measured >= GOV_SATURATED * n
+    return busy > knob_gov_starved() * n or measured >= GOV_SATURATED * n
 
 
 def _capacity_state(busy: Any, measured: Any, n: Any, prev: Any) -> Any:
     """starved | spare | ok for busy of n cores; between GOV_RESUME and GOV_STARVED the previous state is kept."""
     if gov_starved(busy, measured, n):
         return "starved"
-    if busy < env_num("AGENTCTL_GOV_SPARE", GOV_SPARE) * n:
+    if busy < knob_gov_spare() * n:
         return "spare"
-    if busy < env_num("AGENTCTL_GOV_RESUME", GOV_RESUME) * n:
+    if busy < knob_gov_resume() * n:
         return "ok"
     return "starved" if prev == "starved" else "ok"
 
@@ -88,8 +75,8 @@ def _suite_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: A
     if cls != "suite":
         return None
     suites = sum(1 for t in tickets if t.get("class") == "suite")
-    if suites >= env_num("AGENTCTL_SUITE_CAP", SUITE_CAP):
-        return False, f"{suites}/{env_num('AGENTCTL_SUITE_CAP', SUITE_CAP):g} agentctl suite run(s) going (the suite cap)", False
+    if suites >= knob_suite_cap():
+        return False, f"{suites}/{knob_suite_cap():g} agentctl suite run(s) going (the suite cap)", False
     return None
 
 
@@ -116,8 +103,8 @@ def _free_memory_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, co
     """Less free memory than the work needs now (beyond the reserve and what the new tickets are still growing into)."""
     if m.get("free") is None:
         return None
-    room = m["free"] - env_num("AGENTCTL_GOV_RESERVE_GB", GOV_RESERVE_GB) - gov_ramp(tickets)
-    need = min(mem, env_num("AGENTCTL_GOV_FREE_NEED_GB", GOV_FREE_NEED_GB))
+    room = m["free"] - knob_gov_reserve_gb() - gov_ramp(tickets)
+    need = min(mem, knob_gov_free_need_gb())
     if need > room:
         return False, (f"{m['free']:.1f} GB free, {gov_ramp(tickets):.0f} GB still growing: {max(room, 0):.1f} GB "
                        f"for the {need:g} GB it needs now"), True
@@ -140,13 +127,13 @@ def _cpu_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: Any
     cap = gov_capacity(tickets, m)
     if cap["state"] == "starved":
         return False, (f"starved: {cap['busy']:.1f} of {cap['cores']} cores busy (pauses over "
-                       f"{env_num('AGENTCTL_GOV_STARVED', GOV_STARVED):g}x, resumes under "
-                       f"{env_num('AGENTCTL_GOV_RESUME', GOV_RESUME):g}x)"), False
+                       f"{knob_gov_starved():g}x, resumes under "
+                       f"{knob_gov_resume():g}x)"), False
     if cores and cap["charged"] > 0:  # nothing charged: the head goes whatever it asks (never starved by its own size)
         limit = knob_gov_cpu_factor() * cap["cores"]
         if cap["busy"] + cores > limit:
             return False, (f"cores: {cap['charged']:g} charged ({cap['measured']:.1f} measured, {cap['busy']:.1f} busy) "
-                           f"+ {cores:g} over {limit:g} ({env_num('AGENTCTL_GOV_CPU_FACTOR', GOV_CPU_FACTOR):g}x "
+                           f"+ {cores:g} over {limit:g} ({knob_gov_cpu_factor():g}x "
                            f"{cap['cores']} cores)"), False
     return None
 

@@ -8,7 +8,6 @@ from typing import Any, Optional
 from agentctl.timefmt import ts
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.clock import Clock
-from agentctl.knobs import env_num
 from agentctl.core import err, git, git_ok, slug, state_root
 from agentctl.classify import INFRA_LOG, names_failing_test
 from agentctl.forge import forge_env
@@ -24,7 +23,8 @@ from agentctl.batchitem import batch_fail, batch_members
 from agentctl.batchrun import batch_check, bisect
 from agentctl.queuepush import DEEP_BATCHES
 from agentctl.queuefailure import CHECK_TIMEOUT, judge_failure
-from agentctl.knobs import knob_check_lease_ttl
+from agentctl.govknobs import knob_check_lease_ttl
+from agentctl.queueknobs import knob_drift_stall
 
 
 BATCH_LEASE_MAX = 6 * 3600  # the batch executor's leases: its check (2 h) and its bisect (4 h), its machine's bounds
@@ -44,9 +44,6 @@ def red_prechecked(d, st, it, members, tip, base, how, failed=None):
 
 
 DRIFT_CI = "scripts/identity-drift-ci"
-
-
-DRIFT_STALL = 30 * 60  # s with no output before the drift check is ended (no verdict: the batch goes on)
 
 
 # THE DRIFT CHECK'S TOOLS (2026-10-30, batch #4: "could not push measure/ci-lander/f3b716998-drift-aed681"). It was no
@@ -93,7 +90,7 @@ def batch_drift_check(repo, d, tree, base, tip, against_main=False):
     argv = [os.path.join(tree, DRIFT_CI), tip] + (["--against", "main"] if against_main else [])
     wlog(d, f"the batch {tip[:10]} holds {n} identity-model commits: drift check of its tip ({' '.join(argv[1:])})")
     rc, out = run_watched(argv, tree, drift_env(repo), os.path.join(d, f"drift-{tip[:10]}"), "drift",
-                          stall=env_num("AGENTCTL_DRIFT_STALL", DRIFT_STALL), quiet_ok=True)
+                          stall=knob_drift_stall(), quiet_ok=True)
     with open(os.path.join(d, "checks.log"), "a") as f:
         f.write(f"=== drift {ts()} {base[:10]}..{tip[:10]} rc {rc}\n{out}\n")
     last = ([l for l in (out or "").splitlines() if l.strip()] or ["(no output)"])[-1]

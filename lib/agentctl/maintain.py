@@ -15,11 +15,11 @@ from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.knobs import env_num
 from agentctl.core import REPOS, fmt_age, state_root
 from agentctl.allowedpaths import allowed_path
 from agentctl.inboxentry import inbox_write
-from agentctl.maint import MAINTAIN_SWEEP_HOUR, cmd_orphans, spotlight_exclude
+from agentctl.maint import cmd_orphans, spotlight_exclude
+from agentctl.tickknobs import MAINTAIN_SWEEP_HOUR
 from agentctl.notifier import notify
 from agentctl.launchd import launch_agents_dir
 from agentctl.beats import beat_age, write_beat
@@ -27,6 +27,7 @@ from agentctl.dispatchblock import shutil_which
 from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
 from agentctl.upkeep import rotate_logs
 from agentctl.orphanpass import orphan_duty
+from agentctl.tickknobs import knob_cache_expire_days, knob_sweep_hour
 
 
 IOS_SWEEP_TIMEOUT = 120  # seconds: one `scripts/ios-simulators sweep` (it calls xcrun simctl, which can hang)
@@ -121,7 +122,7 @@ def _sweep_section(a: Any, store: Any) -> None:
     st = read_record(path) or {}
     local = dt.datetime.fromtimestamp(epoch_now())
     today, hour = local.date().isoformat(), local.hour
-    if a.sweep or (st.get("sweep") != today and hour >= int(env_num("AGENTCTL_SWEEP_HOUR", MAINTAIN_SWEEP_HOUR))):
+    if a.sweep or (st.get("sweep") != today and hour >= int(knob_sweep_hour())):
         print("== sweep (daily)")
         rc = cmd_sweep(argparse.Namespace(repo=None, idle_days=SWEEP_IDLE_DAYS, dry_run=a.dry_run, no_report=a.dry_run), store)
         if not a.dry_run:
@@ -143,7 +144,7 @@ def _cache_section(a: Any, store: Any) -> None:
     def expire() -> None:
         gone = expire_cache(dry_run=a.dry_run)
         print(f"  {'would remove' if a.dry_run else 'removed'} {len(gone)} cache entr{'y' if len(gone) == 1 else 'ies'} older "
-              f"than {env_num('AGENTCTL_CACHE_EXPIRE_DAYS', CACHE_EXPIRE_DAYS):g} days")
+              f"than {knob_cache_expire_days():g} days")
     print("== cache expiry")
     _guarded("expire", expire)
 
@@ -164,15 +165,6 @@ def cmd_maintain(a: Any, store: Any) -> int:
     for section in MAINTAIN_SECTIONS:
         section(a, store)
     return 0
-
-
-# CACHE EXPIRY (docs/simplification-2026-10.md, Agent B item 3): the state root collects a log per land (and its
-# .checks.out / .push.out / .baseline.out), the phase-2 apply logs, sbt thread dumps, a dir per red run (its fixer
-# records and claude logs), the baseline caches and the internal-tree tags. Each maintain pass removes what is older
-# than CACHE_EXPIRE_DAYS: a file by its mtime, a red run's dir only when all of it is that old and none of its fixers is
-# still running, a tag only when its worktree is gone. Nothing outside the state root, nothing a protected-folder
-# check refuses (allowed_path: never ~/Desktop and the like), no symlink is followed.
-CACHE_EXPIRE_DAYS = 7
 
 
 CACHE_EXPIRE_FILES = (("", ("agentctl-land-*", "phase2-apply-*.log")), ("sbt-dumps", ("*",)),
@@ -257,7 +249,7 @@ def expire_cache(root: str | None = None, days: float | None = None, now: float 
                  dry_run: bool = False) -> list[tuple[str, str]]:
     """[(path, why)] of what this pass removed (or, dry_run, would remove) under the state root."""
     root = os.path.realpath(root or state_root())
-    days = env_num("AGENTCTL_CACHE_EXPIRE_DAYS", CACHE_EXPIRE_DAYS) if days is None else days
+    days = knob_cache_expire_days() if days is None else days
     if not allowed_path(root):
         return []
     expiry = CacheExpiry(root, days, (wall_epoch() if now is None else now) - days * 86400, dry_run)

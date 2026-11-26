@@ -16,8 +16,8 @@ from agentctl.timefmt import ts
 from agentctl.procs import lsof_cwds, ps_rows
 from agentctl.psparse import tosec
 from agentctl.allowedpaths import allowed_path
-from agentctl.knobs import knob_sbt_idle_min, knob_sbt_idle_pressure_min, knob_sbt_progress_cpu_per_min, knob_sbt_stall_min, knob_swap_free_floor_mb
-from agentctl.textknobs import knob_jvm_cwd, knob_jvm_kept, knob_jvm_ps
+from agentctl.govknobs import knob_sbt_idle_min, knob_sbt_idle_pressure_min, knob_sbt_progress_cpu_per_min, knob_sbt_stall_min, knob_swap_free_floor_mb
+from agentctl.govknobs import knob_jvm_cwd, knob_jvm_kept, knob_jvm_ps
 
 
 # A RATE NEEDS A COMPARABLE SAMPLE: the laptop sleeps (1565 sleep/wakes since boot, pmset 2026-11-07), and wall time runs

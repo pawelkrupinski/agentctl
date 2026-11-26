@@ -3096,39 +3096,39 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `alert_quiet_max` | `AGENTCTL_ALERT_QUIET_MAX` | `86400` | s a READ alert stays its item's live one after its last event |
 | `alert_reconcile` | `AGENTCTL_ALERT_RECONCILE` | `60` | s between reconcile passes |
 | `alert_red_owner_level` | `AGENTCTL_ALERT_RED_OWNER_LEVEL` | `2` | offer rounds a red goes untaken (nobody holding it, no family owner) before it is the owner's |
-| `allow` | `AGENTCTL_ALLOW` | - | - |
-| `allowed_roots` | `AGENTCTL_ALLOWED_ROOTS` | - | - |
+| `allow` | `AGENTCTL_ALLOW` | - | extra allowed paths, space-separated |
+| `allowed_roots` | `AGENTCTL_ALLOWED_ROOTS` | - | colon-separated roots the allowed-path check accepts besides its own |
 | `ask_hold` | `AGENTCTL_ASK_HOLD` | `3600` | s a question its block's probe may answer is held (recorded, not told) |
 | `ask_remind_first` | `AGENTCTL_ASK_REMIND_FIRST` | `3600` | the first reminder this long after the owner was told |
 | `ask_remind_max` | `AGENTCTL_ASK_REMIND_MAX` | `14400` | ...then doubling up to this |
-| `assign_bound` | `AGENTCTL_ASSIGN_BOUND` | `20` | - |
-| `attach_poll` | `AGENTCTL_ATTACH_POLL` | `15` | - |
+| `assign_bound` | `AGENTCTL_ASSIGN_BOUND` | `20` | s the red tick on the gate snapshot may run before it is abandoned |
+| `attach_poll` | `AGENTCTL_ATTACH_POLL` | `15` | s between a wait's looks at an attached session |
 | `author_active_min` | `AGENTCTL_AUTHOR_ACTIVE_MIN` | `15` | live = a pid alive and activity within this |
 | `awake_pid` | `AGENTCTL_AWAKE_PID` | - | the process that already holds the keep-awake (a child's inherited copy) |
 | `backlog_batch_max` | `AGENTCTL_BACKLOG_BATCH_MAX` | `8` | a backlog batch's members at most: its bisect is 3 prefix checks + 1 confirmation |
 | `backlog_batch_min` | `AGENTCTL_BACKLOG_BATCH_MIN` | `2` | queued changes that may share a check and make a backlog batch |
-| `baseline` | `AGENTCTL_BASELINE` | `1` | - |
+| `baseline` | `AGENTCTL_BASELINE` | `1` | 0: skip the baseline run of a land's dry run |
 | `batch_retry_max` | `AGENTCTL_BATCH_RETRY_MAX` | `3` | - |
 | `bg_idle_grace` | `AGENTCTL_BG_IDLE_GRACE` | `60` | s a waiting session with no pending task of its own and no verdict stays quiet: its turn ended |
 | `bg_poll` | `AGENTCTL_BG_POLL` | `5` | seconds between the wrapper's looks at its session |
 | `bg_spent_grace` | `AGENTCTL_BG_SPENT_GRACE` | `120` | s a session must have run before the reaper judges it |
-| `bin_repo` | `AGENTCTL_BIN_REPO` | - | - |
+| `bin_repo` | `AGENTCTL_BIN_REPO` | - | the agentctl checkout (default: the one the tool runs from) |
 | `blame_max` | `AGENTCTL_BLAME_MAX` | `5400` | s a red may wait for its culprit to be decided before a fresh fixer gets it |
 | `blame_probes` | `AGENTCTL_BLAME_PROBES` | `4` | CI probes one red's culprit search may start |
 | `blame_probe_wall` | `AGENTCTL_BLAME_PROBE_WALL` | `7200` | s one probe may run before it is no verdict |
-| `brief` | `AGENTCTL_BRIEF` | `~/bin/briefs/movies-agent-preamble.md` | - |
+| `brief` | `AGENTCTL_BRIEF` | - | the agents' brief file (default ~/bin/briefs/movies-agent-preamble.md) |
 | `brief_src` | `AGENTCTL_BRIEF_SRC` | - | a file to use instead of the tracked docs/fixer-brief.md in fixers' prompts (an override): none by default |
 | `cache_expire_days` | `AGENTCTL_CACHE_EXPIRE_DAYS` | `7` | - |
 | `caffeinate` | `AGENTCTL_CAFFEINATE` | `/usr/bin/caffeinate` | the keep-awake tool; empty: none |
 | `change_hold_max` | `AGENTCTL_CHANGE_HOLD_MAX` | `21600` | s |
-| `checks_dir` | `AGENTCTL_CHECKS_DIR` | - | - |
+| `checks_dir` | `AGENTCTL_CHECKS_DIR` | - | the directory of the check slots' files (default checks under the state root) |
 | `check_lease_ttl` | `AGENTCTL_CHECK_LEASE_TTL` | `600` | - |
 | `check_trees` | `AGENTCTL_CHECK_TREES` | `4` | check trees, so at most this many queued changes are checked at once |
 | `claude` | `AGENTCTL_CLAUDE` | - | the `claude` CLI to launch (tests' fake); default: PATH, ~/.local/bin |
-| `claude_jobs` | `AGENTCTL_CLAUDE_JOBS` | - | - |
-| `claude_projects` | `AGENTCTL_CLAUDE_PROJECTS` | - | - |
+| `claude_jobs` | `AGENTCTL_CLAUDE_JOBS` | - | the Claude jobs directory (default ~/.claude/jobs) |
+| `claude_projects` | `AGENTCTL_CLAUDE_PROJECTS` | - | the Claude projects directory (default ~/.claude/projects) |
 | `claude_settings` | `AGENTCTL_CLAUDE_SETTINGS` | - | the interactive sessions' settings.json (default ~/.claude/settings.json) |
-| `claude_tmp` | `AGENTCTL_CLAUDE_TMP` | - | - |
+| `claude_tmp` | `AGENTCTL_CLAUDE_TMP` | - | the Claude session's scratch directory |
 | `cleanup_item_timeout` | `AGENTCTL_CLEANUP_ITEM_TIMEOUT` | `120` | $AGENTCTL_CLEANUP_ITEM_TIMEOUT |
 | `cleanup_remove_reserve` | `AGENTCTL_CLEANUP_REMOVE_RESERVE` | `300` | $AGENTCTL_CLEANUP_REMOVE_RESERVE |
 | `clone_keepalive` | `AGENTCTL_CLONE_KEEPALIVE` | `20` | - |
@@ -3140,11 +3140,11 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `contact_pause_max` | `AGENTCTL_CONTACT_PAUSE_MAX` | `43200` | s a silent machine's leases are paused at most |
 | `context_fresh` | `AGENTCTL_CONTEXT_FRESH` | `300000` | tokens: a session whose last turn's context is past this is not resumed but started fresh |
 | `disk_min_gb` | `AGENTCTL_DISK_MIN_GB` | `50` | the Data volume's free space below which the upkeep runs at once, then WD opens |
-| `disk_path` | `AGENTCTL_DISK_PATH` | - | - |
+| `disk_path` | `AGENTCTL_DISK_PATH` | - | the path whose free space the disk checks read (default: the home directory) |
 | `dispatch_dir` | `AGENTCTL_DISPATCH_DIR` | - | the dispatches' directory (default beside the reds') |
-| `dispatch_find` | `AGENTCTL_DISPATCH_FIND` | `12` | - |
-| `dispatch_find_poll` | `AGENTCTL_DISPATCH_FIND_POLL` | `5` | - |
-| `drift_ci` | `AGENTCTL_DRIFT_CI` | - | - |
+| `dispatch_find` | `AGENTCTL_DISPATCH_FIND` | `12` | polls for a just-dispatched run to be listed |
+| `dispatch_find_poll` | `AGENTCTL_DISPATCH_FIND_POLL` | `5` | s between those polls |
+| `drift_ci` | `AGENTCTL_DRIFT_CI` | - | the drift CI script (default scripts/identity-drift-ci of the repository) |
 | `drift_stall` | `AGENTCTL_DRIFT_STALL` | `1800` | s with no output before the drift check is ended (no verdict: the batch goes on) |
 | `early_max_runs` | `AGENTCTL_EARLY_MAX_RUNS` | `6` | in-progress runs read per tick, the gate's first |
 | `ever_green_recheck` | `AGENTCTL_EVER_GREEN_RECHECK` | `600` | s before a never-green answer is asked of GitHub again |
@@ -3156,17 +3156,17 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `fixer_unlanded_nudge` | `AGENTCTL_FIXER_UNLANDED_NUDGE` | `2700` | - |
 | `fix_replay_timeout` | `AGENTCTL_FIX_REPLAY_TIMEOUT` | `1800` | s one side of agentctl's replay may run |
 | `free_wait` | `AGENTCTL_FREE_WAIT` | `30` | s --until-done waits for a landed worktree to be free of processes before it keeps it |
-| `gate_publish` | `AGENTCTL_GATE_PUBLISH` | `45` | - |
+| `gate_publish` | `AGENTCTL_GATE_PUBLISH` | `45` | s between the gate line's publishes (a push to main publishes at once) |
 | `generated_regen_timeout` | `AGENTCTL_GENERATED_REGEN_TIMEOUT` | `1200` | s a generated file's regen command may run before the conflict is the author's |
 | `gh_cli` | `AGENTCTL_GH_CLI` | `gh` | the GitHub CLI |
-| `githubstatus_url` | `AGENTCTL_GITHUBSTATUS_URL` | `https://www.githubstatus.com/api/v2/incidents.json` | - |
+| `githubstatus_url` | `AGENTCTL_GITHUBSTATUS_URL` | `https://www.githubstatus.com/api/v2/incidents.json` | the GitHub status incidents feed |
 | `github_api` | `AGENTCTL_GITHUB_API` | `https://api.github.com` | the GitHub API base |
 | `github_lander_repos` | `AGENTCTL_GITHUB_LANDER_REPOS` | `pawelkrupinski/movies` | the repos the lander App writes to, comma-separated |
 | `gov_admit_max` | `AGENTCTL_GOV_ADMIT_MAX` | `7200` | a check waits this long for the governor at most |
-| `gov_budget_gb` | `AGENTCTL_GOV_BUDGET_GB` | `round(0.6 * ram_gb(` | - |
+| `gov_budget_gb` | `AGENTCTL_GOV_BUDGET_GB` | `round(0.6 * ram_gb, 1` | the memory in GB the governor hands out; default 0.6 x the machine's RA |
 | `gov_busy_probe` | `AGENTCTL_GOV_BUSY_PROBE` | - | a command printing the busy cores (tests) |
 | `gov_cpu_factor` | `AGENTCTL_GOV_CPU_FACTOR` | `1.0` | charged cores (or the load) + a job's own may reach this x the cores |
-| `gov_evict_settle` | `AGENTCTL_GOV_EVICT_SETTLE` | `3` | - |
+| `gov_evict_settle` | `AGENTCTL_GOV_EVICT_SETTLE` | `3` | s to wait after evicting a ticket for its memory to free |
 | `gov_free_need_gb` | `AGENTCTL_GOV_FREE_NEED_GB` | `2.5` | free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later |
 | `gov_idle_max` | `AGENTCTL_GOV_IDLE_MAX` | `30.0` | s a waiter behind the head waits at most between two reads of the queue |
 | `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | - |
@@ -3175,12 +3175,12 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `gov_resume` | `AGENTCTL_GOV_RESUME` | `0.8` | x the cores: under it, admitting again |
 | `gov_spare` | `AGENTCTL_GOV_SPARE` | `0.5` | x the cores: under it, spare |
 | `gov_starved` | `AGENTCTL_GOV_STARVED` | `1.0` | x the cores: over it, starved |
-| `hostname` | `AGENTCTL_HOSTNAME` | - | - |
+| `hostname` | `AGENTCTL_HOSTNAME` | - | this host's name (default: the system's) |
 | `identity` | `AGENTCTL_IDENTITY` | - | github-app: credentials come from the GitHub Apps (ci-runner) |
 | `inbox_dir` | `AGENTCTL_INBOX_DIR` | - | the inbox's directory (default inbox under the state root) |
 | `inbox_poll` | `AGENTCTL_INBOX_POLL` | `1.0` | seconds between stat()s of the inbox directory |
 | `infra_same_max` | `AGENTCTL_INFRA_SAME_MAX` | `1800` | - |
-| `internal_trees_dir` | `AGENTCTL_INTERNAL_TREES_DIR` | - | - |
+| `internal_trees_dir` | `AGENTCTL_INTERNAL_TREES_DIR` | - | the internal checkouts' directory (default internal-trees under the state root) |
 | `issue_escalate_gap` | `AGENTCTL_ISSUE_ESCALATE_GAP` | `120` | s between two issues' escalations |
 | `kick_handoff_wait` | `AGENTCTL_KICK_HANDOFF_WAIT` | `30` | s a kick waits for launchd's new processor to listen before handing it the token |
 | `landed_look` | `AGENTCTL_LANDED_LOOK` | `600` | - |
@@ -3199,21 +3199,21 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `laptop_role_ttl` | `AGENTCTL_LAPTOP_ROLE_TTL` | `600` | s a silent holder keeps the role |
 | `laptop_swap_growth_mb` | `AGENTCTL_LAPTOP_SWAP_GROWTH_MB` | `1024` | holds other work while swap grew this much (MB) within LAPTOP_SWAP_WINDOW |
 | `laptop_swap_window` | `AGENTCTL_LAPTOP_SWAP_WINDOW` | `600` | seconds of swap samples the growth is read over |
-| `launch_agents` | `AGENTCTL_LAUNCH_AGENTS` | - | - |
-| `live_globs` | `AGENTCTL_LIVE_GLOBS` | - | - |
+| `launch_agents` | `AGENTCTL_LAUNCH_AGENTS` | - | the launchd agents' directory (default ~/Library/LaunchAgents) |
+| `live_globs` | `AGENTCTL_LIVE_GLOBS` | - | the live sessions' transcript globs (default: the Claude projects') |
 | `live_poll` | `AGENTCTL_LIVE_POLL` | `1.0` | s between looks at a quiet file |
 | `log_rotate_keep` | `AGENTCTL_LOG_ROTATE_KEEP` | `3` | rotated parts kept per log (<log>.1 newest .. <log>.N oldest) |
 | `log_rotate_max` | `AGENTCTL_LOG_ROTATE_MAX` | `10485760` | bytes over which an agentctl log is rotated (copy-truncate; its newest part kept as .1) |
 | `machine` | `AGENTCTL_MACHINE` | - | - |
 | `machine_id` | `AGENTCTL_MACHINE_ID` | - | - |
-| `max_checks` | `AGENTCTL_MAX_CHECKS` | - | - |
+| `max_checks` | `AGENTCTL_MAX_CHECKS` | - | the check slots' cap, overriding the budget's |
 | `max_foreign` | `AGENTCTL_MAX_FOREIGN` | `2` | files a push may revert to an older main before prepush-check refuses |
-| `min_interval` | `AGENTCTL_MIN_INTERVAL` | `60` | - |
-| `movies_remote` | `AGENTCTL_MOVIES_REMOTE` | - | - |
-| `movies_repo` | `AGENTCTL_MOVIES_REPO` | - | - |
+| `min_interval` | `AGENTCTL_MIN_INTERVAL` | `60` | s the least poll interval of `agentctl wait` |
+| `movies_remote` | `AGENTCTL_MOVIES_REMOTE` | - | the movies repository's clone URL the server's clone fetches from (default: the clone's own) |
+| `movies_repo` | `AGENTCTL_MOVIES_REPO` | - | the movies checkout (default ~/projects/movies) |
 | `note_precheck_wait` | `AGENTCTL_NOTE_PRECHECK_WAIT` | `110` | s a precheck's note waits at most for the store or its item (the delays above, cut at this) |
-| `notifier` | `AGENTCTL_NOTIFIER` | - | - |
-| `notify` | `AGENTCTL_NOTIFY` | - | - |
+| `notifier` | `AGENTCTL_NOTIFIER` | - | the notification tool (default: terminal-notifier on PATH, else osascript) |
+| `notify` | `AGENTCTL_NOTIFY` | - | a command run to notify the owner (set: used instead of the notifier) |
 | `notify_timeout` | `AGENTCTL_NOTIFY_TIMEOUT` | `30` | s, each channel: an overloaded laptop's osascript cold start takes 10 s and more |
 | `orphan_fixers` | `AGENTCTL_ORPHAN_FIXERS` | `2` | orphan fixers alive at once ; one dispatched a pass |
 | `orphan_idle` | `AGENTCTL_ORPHAN_IDLE` | `7200` | - |
@@ -3221,11 +3221,11 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `owner_active` | `AGENTCTL_OWNER_ACTIVE` | `7200` | - |
 | `owner_idle` | `AGENTCTL_OWNER_IDLE` | `21600` | no red held this long: the owner ends |
 | `park_digest_days` | `AGENTCTL_PARK_DIGEST_DAYS` | `14` | - |
-| `pinned_recording` | `AGENTCTL_PINNED_RECORDING` | - | - |
+| `pinned_recording` | `AGENTCTL_PINNED_RECORDING` | - | the pinned recording's id the identity checks use |
 | `push_batch_min` | `AGENTCTL_PUSH_BATCH_MIN` | `2` | changes owing a verify round that make a push batch |
 | `push_stall_secs` | `AGENTCTL_PUSH_STALL_SECS` | `180` | - |
 | `push_wall_min` | `AGENTCTL_PUSH_WALL_MIN` | `45` | - |
-| `queue` | `AGENTCTL_QUEUE` | `1` | - |
+| `queue` | `AGENTCTL_QUEUE` | `1` | 0: no batching queue |
 | `queue_stall_after` | `AGENTCTL_QUEUE_STALL_AFTER` | `5400` | s with open changes and no change moving before QUEUE STALLED opens (queuestall.py) |
 | `recovery_dir` | `AGENTCTL_RECOVERY_DIR` | - | the recovery notes' directory |
 | `recover_max` | `AGENTCTL_RECOVER_MAX` | `600` | a probe is re-run at most this far apart, however often it failed |
@@ -3234,7 +3234,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_crash_loop` | `AGENTCTL_RED_CRASH_LOOP` | `3` | $AGENTCTL_RED_CRASH_LOOP |
 | `red_decided_revert_max` | `AGENTCTL_RED_DECIDED_REVERT_MAX` | `2700` | - |
 | `red_decision_block_max` | `AGENTCTL_RED_DECISION_BLOCK_MAX` | `604800` | an owner-decision block lapses after this: the red offered again (2026-11-03: was |
-| `red_families` | `AGENTCTL_RED_FAMILIES` | - | - |
+| `red_families` | `AGENTCTL_RED_FAMILIES` | - | the red families' file (default red-families.json beside the tool) |
 | `red_fixers` | `AGENTCTL_RED_FIXERS` | `5` | live fixers at once, every family together |
 | `red_fixer_wall` | `AGENTCTL_RED_FIXER_WALL` | `10800` | a dispatched fixer's maximum wall time |
 | `red_fix_decide` | `AGENTCTL_RED_FIX_DECIDE` | `10800` | - |
@@ -3249,8 +3249,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `red_orphan_grace` | `AGENTCTL_RED_ORPHAN_GRACE` | `300` | an ended session's turn still held this long is orphaned |
 | `red_others_every` | `AGENTCTL_RED_OTHERS_EVERY` | `60` | seconds between the other watched repos' red ticks: one gate read each |
 | `red_renew` | `AGENTCTL_RED_RENEW` | `60` | a fixer's wrapper renews its lease this often |
-| `red_repo` | `AGENTCTL_RED_REPO` | - | - |
-| `red_repos` | `AGENTCTL_RED_REPOS` | - | - |
+| `red_repo` | `AGENTCTL_RED_REPO` | - | the one repository reds are read for (default: the movies repository) |
+| `red_repos` | `AGENTCTL_RED_REPOS` | - | the red repositories' file (default red-repos.json beside the tool) |
 | `red_skip_say` | `AGENTCTL_RED_SKIP_SAY` | `600` | s between the lines of another repo whose tick keeps failing for the same reason |
 | `red_stale_days` | `AGENTCTL_RED_STALE_DAYS` | `14` | $AGENTCTL_RED_STALE_DAYS |
 | `red_stall` | `AGENTCTL_RED_STALL` | `1800` | a turn with no progress (transcript, worktree) this long is stalled: stopped |
@@ -3261,7 +3261,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `remote` | `AGENTCTL_REMOTE` | - | the push and fetch remote of every clone |
 | `remote_ghost` | `AGENTCTL_REMOTE_GHOST` | `600` | s |
 | `restart_check` | `AGENTCTL_RESTART_CHECK` | `30` | seconds between code-version checks |
-| `runners_page_cache` | `AGENTCTL_RUNNERS_PAGE_CACHE` | `f"{HOME}/.cache/ci-runners-page/last-good.json"` | - |
+| `runners_page_cache` | `AGENTCTL_RUNNERS_PAGE_CACHE` | - | the runners page's last good copy (default ~/.cache/ci-runners-page/last-good.json) |
 | `sbt_idle_min` | `AGENTCTL_SBT_IDLE_MIN` | `120` | min a detached sbt server with no client may sit idle before the reaper ends it |
 | `sbt_idle_pressure_min` | `AGENTCTL_SBT_IDLE_PRESSURE_MIN` | `30` | that limit while swap free is under the floor |
 | `sbt_progress_cpu_per_min` | `AGENTCTL_SBT_PROGRESS_CPU_PER_MIN` | `1.0` | CPU s/min since the previous pass above which an sbt server counts as working |
@@ -3272,23 +3272,23 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `sleep_min` | `AGENTCTL_SLEEP_MIN` | `120` | s of sleep inside a lapse's window that count as "the host was asleep" |
 | `sock_dir` | `AGENTCTL_SOCK_DIR` | - | the token hand-off sockets' directory (default /tmp/agentctl-<uid>) |
 | `stall_cpu_seconds` | `AGENTCTL_STALL_CPU_SECONDS` | `1.0` | CPU that counts as progress per window: a watchdog's polls are not work |
-| `state_file` | `AGENTCTL_STATE_FILE` | - | - |
+| `state_file` | `AGENTCTL_STATE_FILE` | - | the CI state file (default state.json under the state root) |
 | `state_root` | `AGENTCTL_STATE_ROOT` | - | the state root (default ~/.cache/agentctl) |
 | `stats_every` | `AGENTCTL_STATS_EVERY` | `60` | s between passes |
 | `stats_pass_bound` | `AGENTCTL_STATS_PASS_BOUND` | `40` | s a pass works at most (a tick step) |
 | `stats_per_pass` | `AGENTCTL_STATS_PER_PASS` | `150` | records a pass sends at most (the backfill spreads over passes) |
 | `stats_settle` | `AGENTCTL_STATS_SETTLE` | `900` | s after an exit before its record is built: the collector exports a run <= 5 min after it ends |
-| `stats_url` | `AGENTCTL_STATS_URL` | - | - |
+| `stats_url` | `AGENTCTL_STATS_URL` | - | the stats collector's URL |
 | `status_agent_bound` | `AGENTCTL_STATUS_AGENT_BOUND` | `4` | s the page waits for one agent's details |
 | `status_bound` | `AGENTCTL_STATUS_BOUND` | `8` | s a source may take ; the agents' source twice that |
-| `status_page` | `AGENTCTL_STATUS_PAGE` | - | - |
-| `status_port` | `AGENTCTL_STATUS_PORT` | - | - |
+| `status_page` | `AGENTCTL_STATUS_PAGE` | - | 0, off or no: the status page is not served |
+| `status_port` | `AGENTCTL_STATUS_PORT` | - | the status page's port (default: the first free of its range) |
 | `step_bound` | `AGENTCTL_STEP_BOUND` | `120` | s one tick step may run before it is abandoned (the red tick's steps and the sync steps) |
 | `step_join` | `AGENTCTL_STEP_JOIN` | `20` | - |
 | `store_retries` | `AGENTCTL_STORE_RETRIES` | `4` | - |
 | `store_retry_base` | `AGENTCTL_STORE_RETRY_BASE` | `0.5` | s; doubled each attempt: 0.5 + 1 + 2 + 4 = 7.5 s at most |
-| `store_secret` | `AGENTCTL_STORE_SECRET` | - | - |
-| `store_url` | `AGENTCTL_STORE_URL` | - | - |
+| `store_secret` | `AGENTCTL_STORE_SECRET` | - | the store's shared secret (default: the built-in one) |
+| `store_url` | `AGENTCTL_STORE_URL` | - | the remote store's URL (set: every process uses it) |
 | `streak_rereads` | `AGENTCTL_STREAK_REREADS` | `3` | stale or missing streak run signatures read again per tick |
 | `suite_cap` | `AGENTCTL_SUITE_CAP` | `1` | agentctl's own test-suite runs at once : parallel agents queue, never pile up |
 | `swap_free_floor_mb` | `AGENTCTL_SWAP_FREE_FLOOR_MB` | `2048` | swap free (MB) below which the shorter idle limit applies |
@@ -3296,7 +3296,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `sync_mirror` | `AGENTCTL_SYNC_MIRROR` | `10` | s between the laptop's copies of /v1/state into state.json |
 | `tick` | `AGENTCTL_TICK` | `5` | seconds between ticks ; every step is bounded or rate-limited inside |
 | `token_summary` | `AGENTCTL_TOKEN_SUMMARY` | `600` | s between the summaries of a still-missing token (said on its transition first) |
-| `tunnel_state` | `AGENTCTL_TUNNEL_STATE` | - | - |
+| `tunnel_state` | `AGENTCTL_TUNNEL_STATE` | - | the tunnel's health file (default tunnel-health.json under the state root) |
 | `unheld_grace` | `AGENTCTL_UNHELD_GRACE` | `600` | s |
 | `unkicked_after` | `AGENTCTL_UNKICKED_AFTER` | `3600` | a convergence-relevant main push with no convergence (or Identity takes) run on main by then is a red |
 | `unknown_grace` | `AGENTCTL_UNKNOWN_GRACE` | `300` | s an UNKNOWN condition must keep failing (seen again past this) before it opens |
@@ -3314,7 +3314,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `watchdog_retell` | `AGENTCTL_WATCHDOG_RETELL` | `21600` | s |
 | `watchdog_sleep_gap` | `AGENTCTL_WATCHDOG_SLEEP_GAP` | `180` | s since the watchdog's own last pass (launchd: every 60 s) that mean the laptop slept |
 | `watch_conv_start` | `AGENTCTL_WATCH_CONV_START` | `3600` | no convergence (or takes) run containing the sha started by then: said, not waited for |
-| `watch_error_poll` | `AGENTCTL_WATCH_ERROR_POLL` | `30` | - |
+| `watch_error_poll` | `AGENTCTL_WATCH_ERROR_POLL` | `30` | s of the first retry delay after the watch could not read the runs |
 | `watch_follow_lease` | `AGENTCTL_WATCH_FOLLOW_LEASE` | `600` | s a follower's claim on a sha's watch item lasts unrenewed; then the tick (or another follower) takes it |
 | `watch_poll` | `AGENTCTL_WATCH_POLL` | `60` | - |
 | `watch_stall_min` | `AGENTCTL_WATCH_STALL_MIN` | `120` | a watch with no change in its runs for this long ends WATCH STALLED |

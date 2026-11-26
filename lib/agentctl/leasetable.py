@@ -5,7 +5,7 @@ import json
 import re
 import sqlite3
 from typing import Any, Callable
-from agentctl.knobs import knob_contact_gap, knob_contact_pause_max
+from agentctl.storeknobs import knob_contact_gap, knob_contact_pause_max
 from agentctl.statefile import json_object
 
 

@@ -3,39 +3,18 @@
 
 from typing import Any
 from agentctl.holdgraph import push_due
-from agentctl.core import env_num, git, remote
+from agentctl.core import git, remote
 from agentctl.queueslots import checker_alive
 from agentctl.queuerecheck import verdict_kept
 from agentctl.identitychange import identity_model_commits
 from agentctl.changekind import classify_change
 from agentctl.queuebatch import batch_queued, batch_round, kind_of
 from agentctl.recovery import current_batch
-
-
-# ---------------------------------------------------------------- the backlog batch (the owner, 2026-11-17)
-# "BATCH WHENEVER THERE'S A BACKLOG, NOT ONLY ON RED": with 6-8 changes queued at green each paid a 30-40 min check of
-# its own, mostly waiting for a ci-runner check slot. Now, at green with no batch open, BACKLOG_BATCH_MIN or more queued
-# changes that no checker has taken and that may share a check (backlog_batchable: identity changes too, 2026-11-20;
-# no `land --no-batch`, no red fix, no combined-tree verification
-# round, none in an infra backoff or holding an unread remote run) are THE BATCH ABOVE with depth `full`: assembled in
-# queue order (Fixes-Red first; a member that does not apply is left out and checked alone, batch_alone), its tip
-# checked once with the FULL landing check (the hook's --range dry run; on ci-runner check/batch-<tip>, the same
-# precommit-check round a change gets, area tests and heavy rows included -- no member had a check of its own), in
-# ONE check tree. Pass: one push carrying that run (PREPUSH_REMOTE_RUN), every member LANDED with its own record and
-# watch (batch_id, batch). Fail: bisected by prefix (no whole-batch re-check first: the culprit's own confirmation
-# guards a flaky failure), the culprit rejected only when its failure is its own (judge_failure: a base red, a time
-# cap or an infra failure sends it to a check of its own instead), the passing prefix pushed at once, the rest queued
-# again (backlog_reconcile). At most BACKLOG_BATCH_MAX members, so a bisect is at most 4 extra rounds (3 prefixes and
-# the confirmation). While such candidates wait for a tree, the change tick gives them none of its own (they wait for
-# the batch); red fixes are checked alone beside it, and a red fix never waits for it.
-BACKLOG_BATCH_MIN = 2  # queued changes that may share a check and make a backlog batch
-
-
-BACKLOG_BATCH_MAX = 8  # a backlog batch's members at most: its bisect is 3 prefix checks + 1 confirmation
+from agentctl.queueknobs import knob_backlog_batch_max, knob_backlog_batch_min, knob_push_batch_min
 
 
 def backlog_min():
-    return max(2, int(env_num("AGENTCTL_BACKLOG_BATCH_MIN", BACKLOG_BATCH_MIN)))
+    return max(2, int(knob_backlog_batch_min()))
 
 
 def backlog_candidates(repo, d, reds, st, t=None, facts=None):
@@ -60,36 +39,13 @@ def backlog_candidates(repo, d, reds, st, t=None, facts=None):
 
 
 def batch_max() -> int:
-    return int(env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX))
+    return int(knob_backlog_batch_max())
 
 
 def backlog_held(repo, d, reds, st, t=None, facts=None):
     """The ids of the queued changes the change tick holds back for the next backlog batch: with no batch open, the
     candidates one would take now."""
     return set() if current_batch(st, d) else {c["id"] for c in backlog_candidates(repo, d, reds, st, t, facts)}
-
-
-# ---------------------------------------------------------------- the push batch (the owner, 2026-11-17)
-# "COMBINE THEM INSTEAD OF LANDING THEM ONE BY ONE" (W1: the oldest unlanded change over 2 h). A checked change pushed
-# alone: on a main that moved since its full check it got a verify round of its own (THE RULE, queue.py), and THE
-# OLDEST VERIFICATION PUSHES FIRST held every younger checked change meanwhile -- so N checked changes landed serially,
-# each paying a check-runner wait plus a ~10-min verify round after the previous push moved main (ref-scrapers
-# verifying while pr274 and postlanding held their pushes behind it, each to verify again after it pushed). Now, at
-# green with no batch open (a change's own verify round running holds none: A LONE VERIFICATION HOLDS NO BATCH), PUSH_BATCH_MIN or more changes that would each need a verify
-# round on the current main (push_batchable: checked on an older main, or queued for a verify round; no red fix, no
-# `land --no-batch`, no known red, none in a backoff) are THE BATCH ABOVE with depth `verify`, the backlog batch's
-# machine: assembled oldest first on the current main, each member judged by THE RULE against main plus the members
-# before it (batch.py push_batch_full_round: ONE ROUND, THE DEEPEST A MEMBER OWES -- one needing a FULL round, or a
-# queued member never checked, makes it the full landing check; nobody is left out), else the union verified ONCE (the hook's --verify-only
-# over <the oldest member's full base>..<tip>: every test config compiled, the lints, the fast specs and the unit
-# tests of every module a member or what landed meanwhile touches; on ci-runner check/verify-<base>-batch-<tip>), and
-# pushed ONCE (the hook skipping the plan the members' full checks passed, as a lone verified change's push does).
-# Fail: bisected by prefix as the backlog batch is (the culprit confirmed, rejected only when the failure is its own),
-# the passing prefix pushed, the rest queued again for their verify round. More than one identity-model commit in it:
-# G5's drift check of its tip (check_batch); after a drift split, one identity change per batch (drift_serialize). A
-# change checked while a push batch runs is no member: its push waits for the batch (batch_goes_first) and it joins
-# the next one. At most BACKLOG_BATCH_MAX members.
-PUSH_BATCH_MIN = 2  # changes owing a verify round that make a push batch
 
 
 def _queued_owes_verify_round(st: Any, e: Any) -> Any:
@@ -141,7 +97,7 @@ def push_candidates(repo, d, reds, st, t=None, facts=None):
     out = sorted(owing + [e for e in batch_queued(st, repo, d, entries, facts, t) if e["id"] not in ids],
                  key=lambda e: e["seq"])
     out = drift_serialize(repo, out)[:batch_max()]
-    return out if len(out) >= max(2, int(env_num("AGENTCTL_PUSH_BATCH_MIN", PUSH_BATCH_MIN))) else []
+    return out if len(out) >= max(2, int(knob_push_batch_min())) else []
 
 
 def push_held(repo, d, reds, st, t=None, facts=None):

@@ -4,20 +4,20 @@
 import os
 import re
 from typing import Any
-from agentctl.knobs import env_num
-from agentctl.core import err, fmt_age, git, host_role, remote, slug
 from agentctl.timefmt import parse_time
+from agentctl.storeknobs import knob_remote_ghost
+from agentctl.leasetable import LeaseLost
+from agentctl.core import err, fmt_age, git, host_role, remote, slug
 from agentctl.classify import check_push_failure, credential_failure
-from agentctl.store import LeaseLost
 from agentctl.forge import api, forge_actions_run, forge_actions_runs, forge_delete_branch, forge_find_run
 from agentctl.waitingdir import save_entry, waiting_state, wlog
 from agentctl.procs import Terminated
-from agentctl.leases import lock_beat
 from agentctl.wait import fetch_failed_log, job_log_lines, relevant_lines
-from agentctl.owned import backoff, cancel_run
+from agentctl.leases import lock_beat
 from agentctl.dispatches import record_dispatch, save_dispatch
-from agentctl.queue import VERIFY_AREAS_MODE, VERIFY_MODE
 from agentctl.remotejobs import REMOTE_WORKFLOW, jobs_verdict, remote_progress, remote_read_bounds, verdict_jobs
+from agentctl.owned import backoff, cancel_run
+from agentctl.queue import VERIFY_AREAS_MODE, VERIFY_MODE
 
 
 REMOTE_TIMEOUT = 2 * 3600  # s past its push a run may be cancelled -- only when idle REMOTE_IDLE (RUN PROGRESS, below)
@@ -39,13 +39,6 @@ def remote_matches(e, base, head, mode):
     return None
 
 
-# A RUN NO SCHEDULER CAN SEE IS NO CHECK (2026-11-20, phase7-houses: precommit-check run 44682642375 sat `queued` from
-# 05:41Z, its check jobs never started, while later runs' jobs ran: GitHub's own run listing -- `actions/runs?status=
-# queued` and `?status=in_progress` -- left it out, and ci-runner's runner scheduler, which reads exactly those listings,
-# never started a runner with its pin label. agentctl waited for REMOTE_TIMEOUT (2 h) on it, the change's deadline
-# laps meanwhile). A run whose check jobs have none started and which neither listing names for REMOTE_GHOST is
-# cancelled and given up (no verdict: re-checked, keeping its place), never waited on for hours.
-REMOTE_GHOST = 10 * 60  # s ($AGENTCTL_REMOTE_GHOST)
 REMOTE_LISTED_PAGES = 5  # pages of 100 of each status read before a ghost check says it cannot tell
 
 
@@ -83,7 +76,7 @@ def remote_ghost(o_r, rem, jobs, t):
     if _check_job_started(jobs) or not jobs or remote_run_listed(o_r, rem["run"]):
         return {k: v for k, v in rem.items() if k != "unlisted_at"}
     rem = {**rem, "unlisted_at": rem.get("unlisted_at") or t}
-    if t - float(rem["unlisted_at"]) >= env_num("AGENTCTL_REMOTE_GHOST", REMOTE_GHOST):
+    if t - float(rem["unlisted_at"]) >= knob_remote_ghost():
         rem.update(status="abandoned", ghost=True, decided_at=t,
                    out=f"{REMOTE_WORKFLOW} run {rem['run']} queued {int((t - float(rem['unlisted_at'])) // 60)} min with "
                        f"no check job started, and GitHub's queued/in-progress listing omits it (ci-runner's runner "

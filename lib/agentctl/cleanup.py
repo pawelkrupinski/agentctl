@@ -15,7 +15,6 @@ import signal
 import subprocess
 import time
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
 from agentctl.core import (
     GIT_NET_SSH, HOME, PROTECTED_BRANCHES, err, git, git_ok, remote, run_cmd, slug,
     state_root)
@@ -26,17 +25,10 @@ from agentctl.worktrees import CACHE_TREES, gitdir_activity, merged_reason, work
 from agentctl.maint import cmd_orphans
 from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
 from agentctl.dispatches import orphan_branches
-from agentctl.knobs import SBT_STALL_MIN
-from agentctl.textknobs import knob_sbt_reap
-
-
-# A CLEANUP IS BOUNDED PER TREE AND AS A WHOLE (2026-11-22: the upkeep's `cleanup --execute --no-remote` ran past its
-# 1800 s bound at 03:58Z and was killed in the middle of a `git worktree remove`). Each tree's own git reads get
-# CLEANUP_ITEM_TIMEOUT -- a tree that cannot be decided in that time is kept, said, and looked at next pass -- the
-# fetch is the unattended bounded_fetch (180 s, not git()'s 600 s), and the whole pass stops by itself at its
-# --deadline: no tree is looked at past it, and no removal starts with less than CLEANUP_REMOVE_RESERVE left.
-CLEANUP_ITEM_TIMEOUT = 120  # $AGENTCTL_CLEANUP_ITEM_TIMEOUT
-CLEANUP_REMOVE_RESERVE = 300  # $AGENTCTL_CLEANUP_REMOVE_RESERVE
+from agentctl.govknobs import SBT_STALL_MIN
+from agentctl.govknobs import knob_sbt_reap
+from agentctl.queueknobs import knob_free_wait
+from agentctl.tickknobs import knob_cleanup_item_timeout, knob_fetch_timeout
 
 
 def cleanup_left(until: Stopwatch | None) -> float:
@@ -55,7 +47,7 @@ class TreeReview:
                  until: Stopwatch | None) -> None:
         self.repo, self.main, self.min_age_h, self.cwds = repo, main, min_age_h, cwds
         self.include_caches, self.until = include_caches, until
-        self.item = env_num("AGENTCTL_CLEANUP_ITEM_TIMEOUT", CLEANUP_ITEM_TIMEOUT)
+        self.item = knob_cleanup_item_timeout()
 
     def verdict(self, w: dict[str, Any]) -> tuple[str, str, str | None, str, str]:
         """(action, wt, branch, sha, reason) of linked worktree entry w."""
@@ -254,14 +246,6 @@ def close_worktree(wt: str) -> str:
     return f"worktree {closing.wt} kept: {kept}" if kept else closing.message
 
 
-# FREEING A LANDED WORKTREE (2026-11-18: `land --until-done` LANDED 94a33a968 but printed no DONE -- the agent's own
-# kept sbt server, `scripts/sbt-warm`, still worked in the worktree, and the agent removed it by hand). Before the
-# removal, free_worktree stops what is the CALLER's in that worktree and nothing else: the checkout's own sbt server
-# (`scripts/sbt-warm --stop`, which only ever stops that checkout's), then every process whose cwd is inside it and
-# whose environment carries the caller's CLAUDE_CODE_SESSION_ID (SIGTERM, by pid -- never a pattern). It waits up to
-# FREE_WAIT s for the tree to be free; whatever still holds it (another session's, or one without a session) is
-# returned, never signalled.
-FREE_WAIT = 30  # s --until-done waits for a landed worktree to be free of processes before it keeps it
 NEVER_SIGNAL = re.compile(r"(^|/)(claude|login|tmux|ssh)(\s|$)")  # an agent session or a terminal: reported, never stopped
 
 
@@ -311,14 +295,11 @@ def free_worktree(wt: str, out: Any = print) -> dict[int, str]:
         out(f"scripts/sbt-warm --stop in {wt}: exit {r.returncode}", flush=True)
         held = worktree_holders(wt)
     stop_session_holders(held, out)
-    deadline = wall_epoch() + env_num("AGENTCTL_FREE_WAIT", FREE_WAIT)
+    deadline = wall_epoch() + knob_free_wait()
     while held and wall_epoch() < deadline:
         time.sleep(0.5)  # wall: waits on and times real processes and threads
         held = worktree_holders(wt)
     return held
-
-
-FETCH_TIMEOUT = 180  # an unattended fetch's bound ($AGENTCTL_FETCH_TIMEOUT)
 
 
 def bounded_fetch(repo: str, *extra: str, refs: Sequence[str] = ()) -> bool | str:
@@ -329,9 +310,9 @@ def bounded_fetch(repo: str, *extra: str, refs: Sequence[str] = ()) -> bool | st
     env = dict(os.environ, GIT_TERMINAL_PROMPT="0", GIT_SSH_COMMAND=GIT_NET_SSH)
     try:
         r = process_runner().run(["git", "-C", repo, "-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30", "fetch", "--quiet", *extra, remote(), *refs], capture_output=True, text=True, env=env,
-                           timeout=env_num("AGENTCTL_FETCH_TIMEOUT", FETCH_TIMEOUT), stdin=subprocess.DEVNULL)
+                           timeout=knob_fetch_timeout(), stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
-        return f"timed out after {int(env_num('AGENTCTL_FETCH_TIMEOUT', FETCH_TIMEOUT))} s"
+        return f"timed out after {int(knob_fetch_timeout())} s"
     return True if r.returncode == 0 else (r.stderr.strip().splitlines() or ["exit %d" % r.returncode])[-1][:160]
 
 

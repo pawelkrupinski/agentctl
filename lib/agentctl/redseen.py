@@ -7,7 +7,7 @@ import subprocess
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import attempt, env_num, err, fmt_age, git, git_ok, remote, slug
+from agentctl.core import attempt, err, fmt_age, git, git_ok, remote, slug
 from agentctl.timefmt import parse_time
 from agentctl.classify import norm_line
 from agentctl.forge import RED_CONCLUSIONS
@@ -21,6 +21,7 @@ from agentctl.red import STUCK_FACTOR, red_key
 from agentctl.redmove import red_close
 from agentctl.waiting import GATE_UNREAD, gate_unread_why
 from agentctl.branches import branch_reds, entry_predicts
+from agentctl.redknobs import knob_unkicked_after
 
 
 # -- what is red now: one observation per key, from the CI-state snapshot
@@ -115,7 +116,6 @@ def stuck_obs(snap):
     return red_obs_of_units(units)
 
 
-UNKICKED_AFTER = 60 * 60  # a convergence-relevant main push with no convergence (or Identity takes) run on main by then is a red
 # (suite, its paths, their matcher, who dispatches it): Main kicks the convergence when the paths change, and the
 # convergence's preflight dispatches Identity takes (its takes rows, split out 2026-11-08) under the same condition
 CONVERGENCE_PATHS = (".github/convergence-paths.txt", ".github/actions/changed-paths/matches.sh")
@@ -177,7 +177,7 @@ def touches_suite_paths(repo: Any, base: Any, head: str, paths_file: str, matche
 def kick_overdue(newest: dict[str, Any], ct: float, t: float) -> bool:
     """Is the push (commit time ct) older than UNKICKED_AFTER at `t` with no run of the suite since: its newest run
     `newest` was created before the push (an unreadable creation time: nothing to judge)?"""
-    if t - ct < env_num("AGENTCTL_UNKICKED_AFTER", UNKICKED_AFTER):
+    if t - ct < knob_unkicked_after():
         return False
     return not attempt(lambda: parse_time(newest.get("createdAt")).timestamp() >= ct, True,
                        catch=(ValueError, TypeError, AttributeError))

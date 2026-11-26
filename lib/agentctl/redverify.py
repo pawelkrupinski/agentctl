@@ -5,7 +5,6 @@ import glob
 from typing import Any
 from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.statefile import read_record
-from agentctl.knobs import env_num
 from agentctl.core import git, reds_dir, remote
 from agentctl.trailers import trailer_values
 from agentctl.inboxentry import inbox_write
@@ -17,6 +16,7 @@ from agentctl.blameopen import PATHISH
 from agentctl.runsigs import cause_of, name_causes
 from agentctl.redopen import red_offer, red_open
 from agentctl.redfixcheck import fix_reaches_red
+from agentctl.redknobs import knob_red_main_verify_every
 
 
 def red_verify_scheduled(store, it, f, sha, o_r, repo, t):
@@ -74,14 +74,6 @@ def red_fix_unverifiable(store, it, why, t):
     return [f"re-offered {red_what(d)} ({why[:80]})"]
 
 
-# MAIN MOVED UNDER AN OUTSIDE RED: VERIFY IT (2026-11-22, Order independence #105: 9a7130036 fixed it -- a tools-only
-# commit, rightly with no `Fixes-Red:` -- while the red sat fix-pending on an unrelated change that edited its workflow
-# file, and its fixer had been stopped hours before; nothing dispatched a run that would have seen main fixed). An
-# outside-gate red with no LANDED fix of its own, whose job reads something main changed since the red's run
-# (fix_reaches_red over each commit since its head), has its workflow dispatched on main to verify -- once per main
-# head, at most every RED_MAIN_VERIFY_EVERY, and only where a verify dispatch is allowed (red_verify_dispatch:
-# red-workflows.tsv). A green run clears it as any decided run does; a red one says main has not fixed it.
-RED_MAIN_VERIFY_EVERY = 3 * 3600
 RED_MAIN_VERIFY_STATES = ("offered", "leased", "fix-pending", "blocked-external")
 
 
@@ -94,7 +86,7 @@ def _main_verify_due(it: Any, repo: Any, t: Any) -> bool:
     if (d.get("fix") or {}).get("status") == "landed":
         return False  # its own landed fix's verify (red_fix_pending) is on its way
     mv = d.get("main_verify") or {}
-    return t - float(mv.get("at") or 0) >= env_num("AGENTCTL_RED_MAIN_VERIFY_EVERY", RED_MAIN_VERIFY_EVERY)
+    return t - float(mv.get("at") or 0) >= knob_red_main_verify_every()
 
 
 def _main_moved(repo: Any, d: Any) -> Any:

@@ -9,11 +9,12 @@ from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.statefile import read_record, write_json
 from agentctl.timefmt import day_hhmmz
-from agentctl.knobs import env_num
 from agentctl.core import err, process_cache, state_root
 from agentctl.procs import socket_host
 from agentctl.inboxentry import inbox_write
 from agentctl.leases import lease_meta
+from agentctl.govknobs import knob_laptop_role_ttl
+from agentctl.storeknobs import knob_hostname
 
 
 # ---------------------------------------------------------------- the laptop role: ONE machine holds it
@@ -52,7 +53,7 @@ def machine_id():
 
 
 def role_host():
-    return os.environ.get("AGENTCTL_HOSTNAME") or socket_host()
+    return knob_hostname() or socket_host()
 
 
 def laptop_role_holder():
@@ -81,9 +82,6 @@ def laptop_role_line(row):
             f"({role_host()}) is standby -- `agentctl laptop take` hands the role to it")
 
 
-LAPTOP_ROLE_TTL = 10 * 60          # s a silent holder keeps the role ($AGENTCTL_LAPTOP_ROLE_TTL)
-
-
 LAPTOP_ROLE_MAX = 100 * 365 * 86400
 
 
@@ -92,7 +90,7 @@ def laptop_role_path():
 
 
 def _laptop_role_ttl():
-    return env_num("AGENTCTL_LAPTOP_ROLE_TTL", LAPTOP_ROLE_TTL)
+    return knob_laptop_role_ttl()
 
 
 def _renewed_role(store, mine, t) -> bool:

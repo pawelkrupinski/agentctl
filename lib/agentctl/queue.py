@@ -8,7 +8,6 @@ import subprocess
 import time
 from typing import Any, Iterable
 from agentctl.procrunner import process_runner
-from agentctl.knobs import env_num
 from agentctl.core import err, fmt_age, git, git_ok, host_role
 from agentctl.timefmt import iso_at
 from agentctl.statefile import read_record, read_text_or
@@ -19,6 +18,7 @@ from agentctl.land import tool_env
 from agentctl.queueslots import set_change
 from agentctl.conditions import open_condition, run_probe
 from agentctl.statemachines import StaleVersion, TerminalState, change_event
+from agentctl.queueknobs import knob_infra_same_max
 
 
 # a backlog batch (batch.py, THE BACKLOG BATCH) is up to BACKLOG_BATCH_MAX of them checked in ONE tree.
@@ -81,13 +81,12 @@ def requeue_condition(st: Any, d: str, e: dict[str, Any], why: str, reason: str,
     try:
         if credential_failure(why) and push_credential_condition(st, d, why, detail, repo):
             return
-        if n_same >= QUEUE_INFRA_RETRIES or age >= env_num("AGENTCTL_INFRA_SAME_MAX", INFRA_SAME_MAX):
+        if n_same >= QUEUE_INFRA_RETRIES or age >= knob_infra_same_max():
             infra_requeue_condition(st, d, e, why, reason, n_same, age, detail, repo)
     except (Exception, SystemExit) as x:
         err(f"{e['id']}: re-queued {n_same} times for {reason}, and its condition could not be opened ({str(x)[:160]})")
 
 
-INFRA_SAME_MAX = 30 * 60
 STALLED_REASON = "its checks stalled"
 STALL_KEEP_PLACE = 2  # stalls in a row re-queued with no backoff (the change keeps its age-order place), then backed off
 FETCH_MAIN_FAILED = "its fetch of main failed"

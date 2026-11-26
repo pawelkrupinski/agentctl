@@ -8,7 +8,6 @@ import datetime as dt
 import os
 import re
 import time
-from agentctl.knobs import env_num
 from agentctl.core import attempt, git, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -16,21 +15,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.conditions import recovery_dir
 from agentctl.queueclose import change_state
 from agentctl.superseded import change_chain_end
-
-
-# PARKED (the owner, 2026-11-03: "fix root cause and prevent structurally" -- movies-wt-bare-borrow (a design branch the
-# owner is still deciding on), -flip-stage5 (an unproven design kept for reference), -order-rows (blocked on another
-# change landing first) escalated UNLANDED ORPHAN over and over: an orphan was "author gone + commits not on main", with
-# no way to say "this work is parked for a reason"). `agentctl park <worktree> --reason R` with one condition:
-#   --until-landed <change id | commit>   re-surfaces once that change LANDED (or its re-submission did) or the commit
-#                                        is on main by content;
-#   --until <date>                        re-surfaces at that time;
-#   --owner-decision                      only `agentctl unpark` (a person) ends it.
-# A parked worktree gets no orphan action and no escalation (an open UNLANDED ORPHAN clears: "parked: R"); `agentctl
-# status` shows `parked: N` with the reasons. Each maintain pass reads every condition again (self-recovering): met, the
-# mark is RELEASED and the orphan rules apply afresh (its orphan records dropped, so it gets its one submit -- it lands).
-# A parked worktree older than PARK_DIGEST_DAYS is named in ONE weekly digest line (an inbox entry that wakes nobody).
-PARK_DIGEST_DAYS = 14
+from agentctl.tickknobs import knob_park_digest_days
 
 
 PARK_DIGEST_EVERY = 7 * 86400
@@ -134,7 +119,7 @@ def park_digest(old: Any, t: Any, dry_run: Any) -> Any:
 
 def parked_long(m: Any, t: Any) -> bool:
     """Whether mark m has stood PARK_DIGEST_DAYS (the weekly digest names it)."""
-    return bool(t - float(m.get("at") or t) >= env_num("AGENTCTL_PARK_DIGEST_DAYS", PARK_DIGEST_DAYS) * 86400)
+    return bool(t - float(m.get("at") or t) >= knob_park_digest_days() * 86400)
 
 
 def park_duty(repo, store, dry_run=False, now_=None):

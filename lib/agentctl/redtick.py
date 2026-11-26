@@ -7,7 +7,6 @@ import os
 import threading
 from typing import Any
 from agentctl.statemachines import StaleVersion
-from agentctl.knobs import env_num
 from agentctl.core import NoReadAccess, attempt, err, process_cache, run_bounded, slug
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
@@ -26,7 +25,8 @@ from agentctl.lander import lander_note_landed
 from agentctl.redfixread import red_main_current
 from agentctl.conditions import open_condition, run_probe
 from agentctl.redfixes import red_fix_facts
-from agentctl.red import RED_TICK_INTERVAL, red_active_of, red_obs_for
+from agentctl.red import red_active_of, red_obs_for
+from agentctl.redknobs import RED_TICK_INTERVAL
 from agentctl.redmove import red_settled_runs
 from agentctl.recordingpins import refresh_pinned_recording
 from agentctl.branches import route_branch_reds, settle_branch_reds
@@ -51,7 +51,9 @@ from agentctl.redcommands import (
     red_cmd_auto, red_cmd_block, red_cmd_dispatch, red_cmd_lease, red_cmd_owner_push, red_cmd_status,
     red_cmd_unblame, red_cmd_unblock)
 from agentctl.redquota import red_quota_waits
-from agentctl.knobs import knob_step_bound
+from agentctl.tickknobs import knob_step_bound
+from agentctl.tickknobs import knob_assign_bound, knob_gate_publish
+from agentctl.redknobs import knob_red_others_every, knob_red_skip_say, knob_red_tick
 
 
 # -- the tick's red step (the processor; ci-why never acts)
@@ -244,7 +246,6 @@ def red_observe_gate(o_r, snap):
             live.update(old)
 
 
-RED_OTHERS_EVERY = 60        # seconds between the other watched repos' red ticks: one gate read each ($AGENTCTL_RED_OTHERS_EVERY)
 _last_others_tick = [0.0]
 
 
@@ -275,7 +276,7 @@ def red_tick_others(store, now_=None, dispatch=False, force=True):
     this machine's when there is one (Fixes-Red trailers, authors); without one (ci-runner) its reds open and clear
     by its gate runs alone."""
     acts = []
-    if not force and epoch_now() - _last_others_tick[0] < env_num("AGENTCTL_RED_OTHERS_EVERY", RED_OTHERS_EVERY):
+    if not force and epoch_now() - _last_others_tick[0] < knob_red_others_every():
         return acts
     _last_others_tick[0] = epoch_now()
     unread = []
@@ -297,14 +298,13 @@ def red_tick_others(store, now_=None, dispatch=False, force=True):
 
 
 _others_said = process_cache({})  # repo -> (why, when said): a skipped repo's line is said when it changes, else every RED_SKIP_SAY s
-RED_SKIP_SAY = 600  # s between the lines of another repo whose tick keeps failing for the same reason
 
 
 def red_others_skipped(o_r, why, now_=None):
     """Another repo's tick failed: said on a new reason, else at most every RED_SKIP_SAY s (it was every tick)."""
     t = now_ if now_ is not None else epoch_now()
     last = _others_said.get(o_r)
-    if last and last[0] == why and t - last[1] < env_num("AGENTCTL_RED_SKIP_SAY", RED_SKIP_SAY):
+    if last and last[0] == why and t - last[1] < knob_red_skip_say():
         return None
     _others_said[o_r] = (why, t)
     line = f"red tick: {o_r}: skipped ({why})" + (" (still)" if last and last[0] == why else "")
@@ -336,7 +336,7 @@ def probe_red_read(a):
 
 def maybe_red_tick(repo, store):
     """At most every RED_TICK_INTERVAL s, from the processor's duties. Bounded; never fatal."""
-    if epoch_now() - _last_red_tick[0] < env_num("AGENTCTL_RED_TICK", RED_TICK_INTERVAL):
+    if epoch_now() - _last_red_tick[0] < knob_red_tick():
         return
 
     def work():
@@ -386,7 +386,7 @@ def gate_publish_cycle(repo: str, store: Any) -> None:
         ci_state_write(snap)
         # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or
         # held (never NOBODY). Bounded: a dispatch's worktree checkout finishes on the tick's own thread
-        if not run_bounded("red-tick", lambda: red_tick_repo(repo, store, snap), env_num("AGENTCTL_ASSIGN_BOUND", 20)):
+        if not run_bounded("red-tick", lambda: red_tick_repo(repo, store, snap), knob_assign_bound()):
             err("red tick: still running; the gate line is published meanwhile")
         _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo, store=store)
         publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
@@ -407,7 +407,7 @@ def maybe_publish_gate(repo, store):
     summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
     # a push to main since the last publish (mark_gate_dirty): publish now, not at the 45 s mark
     marked = attempt(lambda: os.path.getmtime(gate_dirty_path()) > _last_gate_publish[0], False, catch=(OSError,))
-    if not marked and wall_epoch() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
+    if not marked and wall_epoch() - _last_gate_publish[0] < knob_gate_publish():
         return
     _last_gate_publish[0] = wall_epoch()  # the wall's: it is compared with a file's mtime above
 

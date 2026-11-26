@@ -4,13 +4,12 @@ from agentctl.clock import epoch_now
 import os
 import time
 from typing import Any, Callable, Optional
-from agentctl.knobs import env_num
 from agentctl.govpool import gov_dir_path
 from agentctl.statefile import read_record, write_json
+from agentctl.govknobs import knob_laptop_load
 
 
 GOV_SATURATED = 0.95    # x the cores: the machine's measured CPU at or over it is starved, whatever is charged
-LAPTOP_LOAD = 2.0             # holds other work while the 1-min load is over this x the cores
 
 # THE WHOLE MACHINE'S CPU (2026-11-22: top 0.24% idle -- 44% user, 56% sys -- at load 131-150 on 18 cores, while ps's
 # %CPU summed to 6.1 cores and the governor saw no pressure). ps's %CPU is a decaying per-process average: it misses
@@ -80,7 +79,7 @@ def cpu_pressure(r: dict[str, Any]) -> list[str]:
     """The CPU's part of laptop_pressure: busy cores past LAPTOP_LOAD x the cores (a reading charged past them), or the
     whole machine's CPU saturated (GOV_SATURATED, user + sys) with a run queue over LAPTOP_LOAD x the cores -- never
     a long run queue alone (46 threads waiting on 18 cores while cores sat idle, 2026-11-19)."""
-    factor, n, busy, runq = env_num("AGENTCTL_LAPTOP_LOAD", LAPTOP_LOAD), r.get("cores"), r.get("load1"), r.get("runq")
+    factor, n, busy, runq = knob_laptop_load(), r.get("cores"), r.get("load1"), r.get("runq")
     if busy is None or not n:
         return []
     if busy > factor * n:

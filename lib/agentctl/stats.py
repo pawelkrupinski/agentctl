@@ -8,17 +8,14 @@ import sys
 from typing import Any
 from agentctl.timefmt import iso_at
 from agentctl.statsrecords import CHANGE_EXITS, _num, landing_records, state_spans, watch_record
-from agentctl.knobs import env_num
 from agentctl.core import err, git, host_role
 from agentctl.waitingdir import waiting_entries, wlog
 from agentctl.gating import gate_flows
 from agentctl.statsepisodes import condition_record, gate_run_record, owner_decision_record, red_record
+from agentctl.watchknobs import knob_stats_every, knob_stats_pass_bound, knob_stats_per_pass, knob_stats_settle
+from agentctl.storeknobs import knob_stats_url
 
 
-STATS_EVERY = 60            # s between passes ($AGENTCTL_STATS_EVERY)
-STATS_PER_PASS = 150        # records a pass sends at most (the backfill spreads over passes)
-STATS_SETTLE = 15 * 60      # s after an exit before its record is built: the collector exports a run <= 5 min after it ends
-STATS_PASS_BOUND = 40       # s a pass works at most (a tick step)
 STATS_GATE_LOOKBACK = 3 * 86400   # s of gate runs each pass looks at (markers dedupe)
 STATS_GATE_HISTORY = 120 * 86400  # s of gate runs the first passes walk back (the collector backfilled 90 days)
 STATS_URL_SERVER = "http://victoria-logs-ci.service.consul:9429"
@@ -34,7 +31,7 @@ CI_FIELDS = ("kind, repo, workflow, run_id, run_number, run_attempt, sha, event,
 
 def stats_url():
     """Where the records go: $AGENTCTL_STATS_URL ('off' disables), else victoria-logs-ci on ci-runner; None elsewhere."""
-    u = os.environ.get("AGENTCTL_STATS_URL")
+    u = knob_stats_url()
     if u:
         return None if u == "off" else u.rstrip("/")
     return STATS_URL_SERVER if host_role() == "server" else None
@@ -127,7 +124,7 @@ class StatsPass:
         if self.since is None:
             self.since = self.t
             st.meta_set("stats_since", self.since)
-        self.deadline = clock.monotonic() + env_num("AGENTCTL_STATS_PASS_BOUND", STATS_PASS_BOUND)
+        self.deadline = clock.monotonic() + knob_stats_pass_bound()
         self.entries = {e["id"]: e for e in waiting_entries(d, open_only=False)} if d else {}
         self.waits: Any = None
         self.by_sha: dict[Any, Any] = {}
@@ -138,7 +135,7 @@ class StatsPass:
     def due(self) -> Any:
         """[(marker name, id, item)], oldest first: the exits settled and the watches, reds and conditions closed."""
         st, t = self.st, self.t
-        settle = env_num("AGENTCTL_STATS_SETTLE", STATS_SETTLE)
+        settle = knob_stats_settle()
         self.changes = st.items("change")
         due = [("landing", it["id"], it) for it in self.changes if it["state"] in CHANGE_EXITS
                and it["entered_at"] <= t - settle and not stats_sent(st, "landing", it["id"])]
@@ -151,7 +148,7 @@ class StatsPass:
     def run(self) -> Any:
         """How many records were sent, the gate runs after the due items while the pass has time left."""
         due = self.due()
-        cap = int(env_num("AGENTCTL_STATS_PER_PASS", STATS_PER_PASS))
+        cap = int(knob_stats_per_pass())
         sent = self.send_due(due, cap)
         if self.clock.monotonic() <= self.deadline and sent < cap:
             sent += gate_runs_pass(self.st, self.url, self.t, self.since, cap - sent, self.out)
@@ -302,7 +299,7 @@ def maybe_stats_pass(repo, d, clock, st):
     """The reconciler's step: a pass every STATS_EVERY s when there is a store to write to."""
     if not stats_url():
         return 0
-    if clock.time() - float(st.meta_get("stats_at", 0) or 0) < env_num("AGENTCTL_STATS_EVERY", STATS_EVERY):
+    if clock.time() - float(st.meta_get("stats_at", 0) or 0) < knob_stats_every():
         return 0
     st.meta_set("stats_at", clock.time())
     n = stats_pass(clock, st, repo, d)

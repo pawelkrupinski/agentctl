@@ -69,7 +69,6 @@ def run(module, script):
             "alert_red_audience": rec("alert_red_audience", lambda e, it, st, t: ("red-audience", it["state"])),
             "alert_condition_audience": rec("alert_condition_audience", lambda kind, e, opened, t: ("cond-audience", kind)),
             "alert_gate": rec("alert_gate", script.get("gate", [])), "red_what": lambda d: d["what"],
-            "env_num": lambda name, default: default,
         }
         for name, fake in patches.items():
             stack.enter_context(mock.patch.object(module, name, fake))

@@ -9,7 +9,6 @@ import subprocess
 from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.claudefiles import claude_limit
-from agentctl.knobs import env_num
 from agentctl.core import SHORT, fmt_age, remote, spawn_detached, tilde
 from agentctl.timefmt import iso_epoch, parse_time, ts
 from agentctl.statefile import read_record
@@ -26,8 +25,9 @@ from agentctl.ciwhy import ci_state_load
 from agentctl.redblock import BLOCK_TTL
 from agentctl.rundispatch import red_verify_dispatch
 from agentctl.redopen import red_offer
-from agentctl.knobs import RED_CRASH_BLOCK_MAX, knob_red_crash_block_max, knob_red_decision_block_max, knob_red_old_run, knob_sleep_min
-from agentctl.textknobs import knob_awake_pid, knob_caffeinate, knob_sleep_log
+from agentctl.redknobs import knob_red_crash_block_max, knob_red_decision_block_max, knob_red_old_run
+from agentctl.govknobs import knob_sleep_min
+from agentctl.govknobs import knob_awake_pid, knob_caffeinate, knob_sleep_log
 
 
 RED_CRASH_OUTCOME = re.compile(r"(NOT STARTED|ended with no|exit -?\d+ with no|TIMED OUT|lease expired|"
@@ -219,7 +219,7 @@ def red_crash_loop(store, it, upd, streak, t):
     text = (f"HARNESS FAULT: the fixers crash on {red_what(d)}: {n} launches in a row at the {tier} tier ended with "
             f"no LANDED / GAVE UP ({red_crash_launches(streak)}). The fixer harness, not the code, is what fails: "
             f"agentctl's own bug, filed for its maintainer as issue {issue} (logs: `{cmd}`). Auto-clears when {until}, "
-            f"when the issue is closed, or in {fmt_age(env_num('AGENTCTL_RED_CRASH_BLOCK_MAX', RED_CRASH_BLOCK_MAX))} "
+            f"when the issue is closed, or in {fmt_age(knob_red_crash_block_max())} "
             "(offered again)")
     upd = {**upd, "crash_loop": {"stage": "harness", "mark": mark, "at": t, "from": tier, "launches": n}}
     red_harness_block(store, it, upd, issue, CRASH_LOOP_CAUSE, cmd, until, text, t, tail=tail)

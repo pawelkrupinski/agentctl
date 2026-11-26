@@ -9,6 +9,7 @@ import urllib.parse
 from agentctl.core import err, fmt_age, git, host_role, reds_dir, remote
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import api, forge_release_asset
+from agentctl.redknobs import knob_pinned_recording
 
 
 # What main's convergence replays when its `recording` input is empty: each country's pin, the first word of the
@@ -146,8 +147,8 @@ def pins_status(rec = None, now_ = None):
 
 def pinned_runs():
     """The recordings main's convergence replays by default (one per pinned country, deduplicated), or []."""
-    if os.environ.get("AGENTCTL_PINNED_RECORDING"):
-        return [os.environ["AGENTCTL_PINNED_RECORDING"]]
+    if knob_pinned_recording():
+        return [knob_pinned_recording()]
     pins = (read_record(pinned_path()) or {}).get("pins") or {}
     return sorted(set(pins.values()), key=lambda x: int(x) if x.isdigit() else 0)
 

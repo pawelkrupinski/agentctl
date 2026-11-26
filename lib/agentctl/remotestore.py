@@ -11,12 +11,13 @@ import urllib.parse
 import urllib.request
 from typing import Any
 from agentctl.statefile import read_text_or
-from agentctl.knobs import env_num
 from agentctl.core import SHORT, attempt, host_role
 from agentctl.store import StoreAuthFailed, StoreUnavailable, store_errors
 from agentctl.storetoken import token
 from agentctl.laptoprole import laptop_role_holder
 from agentctl.core import state_root
+from agentctl.storeknobs import knob_store_retries, knob_store_retry_base
+from agentctl.storeknobs import knob_store_url
 
 
 def contact_machine():
@@ -39,15 +40,6 @@ class _StoreTransient(Exception):
 def http_client_errors():
     import http.client
     return http.client.HTTPException
-
-
-# TRANSIENT STORE FAILURES ARE RETRIED (2026-10-29: fixer -8's watcher died on one `POST /v1/store/get: [Errno 54]
-# Connection reset by peer`). Reads and the calls that are harmless twice (a renew answers no_progress, a release of a
-# released lease is a no-op) retry on any transient failure; the rest only when the request never left (refused).
-STORE_RETRIES = 4
-
-
-STORE_RETRY_BASE = 0.5   # s; doubled each attempt: 0.5 + 1 + 2 + 4 = 7.5 s at most
 
 
 STORE_RPC_SAFE = ("get", "item", "items", "offers", "offer_of", "meta_get", "events", "item_events", "list", "renew", "note",
@@ -90,7 +82,7 @@ class RemoteStore:
         retried only when it never reached the server (refused). What is still failing after that raises
         StoreUnavailable: no verdict either way -- never "lost"."""
         safe = (method == "GET") if safe is None else safe
-        tries = int(env_num("AGENTCTL_STORE_RETRIES", STORE_RETRIES)) if self.retries is None else self.retries
+        tries = int(knob_store_retries()) if self.retries is None else self.retries
         for attempt in range(tries + 1):
             try:
                 return self._call_once(method, path, body, timeout)
@@ -98,7 +90,7 @@ class RemoteStore:
                 if attempt == tries or not (safe or e.unsent):
                     raise StoreUnavailable(str(e)) from None
                 # wall: waits on and times real processes and threads
-                time.sleep(env_num("AGENTCTL_STORE_RETRY_BASE", STORE_RETRY_BASE) * (2 ** attempt))
+                time.sleep(knob_store_retry_base() * (2 ** attempt))
 
     def _headers(self):
         hdrs = {"Authorization": f"token {self._token()}", "Content-Type": "application/json"}
@@ -148,8 +140,8 @@ def store_url() -> str | None:
     the tunnel. None on the server: its database is in-process."""
     if host_role() == "server":
         return None
-    if os.environ.get("AGENTCTL_STORE_URL"):
-        return os.environ["AGENTCTL_STORE_URL"]
+    if knob_store_url():
+        return knob_store_url()
     return read_text_or(state_root("store.url"), "").strip() or default_store_url()
 
 

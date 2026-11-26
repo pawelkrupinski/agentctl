@@ -8,7 +8,6 @@ import re
 import signal
 import time
 from typing import Any
-from agentctl.knobs import env_num
 from agentctl.core import fmt_age
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -19,8 +18,10 @@ from agentctl.claudefiles import bg_transcript, fixer_verdict
 from agentctl.procs import process_start, socket_host
 from agentctl.leases import lease_meta
 from agentctl.inboxentry import inbox_write
-from agentctl.fixersession import FIXER_CLAIM_WITHIN, bg_failure, bg_final_text, bg_row_brief, bg_session, bg_start, bg_stop, bg_turn, bg_turn_over, bg_wait_mark, fixer_label, store_reauth
-from agentctl.knobs import RED_STALL
+from agentctl.fixersession import (
+    bg_failure, bg_final_text, bg_row_brief, bg_session, bg_start, bg_stop, bg_turn, bg_turn_over, bg_wait_mark,
+    fixer_label, store_reauth)
+from agentctl.redknobs import RED_STALL
 from agentctl.worktrees import mark_internal
 from agentctl.inbox import INBOX_TAIL
 from agentctl.redreplay import sync_brief
@@ -28,12 +29,14 @@ from agentctl.redrepos import red_owner_only
 from agentctl.fixerland import fixer_mark, fixer_meta_sent
 from agentctl.fixer import FIXER_IDENTITY_ENV, OWNER_ONLY_DENIED, fixer_prompt
 from agentctl.red import RED_FIXER_MAX, RED_FIXER_TTL, RED_RELEASE_ASKS
-from agentctl.knobs import RED_RENEW_EVERY
+from agentctl.redknobs import RED_RENEW_EVERY
 from agentctl.redclaim import bind_fixer_session
 from agentctl.redcrash import keep_awake, verdict_cut
 from agentctl.dispatchblock import claude_cli, interactive_mode
 from agentctl.sessionroll import fixer_rollover
-from agentctl.knobs import knob_bg_poll, knob_red_fixer_wall, knob_red_renew, knob_red_stall
+from agentctl.fixerknobs import knob_bg_poll
+from agentctl.redknobs import knob_red_fixer_wall, knob_red_renew, knob_red_stall
+from agentctl.fixerknobs import knob_fixer_claim_within
 
 
 # ONE FIXER LIFECYCLE (2026-11-04): a dispatched fixer's wrapper (red_fixer) and a family owner's (owner.red_owner) keep
@@ -334,7 +337,7 @@ class RedFixerWrapper:
         """NEVER CLAIMED (2026-10-31): a session that in claim_within neither started its transcript nor ran its first
         `red claim` never got going -- ended with what `claude agents` says of it, never a silent "never got going".
         One that works but never ran `red claim` is said once, on its lease and the inbox."""
-        rec, claim_within = self.rec, env_num("AGENTCTL_FIXER_CLAIM_WITHIN", FIXER_CLAIM_WITHIN)
+        rec, claim_within = self.rec, knob_fixer_claim_within()
         if wall_epoch() - self.t0 <= claim_within or (read_record(self.a.record) or {}).get("note"):
             return None
         if not rec.get("transcript"):

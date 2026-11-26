@@ -12,7 +12,7 @@ from agentctl.govpool import gov_dir_path
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
 from agentctl.owned import lock_held
-from agentctl.knobs import knob_gov_poll
+from agentctl.govknobs import knob_gov_poll
 
 
 def gov_dir() -> str:
