@@ -16,8 +16,8 @@ from agentctl.redfixes import (
     red_entry_status, red_fix_is_set_aside, red_fix_of, red_fix_on_main, red_refuted_with,
     fix_failed_said, red_set_aside)
 from agentctl.redask import red_decision
-from agentctl.red import (
-    RED_FIX_RUN_START, red_fix_giveup, red_verify_plan, red_verify_run_on_way, red_waits_for_its_run)
+from agentctl.red import RED_FIX_RUN_START, red_fix_giveup, red_waits_for_its_run
+from agentctl.redverify import red_verify_plan, red_verify_run_on_way
 from agentctl.redmove import red_close, red_keep_holder, red_move, red_stop_holder
 from agentctl.landwatch import WATCH_SLACK
 from agentctl.rundispatch import red_verify_dispatch

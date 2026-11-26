@@ -1,25 +1,15 @@
-# agentctl, part `red`: the red machine.
+# agentctl, part `red`: the red machine: its states and TTLs (MACHINES["red"], "branch-red"), when a fix gives up, and the
+# tier ladder a red's fixer is dispatched on
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now
-import os
 import re
 from typing import Any
-from agentctl.core import err, pct, process_cache, remote
-from agentctl.timefmt import parse_time
-from agentctl.classify import norm_line
-from agentctl.forge import RUN_FIELDS, gh_json, is_cancelled, stuck_durations
-from agentctl.repos import RED_PRIMARY, red_repo_of
-from agentctl.workflows import workflow_file_of
-from agentctl.redrecord import red_active
 from agentctl.lander import blame_decision
-from agentctl.redrepos import red_is_other, red_repo_key
 from agentctl.redask import red_decision
-from agentctl.ancestry import contains_local
 from agentctl.statemachines import ARCHIVE, MACHINES, StateSpec
 from agentctl.redknobs import (
-    RED_FIX_DECIDE, knob_red_decided_revert_max, knob_red_fix_decide, knob_red_fix_giveup, knob_red_fix_next_run,
-    knob_red_verify_slack)
+    RED_FIX_DECIDE, knob_red_decided_revert_max, knob_red_fix_decide, knob_red_fix_giveup, knob_red_fix_next_run)
 
 
 # ---------------------------------------------------------------- red: every red build held by a lease, or offered
@@ -109,132 +99,6 @@ def red_waits_for_its_run(d):
     return not d.get("gate") and d.get("red_kind") == "outside" and f.get("status") == "landed" and bool(f.get("sha"))
 
 
-RED_VERIFY_DURATION = 2 * 3600  # s a scheduled run is taken to last when none of its runs finished
-RED_VERIFY_HOLD = 30 * 60       # s a run that will decide the fix, still undecided at the deadline, holds it again
-CRON_HORIZON_DAYS = 32
-CRON_RANGES = ((0, 59), (0, 23), (1, 31), (1, 12), (0, 7))
-
-
-def cron_fields(cron):
-    """A cron's five fields as sets of values (None for `*`), or None when it cannot be read."""
-    parts = str(cron or "").split()
-    if len(parts) != 5:
-        return None
-    out = []
-    try:
-        for text, (low, high) in zip(parts, CRON_RANGES):
-            out.append(None if text == "*" else cron_values(text, low, high))
-    except ValueError:
-        return None
-    if out[4] is not None:
-        out[4] = {v % 7 for v in out[4]}  # 7 and 0 are both Sunday
-    return out
-
-
-def cron_values(text, low, high):
-    vals = set()
-    for item in text.split(","):
-        rng, _, step = item.partition("/")
-        if rng == "*":
-            a, b = low, high
-        elif "-" in rng:
-            a, b = map(int, rng.split("-"))
-        else:
-            a = int(rng)
-            b = high if step else a
-        vals |= set(range(a, b + 1, int(step) if step else 1))
-    return vals
-
-
-def cron_hit(vals, v):
-    return vals is None or v in vals
-
-
-def cron_matches(fields, at):
-    minutes, hours, days, months, weekdays = fields
-    weekday = (at.weekday() + 1) % 7  # Python's Monday=0 -> cron's Sunday=0
-    if days is not None and weekdays is not None:  # cron ORs a restricted day of month and day of week
-        day = at.day in days or weekday in weekdays
-    else:
-        day = cron_hit(days, at.day) and cron_hit(weekdays, weekday)
-    return cron_hit(minutes, at.minute) and cron_hit(hours, at.hour) and cron_hit(months, at.month) and day
-
-
-def cron_next(crons, after):
-    """The first whole minute (epoch, UTC) after `after` that any of the crons fires at; None when none does within
-    CRON_HORIZON_DAYS or none can be read."""
-    import datetime as _dt
-    fields = [f for f in (cron_fields(c) for c in crons) if f]
-    if not fields:
-        return None
-    at = _dt.datetime.fromtimestamp(int(float(after) // 60) * 60 + 60, _dt.timezone.utc)
-    end = at + _dt.timedelta(days=CRON_HORIZON_DAYS)
-    while at < end:
-        if not any(cron_hit(f[1], at.hour) for f in fields):  # no cron fires in this hour: the next one
-            at = at.replace(minute=0) + _dt.timedelta(hours=1)
-            continue
-        if any(cron_matches(f, at) for f in fields):
-            return at.timestamp()
-        at += _dt.timedelta(minutes=1)
-    return None
-
-
-def workflow_crons(text):
-    """The `on.schedule` crons of a workflow file's text."""
-    return [m.group(2) for m in re.finditer(r"^\s*-\s*cron:\s*(['\"])(.+?)\1", text or "", re.M)]
-
-
-_verify_runs = process_cache({})
-VERIFY_RUNS_TTL = 5 * 60
-
-
-def workflow_main_runs(o_r, wfile):
-    """The newest 30 runs on main of workflow file wfile (read at most every VERIFY_RUNS_TTL); [] when unread."""
-    at, runs = _verify_runs.get((o_r, wfile), (0.0, None))
-    if runs is None or epoch_now() - at >= VERIFY_RUNS_TTL:
-        try:
-            # listing: a fix is verified by a run CONTAINING it, the newest 30 read; none there keeps it pending, never refuted
-            runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
-                           "--json", RUN_FIELDS) or []
-        except (Exception, SystemExit) as e:
-            err(f"red verify: could not list {wfile} ({str(e)[:120]})")
-            runs = runs or []
-        _verify_runs[(o_r, wfile)] = (epoch_now(), runs)
-    return runs
-
-
-def red_verify_plan(o_r, repo, workflow, after):
-    """{slot, by, file} for a fix of a red of `workflow` landed at `after`: the first scheduled slot after the landing,
-    and when its run should have decided (slot + the p90 of its finished runs + RED_VERIFY_SLACK). None when the
-    workflow has no schedule or its file cannot be read."""
-    path, txt = workflow_file_of(repo, f"{remote()}/main", workflow) if repo and workflow else (None, "")
-    slot = cron_next(workflow_crons(txt), after) if path else None
-    if slot is None:
-        return None
-    runs = [r for r in workflow_main_runs(o_r, os.path.basename(path)) if not is_cancelled(r)]
-    duration = pct(stuck_durations(runs), 0.9) or RED_VERIFY_DURATION
-    return {"slot": slot, "by": slot + duration + knob_red_verify_slack(),
-            "file": os.path.basename(path)}
-
-
-def red_verify_run_on_way(o_r, repo, f):
-    """The undecided run on main of a scheduled fix's workflow that will decide it -- created since its slot, or one
-    containing the fix -- or None."""
-    for r in workflow_main_runs(o_r, f["verify_file"]) if f.get("verify_file") else []:
-        if r.get("status") != "completed" and (
-                run_since_slot(r, f) or (repo and r.get("headSha") and contains_local(repo, f.get("sha"), r["headSha"]))):
-            return r
-    return None
-
-
-def run_since_slot(r: Any, f: Any) -> Any:
-    """The run was created since the scheduled fix's slot (a minute's grace)."""
-    try:
-        return parse_time(r.get("createdAt")).timestamp() >= float(f.get("next_run_at") or 0) - 60
-    except (ValueError, TypeError, AttributeError):
-        return False
-
-
 RED_PRIORITY = {"gate": 0, "fix": 1, "outside": 2, "flake": 3}
 RED_RELEASE_ASKS = 12        # ...and asks a store that does not answer this many times, a poll apart, to release it
 STUCK_FACTOR, STUCK_FLOOR = 3, 30 * 60  # audit #8: a run undecided past max(3 x its workflow's p90, 30 min) is a red
@@ -309,41 +173,3 @@ def red_ladder_takers(d: Any, culprit: Any) -> dict[str, bool]:
             "culprit": bool(culprit) and not d.get("reverted") and not d.get("early")}  # early: never
 
 
-def canon_job(job):
-    """A job's name as red keys have always spelled it: ci.yml's page tests were `page tests (<engine> / <variant>)` until
-    2026-11-01 and are now `page-tests-<engine> (<variant>)`; the new name keys as the old, so an open red keeps its key."""
-    import re
-    m = re.fullmatch(r"((?:\S+ / )*)page-tests-(safari|chrome) \((.+)\)", job or "")
-    return f"{m.group(1)}page tests ({m.group(2)} / {m.group(3)})" if m else job
-
-
-def red_key(workflow, job, line):
-    """A red's identity: its workflow and normalized first error line (the failing test or step); the job only when no
-    line was read. Never the job name alone: matrix jobs failing the same way are one red."""
-    import hashlib
-    n = norm_line(line)
-    return hashlib.sha1((f"{workflow}\0{n}" if n else f"{workflow}\0job {canon_job(job)}").encode()).hexdigest()[:12]
-
-
-def red_active_of(store, o_r):
-    """red_active, only o_r's reds: another watched repo's own, else the primary's (a red with no `repo`)."""
-    mine = o_r if red_is_other(o_r) else RED_PRIMARY
-    return {k: it for k, it in red_active(store).items() if red_repo_of(it["data"]) == mine}
-
-
-def red_obs_for(o_r, obs):
-    """Observations keyed for the store: another repo's keys bound to it (red_repo_key), the primary's as they are."""
-    if not red_is_other(o_r):
-        return obs
-    out = {}
-    for key, ob in obs.items():
-        k = red_repo_key(o_r, key)
-        out[k] = dict(ob, key=k)
-    return out
-
-
-def red_item_of_run(store, n, workflow=None):
-    """The non-terminal reds a run number or id names (newest spell first)."""
-    n = str(n).lstrip("#")
-    return [it for it in red_active(store).values() if n in set(it["data"].get("runs") or [])
-            and (workflow is None or it["data"].get("workflow") == workflow)]

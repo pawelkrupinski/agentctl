@@ -17,7 +17,8 @@ from agentctl.redrecord import red_active, red_names, red_what
 from agentctl.leases import lease_meta
 from agentctl.owners import owner_record_path
 from agentctl.redask import red_decision
-from agentctl.red import RED_OFFER, decided_revert, red_obs_for, red_tier
+from agentctl.red import RED_OFFER, decided_revert, red_tier
+from agentctl.redrecord import red_obs_for
 from agentctl.redmove import red_keep_holder, red_move, red_offer_class, red_put_offer, tail_lines
 from agentctl.rundispatch import red_verify_dispatch
 from agentctl.blameopen import blame_open, culprit_of

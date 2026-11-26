@@ -136,7 +136,7 @@ class RedViewer:
         d, it, rec = self.d, self.it, self.rec
         sha, before_deadline = str(f.get("sha")), self.t < float(it["deadline"])
         if str(f.get("verify") or "").startswith("dispatched") and before_deadline:
-            # VERIFY PROMPTLY BY DEFAULT (red.py): its dispatched run decides it, never the cron slot (2026-11-21, #99)
+            # VERIFY PROMPTLY BY DEFAULT (redverify.py): its dispatched run decides it, never the cron slot (2026-11-21, #99)
             at = str(f.get("verify_dispatched") or "")[11:16]
             return (f"fix landed in {sha[:9]}, verify run dispatched {at}Z ({d.get('workflow')}; verified by {self.verify_by(f)}){rec}",
                     f"fix {sha[:7]} verify run dispatched {at}Z")

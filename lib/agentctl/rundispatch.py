@@ -13,7 +13,7 @@ from agentctl.forge import api, gh_json
 from agentctl.workflows import workflow_file_of
 from agentctl.cidispatches import record_dispatch
 from agentctl.redrepos import RED_WORKFLOWS_FILE, verify_dispatchable
-from agentctl.red import workflow_crons
+from agentctl.workflowcron import workflow_crons
 
 
 def verify_inputs(o_r: Any, run_id: Any, workflow_text: str) -> Any:

@@ -12,7 +12,7 @@ from agentctl.allowedpaths import allowed_path
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import lease_is_live, red_lease, red_what
 from agentctl.leases import lease_meta
-from agentctl.red import red_active_of, red_obs_for
+from agentctl.redrecord import red_active_of, red_obs_for
 from agentctl.redmove import red_close
 from agentctl.redseen import red_obs_of_units, red_units
 from agentctl.redopen import red_culprit_search

@@ -3,13 +3,13 @@
 
 import glob
 from typing import Any
+import os
 from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.statefile import read_record
 from agentctl.core import git, reds_dir, remote
 from agentctl.trailers import trailer_values
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_what
-from agentctl.red import RED_VERIFY_HOLD, red_verify_run_on_way, workflow_main_runs
 from agentctl.redmove import red_move
 from agentctl.rundispatch import red_verify_dispatch
 from agentctl.blameopen import PATHISH
@@ -17,6 +17,14 @@ from agentctl.runsigs import cause_of, name_causes
 from agentctl.redopen import red_offer, red_open
 from agentctl.redfixcheck import fix_reaches_red
 from agentctl.redknobs import knob_red_main_verify_every
+from agentctl.clock import epoch_now
+from agentctl.redknobs import knob_red_verify_slack
+from agentctl.core import err, pct, process_cache
+from agentctl.workflows import workflow_file_of
+from agentctl.ancestry import contains_local
+from agentctl.forge import RUN_FIELDS, gh_json, is_cancelled, stuck_durations
+from agentctl.rundispatch import workflow_crons
+from agentctl.workflowcron import cron_next
 
 
 def red_verify_scheduled(store, it, f, sha, o_r, repo, t):
@@ -219,3 +227,62 @@ def _touches_failure_or_ci(files: list[str], named: set[str]) -> bool:
     """Is one of the files CI's own workflows or actions, or one the failure names?"""
     return any(f.startswith((".github/workflows/", ".github/actions/")) or any(f.endswith(n) or n.endswith(f) for n in named)
                for f in files)
+
+
+RED_VERIFY_DURATION = 2 * 3600  # s a scheduled run is taken to last when none of its runs finished
+
+
+RED_VERIFY_HOLD = 30 * 60       # s a run that will decide the fix, still undecided at the deadline, holds it again
+
+
+_verify_runs = process_cache({})
+
+
+VERIFY_RUNS_TTL = 5 * 60
+
+
+def workflow_main_runs(o_r, wfile):
+    """The newest 30 runs on main of workflow file wfile (read at most every VERIFY_RUNS_TTL); [] when unread."""
+    at, runs = _verify_runs.get((o_r, wfile), (0.0, None))
+    if runs is None or epoch_now() - at >= VERIFY_RUNS_TTL:
+        try:
+            # listing: a fix is verified by a run CONTAINING it, the newest 30 read; none there keeps it pending, never refuted
+            runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
+                           "--json", RUN_FIELDS) or []
+        except (Exception, SystemExit) as e:
+            err(f"red verify: could not list {wfile} ({str(e)[:120]})")
+            runs = runs or []
+        _verify_runs[(o_r, wfile)] = (epoch_now(), runs)
+    return runs
+
+
+def red_verify_plan(o_r, repo, workflow, after):
+    """{slot, by, file} for a fix of a red of `workflow` landed at `after`: the first scheduled slot after the landing,
+    and when its run should have decided (slot + the p90 of its finished runs + RED_VERIFY_SLACK). None when the
+    workflow has no schedule or its file cannot be read."""
+    path, txt = workflow_file_of(repo, f"{remote()}/main", workflow) if repo and workflow else (None, "")
+    slot = cron_next(workflow_crons(txt), after) if path else None
+    if slot is None:
+        return None
+    runs = [r for r in workflow_main_runs(o_r, os.path.basename(path)) if not is_cancelled(r)]
+    duration = pct(stuck_durations(runs), 0.9) or RED_VERIFY_DURATION
+    return {"slot": slot, "by": slot + duration + knob_red_verify_slack(),
+            "file": os.path.basename(path)}
+
+
+def red_verify_run_on_way(o_r, repo, f):
+    """The undecided run on main of a scheduled fix's workflow that will decide it -- created since its slot, or one
+    containing the fix -- or None."""
+    for r in workflow_main_runs(o_r, f["verify_file"]) if f.get("verify_file") else []:
+        if r.get("status") != "completed" and (
+                run_since_slot(r, f) or (repo and r.get("headSha") and contains_local(repo, f.get("sha"), r["headSha"]))):
+            return r
+    return None
+
+
+def run_since_slot(r: Any, f: Any) -> Any:
+    """The run was created since the scheduled fix's slot (a minute's grace)."""
+    try:
+        return parse_time(r.get("createdAt")).timestamp() >= float(f.get("next_run_at") or 0) - 60
+    except (ValueError, TypeError, AttributeError):
+        return False

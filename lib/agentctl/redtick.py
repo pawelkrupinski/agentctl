@@ -18,7 +18,7 @@ from agentctl.redrecord import red_what
 from agentctl.lander import lander_note_landed
 from agentctl.redfixread import red_main_current
 from agentctl.redfixes import red_fix_facts
-from agentctl.red import red_active_of, red_obs_for
+from agentctl.redrecord import red_active_of, red_obs_for
 from agentctl.redknobs import knob_red_others_every, knob_red_skip_say, knob_red_tick, RED_TICK_INTERVAL
 from agentctl.redmove import red_settled_runs
 from agentctl.redseen import gate_red_units, red_merge_rekeyed, red_obs_of_units, red_observe, stuck_obs

@@ -15,7 +15,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.conditions import PROBES, condition_item_of, open_condition, run_probe
 from agentctl.redrepos import red_gate_flows
 from agentctl.redask import OWNER_CAUSES, ask_category, ask_refusal
-from agentctl.red import red_item_of_run
+from agentctl.redrecord import red_item_of_run
 from agentctl.ciwhy import main_runs_of, resolve_run
 from agentctl.redseen import local_units, red_units
 from agentctl.runsigs import run_sigs

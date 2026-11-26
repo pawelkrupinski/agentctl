@@ -17,7 +17,7 @@ from agentctl.leases import block_lease, lease_meta, red_block_of
 from agentctl.classify import QUOTA_LOG
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.inboxentry import inbox_write
-from agentctl.red import red_active_of
+from agentctl.redrecord import red_active_of
 from agentctl.rundispatch import red_verify_dispatch
 from agentctl.stuckruns import run_jobs
 from agentctl.redblock import BLOCK_MAX, BLOCK_TTL

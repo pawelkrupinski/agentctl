@@ -6,6 +6,9 @@ from typing import Any
 from agentctl.repos import RED_PRIMARY, red_repo_of, red_repo_short
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.statemachines import machine_state, open_items, is_terminal
+from agentctl.classify import norm_line
+from agentctl.redrepos import red_is_other, red_repo_key
+
 
 
 def red_lease(key: str) -> str:
@@ -59,3 +62,43 @@ def red_closed_of(store, key):
     if last is None or not machine_state("red", last["state"]).terminal:
         return None
     return last
+
+
+def canon_job(job):
+    """A job's name as red keys have always spelled it: ci.yml's page tests were `page tests (<engine> / <variant>)` until
+    2026-11-01 and are now `page-tests-<engine> (<variant>)`; the new name keys as the old, so an open red keeps its key."""
+    import re
+    m = re.fullmatch(r"((?:\S+ / )*)page-tests-(safari|chrome) \((.+)\)", job or "")
+    return f"{m.group(1)}page tests ({m.group(2)} / {m.group(3)})" if m else job
+
+
+def red_key(workflow, job, line):
+    """A red's identity: its workflow and normalized first error line (the failing test or step); the job only when no
+    line was read. Never the job name alone: matrix jobs failing the same way are one red."""
+    import hashlib
+    n = norm_line(line)
+    return hashlib.sha1((f"{workflow}\0{n}" if n else f"{workflow}\0job {canon_job(job)}").encode()).hexdigest()[:12]
+
+
+def red_active_of(store, o_r):
+    """red_active, only o_r's reds: another watched repo's own, else the primary's (a red with no `repo`)."""
+    mine = o_r if red_is_other(o_r) else RED_PRIMARY
+    return {k: it for k, it in red_active(store).items() if red_repo_of(it["data"]) == mine}
+
+
+def red_obs_for(o_r, obs):
+    """Observations keyed for the store: another repo's keys bound to it (red_repo_key), the primary's as they are."""
+    if not red_is_other(o_r):
+        return obs
+    out = {}
+    for key, ob in obs.items():
+        k = red_repo_key(o_r, key)
+        out[k] = dict(ob, key=k)
+    return out
+
+
+def red_item_of_run(store, n, workflow=None):
+    """The non-terminal reds a run number or id names (newest spell first)."""
+    n = str(n).lstrip("#")
+    return [it for it in red_active(store).values() if n in set(it["data"].get("runs") or [])
+            and (workflow is None or it["data"].get("workflow") == workflow)]

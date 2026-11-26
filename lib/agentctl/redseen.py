@@ -19,7 +19,8 @@ from agentctl.ciwhy import gate_from_snap, gate_report_only, gate_runs, main_run
 from agentctl.runsigs import classifier_version, run_names, signature
 from agentctl.redepisode import RedEpisode, streak_budget
 from agentctl.redrecord import red_what
-from agentctl.red import STUCK_FACTOR, red_key
+from agentctl.red import STUCK_FACTOR
+from agentctl.redrecord import red_key
 from agentctl.redmove import red_close
 from agentctl.waiting import UnreadGate
 from agentctl.branches import branch_reds, entry_predicts

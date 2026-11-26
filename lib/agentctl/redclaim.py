@@ -16,7 +16,8 @@ from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.allowedpaths import allowed_dir
 from agentctl.worktrees import claimant, worktree_of
 from agentctl.redrepos import red_is_other, red_owner_only
-from agentctl.red import RED_CLAIM_MAX, RED_CLAIM_TTL, red_item_of_run, red_obs_for
+from agentctl.red import RED_CLAIM_MAX, RED_CLAIM_TTL
+from agentctl.redrecord import red_item_of_run, red_obs_for
 from agentctl.redseen import red_obs_of_units
 from agentctl.redblock import red_run_units
 from agentctl.redopen import red_attach_obs, red_open
