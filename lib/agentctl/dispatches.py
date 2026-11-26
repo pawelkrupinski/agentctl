@@ -11,7 +11,7 @@ from agentctl.core import PROTECTED_BRANCHES, dispatches_dir, git, git_ok, remot
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import RUN_FIELDS, gh_json
-from agentctl.procs import proc_alive, process_start, safe_cwd
+from agentctl.procs import process_start, record_alive, safe_cwd
 from agentctl.waitingdir import waiting_dir
 from agentctl.fixerrecords import agent_name
 from agentctl.worktrees import CACHE_TREES, internal_trees_dir, merged_reason, worktree_of, worktrees
@@ -228,7 +228,7 @@ def owner_gone(rec):
         return None
     if rec.get("worktree") and not os.path.isdir(rec["worktree"]):
         return True
-    if rec.get("pid") and not proc_alive(rec["pid"], rec.get("process_start")):
+    if rec.get("pid") and not record_alive(rec):
         return True
     return False
 

@@ -11,7 +11,7 @@ import time
 from typing import Any
 from agentctl.core import env_num, fmt_age, git, reds_dir, spawn_detached
 from agentctl.statefile import read_record
-from agentctl.procs import proc_alive, process_start
+from agentctl.procs import process_start, record_alive
 from agentctl.selfcode import TOOL_PATH
 from agentctl.inboxentry import inbox_write
 from agentctl.lander import blame_change_name, blame_decision
@@ -261,7 +261,7 @@ def blame_probe_start(repo, o_r, d, b, i):
             blame_boundary(b, i), "--run", str(num), "--out", out, "--tokens", " ".join(blame_tokens(d))]
     with open(out[:-5] + ".log", "a") as logf:
         p = spawn_detached(argv, cwd=repo, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True)
-    return {"boundary": i, "commit": blame_boundary(b, i), "out": out, "pid": p.pid, "start": process_start(p.pid),
+    return {"boundary": i, "commit": blame_boundary(b, i), "out": out, "pid": p.pid, "process_start": process_start(p.pid),
             "at": epoch_now(), "kind": b["kind"]}
 
 
@@ -275,7 +275,7 @@ def blame_probe_result(p, t):
     rec = read_record(p.get("out"))
     if rec and rec.get("verdict"):
         return {**rec, "ci": True}
-    if p.get("pid") and proc_alive(p["pid"], p.get("start")):
+    if p.get("pid") and record_alive(p):
         if t - float(p.get("at") or t) > env_num("AGENTCTL_BLAME_PROBE_WALL", BLAME_PROBE_WALL) + 300:
             blame_probe_stop(p)
             return {"verdict": "none", "evidence": "the probe ran past its wall time", "ci": True}
@@ -284,7 +284,7 @@ def blame_probe_result(p, t):
 
 
 def blame_probe_stop(p):
-    if p and p.get("pid") and int(p["pid"]) != os.getpid() and proc_alive(p["pid"], p.get("start")):
+    if p and p.get("pid") and int(p["pid"]) != os.getpid() and record_alive(p):
         try:
             os.killpg(int(p["pid"]), signal.SIGTERM)
         except OSError:

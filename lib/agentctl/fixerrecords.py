@@ -8,7 +8,7 @@ from agentctl.clock import wall_epoch
 from typing import Any
 from agentctl.core import reds_dir
 from agentctl.statefile import read_record
-from agentctl.procs import proc_alive
+from agentctl.procs import record_alive
 from agentctl.statefile import mtime
 
 
@@ -45,7 +45,7 @@ def fixer_records(max_age: float | None = None, now_: float | None = None) -> li
         r = read_record(p)
         if r:
             r["path"] = p
-            r["alive"] = not r.get("ended") and proc_alive(r.get("pid"), r.get("process_start"))
+            r["alive"] = not r.get("ended") and record_alive(r)
             out.append(r)
     return out
 

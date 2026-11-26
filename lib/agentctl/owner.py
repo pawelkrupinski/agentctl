@@ -14,7 +14,7 @@ from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.selfcode import TOOL_PATH
 from agentctl.waitingdir import waiting_state
-from agentctl.procs import proc_alive, process_start, socket_host
+from agentctl.procs import process_start, record_alive, socket_host
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import bg_resumable
 from agentctl.worktrees import worktree_exclude
@@ -203,7 +203,7 @@ def owner_still_ending(store, fam, t):
     """Why the family's next owner waits, or None: its last wrapper lost its heartbeat less than OWNER_TTL ago and its
     process still runs (it exits at its next beat; a new one now would race it for the record and the leases)."""
     rec = read_record(owner_record_path(fam)) or {}
-    if not rec.get("pid") or rec.get("ended") or not proc_alive(rec["pid"], rec.get("process_start")):
+    if not rec.get("pid") or rec.get("ended") or not record_alive(rec):
         return None
     gone = float(lease_meta(store.get(owner_lease(fam))).get("released_at") or 0)
     if not gone or t - gone > OWNER_TTL:

@@ -11,7 +11,8 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, SHORT, _tokens, env_num, git, pid_alive, state_root, tilde
+from agentctl.procs import proc_alive
+from agentctl.core import HOME, SHORT, _tokens, env_num, git, state_root, tilde
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.repos import red_repo_clone, red_repos
 from agentctl.inboxentry import inbox_write
@@ -187,7 +188,7 @@ def bg_ended(ent):
     if ent.get("state") in BG_ENDED_STATES:
         return True
     pid = ent.get("pid")
-    return ent.get("state") in BG_WAITING_STATES and not (pid and pid_alive(int(pid)))
+    return ent.get("state") in BG_WAITING_STATES and not proc_alive(pid)
 
 
 # A FINISHED TURN WHOSE PROCESS LIVES ON (2026-11-01, convergence #579 / Verify #1 `fixer-crash-loop`): claude now keeps
@@ -294,7 +295,7 @@ def bg_turn(path: str | None) -> dict[str, Any]:
 def bg_waiting(ent):
     """The row is a turn over with its process alive (claude's spare keeps it): what it waits for is the transcript's."""
     pid = (ent or {}).get("pid")
-    return bool(ent) and (ent.get("state") or ent.get("status")) in BG_WAITING_STATES and bool(pid) and pid_alive(int(pid))
+    return bool(ent) and (ent.get("state") or ent.get("status")) in BG_WAITING_STATES and proc_alive(pid)
 
 
 # A CLOSED TURN UNDER A `working` ROW (2026-11-21 21:53Z convergence owner session 0f6f7ecd, 22:55Z outside-gate
@@ -318,7 +319,7 @@ def bg_turn_over(ent, path, now=None):
         return True
     if turn["pending"]:
         return False
-    quiet = (now or wall_epoch()) - mtime(path)
+    quiet = (wall_epoch() if now is None else now) - mtime(path)
     return quiet >= env_num("AGENTCTL_BG_IDLE_GRACE", BG_IDLE_GRACE)
 
 
@@ -328,7 +329,7 @@ def bg_wait_mark(ent, path, now, every):
     renewed by it (bounded by the wall time). 2026-11-03: only a `blocked` / `idle` row counted, and an owner whose row
     read `working` while its own measure ran in the background stalled at 30 min."""
     pid = (ent or {}).get("pid")
-    if not ent or bg_ended(ent) or not (pid and pid_alive(int(pid))):
+    if not ent or bg_ended(ent) or not proc_alive(pid):
         return ""
     pending = bg_turn(path)["pending"]
     return f":waiting {','.join(pending)} @{int(now // max(every, 1))}" if pending else ""

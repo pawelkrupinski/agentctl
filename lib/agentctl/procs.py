@@ -25,6 +25,12 @@ def proc_alive(pid: Any, start: Any = None) -> bool:
     return not start or sorted(process_start(int(pid)).split()) == sorted(str(start).split())
 
 
+def record_alive(rec: Any) -> bool:
+    """The process a record names (its `pid`, and `process_start` when it has one) is running: the ONE reading of a
+    fixer, owner, dispatch or probe record's liveness."""
+    return proc_alive(rec.get("pid"), rec.get("process_start"))
+
+
 # ---------------------------------------------------------------- orphans
 def ps() -> list[tuple[int, int, str, str]]:
     r = run_cmd(["ps", "-axo", "pid=,ppid=,etime=,command="])

@@ -471,12 +471,12 @@ class OwnerWorkTest(unittest.TestCase):
         case.fake("owner_record_path", lambda rng, fam: "/owner.json")
         case.fake("read_record", lambda rng, p: rng.choice([rec] * 9 + [None]))
         case.fake("pid_alive", lambda rng, pid: rng.random() < 0.5)
-        case.fake("proc_alive", lambda rng, pid, start: rng.random() < 0.85)
+        case.fake("record_alive", lambda rng, rec: rng.random() < 0.85)
         case.fake("mtime", lambda rng, p: rng.choice([0, NOW - 50, NOW - 10 ** 6]))
         case.fake("env_num", lambda rng, n, d: rng.choice([d, d, 0, 10 ** 9]))
         case.fake("claude_cli", lambda rng: "claude")
         case.fake("bg_session", lambda rng, cli, bid: rng.choice([{}, None, {"state": "idle"}, {"state": None}, {"state": "running"}]))
-        case.fake("bg_turn_over", lambda rng, ent, tr, t: rng.random() < 0.5)
+        case.fake("bg_turn_over", lambda rng, ent, tr: rng.random() < 0.5)
         return ("fam", NOW, r.choice([None, None, 100, "100", 300, 0]))
 
     def test_owner_work(self):

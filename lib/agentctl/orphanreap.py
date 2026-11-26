@@ -5,8 +5,9 @@ from typing import Any
 import glob
 import os
 from agentctl.core import env_num, fmt_age, on_ci_runner, pid_alive, reds_dir
+from agentctl.clock import wall_epoch
 from agentctl.statefile import mtime, read_record
-from agentctl.procs import proc_alive, socket_host
+from agentctl.procs import record_alive, socket_host
 from agentctl.fixerrecords import fixer_records
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import RED_STALL, bg_rows, bg_session, bg_stop, bg_turn_over, bg_waiting
@@ -42,9 +43,16 @@ def _wrapper_verdict(rec: Any, pid: Any, holder_pid: Any) -> Any:
         return False, f"its wrapper (pid {holder_pid}) is gone"
     if rec.get("ended"):
         return False, f"its wrapper ended ({str(rec.get('verdict') or '?')[:160]})"
-    if not proc_alive(pid, rec.get("process_start")):
+    if not record_alive(rec):
         return False, f"its wrapper (pid {pid}) is gone"
     return None
+
+
+def _idle(t: Any, stamped: Any, path: Any) -> float:
+    """Seconds without progress: the age of the newest of a stamp the store or a record made (`t`'s clock, the process's)
+    and the file's mtime (the wall's: a file's time is real time, never the injected clock's)."""
+    ages = ([t - float(stamped)] if stamped else []) + ([wall_epoch() - mtime(path)] if mtime(path) else [])
+    return min(ages) if ages else t
 
 
 def _session_verdict(rec: Any, pid: Any, t: Any, idle: Any, grace: Any) -> Any:
@@ -55,7 +63,7 @@ def _session_verdict(rec: Any, pid: Any, t: Any, idle: Any, grace: Any) -> Any:
     ent = bg_session(claude_cli(), bid)
     if ent == {}:
         return None, "`claude agents` unread"
-    if (ent is None or bg_turn_over(ent, rec.get("transcript"), t)) and idle > grace:
+    if (ent is None or bg_turn_over(ent, rec.get("transcript"))) and idle > grace:
         return False, (f"its session {bid} is {(ent or {}).get('state') or 'gone'} while its wrapper (pid {pid}) "
                        f"still holds the turn, {fmt_age(idle)} without progress")
     return None
@@ -64,7 +72,7 @@ def _session_verdict(rec: Any, pid: Any, t: Any, idle: Any, grace: Any) -> Any:
 def _turn_verdict(rec: Any, pid: Any, t: Any) -> Any:
     """(at work?, why) of an owner in its turn: its session, then the transcript's progress."""
     grace = env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE)
-    idle = t - max(float(rec.get("progress_at") or 0), mtime(rec.get("transcript")))
+    idle = _idle(t, rec.get("progress_at"), rec.get("transcript"))
     verdict = _session_verdict(rec, pid, t, idle, grace)
     if verdict:
         return verdict
@@ -98,7 +106,7 @@ def wrapper_last_words(m, n: int = 3):
 def _wrapper_gone(m: Any) -> Any:
     """Why a dispatched fixer's wrapper is gone (its pid dead; its last words), or None."""
     pid = m.get("pid")
-    if not pid or pid_alive(int(pid)):
+    if not pid or record_alive(m):
         return None
     words = wrapper_last_words(m)
     return f"its wrapper (pid {pid}) is gone" + (f"; its last words: {words}" if words else "")
@@ -107,8 +115,8 @@ def _wrapper_gone(m: Any) -> Any:
 def _session_ended(row: Any, t: Any, m: Any, bid: Any, ent: Any) -> Any:
     """Why a dispatched fixer's bg session `bid` (entry ent) is over -- gone or its turn ended, no progress for
     RED_ORPHAN_GRACE -- or None."""
-    idle = t - max(float(row.get("renewed_at") or row.get("acquired_at") or 0), mtime(m.get("log")))
-    if (ent is None or bg_turn_over(ent, m.get("log"), t)) and idle > env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE):
+    idle = _idle(t, row.get("renewed_at") or row.get("acquired_at"), m.get("log"))
+    if (ent is None or bg_turn_over(ent, m.get("log"))) and idle > env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE):
         return f"its session {bid} is {(ent or {}).get('state') or 'gone'}, {fmt_age(idle)} without progress"
     return None
 
@@ -223,7 +231,7 @@ def bg_live_turns():
     for p in glob.glob(reds_dir("owners", "*", "owner.json")):
         r = read_record(p) or {}
         if (r.get("bg_id") and not r.get("ended") and r.get("in_turn", True)
-                and proc_alive(r.get("pid"), r.get("process_start"))):
+                and record_alive(r)):
             live.add(r["bg_id"])
     live.update(r["bg_id"] for r in fixer_records() if r.get("alive") and r.get("bg_id"))
     return live

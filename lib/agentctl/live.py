@@ -10,7 +10,7 @@ import threading
 from typing import Any
 from agentctl.core import attempt, dispatches_dir, process_cache, reds_dir
 from agentctl.statefile import mtime, read_json_file, read_record, tail_bytes
-from agentctl.procs import proc_alive
+from agentctl.procs import record_alive
 from agentctl.claudefiles import bg_transcript, claude_projects_root
 
 
@@ -262,7 +262,7 @@ def live_state(e: dict[str, Any], info: dict[str, Any], t: float | None = None) 
     stop = info.get("stop")
     if info.get("api_error"):
         return "failed", "the last answer was an API error"
-    alive = attempt(lambda: proc_alive(e["pid"], e.get("process_start")), None, catch=(Exception, SystemExit)) if e.get("pid") else None
+    alive = attempt(lambda: record_alive(e), None, catch=(Exception, SystemExit)) if e.get("pid") else None
     process = _process_state(alive, stop)
     if process:
         return process

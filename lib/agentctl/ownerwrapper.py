@@ -266,7 +266,7 @@ class OwnerWrapper:
         self._note_session(ent)
         self.missing = self.missing + 1 if ent is None else 0
         self.ent = ent
-        if bg_turn_over(ent, rec.get("transcript"), now) or self.missing >= 3:  # the turn ended (done, stopped,
+        if bg_turn_over(ent, rec.get("transcript")) or self.missing >= 3:  # the turn ended (done, stopped,
             # blocked; or waiting with its verdict said, bg_turn_over) or the session is gone
             failure = bg_failure(self.bid)
             return self._end_turn(f"ended with no LANDED / GAVE UP line (session {self.bid}: "

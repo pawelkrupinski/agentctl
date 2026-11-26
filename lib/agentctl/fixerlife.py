@@ -217,7 +217,7 @@ class RedFixerWrapper:
         """Its record and lease meta say who runs it (the meta is sent at the polls when the store did not answer)."""
         rec, own = self.rec, self.own
         session, me = rec.get("session"), os.getpid()  # session: known once `claude agents` lists it (--bg picks its id)
-        self.meta = {"worktree": self.wt, "session": session, "pid": me, "log": rec["log"], "host": socket_host(),
+        self.meta = {"worktree": self.wt, "session": session, "pid": me, "process_start": process_start(me), "log": rec["log"], "host": socket_host(),
                      "wrapper_log": os.path.join(os.path.dirname(os.path.abspath(self.a.record)), "fixer.log")}
         try:
             row = self.st.get(own.name)
