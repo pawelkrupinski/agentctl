@@ -5,7 +5,7 @@ import argparse
 from typing import Any
 import os
 import time
-from agentctl.core import HOME, PROTECTED_BRANCHES, attempt, cherry_landed, git, remote
+from agentctl.core import PROTECTED_BRANCHES, attempt, cherry_landed, git, remote, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.procs import process_cwds
@@ -57,39 +57,82 @@ def change_chain_end(st, cid):
     return it
 
 
-def successor_state(m, repo, store):
+def _change_tree(item: Any) -> Any:
+    """The real path of the worktree a change item was submitted from ('' for none)."""
+    return os.path.realpath(str(item["data"].get("worktree") or ""))
+
+
+def successor_state(m: Any, repo: Any, store: Any) -> Any:
     """(open | landed | lapsed, why) of mark m's successor."""
-    st = store
-    by, at = m["by"], float(m.get("at") or 0)
-    end = change_chain_end(st, m["change"]) if m.get("change") else None
-    if end and end["state"] == "landed":
-        return "landed", f"its change {end['id']} landed"
-    succ = m.get("worktree")
-    if succ:
-        rs = os.path.realpath(succ)
-        for it in st.items("change", ["landed"]):
-            if os.path.realpath(str(it["data"].get("worktree") or "")) == rs and float(it.get("entered_at") or 0) >= at:
+    return SuccessorRead(m, repo, store).state()
+
+
+class SuccessorRead:
+    """Mark m's successor read from the store and the repository: the first stage that finds it landed, lapsed or
+    carried decides; else it is open (`by` has not landed yet)."""
+
+    def __init__(self, m: Any, repo: Any, store: Any) -> None:
+        self.m, self.repo, self.st = m, repo, store
+        self.by, self.at = m["by"], float(m.get("at") or 0)
+        self.end = change_chain_end(store, m["change"]) if m.get("change") else None
+        self.succ = m.get("worktree")
+
+    def state(self) -> Any:
+        for stage in (self._change_landed, self._worktree_landed, self._head_on_main, self._named_change, self._gone):
+            found = stage()
+            if found:
+                return found
+        return "open", f"{self.by} has not landed yet"
+
+    def _change_landed(self) -> Any:
+        if self.end and self.end["state"] == "landed":
+            return "landed", f"its change {self.end['id']} landed"
+        return None
+
+    def _worktree_landed(self) -> Any:
+        """A change of the successor's worktree landed since the mark."""
+        if not self.succ:
+            return None
+        rs = os.path.realpath(self.succ)
+        for it in self.st.items("change", ["landed"]):
+            if _change_tree(it) == rs and float(it.get("entered_at") or 0) >= self.at:
                 return "landed", f"{os.path.basename(rs)}'s change {it['id']} landed"
-    if m.get("head"):
-        done, via = change_landed(repo, m["head"])
+        return None
+
+    def _head_on_main(self) -> Any:
+        if not self.m.get("head"):
+            return None
+        done, via = change_landed(self.repo, self.m["head"])
         if done:
-            return "landed", f"{by}'s head {m['head'][:10]} is on main" + (f" ({via[:10]})" if via else "")
-    if m.get("change"):  # a named change decides: open while it (or its re-submission) is
+            return "landed", f"{self.by}'s head {self.m['head'][:10]} is on main" + (f" ({via[:10]})" if via else "")
+        return None
+
+    def _named_change(self) -> Any:
+        """A named change decides: open while it (or its re-submission) is."""
+        if not self.m.get("change"):
+            return None
+        end = self.end
         if not end:
-            return "lapsed", f"change {m['change']} is not known"
+            return "lapsed", f"change {self.m['change']} is not known"
         if machine_state("change", end["state"]).terminal:
-            again = [i for i in (worktree_change_items(succ, st)["open"] if succ else [])
-                     if os.path.realpath(str(i["data"].get("worktree") or "")) == os.path.realpath(succ)]
-            if again:  # rejected, then landed again from the same worktree: that change carries it now
-                return "open", f"its change {end['id']} ended {end['state']}; {again[-1]['id']} carries it now"
-            return "lapsed", f"its change {end['id']} ended {end['state']}, unlanded"
+            return self._ended(end)
         return "open", f"its change {end['id']} is {end['state']}"
-    if succ and not os.path.isdir(succ):
-        return "lapsed", f"{succ.replace(HOME, '~')} is gone with nothing of it landed"
-    return "open", f"{by} has not landed yet"
+
+    def _ended(self, end: Any) -> Any:
+        succ = self.succ
+        again = [i for i in (worktree_change_items(succ, self.st)["open"] if succ else [])
+                 if _change_tree(i) == os.path.realpath(succ)]
+        if again:  # rejected, then landed again from the same worktree: that change carries it now
+            return "open", f"its change {end['id']} ended {end['state']}; {again[-1]['id']} carries it now"
+        return "lapsed", f"its change {end['id']} ended {end['state']}, unlanded"
+
+    def _gone(self) -> Any:
+        if self.succ and not os.path.isdir(self.succ):
+            return "lapsed", f"{tilde(self.succ)} is gone with nothing of it landed"
+        return None
 
 
-def close_superseded(repo, wt, why):
+def close_superseded(repo: Any, wt: Any, why: Any) -> Any:
     """Remove the superseded worktree wt and its branch: never the root checkout, a locked tree, one a process is in or
     one with uncommitted work. Returns (closed, line)."""
     wt = os.path.realpath(wt)
@@ -97,29 +140,44 @@ def close_superseded(repo, wt, why):
         return True, f"{wt} is already gone"
     trees = worktrees(repo)
     me = next((t for t in trees if os.path.realpath(t.get("worktree") or "") == wt), None)
-    if me is None or wt == os.path.realpath(trees[0]["worktree"]):
-        return False, f"kept: {wt} is not a linked worktree of {repo}"
-    if "locked" in me:
-        return False, "kept: locked"
-    busy = attempt(lambda: [p for p, c in process_cwds().items() if c == wt or c.startswith(wt + "/")], [],
-                   catch=(Exception, SystemExit))
-    if busy:
-        return False, f"kept: in use by pid {busy[:3]}"
-    dirty = git(wt, "status", "--porcelain", "--untracked-files=all", check=False)
-    if dirty.returncode or dirty.stdout.strip():
-        return False, f"kept: the tree is not clean ({len(dirty.stdout.splitlines())} changed/untracked)"
+    kept = _kept_reason(repo, wt, trees, me)
+    if kept or me is None:
+        return False, kept
     head = git(wt, "rev-parse", "HEAD").strip()
     branch = (me.get("branch") or "").removeprefix("refs/heads/") or None
     r = git(repo, "worktree", "remove", wt, check=False)
     if r.returncode:
         return False, f"kept: git worktree remove refused: {r.stderr.strip()[:160]}"
     log_deletion("worktree", os.path.basename(repo), wt, head, f"superseded: {why}")
-    line = f"closed {wt.replace(HOME, '~')}"
-    if branch and branch not in PROTECTED_BRANCHES and f"refs/heads/{branch}" not in {t.get("branch") for t in worktrees(repo)}:
-        if git(repo, "update-ref", "-d", f"refs/heads/{branch}", head, check=False).returncode == 0:
-            log_deletion("branch", os.path.basename(repo), branch, head, f"superseded: {why}")
-            line += f" and branch {branch} ({head[:10]})"
-    return True, line
+    return True, f"closed {tilde(wt)}" + _drop_branch(repo, branch, head, why)
+
+
+def _kept_reason(repo: Any, wt: Any, trees: Any, me: Any) -> Any:
+    """Why worktree wt (`me`, its entry among `trees`) is not closed -- the root checkout, locked, in use, not clean --
+    or None."""
+    if me is None or wt == os.path.realpath(trees[0]["worktree"]):
+        return f"kept: {wt} is not a linked worktree of {repo}"
+    if "locked" in me:
+        return "kept: locked"
+    busy = attempt(lambda: [p for p, c in process_cwds().items() if c == wt or c.startswith(wt + "/")], [],
+                   catch=(Exception, SystemExit))
+    if busy:
+        return f"kept: in use by pid {busy[:3]}"
+    dirty = git(wt, "status", "--porcelain", "--untracked-files=all", check=False)
+    if dirty.returncode or dirty.stdout.strip():
+        return f"kept: the tree is not clean ({len(dirty.stdout.splitlines())} changed/untracked)"
+    return None
+
+
+def _drop_branch(repo: Any, branch: Any, head: Any, why: Any) -> Any:
+    """` and branch <name> (<head>)` once the closed worktree's branch is deleted (never a protected one, nor one
+    another worktree has out), else ''."""
+    if not branch or branch in PROTECTED_BRANCHES or f"refs/heads/{branch}" in {t.get("branch") for t in worktrees(repo)}:
+        return ""
+    if git(repo, "update-ref", "-d", f"refs/heads/{branch}", head, check=False).returncode != 0:
+        return ""
+    log_deletion("branch", os.path.basename(repo), branch, head, f"superseded: {why}")
+    return f" and branch {branch} ({head[:10]})"
 
 
 def _supersede_one(repo: Any, store: Any, wt: Any, m: Any, dry_run: Any, did: Any) -> Any:
@@ -146,7 +204,7 @@ def _supersede_one(repo: Any, store: Any, wt: Any, m: Any, dry_run: Any, did: An
     if closed:
         m.update(state="closed", closed=ts(), why=why)
         did.append(f"superseded {name}: {m['by']} landed ({why}): {line}")
-        inbox_write("maintain", f"CLOSED {wt.replace(HOME, '~')}: superseded by {m['by']}, which landed ({why})",
+        inbox_write("maintain", f"CLOSED {tilde(wt)}: superseded by {m['by']}, which landed ({why})",
                     [], [line], 0, cwd=wt)
         return True
     if m.get("said") != line:
@@ -201,12 +259,7 @@ def resolve_successor(by, repo, store):
 def cmd_supersede(a: argparse.Namespace, store: Any) -> int:
     marks = superseded_marks()
     if not a.worktree:
-        live = {w: m for w, m in marks.items() if a.all or m.get("state") in ("open", "landed")}
-        for w, m in sorted(live.items()):
-            print(f"{w.replace(HOME, '~')}: SUPERSEDED BY {m['by']} ({m.get('state')}{': ' + m['why'] if m.get('why') else ''})")
-        if not live:
-            print("supersede: no superseded worktree" + ("" if a.all else " open (--all: the closed and lapsed too)"))
-        return 0
+        return _list_marks(marks, a.all)
     wt = os.path.realpath(os.path.expanduser(a.worktree))
     top = git(wt, "rev-parse", "--show-toplevel", check=False).stdout.strip() if os.path.isdir(wt) else ""
     if not top:
@@ -216,15 +269,30 @@ def cmd_supersede(a: argparse.Namespace, store: Any) -> int:
     if a.undo:
         m = marks.pop(wt, None)
         write_json(superseded_path(), marks)
-        print(f"supersede: {wt.replace(HOME, '~')} " + ("is no longer marked" if m else "was not marked"))
+        print(f"supersede: {tilde(wt)} " + ("is no longer marked" if m else "was not marked"))
         return 0
     if not a.by:
         print("usage: agentctl supersede <worktree> --by <worktree|change id>   (or --undo)")
         return 2
+    return _mark_superseded(marks, wt, a.by, store)
+
+
+def _list_marks(marks: Any, every: Any) -> Any:
+    """Print the live marks (every: the closed and lapsed too)."""
+    live = {w: m for w, m in marks.items() if every or m.get("state") in ("open", "landed")}
+    for w, m in sorted(live.items()):
+        print(f"{tilde(w)}: SUPERSEDED BY {m['by']} ({m.get('state')}{': ' + m['why'] if m.get('why') else ''})")
+    if not live:
+        print("supersede: no superseded worktree" + ("" if every else " open (--all: the closed and lapsed too)"))
+    return 0
+
+
+def _mark_superseded(marks: Any, wt: Any, by: Any, store: Any) -> Any:
+    """Mark worktree wt superseded by `by` (a worktree or a change id): the mark written, or why it was refused (2)."""
     repo = git(wt, "rev-parse", "--path-format=absolute", "--git-common-dir").strip()
     repo = os.path.dirname(repo) if repo.endswith("/.git") else repo
     try:
-        name, change, succ, head = resolve_successor(a.by, wt, store)
+        name, change, succ, head = resolve_successor(by, wt, store)
     except (Exception, SystemExit) as e:  # SystemExit: NoToken (a change id is read from the store)
         print(f"supersede: {str(e).replace('agentctl: ', '')}")
         return 2
@@ -234,7 +302,7 @@ def cmd_supersede(a: argparse.Namespace, store: Any) -> int:
     marks[wt] = {"by": name, "change": change, "worktree": succ, "head": head, "at": time.time(), "marked": ts(),
                  "state": "open", "repo": repo}
     write_json(superseded_path(), marks)
-    print(f"SUPERSEDED BY {name}: {wt.replace(HOME, '~')} -- no orphan escalation; it closes itself once {name} lands")
+    print(f"SUPERSEDED BY {name}: {tilde(wt)} -- no orphan escalation; it closes itself once {name} lands")
     return 0
 
 
