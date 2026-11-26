@@ -17,7 +17,7 @@ from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import trust_asks
 from agentctl.clock import Clock
-from agentctl.store import StoreUnavailable
+from agentctl.store import StoreLacksCall, StoreUnavailable
 from agentctl.land import tool_env
 from agentctl.explorer import explorer_tick
 from agentctl.reverts import revert_notes
@@ -118,12 +118,20 @@ class _SyncDuties:
         return lambda: None if self.role is False else fn()
 
 
+def file_events_refused(e: BaseException) -> None:
+    """The offline log's lines were not taken: a store older than `record_events` is said in one line, once per its
+    recheck (remotestore.py LACKING_RECHECK: the call is not sent again until then, nor said; the lines stay in the
+    log for a store that has it); a store that is down is said by the tunnel's and the state's own lines."""
+    if isinstance(e, StoreLacksCall) and not e.remembered:
+        err(f"file events: {e}")
+
+
 def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequence[tuple[str, Callable[[], Any]]]:
     """The laptop's loop once the store is remote: it never ticks. clock and store: the process's (cli's)."""
     s = _SyncDuties(repo, o_r, clock, store)
     duty = s.duty
     return (("laptop role", s.claim_role),
-            ("outbox", lambda: flush_outbox(store)), ("file events", lambda: drain_event_log(store)), ("state mirror", s.mirror), ("children", reap_children),
+            ("outbox", lambda: flush_outbox(store)), ("file events", lambda: drain_event_log(store, refused=file_events_refused)), ("state mirror", s.mirror), ("children", reap_children),
             ("events", lambda: project_events(store)), ("notifier", duty(lambda: notify_escalations(store))),
             ("alerts", duty(lambda: reconcile_alerts(store))),
             ("workspace trust", lambda: [err(x) for x in trust_asks()]),
@@ -179,7 +187,7 @@ def answer_regen_holds(d: str, st: Any) -> list[str]:
     """The laptop's step (above): `agentctl land` started in the worktree of each regen-held change it can answer; its
     lines."""
     out = []
-    for it in st.items("change"):
+    for it in st.items("change", ["queued"]):  # only a queued change is held for its regeneration (_regen_held)
         target = _regen_answerable(it)
         if not target:
             continue

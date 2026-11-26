@@ -16,7 +16,7 @@ from agentctl.conflicts import pick
 from agentctl.queuerecheck import queued_entries, same_change_source
 from agentctl.redland import may_land_on_red
 from agentctl.changekind import facts_for
-from agentctl.statemachines import StaleVersion, change_event, machine_state
+from agentctl.statemachines import StaleVersion, change_event, machine_state, open_items
 
 
 WAITING_HELP = """The processor (one loop of ticks, launchd net.bitcashier.agentctl-waiting) and its queue: every landed change is
@@ -241,8 +241,8 @@ def cancel_submitted(st: Any, eid: str, how: str = "cancel", repo: str | None = 
 def clear_holds_on(st, eid) -> None:
     """Every open change's recorded hold naming change eid as its blocker, cleared (eid is gone: the next tick reads
     each one's hold again); never a phantom blocker in `land status`."""
-    for it in st.items("change"):
-        if machine_state("change", it["state"]).terminal or ((it.get("data") or {}).get("hold") or {}).get("blocker") != eid:
+    for it in open_items(st, "change"):
+        if ((it.get("data") or {}).get("hold") or {}).get("blocker") != eid:
             continue
         try:
             st.update_item("change", it["id"], it["version"], {"hold": None})

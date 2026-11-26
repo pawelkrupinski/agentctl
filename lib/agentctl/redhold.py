@@ -5,7 +5,7 @@ import re
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.statemachines import StaleVersion, machine_state
+from agentctl.statemachines import StaleVersion, open_items
 from agentctl.timefmt import parse_time
 from agentctl.watchknobs import knob_wr_max
 from agentctl.redknobs import RED_FIX_REQUEUE_GRACE, knob_red_fix_requeue_grace, knob_red_liveness_max
@@ -98,8 +98,8 @@ def red_fix_stalls(st: Any, t: float, facts: dict[str, Any]) -> list[str]:
     """Why each open red fix does not move, as WR words it: [text], the changes WR violates on (inv_wr, the liveness line)."""
     lim = knob_wr_max()
     out = []
-    for it in st.items("change"):
-        k = None if machine_state("change", it["state"]).terminal else classify_change(it.get("data") or {}, facts, t)
+    for it in open_items(st, "change"):
+        k = classify_change(it.get("data") or {}, facts, t)
         why = k and k["red_fix"] and red_fix_stall(st, it, k, t, lim)
         if why:
             out.append(f"{it['id']} ({kind_text(k)}) {why}")

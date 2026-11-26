@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import argparse
+from functools import partial
 import contextlib
 import datetime as dt
 import io
@@ -98,14 +99,22 @@ def with_store(command: Callable[..., Any], store: Any) -> Callable[[argparse.Na
     return lambda a: command(a, store)
 
 
+def waited_on(args: list[str]) -> bool:
+    """A command someone waits on at a terminal (`status`, `land status`): its store calls are bounded and never
+    retried (server.py process_store waited_on); `status --line` reads no store at all."""
+    words = [w for w in args if not w.startswith("-")]
+    return words[:1] == ["status"] or words[:2] == ["land", "status"]
+
+
 # ---------------------------------------------------------------- main
 def main(argv: list[str] | None = None, clock: Clock | None = None, runner: ProcessRunner | None = None,
          store: Any = None) -> Any:
     """The entry: wires the process's collaborators (the clock, the process runner and the store: a test passes its
     own) and runs the command."""
     clock = clock or Clock()
+    args = sys.argv[1:] if argv is None else argv
     store = store if store is not None else CurrentStore(
-        process_store, clock.time, actor=process_actor(sys.argv[1:] if argv is None else argv))
+        partial(process_store, waited_on=True) if waited_on(args) else process_store, clock.time, actor=process_actor(args))
     wire_collaborators(clock, store)
     wire_runner(runner or ProcessRunner())
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:

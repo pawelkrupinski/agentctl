@@ -17,7 +17,7 @@ from agentctl.worktrees import WorktreeGuard
 from agentctl.fixerenv import fixer_env
 from agentctl.redrepos import red_owner_only, red_repo_note
 from agentctl.redfamilies import red_identity
-from agentctl.statemachines import StaleVersion
+from agentctl.statemachines import StaleVersion, open_items
 from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_active, red_names, red_what
 from agentctl.leases import LeaseKinds, lease_meta
 from agentctl.land import spawn_land
@@ -185,9 +185,7 @@ def red_migrate(store):
     if int(store.meta_get("red_model", 1) or 1) >= RED_MODEL:
         return 0
     n, left = 0, 0
-    for it in store.items("red"):
-        if it["state"] in RED_TERMINAL:
-            continue
+    for it in open_items(store, "red"):
         want = red_identity(it["data"])
         if want.items() <= it["data"].items():
             continue

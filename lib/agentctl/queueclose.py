@@ -9,7 +9,7 @@ from typing import Any
 from contextlib import suppress
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
-from agentctl.statemachines import StaleVersion, TerminalState, machine_state
+from agentctl.statemachines import StaleVersion, TerminalState, machine_state, open_items
 from agentctl.clock import Clock
 from agentctl.landstate import UNKNOWN, LandState, landed_state
 from agentctl.core import fmt_age, git_ok, host_role, process_cache, remote
@@ -92,8 +92,8 @@ def close_landed_changes(repo: Any, clock: Any, store: Any, d: Any = None) -> An
     st, t = store, clock.time()
     did: list[str] = []
     carried = _close_landed_entries(repo, st, d, t, did)
-    for it in st.items("change"):
-        if machine_state("change", it["state"]).terminal or it["state"] == "pushing" or it["id"] in carried:
+    for it in open_items(st, "change"):
+        if it["state"] == "pushing" or it["id"] in carried:
             continue
         if not landed_look_due(it["id"], t):
             continue
@@ -110,8 +110,8 @@ def stranded_changes(repo, d, store, now_ = None):
     st = store
     entries = {e["id"] for e in waiting_entries(d, open_only=False)}
     out = []
-    for it in st.items("change"):
-        if machine_state("change", it["state"]).terminal or it["id"] in entries:
+    for it in open_items(st, "change"):
+        if it["id"] in entries:
             continue
         r = run_probe("change_source", {"id": it["id"], "repo": repo})
         if r.ok is False:
@@ -214,7 +214,7 @@ def change_rows(store: Any) -> list[dict[str, Any]]:
     """THE QUEUE as everyone reads it (`land status`, the status line, the page): the store's open change items,
     by id, as {id, state, worktree, head, deadline, level, hold, kind (a red fix's, changekind.py), since (submitted: the queue age a kept place
     inherits), created (this entry's own creation)}."""
-    rows = [_change_row(i) for i in store.items("change") if not machine_state("change", i["state"]).terminal]
+    rows = [_change_row(i) for i in open_items(store, "change")]
     return sorted(rows, key=lambda r: r["id"])
 
 

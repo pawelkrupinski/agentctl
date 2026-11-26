@@ -15,7 +15,7 @@ from agentctl.storeknobs import knob_tunnel_state
 TUNNEL_PORTS = [(3014, "agentctl store")]  # what the laptop tunnel carries
 
 
-def tunnel_ports():
+def tunnel_ports() -> list[tuple[int, str]]:
     """The ports the laptop's tunnel must hold: the agentctl store's."""
     return TUNNEL_PORTS
 

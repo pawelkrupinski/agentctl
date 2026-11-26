@@ -12,7 +12,7 @@ from agentctl.queueslots import checker_alive
 from agentctl.redland import may_land_on_red, red_kind_of
 from agentctl.issues import issue_open
 from agentctl.identitychange import identity_change
-from agentctl.statemachines import StaleVersion, machine_state
+from agentctl.statemachines import StaleVersion, machine_state, open_items
 
 
 # ---------------------------------------------------------------- ONE CLASSIFIER (the owner, 2026-11-19: "fix that structurally")
@@ -66,7 +66,7 @@ def queue_facts(gate: Any, st: Any) -> dict[str, Any]:
     An unreadable store gives no open reds: the gate's still count."""
     open_ = {}
     try:
-        items = st.items("red")
+        items = open_items(st, "red")
     except Exception:  # an unreadable store orders nothing: the gate's reds still do
         items = []
     for it in items:

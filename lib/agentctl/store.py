@@ -333,6 +333,17 @@ class StoreUnavailable(RuntimeError):
     """The remote store did not answer (the tunnel, ci-runner, the service): no verdict either way."""
 
 
+class StoreLacksCall(StoreUnavailable):
+    """THE STORE IS OLDER THAN THIS CLIENT (2026-11-26: the laptop ran ~/bin's head, ci-runner stayed pinned to an
+    older rev while agentctl's CI was red, and every sync tick re-sent its 88 KB `record_events` page to a store that
+    answered 404). The store answered that it has no such call: no verdict on the data, which the caller keeps for
+    later. RemoteStore remembers it (LACKING_RECHECK) and answers again without the network until then (`remembered`)."""
+
+    def __init__(self, msg: str, remembered: bool = False) -> None:
+        super().__init__(msg)
+        self.remembered = remembered
+
+
 class StoreAuthFailed(StoreUnavailable):
     """The store refused the caller's credential (HTTP 401/403): never transient. A wrapper holding leases takes a fresh
     store token once and, refused again, ends at once -- its leases released (or revoked by the tick) with `store auth

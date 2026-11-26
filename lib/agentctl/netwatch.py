@@ -13,6 +13,7 @@ from agentctl.store import StoreUnavailable
 from agentctl.gating import mark_gate_dirty
 from agentctl.conditions import open_condition, recovery_recheck_all, run_probe
 from agentctl.cistate import state_read, state_update
+from agentctl.storestate import port_open
 from agentctl.tunnel import default_route, tunnel_ports, tunnel_state_path
 from agentctl.recovery import recover_tunnel_reset
 
@@ -187,6 +188,29 @@ def clear_network_note() -> None:
     """Drop the status line's NETWORK note, when one is set."""
     if (state_read().get("network") or {}).get("at"):
         state_update(network=None)
+
+
+WU_MAX = 300  # s the store may go unanswered through a tunnel that accepts connections before WU says so
+
+
+def inv_wu(clock: Any, st: Any, listening: Any = None) -> tuple[Any, str]:
+    """WU (the sync role): THE STORE TUNNEL IS UP BUT UNRESPONSIVE -- localhost's store port accepts a connection, yet the
+    store has not answered the sync's reads for over WU_MAX (state.json's store_error, kept from the first failed read
+    until one answers). 2026-11-26 16:54Z: the tunnel's ssh was alive and listening for 90+ min while every request
+    timed out (a 40 KB/s uplink, each sync read 4 MB of decided changes); the tunnel probe called it NETWORK and
+    nothing was raised, and `status` and `land status` hung. A closed port is the tunnel watch's (a kickstart), not WU's."""
+    if host_role() != "sync":
+        return True, "no tunnel here (the server)"
+    port = tunnel_ports()[0][0]
+    if not (listening or port_open)(port):
+        return None, f"the tunnel (localhost:{port}) is not listening: the tunnel watch's to restart"
+    se = state_read().get("store_error") or {}
+    since = float(se.get("since") or 0)
+    if not since or clock.time() - since <= WU_MAX:
+        return True, f"the store answers through the tunnel (localhost:{port})"
+    return False, (f"the store tunnel (localhost:{port}) accepts connections but the store has not answered for "
+                   f"{int((clock.time() - since) // 60)} min ({str(se.get('why'))[:120]}): a saturated or lossy uplink, "
+                   f"or a wedged forward -- `agentctl env --check`; `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}`")
 
 
 def tunnel_watch(store, now_=None, probe=None, kick=None, uplink=None):

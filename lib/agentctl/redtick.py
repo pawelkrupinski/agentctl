@@ -6,7 +6,7 @@ import functools
 import os
 import threading
 from typing import Any
-from agentctl.statemachines import StaleVersion
+from agentctl.statemachines import StaleVersion, open_items
 from agentctl.core import NoReadAccess, attempt, err, process_cache, run_bounded, slug
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
@@ -189,7 +189,7 @@ def red_open_flows(o_r, store):
     """The workflows of o_r's open reds that are not its gate's: their newest decided run on main must be read too, or
     such a red can never clear (core Dependabot Updates #154, 2026-11-02: green #155/#156 came, nothing read them)."""
     try:
-        its = store.items("red")
+        its = open_items(store, "red")
     except (Exception, SystemExit):
         return []
     gate = {n for n, _f in red_gate_flows(o_r)}

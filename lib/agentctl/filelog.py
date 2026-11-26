@@ -95,10 +95,10 @@ def _pending(offset: int) -> list[tuple[dict[str, Any], int]]:
     return out
 
 
-def drain_event_log(store: Any, page: int = DRAIN_PAGE) -> int:
+def drain_event_log(store: Any, page: int = DRAIN_PAGE, refused: Any = None) -> int:
     """THE SYNC: the offline log's new lines into the store, a page a call, the cursor moved after each page the store
-    took; a store that cannot take them (down, older than `record_events`) leaves them for the next tick. Returns the
-    lines drained."""
+    took; a store that cannot take them (down, older than `record_events`) leaves them for the next tick, its error
+    handed to `refused` (the sync's: a one-line warning for a store older than the call). Returns the lines drained."""
     if not os.path.exists(log_path()):
         return 0
     offset = _read_cursor()
@@ -109,7 +109,9 @@ def drain_event_log(store: Any, page: int = DRAIN_PAGE) -> int:
         chunk = rows[i:i + page]
         try:
             store.record_events([r for r, _end in chunk])
-        except Exception:
+        except Exception as e:
+            if refused:
+                refused(e)
             return done  # kept: the cursor did not move past them
         _write_cursor(chunk[-1][1])
         done += len(chunk)

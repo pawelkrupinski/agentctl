@@ -17,13 +17,15 @@ DIGESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "
 
 
 def stable(x):
-    """repr with sets sorted, so a hash seed never moves a digest."""
+    """repr with sets sorted and functions by name, so neither a hash seed nor an address moves a digest."""
     if isinstance(x, (set, frozenset)):
         return "{" + ", ".join(sorted(stable(i) for i in x)) + "}"
     if isinstance(x, dict):
         return "{" + ", ".join(f"{stable(k)}: {stable(v)}" for k, v in x.items()) + "}"
     if isinstance(x, (list, tuple)):
         return "(" + ", ".join(stable(i) for i in x) + ")"
+    if callable(x) and hasattr(x, "__qualname__"):  # a function passed on (sync_steps' `refused=`): by name, never its address
+        return f"<function {x.__qualname__}>"
     return repr(x)
 
 

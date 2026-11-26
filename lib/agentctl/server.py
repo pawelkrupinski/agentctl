@@ -29,12 +29,12 @@ from agentctl.cistate import state_read
 from agentctl.laptoprole import laptop_role_refusal, laptop_role_speaks
 from agentctl.waiting import cancel_submitted, supersede
 from agentctl.queuesubmit import SUBMIT_FIELDS
-from agentctl.remotestore import RemoteStore, STORE_PORT, store_url
+from agentctl.remotestore import RemoteStore, STORE_PORT, STORE_WAITED_TIMEOUT, store_url
 from agentctl.storeauth import (
     store_secret, store_secret_path, store_token_issue, store_token_revoke, store_token_user, store_tokens_load)
 from agentctl.blamerecords import blame_land_refusal
 from agentctl.redhold import red_unheld
-from agentctl.statemachines import MACHINES, StaleVersion, TerminalState, machine_state
+from agentctl.statemachines import MACHINES, StaleVersion, TerminalState, machine_state, open_items
 from agentctl.tickknobs import knob_tick
 
 
@@ -64,11 +64,14 @@ for _m in STORE_RPC:
     setattr(RemoteStore, _m, (lambda m: lambda self, *a, **k: self._rpc(m, a, k))(_m))
 
 
-def process_store(clock=None):
+def process_store(clock: Any = None, waited_on: bool = False) -> Any:
     """The store this process uses (cli hands it to CurrentStore as its opener): the remote store when a store URL is set
-    (store_url: every sync process), else the file store (the server's own database)."""
+    (store_url: every sync process), else the file store (the server's own database). waited_on (a command someone
+    waits on, cli waited_on): each call bounded by STORE_WAITED_TIMEOUT and never retried, so it fails fast."""
     url = store_url()
-    return RemoteStore(url, clock=clock) if url else Store(clock=clock)
+    if not url:
+        return Store(clock=clock)
+    return RemoteStore(url, clock=clock, timeout=STORE_WAITED_TIMEOUT, retries=0) if waited_on else RemoteStore(url, clock=clock)
 
 
 def store_grace(st, now_=None):
@@ -170,9 +173,9 @@ def supersede_stranded(d, e, st):
     """A submission replaces every older open item of the same worktree that no entry carries (queue_change supersedes
     the entries; an item mirrored from another host's queue has none): SUPERSEDED, never left waiting."""
     carried = {x["id"] for x in waiting_entries(d, open_only=False)}
-    for it in st.items("change"):
+    for it in open_items(st, "change"):
         dd = it.get("data") or {}
-        if it["id"] in carried or machine_state("change", it["state"]).terminal or \
+        if it["id"] in carried or \
                 os.path.realpath(dd.get("worktree") or "") != os.path.realpath(e.get("worktree") or ""):
             continue
         try:
@@ -206,9 +209,7 @@ def oldest_change_age(st: Any, t: float) -> float:
     """The age of the oldest non-terminal change, not counting the time main was red (the red accumulator's growth)."""
     acc = float(st.meta_get("red_accum", 0) or 0)
     ages = []
-    for it in st.items("change"):
-        if machine_state("change", it["state"]).terminal:
-            continue
+    for it in open_items(st, "change"):
         dd = it.get("data") or {}
         since = float(dd.get("submitted_at") or it["entered_at"])
         acc0 = dd.get("red_accum0")
@@ -290,6 +291,8 @@ class StoreAPI:
         other a 500 with its traceback in the journal, never a dropped connection."""
         if isinstance(e, tuple(store_errors().values())):
             return self._json(409, {"error": type(e).__name__, "message": str(e)})
+        if isinstance(e, UnknownCall):  # a newer client's call (version skew): said as such (remotestore.py StoreLacksCall)
+            return self._json(404, {"error": "UnknownCall", "message": e.args[0]})
         if isinstance(e, KeyError):
             return self._json(404, {"error": "NotFound", "message": str(e)})
         if isinstance(e, (ValueError, TypeError)):
@@ -358,10 +361,14 @@ class StoreAPI:
         if p.startswith("/v1/store/"):
             m = p[len("/v1/store/"):]
             if m not in STORE_RPC:
-                raise KeyError(m)
+                raise UnknownCall(m)
             args, kwargs = legacy_cause(m, b.get("args", []), b.get("kwargs", {}))
             return self._json(200, {"result": getattr(st, m)(*args, **kwargs)})
         raise KeyError(f"POST {p}")
+
+
+class UnknownCall(KeyError):
+    """A store method this server does not serve (STORE_RPC): a newer client's (404 `UnknownCall`)."""
 
 
 class StoreRequestHandler(BaseHTTPRequestHandler):

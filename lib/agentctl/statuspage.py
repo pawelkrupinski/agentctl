@@ -5,6 +5,7 @@ from agentctl.clock import epoch_now
 import http.server
 import json
 import os
+import sys
 import re
 import threading
 import urllib.parse
@@ -14,8 +15,9 @@ from agentctl.procrunner import process_runner
 from agentctl.core import err, on_ci_runner, process_cache, reds_dir, state_root
 from agentctl.statefile import read_json_file, write_json
 from agentctl.live import live_lookup
-from agentctl.laptoprole import laptop_role_standby
+from agentctl.laptoprole import LAPTOP_ROLE_LEASE, standby_of
 from agentctl.storestate import port_open
+from agentctl.remotestore import store_unreachable_text
 from agentctl.statusagents import STATUS_LOG_MAX, STATUS_LOG_SUFFIXES, status_log_body
 from agentctl.status import render_status, status_cached, status_header
 from agentctl.redhold import red_fix_liveness
@@ -56,7 +58,12 @@ def cmd_status(a, store):
     if a.line:  # THE STATUS LINE IS THE SNAPSHOT ALONE: no store RPC, no network (2026-11-22: 2-4.6 s, "gate ?")
         print(h["line"])
         return 0
-    standby = None if on_ci_runner() else laptop_role_standby(store)  # ONE MACHINE HOLDS THE LAPTOP ROLE
+    try:  # ONE MACHINE HOLDS THE LAPTOP ROLE (the role's lease: the first store read, bounded -- cli waited_on)
+        standby = None if on_ci_runner() else standby_of(store.get(LAPTOP_ROLE_LEASE), t)
+    except Exception as e:  # said, and the status from the snapshot all the same: never a hang, no more store reads
+        print(store_unreachable_text(e), file=sys.stderr)
+        print(render_status(h, t))
+        return 0
     print((f"STANDBY: {standby}\n" if standby else "") + with_liveness(render_status(h, t), store, t))
     return 0
 

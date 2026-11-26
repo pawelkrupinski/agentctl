@@ -5,6 +5,7 @@ from agentctl.clock import epoch_now
 import argparse
 import os
 import signal
+import sys
 import time
 from typing import Any
 from agentctl.clock import Clock
@@ -22,7 +23,7 @@ from agentctl.queuerecheck import queued_entries
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.waiting import GATE_UNREAD, cancel_entry_remote, cancel_submitted, unread_why
 from agentctl.queuesubmit import landed_sha_of
-from agentctl.remotestore import store_url
+from agentctl.remotestore import StoreUnavailable, store_unreachable_text, store_url
 from agentctl.landhold import LAND_HOLD_DEFAULT, hold_by, land_hold_release, land_hold_set
 from agentctl.redseen import gate_reds
 from agentctl.remote import remote_check_lines
@@ -108,10 +109,14 @@ def land_release_command(repo: str, d: str, st: Any) -> int:
 
 def land_status_command(a: argparse.Namespace, repo: str, d: str, st: Any) -> int:
     """`land status [<id>]`: one change, open or decided (A VERDICT IS DURABLE), else the whole queue."""
-    if getattr(a, "entry", None):
-        return land_status_entry(st, a.entry, epoch_now())
-    # ONE QUEUE: the store's change items, on either host
-    rows = change_rows(st)
+    try:  # the store's reads are bounded (cli waited_on): one that does not answer fails the command fast, saying which
+        if getattr(a, "entry", None):
+            return land_status_entry(st, a.entry, epoch_now())
+        # ONE QUEUE: the store's change items, on either host
+        rows = change_rows(st)
+    except StoreUnavailable as e:
+        print(store_unreachable_text(e), file=sys.stderr)
+        return 3
     print(f"queue: {store_url() or 'this host'}")
     print(f"processor: {'running' if waiting_processor_alive(d) else 'not running'}")
     hold = land_hold(st)

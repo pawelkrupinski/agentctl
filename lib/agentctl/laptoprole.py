@@ -56,7 +56,7 @@ def role_host():
     return knob_hostname() or socket_host()
 
 
-def laptop_role_holder():
+def laptop_role_holder() -> str:
     return f"role:{role_host()}:{machine_id()}"
 
 
@@ -69,12 +69,17 @@ def laptop_role_standby(store, t = None):
         row = st.get(LAPTOP_ROLE_LEASE)
     except Exception:  # an unread store decides nothing here: the duty's own store calls fail on their own
         return None
+    return standby_of(row, t)
+
+
+def standby_of(row: dict[str, Any] | None, t: float) -> str | None:
+    """The standby line of the role lease's row read at t (None: this machine may do the laptop's duties)."""
     if not row or not row.get("holder") or float(row.get("expires_at") or 0) <= t or row["holder"] == laptop_role_holder():
         return None
     return laptop_role_line(row)
 
 
-def laptop_role_line(row):
+def laptop_role_line(row: dict[str, Any]) -> str:
     m = lease_meta(row)
     since = m.get("since") or row.get("acquired_at")
     when = day_hhmmz(since) if since else "?"

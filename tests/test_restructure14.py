@@ -176,7 +176,7 @@ class CloseLandedChangesTest(unittest.TestCase):
         case.fake("landed_look_due", lambda rng, cid, t: rng.random() < 0.7)
         case.fake("already_landed", lambda rng, st, d, e, via: None)
         case.fake("close_item_landed", lambda rng, st, cid, why, via=None: rng.random() < 0.6)
-        st = Probe(case, "st", items=lambda rng, kind: items)
+        st = Probe(case, "st", items=lambda rng, kind, states=None: [i for i in items if states is None or i["state"] in states])
         clock = Probe(case, "clock", time=lambda rng: NOW)
         return ("/repo", clock, st, r.choice([None, "/d", ""]))
 

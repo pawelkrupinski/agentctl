@@ -255,7 +255,10 @@ moves it forward; nothing is a detached process that can die with its state in i
   5 min, W8 no change left the queue in the last hour (landed, rejected, superseded, cancelled) without an event
   addressed to its author's inbox (Store.transition completes every such event; the entry carries the item id, so
   `agentctl inbox <item id>` finds it, also once merged into its worktree's live land alert, which lists every merged
-  change id under `entries`; W8 reads the items before the events, so a change exiting mid-read is not named). A violation is a condition and a notification. W5 kickstarts a processor
+  change id under `entries`; W8 reads the items before the events, so a change exiting mid-read is not named), WU (the sync
+  role) the store tunnel is not up but unresponsive: localhost:3014 accepts a connection while the store has not answered the
+  sync's reads for over 5 min (state.json `store_error`; 2026-11-26: the tunnel listened for 90+ min, every request timed
+  out, nothing was raised). A violation is a condition and a notification. W5 kickstarts a processor
   silent for 15 min (3 x W5_MAX) of AWAKE time only: a pass whose own previous pass is over 3 min old
   (`$AGENTCTL_WATCHDOG_SLEEP_GAP`) slept through the gap and starts the clock again (2026-11-15 16:58: at a 2-second
   dark wake it kicked a processor whose beat was 16 min old because the laptop had slept since 16:42). The kick keeps
@@ -3389,6 +3392,15 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
   launchd's 256: a lossy uplink strands an fd per abandoned request). On a lossy uplink (any lost ping of 10 to
   1.1.1.1, e.g. a phone hotspot) the processor never kicks it -- a restart only drops what is in flight -- and the
   status line says NETWORK until a clean sample.
+- **`STORE UNREACHABLE` from `status` / `land status`, or WU.** Both commands bound each store call (15 s, never
+  retried) and name the store and the tunnel instead of hanging. A tunnel that listens but does not answer (WU) is a
+  wedged forward or a saturated uplink: a second forward (`ssh -O forward -L 13014:10.1.0.3:3014 ci-runner`, then
+  `curl localhost:13014/` -- a 401 is an answer) tells which; a wedged one is kickstarted as above. The readers of
+  open items ask the store for the open states only (`open_items`), never every decided change (4 MB on 2026-11-26).
+- **`version skew` (StoreLacksCall).** ci-runner's store is pinned behind the laptop's ~/bin (agentctl's tests.yml
+  red) and lacks a call the client makes (a 404 naming it). The call is not sent again for 10 min
+  (`store-lacking.json` under the state root); what it carried (the offline event log) stays for a store that has it.
+  It clears itself once the pin moves.
 - **gh / GitHub / git timeouts on a lossy uplink.** Every forge read (gh_json, api GETs), the land/ ref push and the
   push's proving fetch go through `net_retry` / `net_run` (lib/agentctl/classify.py, beside the network's signature table): a failure in the network's words
   (TRANSIENT_NETWORK) or a timeout is tried again 2-20 s apart within NET_RETRY_BUDGET (120 s), then raises

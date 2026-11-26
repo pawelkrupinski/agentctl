@@ -5,7 +5,7 @@ import re
 from typing import Any
 from agentctl.repos import RED_PRIMARY, red_repo_of, red_repo_short
 from agentctl.workflows import LOCAL_FLOW
-from agentctl.statemachines import machine_state
+from agentctl.statemachines import machine_state, open_items
 
 
 RED_TERMINAL = ("verified", "cleared")
@@ -33,9 +33,8 @@ def red_what(d: dict[str, Any]) -> str:
 def red_active(store: Any) -> dict[str, dict[str, Any]]:
     """{key: item} of the non-terminal reds (one per key)."""
     out = {}
-    for it in store.items("red"):
-        if it["state"] not in RED_TERMINAL:
-            out[it["data"].get("key") or it["id"]] = it
+    for it in open_items(store, "red"):
+        out[it["data"].get("key") or it["id"]] = it
     return out
 
 

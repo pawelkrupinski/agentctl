@@ -89,6 +89,18 @@ MACHINES = {
 }
 
 
+def open_states(typ: Any) -> list[str]:
+    """The states of machine typ that are not terminal: what an item still open can be in."""
+    return [name for name, spec in MACHINES[typ].items() if not spec.terminal]
+
+
+def open_items(st: Any, typ: Any) -> list[Any]:
+    """THE STORE FILTERS THE OPEN ITEMS (2026-11-26: `items("change")` was 4.1 MB, 1990 changes nearly all decided, read
+    whole by every status, land status and sync step over a 40 KB/s tunnel: each read took 3 min and the queue stalled).
+    The states go to the store (`items(typ, states)`, which every store version takes), so only open items cross."""
+    return list(st.items(typ, open_states(typ)))
+
+
 def machine_state(typ: Any, state: Any) -> Any:
     try:
         return MACHINES[typ][state]

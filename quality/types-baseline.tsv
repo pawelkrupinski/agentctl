@@ -64,7 +64,7 @@ mypy-errors	lander	33
 mypy-errors	landhold	4
 mypy-errors	landqueue	5
 mypy-errors	landwatch	19
-mypy-errors	laptoprole	51
+mypy-errors	laptoprole	42
 mypy-errors	launchd	2
 mypy-errors	leases	1
 mypy-errors	live	33
@@ -72,7 +72,7 @@ mypy-errors	livestream	38
 mypy-errors	localrecheck	34
 mypy-errors	maint	28
 mypy-errors	maintain	9
-mypy-errors	netwatch	18
+mypy-errors	netwatch	16
 mypy-errors	notifier	26
 mypy-errors	notifyurl	13
 mypy-errors	offerdispatch	19
@@ -107,7 +107,7 @@ mypy-errors	queueslots	23
 mypy-errors	queuesubmit	31
 mypy-errors	queueuntil	10
 mypy-errors	recordingpins	30
-mypy-errors	recovery	51
+mypy-errors	recovery	50
 mypy-errors	red	48
 mypy-errors	redask	18
 mypy-errors	redauthors	11
@@ -146,7 +146,7 @@ mypy-errors	redview	25
 mypy-errors	redwaits	6
 mypy-errors	remote	42
 mypy-errors	remotejobs	28
-mypy-errors	remotestore	28
+mypy-errors	remotestore	26
 mypy-errors	repos	26
 mypy-errors	reverts	46
 mypy-errors	rundispatch	10
@@ -159,7 +159,7 @@ mypy-errors	sessionpaths	9
 mypy-errors	slots	51
 mypy-errors	statemachines	29
 mypy-errors	stats	33
-mypy-errors	status	83
+mypy-errors	status	82
 mypy-errors	statusagents	34
 mypy-errors	statusline	4
 mypy-errors	statuspage	30
@@ -171,9 +171,9 @@ mypy-errors	stuckruns	4
 mypy-errors	superseded	21
 mypy-errors	syncsteps	30
 mypy-errors	tickservice	8
-mypy-errors	tools	56
+mypy-errors	tools	55
 mypy-errors	trailers	2
-mypy-errors	tunnel	4
+mypy-errors	tunnel	3
 mypy-errors	upkeep	13
 mypy-errors	wait	46
 mypy-errors	waiting	24
