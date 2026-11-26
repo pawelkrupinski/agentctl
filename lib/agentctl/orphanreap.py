@@ -30,13 +30,8 @@ from agentctl.redmove import tail_lines
 RED_ORPHAN_GRACE = 5 * 60    # an ended session's turn still held this long is orphaned ($AGENTCTL_RED_ORPHAN_GRACE)
 
 
-def owner_work(fam, t, holder_pid=None):
-    """(True|False|None, why): is family fam's owner at work? None when this machine cannot tell. holder_pid: the
-    wrapper the lease itself names (its meta's pid): a record of another spell judges nothing of it."""
-    rec = read_record(owner_record_path(fam)) or {}
-    pid = rec.get("pid")
-    if not pid:
-        return None, "no owner record on this machine"
+def _wrapper_verdict(rec: Any, pid: Any, holder_pid: Any) -> Any:
+    """(at work?, why) when the owner record shows the wrapper itself gone or never the lease's own; None when it lives."""
     if holder_pid and str(holder_pid) != str(pid):
         # THE RECORD IS ANOTHER SPELL'S (2026-11-15 11:34:52, Order independence #74 and Main #2475): the leases of
         # two live wrappers in their turns (outside-gate pid 37262, main-tests) were revoked "ORPHANED ... its wrapper
@@ -49,21 +44,48 @@ def owner_work(fam, t, holder_pid=None):
         return False, f"its wrapper ended ({str(rec.get('verdict') or '?')[:160]})"
     if not proc_alive(pid, rec.get("process_start")):
         return False, f"its wrapper (pid {pid}) is gone"
-    if not rec.get("in_turn", bool(rec.get("bg_id"))):  # older records have no in_turn: a recorded session is a turn
-        return True, "between turns"
+    return None
+
+
+def _session_verdict(rec: Any, pid: Any, t: Any, idle: Any, grace: Any) -> Any:
+    """(at work?, why) when the background session is unreadable, or over while the wrapper still holds the turn; else None."""
+    bid = rec.get("bg_id")
+    if not bid:
+        return None
+    ent = bg_session(claude_cli(), bid)
+    if ent == {}:
+        return None, "`claude agents` unread"
+    if (ent is None or bg_turn_over(ent, rec.get("transcript"), t)) and idle > grace:
+        return False, (f"its session {bid} is {(ent or {}).get('state') or 'gone'} while its wrapper (pid {pid}) "
+                       f"still holds the turn, {fmt_age(idle)} without progress")
+    return None
+
+
+def _turn_verdict(rec: Any, pid: Any, t: Any) -> Any:
+    """(at work?, why) of an owner in its turn: its session, then the transcript's progress."""
     grace = env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE)
     idle = t - max(float(rec.get("progress_at") or 0), mtime(rec.get("transcript")))
-    bid = rec.get("bg_id")
-    if bid:
-        ent = bg_session(claude_cli(), bid)
-        if ent == {}:
-            return None, "`claude agents` unread"
-        if (ent is None or bg_turn_over(ent, rec.get("transcript"), t)) and idle > grace:
-            return False, (f"its session {bid} is {(ent or {}).get('state') or 'gone'} while its wrapper (pid {pid}) "
-                           f"still holds the turn, {fmt_age(idle)} without progress")
+    verdict = _session_verdict(rec, pid, t, idle, grace)
+    if verdict:
+        return verdict
     if idle > env_num("AGENTCTL_RED_STALL", RED_STALL) + grace:
         return False, f"turn {rec.get('turn')}: no progress (transcript) for {fmt_age(idle)}"
     return True, f"turn {rec.get('turn')} at work"
+
+
+def owner_work(fam: Any, t: Any, holder_pid: Any = None) -> Any:
+    """(True|False|None, why): is family fam's owner at work? None when this machine cannot tell. holder_pid: the
+    wrapper the lease itself names (its meta's pid): a record of another spell judges nothing of it."""
+    rec = read_record(owner_record_path(fam)) or {}
+    pid = rec.get("pid")
+    if not pid:
+        return None, "no owner record on this machine"
+    verdict = _wrapper_verdict(rec, pid, holder_pid)
+    if verdict:
+        return verdict
+    if not rec.get("in_turn", bool(rec.get("bg_id"))):  # older records have no in_turn: a recorded session is a turn
+        return True, "between turns"
+    return _turn_verdict(rec, pid, t)
 
 
 def wrapper_last_words(m, n=3):
