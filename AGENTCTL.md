@@ -1801,7 +1801,7 @@ The reconciler then takes it, a step per tick:
   runs the kind's recovery, and an overlap hold on a holder NOT IN FLIGHT (not checking, checked or pushing) lasts at
   most `$AGENTCTL_HOLD_IDLE_TTL` (1 h): the change lets go of that blocker for good (`hold_expired` on its entry), is
   told once (`its hold on X (waiting, not being checked) expired after 1 h`) and goes on. queuehold.py
-  `idle_hold_expired`; tests: tests/test_conflict_holds.py, the simulator's IH (`hold-on-parked-*`).
+  `idle_hold_expired`; tests: tests/test_conflict_holds.py, the simulator's IT (`hold-on-parked-*`).
 - **OVERLAPPING CHANGES ARE CHECKED AS ONE (2026-11-18: B1 against the CI-workflows change, the scraper catalog
   against the scrapers refactor, the cycle-breaking change against both -- each checked alone, then `NOT LANDED: the
   change no longer applies ... main moved during its checks`, a rebase and a full recheck).** A queued change sharing a

@@ -423,7 +423,8 @@ QUIET_LAP_MAX = 2 * 3600
 
 def quiet_lap_after(state: str, it: dict[str, Any], t: float) -> float:
     """The seconds until a quietly held change's next lap: its age in the state, between its deadline and QUIET_LAP_MAX."""
-    return min(max(machine_state("change", state).deadline, t - float(it.get("entered_at") or t)), QUIET_LAP_MAX)
+    least = float(machine_state("change", state).deadline)
+    return min(max(least, t - float(it.get("entered_at") or t)), QUIET_LAP_MAX)
 
 
 def lap_change_deadline(st: Any, e: Any, state: Any, t: Any, note: Any = None) -> Any:
@@ -439,6 +440,11 @@ def lap_change_deadline(st: Any, e: Any, state: Any, t: Any, note: Any = None) -
         _rederive_stuck_hold(st, e, state, it, hold, stuck, t)
         return
     issue = None if hold else file_unheld_change(st, it, t, "agentctl (the change tick)")  # agentctl's bug: an issue,
+    _write_lap(st, e, state, it, hold, stuck, note, issue, t)
+
+
+def _write_lap(st: Any, e: Any, state: str, it: Any, hold: Any, stuck: Any, note: Any, issue: Any, t: float) -> None:
+    """The lap's event and next deadline: quiet while its hold is live, else to its author."""
     # A HELD LAP IS NO INBOX ENTRY (2026-11-19 08:39Z, 08:55Z: movies-fix-replay's "queued for 15 min / 30 min, held:
     # ..." reached the inbox every 15 min -- 93 of the day's 442 entries -- because the lap's event named the worktree
     # as its audience, and the projector writes every event with one). A live hold's lap is an event with no audience:
