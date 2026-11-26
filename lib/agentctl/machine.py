@@ -35,6 +35,17 @@ def machine_load1() -> float:
     return float(m["load1"]) if m and m.get("load1") is not None else os.getloadavg()[0]
 
 
+def run_queue(passed: Optional[float] = None) -> Optional[float]:
+    """The 1-min load average: the run queue, beside the busy cores (a saturated CPU is pressure only when it is
+    oversubscribed too). None where unreadable, or when a caller passed its own load (pressure_reading's seam)."""
+    if passed is not None:
+        return None
+    try:
+        return machine_load1()
+    except OSError:
+        return None
+
+
 def machine_cores() -> int:
     m = machine_fixed()
     return int(m["cores"]) if m and m.get("cores") else (os.cpu_count() or 1)

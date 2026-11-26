@@ -76,17 +76,6 @@ def machine_busy_cores(n: int, read: Optional[Callable[[], Optional[tuple[int, i
     return round(float(n * (end[0] - start[0]) / (end[1] - start[1])), 2)
 
 
-def run_queue(passed: Optional[float] = None) -> Optional[float]:
-    """The 1-min load average: the run queue, beside the busy cores (a saturated CPU is pressure only when it is
-    oversubscribed too). None where unreadable, or when a caller passed its own load (pressure_reading's seam)."""
-    if passed is not None:
-        return None
-    try:
-        return os.getloadavg()[0]
-    except OSError:
-        return None
-
-
 def cpu_pressure(r: dict[str, Any]) -> list[str]:
     """The CPU's part of laptop_pressure: busy cores past LAPTOP_LOAD x the cores (a reading charged past them), or the
     whole machine's CPU saturated (GOV_SATURATED, user + sys) with a run queue over LAPTOP_LOAD x the cores -- never

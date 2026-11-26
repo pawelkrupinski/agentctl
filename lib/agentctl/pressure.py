@@ -8,8 +8,8 @@ import sys
 from typing import Any
 from agentctl.core import attempt, env_num, run_cmd
 from agentctl.statefile import read_record, write_json
-from agentctl.cpu import cpu_pressure, machine_busy_cores, run_queue
-from agentctl.machine import machine_cores, machine_fixed, read_meminfo
+from agentctl.cpu import cpu_pressure, machine_busy_cores
+from agentctl.machine import machine_cores, machine_fixed, read_meminfo, run_queue
 from agentctl.govtickets import gov_dir
 
 
