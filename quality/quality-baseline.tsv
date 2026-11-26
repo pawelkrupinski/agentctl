@@ -9,7 +9,6 @@ cognitive	_watch_group	12
 cognitive	assemble	24
 cognitive	batch_check	19
 cognitive	bg_spent	16
-cognitive	blame_step	26
 cognitive	close_condition	19
 cognitive	close_landed_changes	19
 cognitive	cmd_config	21
@@ -68,7 +67,6 @@ cyclomatic	apply_entry	12
 cyclomatic	assemble	15
 cyclomatic	batch_check	17
 cyclomatic	bg_spent	15
-cyclomatic	blame_step	19
 cyclomatic	build_view_change	15
 cyclomatic	close_condition	15
 cyclomatic	close_landed_changes	15

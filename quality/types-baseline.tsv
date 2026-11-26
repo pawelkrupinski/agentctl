@@ -12,7 +12,7 @@ mypy-errors	batchpush	24
 mypy-errors	batchrun	26
 mypy-errors	batchtick	44
 mypy-errors	beats	4
-mypy-errors	blame	43
+mypy-errors	blame	42
 mypy-errors	blameopen	11
 mypy-errors	blamerecords	18
 mypy-errors	branches	67

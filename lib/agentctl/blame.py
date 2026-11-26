@@ -192,8 +192,7 @@ def blame_unproven(d, b):
 def blame_step(store, it, repo, o_r, t):
     """One step of a probing red's culprit search (the red tick, before its offer step). Returns act lines, or None when
     the red is not probing."""
-    d = it["data"]
-    b = d.get("blame") or {}
+    b = it["data"].get("blame") or {}
     if b.get("state") != "probing":
         return None
     if t - float(b.get("since") or t) > env_num("AGENTCTL_BLAME_MAX", BLAME_MAX):
@@ -207,6 +206,13 @@ def blame_step(store, it, repo, o_r, t):
         b, why = blame_apply(b, p["boundary"], v)
         if why:
             return blame_finish(store, it, b, why, t)
+    return _blame_search(store, it, repo, o_r, t, b)
+
+
+def _blame_search(store: Any, it: Any, repo: Any, o_r: Any, t: Any, b: Any) -> Any:
+    """The search from boundary to boundary: each one a stored run decides (blame_free), else a CI probe is started (the
+    step's lines) or the search ends (blame_finish)."""
+    d = it["data"]
     while True:
         i = blame_next(b)
         if i is None:
@@ -217,20 +223,33 @@ def blame_step(store, it, repo, o_r, t):
             if why:
                 return blame_finish(store, it, b, why, t)
             continue
-        started = len([x for x in b.get("probes") or [] if x.get("ci")])
-        if started >= env_num("AGENTCTL_BLAME_PROBES", BLAME_PROBES):
-            return blame_finish(store, it, b, f"inconclusive within {started} CI probes", t)
-        if b.get("kind") not in ("drift", "checks"):
-            why = ("no CI check repeats this red on another commit (a convergence leg's pinned pair rotates nightly)"
-                   if b.get("kind") is None else f"no decided {d.get('workflow')} run on {blame_boundary(b, i)[:10]}")
+        why = _blame_unprobeable(d, b, i)
+        if why:
             return blame_finish(store, it, b, why, t)
-        p = blame_probe_start(repo, o_r, d, b, i)
-        b = dict(b, probe=p)  # counted among the CI probes when its verdict lands (ci: True)
-        store.update_item("red", it["id"], it["version"], {"blame": b})
-        line = (f"RED BLAME: {red_what(d)}: probing {blame_boundary(b, i)[:10]} (boundary {i} of {len(b['groups'])}, "
-                f"{b['kind']}) on CI")
-        dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
-        return [line]
+        return _blame_probe_line(store, it, repo, o_r, b, i)
+
+
+def _blame_unprobeable(d: Any, b: Any, i: Any) -> Any:
+    """Why boundary i cannot be probed on CI (the probes are spent, or no check repeats this red), or None."""
+    started = len([x for x in b.get("probes") or [] if x.get("ci")])
+    if started >= env_num("AGENTCTL_BLAME_PROBES", BLAME_PROBES):
+        return f"inconclusive within {started} CI probes"
+    if b.get("kind") in ("drift", "checks"):
+        return None
+    if b.get("kind") is None:
+        return "no CI check repeats this red on another commit (a convergence leg's pinned pair rotates nightly)"
+    return f"no decided {d.get('workflow')} run on {blame_boundary(b, i)[:10]}"
+
+
+def _blame_probe_line(store: Any, it: Any, repo: Any, o_r: Any, b: Any, i: Any) -> Any:
+    """Starts the CI probe of boundary i, records it on the red, and returns the step's line."""
+    d = it["data"]
+    b = dict(b, probe=blame_probe_start(repo, o_r, d, b, i))  # counted among the CI probes when its verdict lands (ci: True)
+    store.update_item("red", it["id"], it["version"], {"blame": b})
+    line = (f"RED BLAME: {red_what(d)}: probing {blame_boundary(b, i)[:10]} (boundary {i} of {len(b['groups'])}, "
+            f"{b['kind']}) on CI")
+    dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
+    return [line]
 
 
 # -- the probes: a detached `agentctl red probe` per boundary, its verdict in a JSON file
