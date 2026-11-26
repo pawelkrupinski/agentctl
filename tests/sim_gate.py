@@ -68,6 +68,9 @@ def scenarios():
     # v4 (2026-11-26): the red-landing rule -- a fix beside a bare production commit waits for green (IR)
     out += [(f"redfix-beside-bare-{s}", {"seed": s, "calm": True, "trees": 2, "script": "REDFIX_BESIDE_BARE"})
             for s in range(4)]
+    # v5 (2026-11-26): one RedEpisode -- a fix naming a run only a stale cached signature puts in the episode (IW)
+    out += [(f"redfix-stale-episode-{s}", {"seed": s, "calm": True, "trees": 2, "script": "REDFIX_STALE_EPISODE"})
+            for s in range(4)]
     return out
 
 

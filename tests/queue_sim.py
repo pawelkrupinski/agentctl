@@ -349,6 +349,7 @@ class Sim:
         # `learn-run`), and a run of another failure by no item at all
         self.red_older, self.red_item, self.red_item_runs, self.fix_waits = None, None, set(), {}
         self.green_ticks = []  # the ticks the gate went green (the forge's)
+        self.episode_runs, self.episode_snap = set(), None  # the open red's runs only its episode names (stale_episode)
         self.outside, self.outside_run, self.outside_clears = {}, 5000, {}  # reds outside the gate: {run: red id}
         # their own draws (a stream of their own: a seed without one replays exactly as before they were modelled)
         self.outside_rng = random.Random(f"outside-{seed}")
@@ -709,7 +710,7 @@ class Sim:
         simulated hook applies): while the gate is red, every production commit the queue LANDS names a run of the open
         red -- the gate's or its item's. (A push the hook refuses -- the gate turned red after the queue decided -- lands
         nothing and is no violation.)"""
-        known = set(self.reds) | self.red_item_runs
+        known = set(self.reds) | self.red_item_runs | self.episode_runs
         for c in commits if self.reds else ():
             p = self.patches.get(self.commits.get(c, (None, None))[1])
             if p and any(sim_production(x) for x in p.paths) and not p.fixes & known:
@@ -1065,6 +1066,9 @@ class Sim:
             if spec.get("kind") == "open-red":  # a gate red with its item in the store (and an older run of it)
                 self.open_red(item=True, older_known=spec.get("older_known", True))
                 continue
+            if spec.get("kind") == "stale-episode":
+                self.stale_episode()
+                continue
             if spec.get("kind") == "learn-run":
                 self.name_older_run()
                 continue
@@ -1128,6 +1132,26 @@ class Sim:
                 "key": self.red_item, "workflow": "Main", "gate": True, "red_kind": "test",
                 "runs": sorted(self.red_item_runs), "last_run": {"number": self.red_run}})
 
+    def stale_episode(self):
+        """The open red's EPISODE holds its older run only through the CI snapshot: the gate's streak lists it, and its
+        cached signature -- written by an older classifier -- names the red's job and line (redepisode.py's fallback
+        order counts a stale record). The red's item names its newest runs only."""
+        st = A.process_store()
+        it = st.item("red", self.red_item)
+        st.update_item("red", self.red_item, it["version"], {"job": "Unit tests", "line": "Failed: sim"})
+        runs = [{"number": int(n), "databaseId": 50000 + int(n), "status": "completed", "conclusion": "failure",
+                 "headBranch": "main"} for n in (self.red_run, self.red_older)]
+        for r, version in zip(runs, (A.classifier_version(), "older-classifier")):
+            A.write_json(A.reds_dir("runsig", f"{r['databaseId']}.json"), {
+                "classifier": version, "sigs": [{"job": "Unit tests", "kind": "test", "line": "Failed: sim"}]})
+        self.episode_runs = {self.red_older, str(runs[1]["databaseId"])}
+        self.episode_snap = {"repo": A.SHORT["movies"], "gate": [{"name": "Main", "decided": runs[0], "runs": runs}]}
+        self.refresh_episode_snap()
+
+    def refresh_episode_snap(self):
+        if self.episode_snap and self.reds:
+            A.state_update(ci={**self.episode_snap, "at": A.epoch_now()})
+
     def name_older_run(self):
         """The red's item names its older run now (a tick attached it)."""
         st = A.process_store()
@@ -1162,6 +1186,7 @@ class Sim:
 
     def forge(self):
         self.close_outside_reds()
+        self.refresh_episode_snap()
         if self.red_clears_at is not None and self.tick >= self.red_clears_at:
             self.reds, self.red_since, self.red_clears_at = set(), None, None
             self.green_ticks.append(self.tick)
@@ -1319,7 +1344,7 @@ class Sim:
         # W. A RED FIX OF AN OPEN GATE RED THE STORE NAMES NEVER WAITS FOR GREEN (2026-11-25, batch #124: Main #2898
         # red, the fix named #2896 -- a run of the same red its item named -- and waited for the green only it could
         # bring): the simulation's own truth, the names the gate reads and its item holds
-        known = set(self.reds) | self.red_item_runs
+        known = set(self.reds) | self.red_item_runs | (self.episode_runs if self.reds else set())
         for eid, e in entries.items():
             if e.get("status") == "waiting" and self.reds and self.names_the_red(eid, known):
                 n = self.fix_waits[eid] = self.fix_waits.get(eid, 0) + 1
@@ -1601,6 +1626,16 @@ REDFIX_BESIDE_BARE = [
     (1, {"label": "fix", "worktree": "fix", "kind": "redfix-older", "two_commits": True, "paths": ["worker/src/main/Fix.scala"]}),
     (2, {"label": "tools", "worktree": "tools", "paths": ["scripts/tools.sh"]}),
     (3, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
+    (20, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]}),
+]
+# AN EPISODE READ FROM A STALE SIGNATURE (2026-11-26, one RedEpisode): the fix names the red's older run, which only the
+# gate's streak and that run's signature cached by an OLDER classifier say is the same failure. The gate's copy
+# counted the stale record, the queue facts' did not: the fix waited for the green only it could bring (IW).
+REDFIX_STALE_EPISODE = [
+    (0, {"kind": "open-red", "older_known": False}),
+    (0, {"kind": "stale-episode"}),
+    (0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
+    (1, {"label": "fix", "worktree": "fix", "kind": "redfix-older", "one_commit": True, "paths": ["worker/src/main/Fix.scala"]}),
     (20, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]}),
 ]
 FIX_08010C_BOUND = 8  # ticks from its arrival to LANDED (a check is 2-4 ticks; nothing may hold it)
