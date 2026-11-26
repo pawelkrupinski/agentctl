@@ -1,8 +1,9 @@
 # agentctl, part `workflows`: GitHub Actions workflows: a workflow file's jobs and triggers (read by indentation, no YAML parser), a job's own name, the reaper step's name.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import itertools
 import re
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator, NamedTuple
 from agentctl.core import git
 
 
@@ -123,19 +124,81 @@ JOB_TIMEOUT_LINE = re.compile(r"^ +timeout-minutes:[ \t]*(\d+)[ \t]*(?:#.*)?$")
 JOBS_HEADER = re.compile(r"^jobs:[ \t]*(?:#.*)?$")
 
 
-def _jobs_body(text: str) -> Iterator[tuple[int, str]]:
-    """(indent, line) of each significant line of a workflow's `jobs:` block, up to the next top-level key."""
+class JobSyntax(NamedTuple):
+    """How a reader of a `jobs:` block takes its text (the two readers differ on these edges, each kept as it was):
+    the line opening the section, how a line's indent is counted, and which lines may open a job."""
+    header: "re.Pattern[str]"
+    indent: Callable[[str], int]
+    opens_job: Callable[[str], bool]
+
+
+def _space_indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _white_indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+# THE NAMES (workflow_jobs): `jobs:` may carry a comment, only spaces indent, and a job opens on a `key:` line alone.
+DECLARED_JOBS = JobSyntax(JOBS_HEADER, _space_indent, lambda line: JOB_KEY_LINE.match(line) is not None)
+# THE TIMEOUT BOUND (outsideflows.workflow_timeout_bound): a bare `jobs:`, a tab counts as indent, and any line at the
+# first line's indent opens a job.
+BOUND_JOBS = JobSyntax(re.compile(r"^jobs:\s*$"), _white_indent, lambda line: True)
+
+
+class JobBlock:
+    """One job of a `jobs:` block: the line that opened it and the lines at the indent of its first property."""
+
+    def __init__(self, head: str) -> None:
+        self.head = head
+        self.props: list[str] = []
+
+
+def _jobs_body(text: str, syntax: JobSyntax) -> Iterator[tuple[int, str]] | None:
+    """(indent, line) of each significant line of a workflow's `jobs:` block, up to the next top-level key; None without
+    that section."""
     lines = text.splitlines()
-    start = next((n for n, l in enumerate(lines) if JOBS_HEADER.match(l)), None)
+    start = next((n for n, l in enumerate(lines) if syntax.header.match(l)), None)
     if start is None:
-        return
-    for line in lines[start + 1:]:
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        indent = len(line) - len(line.lstrip(" "))
-        if indent == 0:
-            return
-        yield indent, line
+        return None
+    body = ((syntax.indent(l), l) for l in lines[start + 1:] if l.strip() and not l.lstrip().startswith("#"))
+    return iter(list(itertools.takewhile(lambda il: il[0] != 0, body)))
+
+
+class _JobsScan:
+    """The jobs of a `jobs:` block, line by line: the first line that may open a job sets the jobs' indent, the first
+    line below a job sets the indent of its properties, and only a line at that indent is kept."""
+
+    def __init__(self, syntax: JobSyntax) -> None:
+        self.syntax = syntax
+        self.jobs: list[JobBlock] = []
+        self.job_indent = -1
+        self.props_indent: int | None = None
+
+    def feed(self, indent: int, line: str) -> None:
+        opens = self.syntax.opens_job(line)
+        if self.job_indent < 0 and opens:
+            self.job_indent = indent
+        if opens and indent == self.job_indent:
+            self.jobs.append(JobBlock(line))
+            self.props_indent = None
+        elif self.jobs and indent > self.job_indent:
+            if self.props_indent is None:
+                self.props_indent = indent
+            if indent == self.props_indent:
+                self.jobs[-1].props.append(line)
+
+
+def scan_jobs(text: str, syntax: JobSyntax) -> list[JobBlock] | None:
+    """The jobs of a workflow's `jobs:` block as `syntax` reads them; None without that section."""
+    body = _jobs_body(text, syntax)
+    if body is None:
+        return None
+    scan = _JobsScan(syntax)
+    for indent, line in body:
+        scan.feed(indent, line)
+    return scan.jobs
 
 
 def _read_job_property(job: dict[str, Any], line: str) -> None:
@@ -149,40 +212,17 @@ def _read_job_property(job: dict[str, Any], line: str) -> None:
         job["timeout_s"] = int(bound.group(1)) * 60
 
 
-class _JobsScan:
-    """The jobs of a `jobs:` block, line by line: the first job key sets the jobs' indent, the first line below a job
-    sets the indent of its properties, and only a line at that indent is read."""
-
-    def __init__(self) -> None:
-        self.jobs: list[dict[str, Any]] = []
-        self.job: dict[str, Any] | None = None
-        self.job_indent = -1
-        self.props_indent: int | None = None
-
-    def feed(self, indent: int, line: str) -> None:
-        key = JOB_KEY_LINE.match(line)
-        if self.job_indent < 0 and key:
-            self.job_indent = indent
-        if key and indent == self.job_indent:
-            self.job, self.props_indent = {"name": key.group(2), "timeout_s": None}, None
-            self.jobs.append(self.job)
-        elif self.job is not None and indent > self.job_indent:
-            self._property(self.job, indent, line)
-
-    def _property(self, job: dict[str, Any], indent: int, line: str) -> None:
-        if self.props_indent is None:
-            self.props_indent = indent
-        if indent == self.props_indent:
-            _read_job_property(job, line)
-
-
 def workflow_jobs(text: str) -> list[dict[str, Any]]:
     """The jobs of a workflow, as its text declares them: [{name, timeout_s}] -- name its template (a job without
     `name:` is named by its key), timeout_s its own `timeout-minutes` in s or None."""
-    scan = _JobsScan()
-    for indent, line in _jobs_body(text):
-        scan.feed(indent, line)
-    return scan.jobs
+    jobs = []
+    for block in scan_jobs(text, DECLARED_JOBS) or []:
+        key = JOB_KEY_LINE.match(block.head)
+        job: dict[str, Any] = {"name": key.group(2) if key else block.head, "timeout_s": None}
+        for line in block.props:
+            _read_job_property(job, line)
+        jobs.append(job)
+    return jobs
 
 
 def workflow_job_names(text: str) -> list[str]:
