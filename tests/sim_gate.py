@@ -71,6 +71,9 @@ def scenarios():
     # v5 (2026-11-26): one RedEpisode -- a fix naming a run only a stale cached signature puts in the episode (IW)
     out += [(f"redfix-stale-episode-{s}", {"seed": s, "calm": True, "trees": 2, "script": "REDFIX_STALE_EPISODE"})
             for s in range(4)]
+    # v6 (2026-11-26): two land holders at once, at each interleaving of the store's seams (IH; tests #289 / #292)
+    out += [(f"two-holders-{o}-{s}", {"seed": s, "calm": True, "trees": 2, "script": f"TWO_HOLDERS_{o.upper()}"})
+            for o in ("apart", "extend_first", "move_between") for s in range(2)]
     return out
 
 

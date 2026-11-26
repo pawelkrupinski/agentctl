@@ -47,6 +47,7 @@ INVARIANT_KINDS = {
     "IX": "no executor for a decided change",
     "IW": "a red fix of an open gate red the store names never waits for green past N ticks",
     "IR": "the queue never lands on a red gate a production commit naming no run of the open red",
+    "IH": "two holders reading no hold at once make exactly one hold, both report it and both moves are said",
 }
 VIOLATIONS_MAX = 50  # lines one scenario keeps in the gate's count mode
 ROOT = "0" * 40
@@ -1068,6 +1069,9 @@ class Sim:
             if spec.get("kind") == "stale-episode":
                 self.stale_episode()
                 continue
+            if spec.get("kind") == "two-holders":
+                self.two_holders(spec["order"])
+                continue
             if spec.get("kind") == "learn-run":
                 self.name_older_run()
                 continue
@@ -1130,6 +1134,43 @@ class Sim:
             A.process_store().put_item("red", self.red_item, "leased", {
                 "key": self.red_item, "workflow": "Main", "gate": True, "red_kind": "test",
                 "runs": sorted(self.red_item_runs), "last_run": {"number": self.red_run}})
+
+    def two_holders(self, order):
+        """TWO HOLDERS AT ONCE (2026-11-26, tests #289 / #292): the laptop and ci-runner run `land hold --for` while no
+        hold is in force, interleaved at the store's seams as ORDER says -- `apart` (one after the other), `extend-first`
+        (the other extends between the maker's making and its expiry move), `move-between` (both read the hold, the
+        maker moves, then the other: its read is stale). IH: exactly one hold in force, both holders return it and
+        neither raises, and both moves -- the maker's expiry, the other's extension -- are said (two hold.held events)."""
+        st, got, errors = self.store, {}, {}
+        h1_read, h0_moved = threading.Event(), threading.Event()
+
+        def hold(name, secs, store):
+            try:
+                got[name] = A.land_hold_set(store, secs, f"sim {name}", name)
+            except Exception as e:  # a holder's failure is the violation, not the run's end
+                errors[name] = f"{type(e).__name__}: {e}"
+
+        def the_other():
+            hold("h1", 120, SeamStore(st, before_move=lambda: (h1_read.set(), h0_moved.wait(10))))
+        h1 = threading.Thread(target=the_other, name="sim-holder-h1", daemon=True)
+        after_open = {"apart": None, "extend-first": lambda: hold("h1", 120, st),
+                      "move-between": lambda: (h1.start(), h1_read.wait(10))}[order]
+        was = A._PROCESS_CLOCK[0]
+        A.wire_clock(self.sim_clock)  # the holders' "now" is the simulation's, as the store's is
+        try:
+            hold("h0", 60, SeamStore(st, after_open=after_open))
+            h0_moved.set()
+            if order == "apart":
+                hold("h1", 120, st)
+            elif order == "move-between":
+                h1.join(10)
+        finally:
+            A.wire_clock(was)
+        held = [h["id"] for h in A.land_holds(st)]
+        said = [e["kind"] for i in held for e in st.item_events("hold", i) if e["from_state"] is not None]
+        if errors or len(held) != 1 or {h["id"] for h in got.values()} != set(held) or said.count("hold.held") != 2:
+            self.violate("IH", f"two holders ({order}): holds in force {held}, returned "
+                         f"{ {k: v['id'] for k, v in got.items()} }, raised {errors}, moves said {said}")
 
     def stale_episode(self):
         """The open red's EPISODE holds its older run only through the CI snapshot: the gate's streak lists it, and its
@@ -1637,6 +1678,39 @@ REDFIX_STALE_EPISODE = [
     (1, {"label": "fix", "worktree": "fix", "kind": "redfix-older", "one_commit": True, "paths": ["worker/src/main/Fix.scala"]}),
     (20, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]}),
 ]
+
+class SeamStore:
+    """The store a simulated holder writes through, running `after_open` once its open_singleton returns and
+    `before_move` before each transition: where another holder's step lands (Sim.two_holders)."""
+
+    def __init__(self, store, after_open=None, before_move=None):
+        self.store, self.after_open, self.before_move = store, after_open, before_move
+
+    def __getattr__(self, name):
+        return getattr(self.store, name)
+
+    def open_singleton(self, *a, **k):
+        got = self.store.open_singleton(*a, **k)
+        if self.after_open:
+            self.after_open()
+        return got
+
+    def transition(self, *a, **k):
+        if self.before_move:
+            self.before_move()
+        return self.store.transition(*a, **k)
+
+
+def two_holders_script(order):
+    """Two holders at once (ORDER: Sim.two_holders), then ordinary changes the short holds delay a tick or two."""
+    return [(0, {"kind": "two-holders", "order": order}),
+            (0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
+            (3, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]})]
+
+
+TWO_HOLDERS_APART = two_holders_script("apart")
+TWO_HOLDERS_EXTEND_FIRST = two_holders_script("extend-first")
+TWO_HOLDERS_MOVE_BETWEEN = two_holders_script("move-between")
 FIX_08010C_BOUND = 8  # ticks from its arrival to LANDED (a check is 2-4 ticks; nothing may hold it)
 
 
