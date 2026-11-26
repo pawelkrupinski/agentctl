@@ -271,7 +271,7 @@ class RedJoinedIdleTest(unittest.TestCase):
         case.fake("red_joined_progress", lambda rng, store, row, why: None)
         case.fake("red_fixes_red_commits", lambda rng, wt, names: rng.choice([None, "a" * 40]))
         case.fake("env_num", lambda rng, name, default: rng.choice([default, 100, 5000]))
-        meta = {k: g() for k, g in (("joined_at", lambda: r.choice([NOW - 10, NOW - 500, NOW - 4000, 0])), ("progressed", lambda: r.choice([True, False])),
+        meta = {k: g() for k, g in (("joined_at", lambda: r.choice([NOW - 10, NOW - 100, NOW - 500, NOW - 4000, NOW - 5000, 0])), ("progressed", lambda: r.choice([True, False])),
                                     ("worktree", lambda: "/w")) if r.random() < 0.85}
         row = {"item": r.choice(["red:r1", "", None, "r1"]), "holder": "h", "meta": json.dumps(meta)}
 
@@ -308,7 +308,7 @@ class RedSpawnTest(unittest.TestCase):
             ("line", lambda: "l"), ("run", lambda: r.choice([{}, {"number": 5}, None])), ("refuted", lambda: ["x" * 12]), ("predicts", lambda: "p"),
             ("red_kind", lambda: r.choice(["flake", "outside"])), ("diagnosis", lambda: "d"), ("names", lambda: ["n1"]), ("prior_work", lambda: {"w": 1}),
             ("old_note", lambda: "o"), ("history", lambda: [{"at": 1, "holder": "h", "outcome": "no", "worktree": "/w"}] * r.randint(0, 2)),
-            ("repo", lambda: "o/r"), ("decision", lambda: r.choice([{}, {"answer": "fixed by revert"}, {"answer": "x"}, None])),
+            ("repo", lambda: "o/r"), ("decision", lambda: r.choice([{}, {"answer": "revert abcdef1234"}, {"answer": "revert abc1234 " + "w" * 200}, {"answer": "x"}, None])),
             ("attempts", lambda: 3), ("culprit", lambda: r.choice([None, "c" * 40])),
             ("blame", lambda: r.choice([{}, {"culprit": "c" * 40}, {"reland_due": True}, {"reland_due": True, "reland": {"ok": True}}, {"culprit": "cu", "reland_due": True}, None]))) if r.random() < 0.8}
         pic.setdefault("workflow", "W")
