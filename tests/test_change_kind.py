@@ -105,6 +105,25 @@ class ChangeKindTest(unittest.TestCase):
         self.assertEqual(A.fixes_red_in_message("subject\n\nbody\n\nFixes-Red: #6, 7\nFixes-Red: 8\n"), {"6", "7", "8"})
         self.assertEqual(A.fixes_named({"fixes": ["#6", 7, " "]}), {"6", "7"})
 
+    def test_a_trailer_counts_only_in_the_final_block_as_git_reads_it(self):
+        """Review 2026-11-26 (A B2): fixes_red_in_message took a `Fixes-Red:` line anywhere in the message, the gate
+        (git's %(trailers)) only in the final block -- an earlier paragraph's Fixes-Red: counted for a blame or revert
+        decision but not for the gate. One parser now, and it agrees with git's own on each message."""
+        import subprocess
+        messages = ("subject\n\nFixes-Red: 5\n\nbody goes on.\n\nCo-Authored-By: x <x@y>",
+                    "subject\n\nFixes-Red: 5\n\nCo-Authored-By: x <x@y>",
+                    "subject\n\nbody\n\nFixes-Red: 6, 7\n  8\nCo-Authored-By: x <x@y>",
+                    "Fixes-Red: 9",
+                    "subject\n\nprose line\nFixes-Red: 10")
+        for msg in messages:
+            parsed = subprocess.run(["git", "interpret-trailers", "--parse", "--no-divider"], input=msg + "\n",
+                                    capture_output=True, text=True, check=True).stdout
+            git_reads = set().union(set(), *(A.trailer_values(ln.partition(":")[2]) for ln in parsed.splitlines()
+                                             if ln.lower().startswith("fixes-red:")))
+            self.assertEqual(A.fixes_red_in_message(msg), git_reads, msg)
+        self.assertEqual(A.fixes_red_in_message(messages[0]), set())
+        self.assertEqual(A.commit_trailers(messages[1]), ["Co-Authored-By: x <x@y>"])
+
     def test_the_governor_admits_a_fix_of_any_open_red_as_red(self):
         """Before: gov_class_of read the gate's reds alone -- a fix of a red outside the gate queued behind the
         governor like an ordinary check."""

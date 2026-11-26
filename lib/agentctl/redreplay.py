@@ -62,12 +62,6 @@ def red_replay_command(repo, d):
     return cmd.replace("{run}", str(run)) if cmd and run else cmd
 
 
-def _final_trailers(msg: str) -> set[str]:
-    """The trailer lines of a message's final paragraph (the block git reads), none for a one-paragraph message."""
-    paras = [p for p in re.split(r"\n\s*\n", msg.strip()) if p.strip()]
-    return set(commit_trailers("-\n\n" + paras[-1])) if len(paras) > 1 else set()
-
-
 class _ReplayTrailers:
     """What the trailers of commits say of FIX REPLAY: the red names of `Fixes-Red:`, the claimed results (`Fix-Replay:
     <cmd> base=X head=Y`), the bare commands agentctl runs, the `none` reasons."""
@@ -79,11 +73,10 @@ class _ReplayTrailers:
         self.nones: list[str] = []
 
     def read(self, msg: str) -> None:
-        final = _final_trailers(msg)
-        for ln in commit_trailers(msg):
-            self._line(ln, final)
+        for ln in commit_trailers(msg):  # the final block only: the one git reads, as the weekly list does
+            self._line(ln)
 
-    def _line(self, ln: str, final: set[str]) -> None:
+    def _line(self, ln: str) -> None:
         k, _, v = ln.partition(":")
         if k.strip().lower() == "fixes-red":
             self.named |= trailer_values(v)
@@ -93,13 +86,12 @@ class _ReplayTrailers:
             return
         said = FIX_REPLAY_ANY.match(ln)
         if said and said.group(1):
-            self._command_or_none(said.group(1), ln, final)
+            self._command_or_none(said.group(1))
 
-    def _command_or_none(self, value: str, ln: str, final: set[str]) -> None:
+    def _command_or_none(self, value: str) -> None:
         none = FIX_REPLAY_NONE.match(value)
         if none or value.lower() == "none":
-            if ln in final:  # the escape hatch counts only where git reads it, as the weekly list does
-                self.nones.append(none.group(1) if none else "")
+            self.nones.append(none.group(1) if none else "")
         elif value not in self.bare:
             self.bare.append(value)
 
