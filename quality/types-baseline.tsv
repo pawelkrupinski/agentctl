@@ -38,7 +38,7 @@ mypy-errors	fixer	15
 mypy-errors	fixerenv	3
 mypy-errors	fixerland	26
 mypy-errors	fixerlife	56
-mypy-errors	fixersession	38
+mypy-errors	fixersession	37
 mypy-errors	forge	43
 mypy-errors	gatesummary	4
 mypy-errors	gating	29
@@ -90,7 +90,7 @@ mypy-errors	pressure	16
 mypy-errors	processorlink	16
 mypy-errors	procwatch	2
 mypy-errors	projector	21
-mypy-errors	queue	28
+mypy-errors	queue	27
 mypy-errors	queuebatch	41
 mypy-errors	queuebatchsel	19
 mypy-errors	queuecheck	28
@@ -99,7 +99,7 @@ mypy-errors	queuediff	32
 mypy-errors	queueenter	75
 mypy-errors	queuefailure	5
 mypy-errors	queuepush	48
-mypy-errors	queuerecheck	45
+mypy-errors	queuerecheck	43
 mypy-errors	queueslots	23
 mypy-errors	queuesubmit	31
 mypy-errors	queueuntil	11
@@ -161,7 +161,7 @@ mypy-errors	status	83
 mypy-errors	statusagents	34
 mypy-errors	statusline	4
 mypy-errors	statuspage	30
-mypy-errors	store	70
+mypy-errors	store	49
 mypy-errors	storeauth	22
 mypy-errors	storestate	7
 mypy-errors	storetoken	46

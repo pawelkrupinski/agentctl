@@ -3,7 +3,9 @@
 
 import json
 import os
+from contextlib import closing
 import re
+import sqlite3
 from agentctl.clock import epoch_now
 import time
 from typing import Any, Callable
@@ -71,8 +73,7 @@ class Store(OfferTable):
         self.path = path or state_root("store.db")
         self.clock = clock or epoch_now
 
-    def db(self):
-        import sqlite3
+    def db(self) -> sqlite3.Connection:
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         c.row_factory = sqlite3.Row
@@ -404,18 +405,9 @@ class Store(OfferTable):
             c.close()
 
     def next_seq(self, key: str) -> int:
-        """The next number of the counter `key` (meta), minted atomically: the read and the write are one immediate
-        transaction, so two writers (the laptop and ci-runner) never get the same number."""
-        c = self.db()
-        try:
-            c.execute("BEGIN IMMEDIATE")
-            r = c.execute("SELECT v FROM meta WHERE k=?", (key,)).fetchone()
-            n = int((r["v"] if r else 0) or 0) + 1
-            c.execute("INSERT OR REPLACE INTO meta VALUES (?,?)", (key, str(n)))
-            c.execute("COMMIT")
-            return n
-        finally:
-            c.close()
+        """The next number of the counter `key` (meta), minted by ONE statement: atomic across the writers."""
+        with closing(self.db()) as c:
+            return int(c.execute("INSERT INTO meta VALUES (?,'1') ON CONFLICT(k) DO UPDATE SET v=v+1 RETURNING v", (key,)).fetchone()[0])
 
     def _event_rows(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
         """The events a query selects, their audience and refs read from JSON."""

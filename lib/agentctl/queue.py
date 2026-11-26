@@ -6,7 +6,7 @@ import os
 import re
 import subprocess
 import time
-from typing import Any
+from typing import Any, Iterable
 from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, fmt_age, git, git_ok, host_role
 from agentctl.timefmt import iso_at
@@ -245,19 +245,24 @@ def verify_supported(hook):
         return False
 
 
-def named_reader(tree, tip, paths, readers):
+def _readers_naming(tree: str, tip: str, path: str, readers: list[str]) -> tuple[list[str], str | None]:
+    """(the readers at tip naming path's file name, why git could not look or None)."""
+    r = git(tree, "grep", "-l", "-F", "-e", os.path.basename(path), tip, "--", *readers, check=False)
+    if r.returncode not in (0, 1):  # 1: no match; anything else: git could not look -- never "no reader names it"
+        return [], f"(git grep failed: {str(r.stderr).strip()[:80] or r.returncode})"
+    return sorted(line.split(":", 1)[1] for line in r.stdout.splitlines() if ":" in line), None
+
+
+def named_reader(tree: str, tip: str, paths: Iterable[str], readers: Iterable[str]) -> tuple[str, str] | None:
     """(path, reader) of a path (a deleted one, a changed build file) whose file name a reader names at tip; None when
-    none does."""
+    none does; a path git could not look for is named as read (a reason to check again)."""
     readers = [p for p in readers if git_ok(tree, "cat-file", "-e", f"{tip}:{p}")]
     if not paths or not readers:
         return None
     for p in sorted(paths):
-        r = git(tree, "grep", "-l", "-F", "-e", os.path.basename(p), tip, "--", *readers, check=False)
-        if r.returncode not in (0, 1):  # 1: no match; anything else: git could not look -- never "no reader names it"
-            return p, f"(git grep failed: {str(r.stderr).strip()[:80] or r.returncode})"
-        hits = sorted(line.split(":", 1)[1] for line in r.stdout.splitlines() if ":" in line)
-        if hits:
-            return p, hits[0]
+        hits, failed = _readers_naming(tree, tip, p, readers)
+        if failed or hits:
+            return p, failed or hits[0]
     return None
 
 
