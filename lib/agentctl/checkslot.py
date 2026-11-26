@@ -23,14 +23,15 @@ class Slot:
     def __init__(self, label, cls="check"):
         self.label, self.cls, self.ticket, self.waited, self.t0 = label, cls, None, 0.0, None
         self.samples, self.running, self.cap, self._last_sample = [], 0, 0, 0.0
+        self.rc, self.out = None, ""  # the check's result: set by done(); None while it runs
 
     def sample(self, force=False):
         if force or time.monotonic() - self._last_sample >= 30:  # wall: waits on and times real processes and threads
             self._last_sample = time.monotonic()  # wall: waits on and times real processes and threads
             try:
                 self.samples.append(machine_sample())
-            except Exception:
-                pass
+            except (OSError, ValueError) as e:  # a reading the machine would not give: the check goes on without it
+                err(f"could not sample the machine for a check: {e}")
 
     def done(self, rc, out):
         self.rc, self.out = rc, out
@@ -63,7 +64,7 @@ def check_slot(repo, label, cls="check"):
         slot.ticket.release()
         try:
             maybe_adjust_cap()
-        except Exception as e:
+        except (OSError, ValueError, KeyError) as e:  # the cap's files unreadable: kept as it was
             err(f"could not adjust the check cap: {e}")
 
 
@@ -151,7 +152,7 @@ class CapReview:
 def maybe_adjust_cap(now=None):
     if os.environ.get("AGENTCTL_MAX_CHECKS"):
         return None
-    now = now or epoch_now()
+    now = epoch_now() if now is None else now
     st = cap_state()
     cap = int(st.get("cap", CHECKS_DEFAULT_CAP))
     new, why = adjust_cap(check_runs(7, now), cap, gov_max_checks(), st.get("changed_at"), now)
