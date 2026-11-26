@@ -60,7 +60,7 @@ class WiredRegistryTest(unittest.TestCase):
         self.assertEqual(set(A.PROBES), set(A.PROBE_EVERY))  # every probe has its recheck interval, and only those
         self.assertTrue({"clear_hold", "tunnel_reset", "clear_flag"} <= set(A.RECOVER_ACTIONS))
         for kind, probe in A.PROBES.items():
-            if kind not in ("invariant", "change_source", "red_newer_verdict", "orphan_landed"):  # these take the root's store
+            if kind not in ("invariant", "change_source", "red_newer_verdict", "orphan_landed", "queue_moving"):  # these take the root's store
                 self.assertIs(probe, getattr(A, f"probe_{kind}"), kind)  # the probe itself, no late-binding wrapper
 
     def test_the_invariant_probe_checks_with_mains_clock_and_store(self):

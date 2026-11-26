@@ -19,6 +19,7 @@ from agentctl.inbox import inbox_command, with_inbox
 from agentctl.maint import cmd_orphans
 from agentctl.ciwhy import gate_from_snap, outside_from_snap, red_for
 from agentctl.actors import process_actor
+from agentctl.queuestall import probe_queue_moving
 from agentctl.timelinecmd import cmd_analyze, cmd_history
 from agentctl.store import CurrentStore
 from agentctl.leases import cmd_lease
@@ -83,7 +84,8 @@ def wire_collaborators(clock: Clock, store: Any) -> None:
     wire_clock(clock)
     wire_probes({"orphan_landed": lambda a: probe_orphan_landed(a, store), "invariant": lambda a: probe_invariant(a, clock, store),
                  "change_source": lambda a: probe_change_source(a, store),
-                 "red_newer_verdict": lambda a: probe_red_newer_verdict(a, store)})
+                 "red_newer_verdict": lambda a: probe_red_newer_verdict(a, store),
+                 "queue_moving": lambda a: probe_queue_moving(store, clock.time())})
     wire_inbox_writer(lambda rec: alert_write(rec, store), clock.time)
     wire_token_missing_note(lambda ns, why: token_unavailable_note(ns, why, store))
 

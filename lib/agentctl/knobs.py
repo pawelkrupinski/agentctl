@@ -256,6 +256,13 @@ def knob_watch_poll() -> float:
     return env_num("AGENTCTL_WATCH_POLL", WATCH_EVERY)
 
 
+QUEUE_STALL_AFTER = 90 * 60  # s with open changes and no change moving before QUEUE STALLED opens (queuestall.py)
+
+
+def knob_queue_stall_after() -> float:
+    return env_num("AGENTCTL_QUEUE_STALL_AFTER", QUEUE_STALL_AFTER)
+
+
 def knob_tick() -> float:
     return env_num("AGENTCTL_TICK", TICK)
 

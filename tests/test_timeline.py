@@ -105,5 +105,27 @@ class BackfillTest(unittest.TestCase):
         self.assertTrue(said[0].startswith("TIME SINKS (7 d): queued: submitted"))
 
 
+class QueueStallTest(unittest.TestCase):
+    """THE 41-HOUR STALL (2026-11-23): open changes, none moving past the bound, names its head blocker."""
+
+    def change(self, iid, state, entered, hold=None):
+        return {"id": iid, "state": state, "entered_at": entered, "data": {"hold": hold} if hold else {}}
+
+    def test_a_stall_names_the_oldest_change_its_hold_and_the_gate_red(self):
+        changes = [self.change("old", "queued", 0, {"why": "an older change it overlaps", "blocker": "x"}),
+                   self.change("new", "waiting", 600), self.change("done", "landed", 900)]
+        reds = [{"id": "fcf7", "state": "leased", "data": {"gate": True, "workflow": "Main",
+                                                             "last_run": {"number": 2877}}}]
+        text = A.queue_stall(changes, reds, now=900 + 5401)
+        self.assertTrue(text.startswith("QUEUE STALLED: 2 change(s) open and none moved for"))
+        self.assertIn("old queued for", text)
+        self.assertIn("held: an older change it overlaps (by x)", text)
+        self.assertIn("the gate is red: Main #2877 (fcf7, leased)", text)
+
+    def test_moving_or_empty_is_no_stall(self):
+        self.assertIsNone(A.queue_stall([self.change("a", "queued", 0)], [], now=5399))
+        self.assertIsNone(A.queue_stall([self.change("a", "landed", 0)], [], now=10 ** 6))
+
+
 if __name__ == "__main__":
     unittest.main()

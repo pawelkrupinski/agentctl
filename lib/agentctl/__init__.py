@@ -35,4 +35,4 @@ MODULES = ("procrunner", "psparse", "govpool", "usage", "statefile", "moviestool
            "queuecheck", "queuebatchsel", "batch", "queueclose", "superseded", "park", "snapshot", "queuepush",
            "orphans", "orphanpass", "batchpush", "batchcheck", "batchtick", "status", "maintain", "invariants",
            "watchdog", "landqueue", "statuspage", "redstatus", "syncsteps", "redcommands", "queueenter",
-           "landdryrun", "slots", "cliparser", "redtick", "serversteps", "processor", "cli")
+           "landdryrun", "slots", "cliparser", "redtick", "queuestall", "serversteps", "processor", "cli")

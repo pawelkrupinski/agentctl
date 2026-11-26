@@ -4,6 +4,7 @@
 from typing import Any, Callable, Sequence
 from agentctl.timelinecmd import timeline_step
 from agentctl.inboxentry import inbox_write
+from agentctl.queuestall import queue_stall_step
 from agentctl.core import reap_children
 from agentctl.waitingdir import wlog
 from agentctl.clones import heal_enabled
@@ -122,6 +123,7 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
             ("recovery", lambda: maybe_recovery_tick(store)),
             ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues(store)]),
             ("reverts", lambda: [wlog(d, f"tick: {x}") for x in tick_reverts(repo, store)]),  # reverts.py: told their landers
+            ("queue stall", lambda: logged(d, queue_stall_step(store))),
             ("timeline", lambda: logged(d, timeline_step(store, clock.time(), owner_summary))),
             ("quiet deadlines", lambda: [wlog(d, f"tick: {x}") for x in tick_quiet_deadlines(store)]),
             ("stats", shared(lambda: maybe_stats_pass(repo, d, clock, store))))
