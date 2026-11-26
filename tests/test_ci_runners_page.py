@@ -264,6 +264,7 @@ class DataTest(unittest.TestCase):
 
 class ServerTest(unittest.TestCase):
     def setUp(self):
+        P.beat()  # /healthz judges the poller by its last beat: the module's import stamp is minutes old in a loaded suite run
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), P.Handler)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.port = self.srv.server_address[1]
