@@ -10,7 +10,6 @@ cognitive	assemble	24
 cognitive	batch_check	19
 cognitive	bg_spent	16
 cognitive	close_condition	19
-cognitive	close_landed_changes	19
 cognitive	cmd_issue	19
 cognitive	cmd_lease	17
 cognitive	cmd_recover	15
@@ -18,11 +17,9 @@ cognitive	conflict_resolve	17
 cognitive	explorer_tick	19
 cognitive	forge_run_list	22
 cognitive	gov_fits	20
-cognitive	lap_change_deadline	15
 cognitive	laptop_role	15
 cognitive	laptop_role_refusal	23
 cognitive	live_state	12
-cognitive	migrate_local_queue	19
 cognitive	open_condition	20
 cognitive	owner_orphans	22
 cognitive	owner_work	21
@@ -34,7 +31,6 @@ cognitive	red_failed_steps	14
 cognitive	red_offer	17
 cognitive	red_unheld	19
 cognitive	refresh_pinned_recording	16
-cognitive	regen_hold_overdue	22
 cognitive	run_local_recheck	14
 cognitive	set_change	16
 cognitive	spotlight_exclude	19
@@ -57,7 +53,6 @@ cyclomatic	batch_check	17
 cyclomatic	bg_spent	15
 cyclomatic	build_view_change	15
 cyclomatic	close_condition	15
-cyclomatic	close_landed_changes	15
 cyclomatic	cmd_issue	13
 cyclomatic	cmd_lease	20
 cyclomatic	cmd_recover	16
@@ -67,11 +62,9 @@ cyclomatic	forge_run_list	15
 cyclomatic	gate_flow_names	14
 cyclomatic	gov_fits	21
 cyclomatic	jobs_verdict	23
-cyclomatic	lap_change_deadline	17
 cyclomatic	laptop_role	17
 cyclomatic	laptop_role_refusal	16
 cyclomatic	live_state	12
-cyclomatic	migrate_local_queue	13
 cyclomatic	open_condition	22
 cyclomatic	owner_orphans	13
 cyclomatic	owner_work	19
@@ -85,7 +78,7 @@ cyclomatic	red_failed_steps	22
 cyclomatic	red_offer	19
 cyclomatic	red_unheld	15
 cyclomatic	refresh_pinned_recording	18
-cyclomatic	regen_hold_overdue	21
+cyclomatic	regen_hold_overdue	11
 cyclomatic	run_local_recheck	18
 cyclomatic	set_change	18
 cyclomatic	spotlight_exclude	15

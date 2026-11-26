@@ -83,11 +83,10 @@ def close_item_landed(st, cid, why, via=None):
         return False
 
 
-def close_landed_changes(repo, clock, store, d=None):
-    """Every open change whose commits are on main by content closes as LANDED: the queue entries of d (with their
-    items), then the store's other open items (by their head). Returns what it did."""
-    st, t = store, clock.time()
-    did, carried = [], set()
+def _close_landed_entries(repo: Any, st: Any, d: Any, t: Any, did: list[str]) -> set[str]:
+    """The queue entries of d on main by content close as LANDED (lines to did); the ids of the open ones the entries
+    cover, whose store items are not looked at again."""
+    carried: set[str] = set()
     for e in waiting_entries(d, open_only=False) if d else []:
         if e.get("status") in ENTRY_FINAL or e.get("status") == "pushing":
             continue
@@ -97,6 +96,15 @@ def close_landed_changes(repo, clock, store, d=None):
             already_landed(st, d, e, via)
             did.append(f"{e['id']}: its commits are on main (by content): landed")
             carried.discard(e["id"])
+    return carried
+
+
+def close_landed_changes(repo: Any, clock: Any, store: Any, d: Any = None) -> Any:
+    """Every open change whose commits are on main by content closes as LANDED: the queue entries of d (with their
+    items), then the store's other open items (by their head). Returns what it did."""
+    st, t = store, clock.time()
+    did: list[str] = []
+    carried = _close_landed_entries(repo, st, d, t, did)
     for it in st.items("change"):
         if machine_state("change", it["state"]).terminal or it["state"] == "pushing" or it["id"] in carried:
             continue
@@ -141,7 +149,34 @@ def probe_change_source(a, store):
     return False, f"change {a['id']} is {it['state']} and no queue entry carries it"
 
 
-def migrate_local_queue(repo, store):
+def _migrate_landed(st: Any, d: Any, e: Any, via: Any) -> str:
+    """Entry e's commits are on main (via): it is LANDED, here and in the store. The line saying so."""
+    e.update(status="landed", landed_sha=via, decided=ts(), why="its commits are on main (by content)")
+    save_entry(d, e)
+    close_item_landed(st, e["id"], "its commits are on main (by content)", via)
+    return f"{e['id']}: its commits are on main (by content): landed"
+
+
+def _migration_failure(repo: Any, st: Any, d: Any, e: Any) -> Any:
+    """Entry e pushed to refs/heads/land/<id> and submitted to ci-runner's queue: why it could not be (None: moved)."""
+    if not submit_ref(repo, d, e, to_server=True):
+        return f"could not push refs/heads/land/{e['id']}"
+    try:
+        st.submit({**{k: e.get(k) for k in SUBMIT_FIELDS}, "id": e["id"]})
+    except (Exception, SystemExit) as ex:
+        return f"ci-runner's store refused or did not answer ({str(ex)[:160]})"
+    return None
+
+
+def _tell_stranded(d: Any, e: Any, line: str) -> None:
+    """The unmoved entry's author hears of it once an hour."""
+    if epoch_now() - float(e.get("migrate_told_at") or 0) > 3600:
+        e["migrate_told_at"] = epoch_now()
+        save_entry(d, e)
+        inbox_write("land", line, [line], [], 1, cwd=e.get("worktree") or safe_cwd())
+
+
+def migrate_local_queue(repo: Any, store: Any) -> Any:
     """THE LAPTOP'S (sync role): its local waiting dir holds no queue. Each open entry there is LANDED when its commits
     are on main by content, else pushed to refs/heads/land/<id> and submitted to ci-runner's queue under its own id
     (the entry: `migrated`). One that cannot move is said loudly (stderr, and its author's inbox once an hour).
@@ -149,26 +184,15 @@ def migrate_local_queue(repo, store):
     if host_role() != "sync" or not os.path.isdir(repo):
         return []
     d = waiting_state(repo)[0]
-    st = store
-    did = []
+    did: list[str] = []
     for e in waiting_entries(d, open_only=False):
         if e.get("status") in ENTRY_FINAL:
             continue
         landed, via = change_landed(repo, e.get("head"), e.get("commits"))
         if landed:
-            e.update(status="landed", landed_sha=via, decided=ts(), why="its commits are on main (by content)")
-            save_entry(d, e)
-            close_item_landed(st, e["id"], "its commits are on main (by content)", via)
-            did.append(f"{e['id']}: its commits are on main (by content): landed")
+            did.append(_migrate_landed(store, d, e, via))
             continue
-        why = None
-        if not submit_ref(repo, d, e, to_server=True):
-            why = f"could not push refs/heads/land/{e['id']}"
-        else:
-            try:
-                st.submit({**{k: e.get(k) for k in SUBMIT_FIELDS}, "id": e["id"]})
-            except (Exception, SystemExit) as ex:
-                why = f"ci-runner's store refused or did not answer ({str(ex)[:160]})"
+        why = _migration_failure(repo, store, d, e)
         if why is None:
             e.update(status="migrated", decided=ts(), why="moved to ci-runner's queue")
             save_entry(d, e)
@@ -177,10 +201,7 @@ def migrate_local_queue(repo, store):
         line = (f"LOCAL QUEUE: {e['id']} ({e.get('worktree')}) is in the laptop's local queue, which nothing runs: {why}; "
                 "tried again every sync cycle")
         did.append(line)
-        if epoch_now() - float(e.get("migrate_told_at") or 0) > 3600:
-            e["migrate_told_at"] = epoch_now()
-            save_entry(d, e)
-            inbox_write("land", line, [line], [], 1, cwd=e.get("worktree") or safe_cwd())
+        _tell_stranded(d, e, line)
     return did
 
 
@@ -219,36 +240,36 @@ def change_rows(store: Any) -> list[dict[str, Any]]:
 REGEN_RECOVERY_WAIT = 2 * 3600  # s from the re-run to the owner's one escalation ($AGENTCTL_REGEN_RECOVERY_WAIT)
 
 
-def regen_hold_overdue(st, d, e, t):
-    """The change tick's step for regen-held entry e (above): False while within its bound (the retry decides), else
-    True -- held, never checked again nor rejected -- with the recovery's round or escalation done; lines to `did`."""
-    h = e.get("regen_hold") or {}
-    if not h or t - float(h.get("since") or t) < CONFLICT_PLACE_KEPT:
-        return False
-    rec = h.get("recovery") or {}
-    wait = env_num("AGENTCTL_REGEN_RECOVERY_WAIT", REGEN_RECOVERY_WAIT)
-    if rec and (rec.get("escalated") or t - float(rec.get("at") or t) < wait):
-        return True
-    it = st.item("change", e["id"])
-    if not it or machine_state("change", it["state"]).terminal:
-        return True
-    files, cmd = ", ".join(h.get("files") or []), h.get("cmd")
-    if not rec:
-        rnd = int((it.get("data") or {}).get("regen_round") or 0) + 1
-        h["recovery"] = {"at": t, "round": rnd}
-        text = (f"REGEN RECOVERY {e['id']}: held {fmt_age(t - float(h['since']))} for its regeneration of {files}; "
-                f"running it again (the laptop's sync starts `{cmd}`), round {rnd}")
-        update, ev = {"regen_round": rnd}, {"kind": "regen.recover", "severity": "info", "text": text}
-    else:
-        answered = int((it.get("data") or {}).get("regen_answered") or 0) >= int(rec.get("round") or 1)
-        rec["escalated"] = t
-        text = (f"REGEN HELD {e['id']}: held {fmt_age(t - float(h['since']))}: its {files} need a regen only the "
-                f"laptop runs (both sides changed a row); run again {fmt_age(t - float(rec['at']))} ago, "
-                + ("the laptop started it, yet it still holds" if answered else "the laptop never answered")
-                + f" -- the laptop or its JVM is unreachable, or the regen fails: run `{cmd}` there, or "
-                f"`agentctl land cancel {e['id']}`")
-        update, ev = {}, {"kind": "regen.escalate", "severity": "escalate", "text": text}
-    e["regen_hold"], e["retry_after"] = h, t + wait
+def _regen_round(e: Any, h: Any, it: Any, t: Any, files: str, cmd: Any) -> Any:
+    """The overdue hold's first recovery: a new regeneration round on the change's item. (its update, its event, the text)"""
+    rnd = int((it.get("data") or {}).get("regen_round") or 0) + 1
+    h["recovery"] = {"at": t, "round": rnd}
+    text = (f"REGEN RECOVERY {e['id']}: held {fmt_age(t - float(h['since']))} for its regeneration of {files}; "
+            f"running it again (the laptop's sync starts `{cmd}`), round {rnd}")
+    return {"regen_round": rnd}, {"kind": "regen.recover", "severity": "info", "text": text}, text
+
+
+def _regen_escalation(e: Any, h: Any, rec: Any, it: Any, t: Any, files: str, cmd: Any) -> Any:
+    """The hold still standing a wait after its re-run: the owner's one escalation. (its update, its event, the text)"""
+    answered = int((it.get("data") or {}).get("regen_answered") or 0) >= int(rec.get("round") or 1)
+    rec["escalated"] = t
+    text = (f"REGEN HELD {e['id']}: held {fmt_age(t - float(h['since']))}: its {files} need a regen only the "
+            f"laptop runs (both sides changed a row); run again {fmt_age(t - float(rec['at']))} ago, "
+            + ("the laptop started it, yet it still holds" if answered else "the laptop never answered")
+            + f" -- the laptop or its JVM is unreachable, or the regen fails: run `{cmd}` there, or "
+            f"`agentctl land cancel {e['id']}`")
+    return {}, {"kind": "regen.escalate", "severity": "escalate", "text": text}, text
+
+
+def _recovery_settled(rec: Any, t: Any, wait: Any) -> bool:
+    """The recovery was escalated already, or its re-run is within the wait."""
+    return bool(rec and (rec.get("escalated") or t - float(rec.get("at") or t) < wait))
+
+
+def _record_regen_step(st: Any, d: Any, e: Any, it: Any, step: Any, t: Any, wait: Any) -> None:
+    """The recovery's step (its update, event and text) kept on the entry and on the change's item, and said."""
+    update, ev, text = step
+    e["retry_after"] = t + wait
     save_entry(d, e)
     with suppress(StaleVersion):  # recorded on the entry; the item catches up next tick
         if update:
@@ -256,6 +277,25 @@ def regen_hold_overdue(st, d, e, t):
             it = st.item("change", e["id"])
         st.transition("change", e["id"], it["state"], it["version"], event=ev)
     wlog(d, text)
+
+
+def regen_hold_overdue(st: Any, d: Any, e: Any, t: Any) -> bool:
+    """The change tick's step for regen-held entry e (above): False while within its bound (the retry decides), else
+    True -- held, never checked again nor rejected -- with the recovery's round or escalation done; lines to `did`."""
+    h = e.get("regen_hold") or {}
+    if not h or t - float(h.get("since") or t) < CONFLICT_PLACE_KEPT:
+        return False
+    rec = h.get("recovery") or {}
+    wait = env_num("AGENTCTL_REGEN_RECOVERY_WAIT", REGEN_RECOVERY_WAIT)
+    if _recovery_settled(rec, t, wait):
+        return True
+    it = st.item("change", e["id"])
+    if not it or machine_state("change", it["state"]).terminal:
+        return True
+    files, cmd = ", ".join(h.get("files") or []), h.get("cmd")
+    step = _regen_escalation(e, h, rec, it, t, files, cmd) if rec else _regen_round(e, h, it, t, files, cmd)
+    e["regen_hold"] = h
+    _record_regen_step(st, d, e, it, step, t, wait)
     return True
 
 
@@ -362,27 +402,45 @@ def round_base(st: Any, repo: str, d: str, e: dict[str, Any], clock: Clock) -> s
     return base if base is not None and commits_here(st, repo, d, e, clock) else None
 
 
+def _rederive_stuck_hold(st: Any, e: Any, state: Any, it: Any, hold: Any, stuck: Any, t: Any) -> None:
+    """SELF-HEALING (2026-11-20, THE HOLD TABLE): a hold that describes a world that moved -- its blocker ended, or
+    its kind's bound passed -- is dropped, and the tick decides afresh (it records the hold again if one still
+    applies, its clock restarted); said quietly on the change's events, never a page
+    NEVER UNHELD BETWEEN TWO READINGS (2026-11-23, W1's "nothing holds it"): kept, its clock restarted."""
+    restart_hold(st, e, t)
+    with suppress(StaleVersion):
+        it = st.item("change", e["id"]) or it
+        st.transition("change", e["id"], state, it["version"],
+                      event={"kind": "change.rederived", "severity": "info",
+                             "text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}; its hold "
+                                     f"({hold.get('why')}) was stuck -- {stuck} -- so it is decided afresh"})
+
+
+def _lap_text(e: Any, state: Any, it: Any, hold: Any, stuck: Any, note: Any, issue: Any, t: Any) -> str:
+    """What a change past its deadline says: its age, its hold (or that nothing holds it), why it is stuck, a note."""
+    return (f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}, "
+            + (f"held: {hold['why']}" if hold else "nothing holds it")
+            + (f" -- STUCK: {stuck}" if stuck else "") + (f" ({note})" if note else "")
+            + (f" -- filed as agentctl issue {issue}" if issue else ""))
+
+
+def _overdue_change(st: Any, e: Any, state: Any, t: Any) -> Any:
+    """The change's item when it is still in `state` and past its deadline, else None."""
+    it = st.item("change", e["id"])
+    return it if it and it["state"] == state and t > it["deadline"] else None
+
+
 def lap_change_deadline(st: Any, e: Any, state: Any, t: Any, note: Any = None) -> Any:
     """A queued or checked change past its deadline: said and re-deadlined -- quietly while its hold is live, an
     escalation when it is stuck (change_hold_stuck: nothing holds it, its blocker is gone, held too long). note: what
     else the line says (a checked change's last push)."""
-    it = st.item("change", e["id"])
-    if not it or it["state"] != state or t <= it["deadline"]:
+    it = _overdue_change(st, e, state, t)
+    if not it:
         return
     hold = change_hold_visible(st, it, e, t)
     stuck = change_hold_stuck(st, hold, it, t)
     if stuck and stuck_recovery(hold, stuck) == "rederive":
-        # SELF-HEALING (2026-11-20, THE HOLD TABLE): a hold that describes a world that moved -- its blocker ended, or
-        # its kind's bound passed -- is dropped, and the tick decides afresh (it records the hold again if one still
-        # applies, its clock restarted); said quietly on the change's events, never a page
-        # NEVER UNHELD BETWEEN TWO READINGS (2026-11-23, W1's "nothing holds it"): kept, its clock restarted
-        restart_hold(st, e, t)
-        with suppress(StaleVersion):
-            it = st.item("change", e["id"]) or it
-            st.transition("change", e["id"], state, it["version"],
-                          event={"kind": "change.rederived", "severity": "info",
-                                 "text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}; its hold "
-                                         f"({hold.get('why')}) was stuck -- {stuck} -- so it is decided afresh"})
+        _rederive_stuck_hold(st, e, state, it, hold, stuck, t)
         return
     issue = None if hold else file_unheld_change(st, it, t, "agentctl (the change tick)")  # agentctl's bug: an issue,
     # A HELD LAP IS NO INBOX ENTRY (2026-11-19 08:39Z, 08:55Z: movies-fix-replay's "queued for 15 min / 30 min, held:
@@ -395,9 +453,6 @@ def lap_change_deadline(st: Any, e: Any, state: Any, t: Any, note: Any = None) -
     with suppress(StaleVersion):
         it = st.item("change", e["id"]) or it
         st.transition("change", e["id"], state, it["version"],
-                      event={"text": f"{e['id']}: {state} for {fmt_age(t - it['entered_at'])}, "
-                                     + (f"held: {hold['why']}" if hold else "nothing holds it")
-                                     + (f" -- STUCK: {stuck}" if stuck else "") + (f" ({note})" if note else "")
-                                     + (f" -- filed as agentctl issue {issue}" if issue else ""),
+                      event={"text": _lap_text(e, state, it, hold, stuck, note, issue, t),
                              **({} if quiet else {"audience": {"worktree": e.get("worktree")}}),
                              **({} if stuck and not issue else {"severity": "info"})})

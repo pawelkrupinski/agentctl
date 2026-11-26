@@ -52,7 +52,7 @@ mypy-errors	govroute	10
 mypy-errors	govusage	6
 mypy-errors	identitychange	11
 mypy-errors	inbox	14
-mypy-errors	invariants	32
+mypy-errors	invariants	31
 mypy-errors	issues	6
 mypy-errors	jvmreap	8
 mypy-errors	land	21
@@ -93,11 +93,11 @@ mypy-errors	queue	28
 mypy-errors	queuebatch	43
 mypy-errors	queuebatchsel	19
 mypy-errors	queuecheck	34
-mypy-errors	queueclose	30
+mypy-errors	queueclose	27
 mypy-errors	queuediff	40
 mypy-errors	queueenter	76
 mypy-errors	queuefailure	5
-mypy-errors	queuepush	53
+mypy-errors	queuepush	52
 mypy-errors	queuerecheck	45
 mypy-errors	queueslots	19
 mypy-errors	queuesubmit	34
@@ -150,7 +150,7 @@ mypy-errors	runexplain	15
 mypy-errors	runsigs	13
 mypy-errors	server	56
 mypy-errors	serverclone	36
-mypy-errors	serversteps	26
+mypy-errors	serversteps	25
 mypy-errors	sessionpaths	9
 mypy-errors	slots	56
 mypy-errors	snapshot	8
@@ -166,7 +166,7 @@ mypy-errors	storestate	8
 mypy-errors	storetoken	46
 mypy-errors	stuckruns	4
 mypy-errors	superseded	22
-mypy-errors	syncsteps	46
+mypy-errors	syncsteps	44
 mypy-errors	tickrun	6
 mypy-errors	tickservice	8
 mypy-errors	tools	56
