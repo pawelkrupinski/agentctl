@@ -8,10 +8,10 @@ import argparse
 import re
 from typing import Any, Callable
 
-from agentctl.store import StoreLacksCall
+from agentctl.timeline import analyze, as_json, find_items, history_lines, render_text, render_tsv, top_sinks
 from agentctl.checkrows import change_rows_lines, change_runs, rows_lines, rows_report
-from agentctl.timeline import (analyze, as_json, find_items, history_lines, merge, render_text, render_tsv, top_sinks,
-                               traces)
+from agentctl.store import StoreLacksCall
+from agentctl.eventtrace import merge, traces
 
 ITEM_TYPES = ("change", "red", "watch", "batch", "condition", "hold", "revert", "issue", "branch-red",
               "gov-ticket", "inbox", "entry", "sbt-server", "escalation")  # the last five: file-held state (filelog.py)
