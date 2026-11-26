@@ -104,7 +104,7 @@ class LacksCallTest(Phase2Base):
             self.assertEqual(A.drain_event_log(self.remote, refused=A.file_events_refused), 0)
         said = [ln for ln in out.getvalue().splitlines() if "version skew" in ln]
         self.assertEqual(len(said), 1, out.getvalue())
-        self.assertEqual(len(A._pending(0)), 2, "both lines kept for a store that has the call")
+        self.assertEqual(len(A._pending(0)[0]), 2, "both lines kept for a store that has the call")
 
 
 class FailFastTest(Phase2Base):

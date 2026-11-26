@@ -80,8 +80,9 @@ def _write_cursor(n: int) -> None:
     os.replace(tmp, _cursor_path())
 
 
-def _pending(offset: int) -> list[tuple[dict[str, Any], int]]:
-    """(row, the offset after its line) of each complete line after offset: a torn last line waits for its writer."""
+def _pending(offset: int) -> tuple[list[tuple[dict[str, Any], int]], int]:
+    """([(row, the offset after its line)] of each complete line after offset, the offset after the last complete line):
+    a torn last line waits for its writer."""
     with open(log_path(), "rb") as f:
         f.seek(offset)
         data = f.read()
@@ -92,7 +93,7 @@ def _pending(offset: int) -> list[tuple[dict[str, Any], int]]:
         pos += len(line)
         with suppress(ValueError):  # a line the store would refuse (MissingCause is one) is skipped, never a block
             out.append((recorded_row(json.loads(line)), pos))
-    return out
+    return out, pos
 
 
 def drain_event_log(store: Any, page: int = DRAIN_PAGE, refused: Any = None) -> int:
@@ -104,7 +105,7 @@ def drain_event_log(store: Any, page: int = DRAIN_PAGE, refused: Any = None) -> 
     offset = _read_cursor()
     if offset > os.path.getsize(log_path()):  # the log started again under a cursor that missed it
         offset = 0
-    rows, done = _pending(offset), 0
+    (rows, end), done = _pending(offset), 0
     for i in range(0, len(rows), page):
         chunk = rows[i:i + page]
         try:
@@ -115,7 +116,9 @@ def drain_event_log(store: Any, page: int = DRAIN_PAGE, refused: Any = None) -> 
             return done  # kept: the cursor did not move past them
         _write_cursor(chunk[-1][1])
         done += len(chunk)
-    _maybe_rotate(rows[-1][1] if rows else offset)
+    if end != offset:  # past the refused lines too (review 2026-11-26: a refused tail was read again every tick)
+        _write_cursor(end)
+    _maybe_rotate(end)
     return done
 
 

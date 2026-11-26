@@ -54,6 +54,24 @@ class FileLogTest(unittest.TestCase):
         A.note_event("inbox", "e2", None, "unread", "notified", key="opened")
         self.assertEqual(A.drain_event_log(self.st), 1)
 
+    def test_a_refused_last_line_is_passed_and_a_drained_log_still_rotates(self):
+        """Review 2026-11-26 (C 8.1): the cursor moved only to the end of the last ACCEPTED line, so a refused line at
+        the log's tail was read again every tick forever and the log never rotated. The cursor now passes it."""
+        A.note_event("inbox", "e1", None, "unread", "notified", key="opened")
+        with open(A.log_path(), "a") as f:
+            f.write('{"not": "an event"}\n')
+        self.assertEqual(A.drain_event_log(self.st), 1)
+        self.assertEqual(A._read_cursor(), os.path.getsize(A.log_path()), "past the refused line")
+        old = A.LOG_ROTATE
+        try:
+            A.LOG_ROTATE = 1
+            with open(A.log_path(), "a") as f:
+                f.write("torn no more, but no event\n")
+            self.assertEqual(A.drain_event_log(self.st), 0)
+        finally:
+            A.LOG_ROTATE = old
+        self.assertEqual(os.path.getsize(A.log_path()), 0, "a log ending in refused lines rotates too")
+
     def test_the_inbox_and_the_waiting_entries_write_their_moves(self):
         eid = A.inbox_write("land", "LANDED abc", [], [], 0)
         A.inbox_acknowledge(argparse.Namespace(all=True, ids=None), [{"id": eid}])
