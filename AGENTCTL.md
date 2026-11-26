@@ -2975,7 +2975,7 @@ skipped when the script or `xcrun` is missing; its output is in the maintain log
 it shut down. Fixers are told to run `xcodebuild test` / Simulator work through `scripts/ios-simulators run -- <cmd>` and
 to name a Simulator they create `fixer<N>-…` (docs/fixer-brief.md, briefs/movies-agent-preamble.md).
 
-Each pass also ROTATES THE LOGS (`rotate_logs`, and the hourly upkeep too; 2026-10-30: the processor's service.log
+Each pass also ROTATES THE LOGS (`rotate_logs`: maintain alone since 2026-11-26, the hourly upkeep no more; 2026-10-30: the processor's service.log
 had grown to 141 MB): every `*.log` under `~/.cache/agentctl` and the reds dir (not a check's own run output in `*.d`,
 `work`, `target`) and `~/Library/Logs/agentctl-*.log`, once over 10 MB (`$AGENTCTL_LOG_ROTATE_MAX`), is copy-truncated
 IN PLACE: its newest 10 MB (from a line start) become `<log>.1`, older parts shift to `.2`/`.3` (keep 3,

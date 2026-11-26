@@ -156,7 +156,7 @@ def run_upkeep(store):
     except (OSError, subprocess.TimeoutExpired) as e:
         lines.append(f"cleanup failed: {str(e)[:200]}")
     lines += close_finished_fixer_trees(store)
-    lines += rotate_logs()
+    # the logs are maintain's to rotate, every 15 min (review 2026-11-26: this pass rotated them too)
     n = sweep_test_tmp()
     if n:
         lines.append(f"removed {n} test temp dir(s) older than {TEST_TMP_MAX_AGE // 60} min")

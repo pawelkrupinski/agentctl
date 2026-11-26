@@ -45,7 +45,13 @@ class UpkeepTest(unittest.TestCase):
             os.makedirs(p)
         os.utime(old, (A.epoch_now() - 7200, A.epoch_now() - 7200))
         os.utime(foreign, (A.epoch_now() - 7200, A.epoch_now() - 7200))
-        lines = A.run_upkeep(A.CurrentStore(A.process_store))
+        rotations, saved_rotate = [], A.rotate_logs
+        A.rotate_logs = lambda: rotations.append(1) or []
+        try:
+            lines = A.run_upkeep(A.CurrentStore(A.process_store))
+        finally:
+            A.rotate_logs = saved_rotate
+        self.assertEqual(rotations, [], "maintain rotates the logs (review 2026-11-26: both did)")
         self.assertEqual(self.calls, [["cleanup", "--execute", "--no-remote", "--deadline", "1200"]])  # its own stop first
         self.assertLess(A.UPKEEP_CLEANUP_DEADLINE + A.CLEANUP_REMOVE_RESERVE, A.UPKEEP_CLEANUP_BOUND)
         self.assertIn("cleanup: 12 s (movies 12 s)", lines)  # how long it took: in upkeep.log
