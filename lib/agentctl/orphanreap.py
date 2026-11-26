@@ -88,7 +88,7 @@ def owner_work(fam: Any, t: Any, holder_pid: Any = None) -> Any:
     return _turn_verdict(rec, pid, t)
 
 
-def wrapper_last_words(m, n=3):
+def wrapper_last_words(m: Any, n: Any = 3) -> Any:
     """The last lines a fixer's wrapper wrote to its stderr (its lease meta's wrapper_log), joined; "" when none."""
     path = m.get("wrapper_log")
     lines = [x.strip() for x in tail_lines(path, 40)] if path and os.path.isfile(path) else []
@@ -113,7 +113,7 @@ def _session_ended(row: Any, t: Any, m: Any, bid: Any, ent: Any) -> Any:
     return None
 
 
-def fixer_work(row, t):
+def fixer_work(row: Any, t: Any) -> Any:
     """(True|False|None, why): is a dispatched fixer's lease held by work? Its wrapper alive, its session not ended
     (beyond RED_ORPHAN_GRACE since the lease's last progress). A dead wrapper's why carries its last words (stderr)."""
     m = lease_meta(row)
@@ -154,7 +154,7 @@ def _cached_owner_work(row: Any, m: Any, t: Any, cache: Any) -> Any:
     return cache[k]
 
 
-def holder_work(row, t, cache=None):
+def holder_work(row: Any, t: Any, cache: Any = None) -> Any:
     """(True|False|None, why) for a live lease's holder: an owner's (its heartbeat or a red it holds) or a dispatched
     fixer's. None for what this machine cannot judge: a claim (renewed by its worktree's activity), a sibling (lives
     with its primary), a holder on another machine, or anything read on ci-runner."""
@@ -172,7 +172,7 @@ def holder_work(row, t, cache=None):
     return None, "not judged here"
 
 
-def red_reap_orphans(store, t):
+def red_reap_orphans(store: Any, t: Any) -> Any:
     """The laptop's tick: every live laptop-held fixer and owner lease whose holder is not at work is revoked
     (`ORPHANED: <why>`) -- the red offered again at once, its wrapper's next renewal lost. An orphaned fixer's session,
     if any still runs, is stopped (its wrapper is gone)."""
@@ -217,7 +217,7 @@ BG_LABELS = ("red owner · ", "red fixer #", "orphan · ", "lander · ")  # owne
 BG_SPENT_GRACE = 120  # s a session must have run before the reaper judges it ($AGENTCTL_BG_SPENT_GRACE)
 
 
-def bg_live_turns():
+def bg_live_turns() -> Any:
     """The background ids that are the current turn of a live wrapper (an owner in its turn, a fixer running)."""
     live = set()
     for p in glob.glob(reds_dir("owners", "*", "owner.json")):
@@ -229,26 +229,26 @@ def bg_live_turns():
     return live
 
 
-def bg_spent(rows, live, t):
+def bg_spent(rows: Any, live: Any, t: Any) -> Any:
     """The rows of `claude agents --json --all` that are agentctl's spent sessions: launched by it (BG_LABELS), waiting
     idle with their process alive (bg_waiting), not a live wrapper's current turn, and older than BG_SPENT_GRACE."""
     grace = env_num("AGENTCTL_BG_SPENT_GRACE", BG_SPENT_GRACE)
-    out = []
-    for x in rows:
-        if not isinstance(x, dict) or x.get("kind") != "background":
-            continue
-        if not str(x.get("name") or "").startswith(BG_LABELS):  # never a session agentctl did not launch
-            continue
-        bid = str(x.get("id") or "")
-        if not bid or bid in live or any(str(x.get("sessionId") or "").startswith(b) for b in live):
-            continue
-        if not bg_waiting(x) or t - float(x.get("startedAt") or 0) / 1000 < grace:
-            continue
-        out.append(x)
-    return out
+    return [x for x in rows if _agentctl_background(x) and _outside(x, live)
+            and bg_waiting(x) and t - float(x.get("startedAt") or 0) / 1000 >= grace]
 
 
-def bg_reap_spent(t):
+def _agentctl_background(x: Any) -> Any:
+    """A background row launched by agentctl (never a session it did not launch)."""
+    return isinstance(x, dict) and x.get("kind") == "background" and str(x.get("name") or "").startswith(BG_LABELS)
+
+
+def _outside(x: Any, live: Any) -> Any:
+    """The row has an id and is neither a live wrapper's turn (by id) nor its session's (by prefix)."""
+    bid = str(x.get("id") or "")
+    return bool(bid) and bid not in live and not any(str(x.get("sessionId") or "").startswith(b) for b in live)
+
+
+def bg_reap_spent(t: Any) -> Any:
     """The laptop's tick: every spent agentctl session stopped (bg_spent). Lines for what it did."""
     if on_ci_runner():
         return []

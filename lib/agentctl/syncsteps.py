@@ -45,7 +45,7 @@ def sync_outbox_dir() -> str:
     return state_root("outbox")
 
 
-def submit_remote(st, e):
+def submit_remote(st: Any, e: Any) -> Any:
     """Submit a change to the remote store; unreachable: kept in the outbox (QUEUED-LOCAL) for the sync to send."""
     try:
         return st.submit(e)
@@ -74,46 +74,56 @@ def flush_outbox(st: Any) -> int:
     return n
 
 
-def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequence[tuple[str, Callable[[], Any]]]:
-    """The laptop's loop once the store is remote: it never ticks. clock and store: the process's (cli's)."""
-    last_mirror = [0.0]
+class _SyncDuties:
+    """The steps of the laptop's sync loop that keep state or wrap a collaborator: clock and store are the process's (cli's)."""
 
-    def mirror():
-        if clock.time() - last_mirror[0] >= env_num("AGENTCTL_SYNC_MIRROR", SYNC_MIRROR_EVERY):
-            last_mirror[0] = clock.time()
-            mirror_state(store)
+    def __init__(self, repo: str, o_r: str, clock: Clock, store: Any):
+        self.repo, self.o_r, self.clock, self.store = repo, o_r, clock, store
+        self.last_mirror = 0.0
+        self.role: bool | None = None  # None: not claimed in this loop yet (a step run on its own: a test)
 
-    def sync_claims():
+    def mirror(self) -> None:
+        if self.clock.time() - self.last_mirror >= env_num("AGENTCTL_SYNC_MIRROR", SYNC_MIRROR_EVERY):
+            self.last_mirror = self.clock.time()
+            mirror_state(self.store)
+
+    def sync_claims(self) -> None:
         """The laptop's holders on ci-runner's store: every claim renewed by its worktree's activity; every fixer and
         owner lease held by no work revoked (red_reap_orphans)."""
-        red_renew_holders(store, clock.time())
-        red_reap_orphans(store, clock.time())
+        red_renew_holders(self.store, self.clock.time())
+        red_reap_orphans(self.store, self.clock.time())
 
-    def pins():
+    def pins(self) -> None:
         """The convergence pins read with the owner's token the processor holds and written into the store: the
         reconciler on ci-runner reads them from there (ci-lander may not read releases). Bounded: a network read."""
-        if not run_bounded("pins", lambda: refresh_pinned_recording(o_r, repo, store, role="sync"),
+        if not run_bounded("pins", lambda: refresh_pinned_recording(self.o_r, self.repo, self.store, role="sync"),
                            env_num("AGENTCTL_STEP_BOUND", 120)):
             err("pinned recording: still reading from an earlier cycle")
 
-    def explorer():
-        if not run_bounded("drift explorer", lambda: [err(x) for x in explorer_tick(o_r, repo, store)],
+    def explorer(self) -> None:
+        if not run_bounded("drift explorer", lambda: [err(x) for x in explorer_tick(self.o_r, self.repo, self.store)],
                            env_num("AGENTCTL_STEP_BOUND", 120)):
             err("drift explorer: still running from an earlier cycle")
 
-    def dispatch():
+    def dispatch(self) -> Any:
         if os.path.exists(reds_dir("DISPATCH_OFF")):
             return []
-        return red_dispatcher(store, o_r, repo, clock.time())
-    role = [None]  # None: not claimed in this loop yet (a step run on its own: a test)
+        return red_dispatcher(self.store, self.o_r, self.repo, self.clock.time())
 
-    def claim_role():
-        role[0] = laptop_role_step(store)
+    def claim_role(self) -> None:
+        self.role = laptop_role_step(self.store)
 
-    def duty(fn):  # ONE MACHINE HOLDS THE LAPTOP ROLE: a standby machine runs none of the laptop's duties
-        return lambda: None if role[0] is False else fn()
-    return (("laptop role", claim_role),
-            ("outbox", lambda: flush_outbox(store)), ("state mirror", mirror), ("children", reap_children),
+    def duty(self, fn: Callable[[], Any]) -> Callable[[], Any]:
+        """ONE MACHINE HOLDS THE LAPTOP ROLE: a standby machine runs none of the laptop's duties."""
+        return lambda: None if self.role is False else fn()
+
+
+def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequence[tuple[str, Callable[[], Any]]]:
+    """The laptop's loop once the store is remote: it never ticks. clock and store: the process's (cli's)."""
+    s = _SyncDuties(repo, o_r, clock, store)
+    duty = s.duty
+    return (("laptop role", s.claim_role),
+            ("outbox", lambda: flush_outbox(store)), ("state mirror", s.mirror), ("children", reap_children),
             ("events", lambda: project_events(store)), ("notifier", duty(lambda: notify_escalations(store))),
             ("alerts", duty(lambda: reconcile_alerts(store))),
             ("workspace trust", lambda: [err(x) for x in trust_asks()]),
@@ -121,9 +131,9 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequenc
             ("local queue", lambda: [err(f"land: {x}") for x in migrate_local_queue(repo, store)]),
             ("landed changes", lambda: [err(f"land: {x}") for x in close_landed_changes(repo, clock, store=store)]),
             ("regen holds", duty(lambda: [err(f"land: {x}") for x in answer_regen_holds(d, store)])),
-            ("claims", duty(sync_claims)),
-            ("dispatcher", duty(dispatch)),
-            ("pins", duty(pins)), ("drift explorer", duty(explorer)),
+            ("claims", duty(s.sync_claims)),
+            ("dispatcher", duty(s.dispatch)),
+            ("pins", duty(s.pins)), ("drift explorer", duty(s.explorer)),
             ("revert notes", duty(lambda: [err(x) for x in revert_notes(store)])),
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),
             ("network watch", lambda: network_watch(store)), ("tunnel probe", lambda: tunnel_watch(store)),
@@ -202,7 +212,7 @@ def _root_checkout_ff_safe(repo: Any) -> Any:
     return not git(repo, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip()
 
 
-def root_checkout_ff(repo):
+def root_checkout_ff(repo: Any) -> Any:
     """Fast-forward clone repo's own checkout (its root, not a worktree) to <remote>/main when that is safe; its lines."""
     if not repo or not os.path.isdir(repo) or not _root_checkout_ff_safe(repo):
         return []

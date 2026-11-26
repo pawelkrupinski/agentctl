@@ -40,13 +40,13 @@ JOB_FAILED = ("failure", "timed_out", "startup_failure", "action_required")
 EXPRESSION = re.compile(r"\$\{\{.*?\}\}")
 
 
-def job_name_glob(template):
+def job_name_glob(template: Any) -> Any:
     """The fnmatch pattern of the listed names a job name template stands for (`${{ ... }}` matches anything)."""
     parts = EXPRESSION.split(template)
     return "*".join(re.sub(r"([*?\[])", r"[\1]", p) for p in parts)
 
 
-def verdict_jobs(o_r, sha):
+def verdict_jobs(o_r: Any, sha: Any) -> Any:
     """(the verdict's job-name globs, the name templates of the workflow's jobs they name), as REMOTE_WORKFLOW declares
     them at commit `sha`; ([], []) when it declares none, or when no job of its `jobs:` block can be read (then the run's
     own conclusion decides: an expectation that cannot be read never lets a success in early)."""
@@ -59,23 +59,40 @@ def verdict_jobs(o_r, sha):
     return (globs, expect) if expect else ([], [])
 
 
-def jobs_verdict(jobs, globs, expect=()):
+def jobs_verdict(jobs: Any, globs: Any, expect: Any = ()) -> Any:
     """(verdict, failed jobs, jobs still going outside the verdict) of a run from its jobs (GitHub's REST shape): verdict
     `failure` once any job concluded in failure, `success` once at least one job matches `globs`, every one that does
     has concluded otherwise and every template of `expect` (the workflow's verdict jobs) is listed, else None
     (undecided)."""
-    failed = [j for j in jobs if j.get("status") == "completed" and j.get("conclusion") in JOB_FAILED]
-    named = [j for j in jobs if any(fnmatch.fnmatchcase(j.get("name") or "", g) for g in globs)]
+    failed = [j for j in jobs if _job_failed(j)]
+    named = [j for j in jobs if _job_named(j, globs)]
     going = [j for j in jobs if j.get("status") != "completed" and j not in named]
     if failed:
         return "failure", failed, going
-    listed = [j.get("name") or "" for j in jobs]
-    created = all(any(n == t or fnmatch.fnmatchcase(n, job_name_glob(t)) or fnmatch.fnmatchcase(n, job_name_glob(t) + " / *")
-                      for n in listed) for t in expect)
-    if named and created and all(j.get("status") == "completed"
-                                 and j.get("conclusion") in ("success", "skipped", "neutral") for j in named):
-        return "success", [], going
-    return None, [], going
+    return ("success" if _all_passed(jobs, named, expect) else None), [], going
+
+
+def _all_passed(jobs: Any, named: Any, expect: Any) -> Any:
+    """Some job matches the globs, every one that does passed, and every template of `expect` is listed."""
+    return bool(named) and all(_job_passed(j) for j in named) and _templates_created([j.get("name") or "" for j in jobs], expect)
+
+
+def _job_failed(j: Any) -> Any:
+    return j.get("status") == "completed" and j.get("conclusion") in JOB_FAILED
+
+
+def _job_named(j: Any, globs: Any) -> Any:
+    return any(fnmatch.fnmatchcase(j.get("name") or "", g) for g in globs)
+
+
+def _job_passed(j: Any) -> Any:
+    return j.get("status") == "completed" and j.get("conclusion") in ("success", "skipped", "neutral")
+
+
+def _templates_created(listed: Any, expect: Any) -> Any:
+    """Whether every job-name template of `expect` has a job in `listed` (by name, glob, or as a called workflow's)."""
+    return all(any(n == t or fnmatch.fnmatchcase(n, job_name_glob(t)) or fnmatch.fnmatchcase(n, job_name_glob(t) + " / *")
+                   for n in listed) for t in expect)
 
 
 # RUN PROGRESS (2026-11-17, ref-srp-54ebae: every check passed by 14:44, `check (page)` waited 23 min for a saturated
@@ -100,7 +117,7 @@ REMOTE_P90_WINDOW = 30 * 86400  # s of the collector's job rows a p90 is read fr
 REMOTE_P90_MIN = 5              # runs of a job before its p90 counts
 
 
-def remote_job_bounds(timeouts, p90s):
+def remote_job_bounds(timeouts: Any, p90s: Any) -> Any:
     """{job name template or name: s a running job is expected to take at most}: each template's timeout-minutes
     (workflow_job_timeouts), else REMOTE_P90_HEADROOM x a listed name's p90 (p90s); a job in neither has
     REMOTE_JOB_CAP (remote_job_expected)."""
@@ -112,7 +129,7 @@ def remote_job_bounds(timeouts, p90s):
     return out
 
 
-def remote_job_expected(bounds, name):
+def remote_job_expected(bounds: Any, name: Any) -> Any:
     """The s job `name` is expected to run at most (remote_job_bounds), else REMOTE_JOB_CAP."""
     if name in (bounds or {}):
         return bounds[name]
@@ -122,7 +139,7 @@ def remote_job_expected(bounds, name):
     return REMOTE_JOB_CAP
 
 
-def remote_job_p90s(since):
+def remote_job_p90s(since: Any) -> Any:
     """{job name: p90 duration_s} of REMOTE_WORKFLOW's finished jobs (the collector's source:ci rows), {} when the store
     is not reachable from here (stats_url) or answers nothing."""
     url = stats_url()
@@ -137,7 +154,7 @@ def remote_job_p90s(since):
             if r.get("job") and _num(r.get("p90")) and int(_num(r.get("n")) or 0) >= REMOTE_P90_MIN}
 
 
-def remote_read_bounds(o_r, sha):
+def remote_read_bounds(o_r: Any, sha: Any) -> Any:
     """remote_job_bounds of REMOTE_WORKFLOW at commit sha and the recorded p90s; {} when neither can be read."""
     import base64
     try:
@@ -159,7 +176,7 @@ def _runs_in_time(j: Any, t: Any, bounds: Any) -> Any:
     return t - started < remote_job_expected(bounds, j.get("name"))
 
 
-def remote_progress(rem, run, jobs, t, bounds=None):
+def remote_progress(rem: Any, run: Any, jobs: Any, t: Any, bounds: Any = None) -> Any:
     """rem with progress_at moved to t when the run's jobs (or its update time) differ from the last poll's, or a job
     still runs inside its own expected duration (remote_job_expected over bounds)."""
     sig = [run.get("updated_at") or run.get("updatedAt")] + sorted(f"{j.get('name')}:{j.get('status')}" for j in jobs or [])

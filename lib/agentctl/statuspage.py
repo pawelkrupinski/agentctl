@@ -47,7 +47,7 @@ STATUS_PAGE_FALLBACK = 3015
 STATUS_PAGE_HOSTS = (STATUS_PAGE_HOST, "127.0.0.1", "localhost")
 
 
-def cmd_status(a, store):
+def cmd_status(a: Any, store: Any) -> Any:
     if getattr(a, "open", False):
         return status_page_open()
     t = epoch_now()
@@ -71,7 +71,7 @@ def with_liveness(text: str, store: Any, t: float) -> str:
     return text if not line else f"{head}\n{line}\n{rest}"
 
 
-def status_host_ok(host):
+def status_host_ok(host: Any) -> Any:
     """Only agentctl.localhost, 127.0.0.1 and localhost (any port): another name pointing here is a rebinding page."""
     h = (host or "").strip().lower()
     if not h or h.startswith("["):
@@ -80,7 +80,7 @@ def status_host_ok(host):
     return name in STATUS_PAGE_HOSTS and (not port or port.isdigit())
 
 
-def status_log_path(p):
+def status_log_path(p: Any) -> Any:
     """The real path of a log /log may serve: a regular .log/.out/.txt file under the state root or the reds dir (after
     symlinks: no traversal out); else None."""
     if not p or "\0" in p or not os.path.isabs(os.path.expanduser(p)):
@@ -217,7 +217,7 @@ class StatusServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
 
 
-def status_page_server(host, port):
+def status_page_server(host: Any, port: Any) -> Any:
     """The page's HTTP server (not started)."""
     return StatusServer((host, port), StatusHandler)
 
@@ -225,8 +225,28 @@ def status_page_server(host, port):
 _status_page = process_cache({})
 
 
-def status_page_file():
+def status_page_file() -> Any:
     return state_root("status-page.json")
+
+
+def _write_status_page_file(url: Any, port: Any, why: Any) -> Any:
+    """status-page.json: where the page is served (`status --open` reads it); a failed write only says so."""
+    try:
+        write_json(status_page_file(), {"url": url, "port": port, "pid": os.getpid(), "at": epoch_now(), "fallback": why})
+    except OSError as e:
+        err(f"status page: {status_page_file()} not written: {e}")
+
+
+def _bind_status_page(port: Any, why: Any) -> Any:
+    """The page's server on 127.0.0.1:port, or None -- the reason appended to `why`."""
+    try:
+        if port == STATUS_PAGE_PORT and port_open(port, timeout=0.5):
+            why.append(f"port {port}: something already listens on it (not shadowed)")
+            return None
+        return status_page_server("127.0.0.1", port)
+    except (OSError, ValueError) as e:
+        why.append(f"port {port}: {e}")
+        return None
 
 
 def status_page_start() -> Any:
@@ -239,15 +259,10 @@ def status_page_start() -> Any:
         return None
     ports = ([int(os.environ["AGENTCTL_STATUS_PORT"])] if os.environ.get("AGENTCTL_STATUS_PORT")
              else [STATUS_PAGE_PORT, STATUS_PAGE_FALLBACK])
-    why = []
+    why: list[str] = []
     for p in ports:
-        try:
-            if p == STATUS_PAGE_PORT and port_open(p, timeout=0.5):
-                why.append(f"port {p}: something already listens on it (not shadowed)")
-                continue
-            srv = status_page_server("127.0.0.1", p)
-        except (OSError, ValueError) as e:
-            why.append(f"port {p}: {e}")
+        srv = _bind_status_page(p, why)
+        if srv is None:
             continue
         threading.Thread(target=srv.serve_forever, daemon=True, name="status-page").start()
         threading.Thread(target=status_warm, daemon=True, name="status-warm").start()  # the first refresh has data
@@ -256,27 +271,24 @@ def status_page_start() -> Any:
         if why:
             err(f"status page: {'; '.join(why)}: serving {url} instead")
         err(f"status page: {url} (127.0.0.1:{p})")
-        try:
-            write_json(status_page_file(), {"url": url, "port": p, "pid": os.getpid(), "at": epoch_now(), "fallback": why})
-        except OSError as e:
-            err(f"status page: {status_page_file()} not written: {e}")
+        _write_status_page_file(url, p, why)
         return url
     err(f"status page: not served ({'; '.join(why)})")
     return None
 
 
-def status_warm():
+def status_warm() -> Any:
     try:
         status_cached()
     except (Exception, SystemExit) as e:
         err(f"status page: the first read failed: {str(e)[:200]}")
 
 
-def status_page_url():
+def status_page_url() -> Any:
     return read_json_file(status_page_file()).get("url") or f"http://{STATUS_PAGE_HOST}/"
 
 
-def status_page_open():
+def status_page_open() -> Any:
     url = status_page_url()
     print(url)
     process_runner().run([os.environ.get("AGENTCTL_OPEN", "open"), url], capture_output=True, timeout=30)

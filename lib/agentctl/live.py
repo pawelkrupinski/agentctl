@@ -39,13 +39,13 @@ _live_reg_lock = threading.Lock()
 _live_info = process_cache({})                 # transcript -> ((size, mtime), tail info)
 
 
-def live_globs():
+def live_globs() -> Any:
     v = os.environ.get("AGENTCTL_LIVE_GLOBS")
     return [g for g in (v.split(os.pathsep) if v is not None
                         else [f"/private/tmp/claude-{os.getuid()}/*/*/tasks/*.output"]) if g]
 
 
-def live_transcript_ok(p):
+def live_transcript_ok(p: Any) -> Any:
     """The real path of a transcript the page may stream: a regular .jsonl file owned by this user under the Claude
     projects root (after symlinks); else None."""
     if not isinstance(p, str) or not p or "\0" in p or not os.path.isabs(p):
@@ -61,12 +61,12 @@ def live_transcript_ok(p):
     return real
 
 
-def live_slug(wt):
+def live_slug(wt: Any) -> Any:
     """Claude Code's project dir name of a working directory: every non-alphanumeric character a '-'."""
     return re.sub(r"[^A-Za-z0-9]", "-", str(wt or ""))
 
 
-def live_session_transcript(session, wt=None):
+def live_session_transcript(session: Any, wt: Any = None) -> Any:
     if not session or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", str(session)):
         return None
     if wt:
@@ -76,14 +76,14 @@ def live_session_transcript(session, wt=None):
     return bg_transcript(session)
 
 
-def live_id_part(s):
+def live_id_part(s: Any) -> Any:
     return re.sub(r"[^A-Za-z0-9_-]", "_", str(s))[:100]
 
 
 _live_metas = process_cache({})                # subagent .meta.json -> (mtime, its JSON)
 
 
-def live_meta(p):
+def live_meta(p: Any) -> Any:
     m = mtime(p)
     hit = _live_metas.get(p)
     if not hit or hit[0] != m:
@@ -174,14 +174,14 @@ def live_registry_read(t: float | None = None) -> dict[str, dict[str, Any]]:
     return read.reg
 
 
-def live_registry(fresh=False):
+def live_registry(fresh: Any = False) -> Any:
     with _live_reg_lock:
         if fresh or _live_reg["reg"] is None or epoch_now() - _live_reg["at"] >= LIVE_REGISTRY_TTL:
             _live_reg["reg"], _live_reg["at"] = live_registry_read(), epoch_now()
         return _live_reg["reg"]
 
 
-def live_lookup(aid):
+def live_lookup(aid: Any) -> Any:
     """The registry entry of a known agent id, else None (an id that is not one is never looked up)."""
     if not isinstance(aid, str) or not LIVE_ID_RE.fullmatch(aid):
         return None
@@ -196,7 +196,7 @@ def live_lookup(aid):
 LIVE_TALK = ("user", "assistant", "queue-operation")
 
 
-def live_track(info, rec):
+def live_track(info: Any, rec: Any) -> Any:
     """Fold one transcript entry into the tail info: the last conversational entry (an assistant's stop_reason or
     None for a user/tool result) and the last timestamp."""
     if not isinstance(rec, dict):
@@ -213,7 +213,7 @@ def live_track(info, rec):
     return info
 
 
-def live_tail_info(path, max_bytes=256 << 10):
+def live_tail_info(path: Any, max_bytes: Any = 256 << 10) -> Any:
     """{stop, last_ts, api_error, size, mtime} from the transcript's last max_bytes, cached by its size and mtime."""
     try:
         sig = (os.path.getsize(path), mtime(path))
@@ -247,13 +247,18 @@ def _process_state(alive: Any, stop: Any) -> tuple[str, str] | None:
     return None
 
 
+def _ended_state(e: dict[str, Any]) -> tuple[str, str]:
+    """The (state, why) of a fixer record that has ended: done on rc 0, else failed."""
+    rc = e.get("rc")
+    return ("done" if rc == 0 else "failed"), (e.get("verdict") or f"ended, rc {rc}")
+
+
 def live_state(e: dict[str, Any], info: dict[str, Any], t: float | None = None) -> tuple[str, str]:
     """(state, why): working, waiting on background, done or failed -- from the fixer record's end, the process, and
     the transcript's last conversational entry (a turn that ended with end_turn is an answer given)."""
     t = epoch_now() if t is None else t
     if e.get("ended"):
-        rc = e.get("rc")
-        return ("done" if rc == 0 else "failed"), (e.get("verdict") or f"ended, rc {rc}")
+        return _ended_state(e)
     stop = info.get("stop")
     if info.get("api_error"):
         return "failed", "the last answer was an API error"

@@ -6,6 +6,7 @@ import json
 import os
 import re
 import urllib.parse
+from typing import Any
 from agentctl.core import err, fmt_age, git, host_role, reds_dir, remote
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import api, forge_release_asset
@@ -34,18 +35,18 @@ PIN_STALE = 24 * 3600
 PIN_META = "pinned_recording"
 
 
-def pinned_path():
+def pinned_path() -> Any:
     return os.path.join(os.path.dirname(reds_dir()), "pinned-recording.json")
 
 
-def pin_release_tag(repo):
+def pin_release_tag(repo: Any) -> Any:
     """The release the convergence pins live in: FIXTURE_RELEASE_TAG as main's convergence workflow sets it."""
     r = git(repo, "show", f"refs/remotes/{remote()}/main:{CONVERGENCE_WORKFLOW}", check=False) if repo else None
     tags = re.findall(r"FIXTURE_RELEASE_TAG:\s*['\"]?([\w.-]+)", r.stdout if r and r.returncode == 0 else "")
     return tags[0] if tags else None
 
 
-def read_pins(o_r, tag):
+def read_pins(o_r: Any, tag: Any) -> Any:
     """{country code: pinned recording run} from the release's hermetic-<code>.txt assets."""
     rel = api(o_r, "GET", f"releases/tags/{urllib.parse.quote(tag)}")
     pins = {}
@@ -62,7 +63,7 @@ def read_pins(o_r, tag):
 _pin_tried = [0.0]
 
 
-def stored_pins(st):
+def stored_pins(st: Any) -> Any:
     """The pins record the store holds (PIN_META), or None."""
     try:
         v = st.meta_get(PIN_META)
@@ -73,7 +74,7 @@ def stored_pins(st):
     return rec if isinstance(rec, dict) and rec.get("pins") else None
 
 
-def store_pins(rec, st):
+def store_pins(rec: Any, st: Any) -> Any:
     """The pins into the store (PIN_META) for the reconciler; the local cache marks them stored. Never fatal."""
     try:
         st.meta_set(PIN_META, json.dumps({k: rec[k] for k in ("at", "repo", "tag", "pins")}))
@@ -85,7 +86,7 @@ def store_pins(rec, st):
     return rec
 
 
-def refresh_pinned_recording(o_r, repo, st, now_=None, force=False, role=None):
+def refresh_pinned_recording(o_r: Any, repo: Any, st: Any, now_: Any = None, force: Any = False, role: Any = None) -> Any:
     """The convergence pins, never fatal. The reconciler (role server) copies the store's record into its cache and
     never reads release assets itself. The laptop (local, or the sync in remote-store mode) re-reads them from the
     release at most every PIN_REFRESH s (PIN_RETRY s after a failure) with the token it holds, and writes them into the
@@ -93,31 +94,45 @@ def refresh_pinned_recording(o_r, repo, st, now_=None, force=False, role=None):
     t = now_ if now_ is not None else epoch_now()
     rec = read_record(pinned_path()) or {}
     if (role or host_role()) == "server":
-        got = stored_pins(st)
-        if got and {k: got.get(k) for k in ("at", "tag", "pins")} != {k: rec.get(k) for k in ("at", "tag", "pins")}:
-            rec = {**got, "stored": True}
-            write_json(pinned_path(), rec)
-        return rec
+        return _server_pins(st, rec)
     if rec.get("pins") and not rec.get("stored"):
         rec = store_pins(rec, st)
-    if not force and (t - float(rec.get("at") or 0) < PIN_REFRESH or t - _pin_tried[0] < PIN_RETRY):
+    if not force and _pins_fresh(rec, t):
         return rec
     _pin_tried[0] = t
     try:
-        tag = pin_release_tag(repo)
-        if not tag:
-            return rec
-        pins = read_pins(o_r, tag)
-        if pins:
-            rec = {"at": t, "repo": o_r, "tag": tag, "pins": pins}
-            write_json(pinned_path(), rec)
-            rec = store_pins(rec, st)
+        return _reread_pins(o_r, repo, st, rec, t)
     except (Exception, SystemExit) as e:
         err(f"pinned recording: not re-read ({str(e)[:160]})")
     return rec
 
 
-def pins_status(rec=None, now_=None):
+def _pins_fresh(rec: Any, t: Any) -> Any:
+    """Whether the pins were read lately (PIN_REFRESH) or tried lately (PIN_RETRY)."""
+    return t - float(rec.get("at") or 0) < PIN_REFRESH or t - _pin_tried[0] < PIN_RETRY
+
+
+def _server_pins(st: Any, rec: Any) -> Any:
+    """The reconciler's pins: the store's record copied into its cache when it differs."""
+    got = stored_pins(st)
+    if got and {k: got.get(k) for k in ("at", "tag", "pins")} != {k: rec.get(k) for k in ("at", "tag", "pins")}:
+        rec = {**got, "stored": True}
+        write_json(pinned_path(), rec)
+    return rec
+
+
+def _reread_pins(o_r: Any, repo: Any, st: Any, rec: Any, t: Any) -> Any:
+    """The pins re-read from the release, written and stored; `rec` as it was when there is no release or no pin."""
+    tag = pin_release_tag(repo)
+    pins = read_pins(o_r, tag) if tag else None
+    if not pins:
+        return rec
+    rec = {"at": t, "repo": o_r, "tag": tag, "pins": pins}
+    write_json(pinned_path(), rec)
+    return store_pins(rec, st)
+
+
+def pins_status(rec: Any = None, now_: Any = None) -> Any:
     """`status`'s line for the pins: which, from which release, and how old (STALE past PIN_STALE)."""
     rec = read_record(pinned_path()) if rec is None else rec
     if not (rec or {}).get("pins"):
@@ -130,7 +145,7 @@ def pins_status(rec=None, now_=None):
     return line
 
 
-def pinned_runs():
+def pinned_runs() -> Any:
     """The recordings main's convergence replays by default (one per pinned country, deduplicated), or []."""
     if os.environ.get("AGENTCTL_PINNED_RECORDING"):
         return [os.environ["AGENTCTL_PINNED_RECORDING"]]
@@ -138,7 +153,7 @@ def pinned_runs():
     return sorted(set(pins.values()), key=lambda x: int(x) if x.isdigit() else 0)
 
 
-def pinned_recording():
+def pinned_recording() -> Any:
     """main's pinned recording as a name: `573`, `528/573` when the countries' pins differ, or `the pinned pair
     (unread)`."""
     runs = pinned_runs()

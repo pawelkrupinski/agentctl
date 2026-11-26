@@ -24,6 +24,11 @@ class NoFixerBase(Base):
 
 
 class IssueTest(NoFixerBase):
+    def test_closing_an_unknown_issue_says_so_and_fails(self):
+        rc, out = self.run_tool("issue", "--close", "no-such-issue")
+        self.assertEqual(rc, 1, out)
+        self.assertIn("issue no-such-issue: no such issue", out)
+
     def test_an_issue_is_stored_listed_on_the_status_page_and_closed(self):
         rc, out = self.run_tool("issue", "land drops the --stash flag", cwd=self.r.path)
         self.assertEqual(rc, 0, out)

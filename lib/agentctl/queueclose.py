@@ -44,7 +44,7 @@ LANDED_LOOK_EVERY = 600
 _landed_looked = process_cache({})
 
 
-def change_landed(repo, head, commits=None):
+def change_landed(repo: Any, head: Any, commits: Any = None) -> Any:
     """(landed, via): landed True when the change at head is on main by content (head an ancestor, or every commit of it
     patch-equivalent there or with a content twin, cherry_landed), False when not, None when this clone cannot tell (head unknown here); via the main commit
     carrying its last commit, when known."""
@@ -62,14 +62,14 @@ def change_landed(repo, head, commits=None):
     return True, equivalent_on(repo, head, main)
 
 
-def landed_look_due(cid, t):
+def landed_look_due(cid: Any, t: Any) -> Any:
     if t - _landed_looked.get(cid, 0) < env_num("AGENTCTL_LANDED_LOOK", LANDED_LOOK_EVERY):
         return False
     _landed_looked[cid] = t
     return True
 
 
-def close_item_landed(st, cid, why, via=None):
+def close_item_landed(st: Any, cid: Any, why: Any, via: Any = None) -> Any:
     """The store's change item cid, unless terminal (or missing), LANDED with an event saying why; via (the main
     commit carrying it) is its landed sha, which await_entry watches. True when moved."""
     it = st.item("change", cid)
@@ -116,7 +116,7 @@ def close_landed_changes(repo: Any, clock: Any, store: Any, d: Any = None) -> An
     return did
 
 
-def stranded_changes(repo, d, store, now_=None):
+def stranded_changes(repo: Any, d: Any, store: Any, now_: Any = None) -> Any:
     """THE SERVER'S: each open store change item its queue (d) has no entry for -- no source, nothing will ever check,
     push or close it -- opens a STRANDED CHANGE condition naming it; its probe (the item closed, or an entry for it)
     closes it. Returns the ids."""
@@ -138,7 +138,7 @@ def stranded_changes(repo, d, store, now_=None):
     return out
 
 
-def probe_change_source(a, store):
+def probe_change_source(a: Any, store: Any) -> Any:
     """The change item is closed, or the server's queue carries it again."""
     it = store.item("change", a["id"])
     if not it or machine_state("change", it["state"]).terminal:
@@ -279,6 +279,12 @@ def _record_regen_step(st: Any, d: Any, e: Any, it: Any, step: Any, t: Any, wait
     wlog(d, text)
 
 
+def _open_change_item(st: Any, eid: Any) -> Any:
+    """The change's item unless it is missing or ended (None)."""
+    it = st.item("change", eid)
+    return None if not it or machine_state("change", it["state"]).terminal else it
+
+
 def regen_hold_overdue(st: Any, d: Any, e: Any, t: Any) -> bool:
     """The change tick's step for regen-held entry e (above): False while within its bound (the retry decides), else
     True -- held, never checked again nor rejected -- with the recovery's round or escalation done; lines to `did`."""
@@ -289,8 +295,8 @@ def regen_hold_overdue(st: Any, d: Any, e: Any, t: Any) -> bool:
     wait = env_num("AGENTCTL_REGEN_RECOVERY_WAIT", REGEN_RECOVERY_WAIT)
     if _recovery_settled(rec, t, wait):
         return True
-    it = st.item("change", e["id"])
-    if not it or machine_state("change", it["state"]).terminal:
+    it = _open_change_item(st, e["id"])
+    if not it:
         return True
     files, cmd = ", ".join(h.get("files") or []), h.get("cmd")
     step = _regen_escalation(e, h, rec, it, t, files, cmd) if rec else _regen_round(e, h, it, t, files, cmd)

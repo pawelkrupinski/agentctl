@@ -54,13 +54,13 @@ MACHINES["issue"] = {
 ISSUE_ESCALATE_GAP = 120  # s between two issues' escalations ($AGENTCTL_ISSUE_ESCALATE_GAP)
 
 
-def issue_escalation_text(it, t):
+def issue_escalation_text(it: Any, t: Any) -> Any:
     d = it.get("data") or {}
     return (f"AGENTCTL ISSUE {it['id']} open {fmt_age(t - float(it.get('entered_at') or t))} "
             f"(filed by {d.get('by') or '?'}): {d.get('text', '')}")[:400]
 
 
-def tick_issues(st, now_=None):
+def tick_issues(st: Any, now_: Any = None) -> Any:
     """The reconciler's step: the most overdue open issue escalated, at most one per ISSUE_ESCALATE_GAP. Returns what
     it did."""
     t = now_ if now_ is not None else st.clock()
@@ -85,30 +85,43 @@ def status_issues(st: Any, t: float) -> list[dict[str, Any]]:
             for i in sorted(st.items("issue", ("open",)), key=lambda i: i.get("entered_at") or 0, reverse=True)]
 
 
-def cmd_issue(a, st):
+def _close_issue(a: Any, st: Any, by: Any) -> Any:
+    it = issue_close(st, a.close, a.note or "fixed", by)
+    if not it:
+        print(f"issue {a.close}: no such issue")
+        return 1
+    print(f"issue {it['id']}: {it['state']}")
+    return 0
+
+
+def _list_issues(a: Any, st: Any) -> Any:
+    items = st.items("issue", None if a.all else ("open",))
+    for i in sorted(items, key=lambda i: i["id"]):
+        print(f"{i['id']}  {i['state']:6}  {i['data'].get('by') or '?'}: {i['data'].get('text', '')[:300]}")
+    if not items:
+        print("no open agentctl issues" if not a.all else "no agentctl issues")
+    return 0
+
+
+def _not_filed(e: Any) -> Any:
+    """The line for an issue the store refused."""
+    why = str(e).replace("agentctl: ", "")[:200]
+    if "machine 'issue'" in why:  # the server runs a pinned revision from before `issue`
+        why += "; ci-runner's agentctl pin predates `issue` (a pin bump fixes it)"
+    return f"agentctl issue: NOT FILED: the store refused it ({why})"
+
+
+def cmd_issue(a: Any, st: Any) -> Any:
     """agentctl issue "<text>" | --list | --close ID [--note N]"""
     by = claimant()
     try:
         if a.close:
-            it = issue_close(st, a.close, a.note or "fixed", by)
-            if not it:
-                print(f"issue {a.close}: no such issue")
-                return 1
-            print(f"issue {it['id']}: {it['state']}")
-            return 0
+            return _close_issue(a, st, by)
         if a.list or not a.text:
-            items = st.items("issue", None if a.all else ("open",))
-            for i in sorted(items, key=lambda i: i["id"]):
-                print(f"{i['id']}  {i['state']:6}  {i['data'].get('by') or '?'}: {i['data'].get('text', '')[:300]}")
-            if not items:
-                print("no open agentctl issues" if not a.all else "no agentctl issues")
-            return 0
+            return _list_issues(a, st)
         it = issue_open(st, " ".join(a.text), by, cwd=safe_cwd())
     except (ValueError, StoreUnavailable) as e:
-        why = str(e).replace("agentctl: ", "")[:200]
-        if "machine 'issue'" in why:  # the server runs a pinned revision from before `issue`
-            why += "; ci-runner's agentctl pin predates `issue` (a pin bump fixes it)"
-        print(f"agentctl issue: NOT FILED: the store refused it ({why})")
+        print(_not_filed(e))
         return 2
     print(f"ISSUE {it['id']} filed: the agentctl maintainer sees it on the status page and in `agentctl issue --list`")
     return 0

@@ -34,7 +34,7 @@ LAPTOP_ROLE_LEASE = "role/laptop"
 _laptop_role_seen = process_cache({})
 
 
-def machine_id():
+def machine_id() -> Any:
     """This machine's stable id: $AGENTCTL_MACHINE_ID, else macOS's IOPlatformUUID, else its hostname."""
     if os.environ.get("AGENTCTL_MACHINE_ID"):
         return os.environ["AGENTCTL_MACHINE_ID"]
@@ -51,15 +51,15 @@ def machine_id():
     return _laptop_role_seen["id"]
 
 
-def role_host():
+def role_host() -> Any:
     return os.environ.get("AGENTCTL_HOSTNAME") or socket_host()
 
 
-def laptop_role_holder():
+def laptop_role_holder() -> Any:
     return f"role:{role_host()}:{machine_id()}"
 
 
-def laptop_role_standby(store, t=None):
+def laptop_role_standby(store: Any, t: Any = None) -> Any:
     """None when this machine may do laptop duties (it holds the role, or no live holder stands); else the standby
     line naming the holder. Read only: never acquires."""
     try:
@@ -73,7 +73,7 @@ def laptop_role_standby(store, t=None):
     return laptop_role_line(row)
 
 
-def laptop_role_line(row):
+def laptop_role_line(row: Any) -> Any:
     m = lease_meta(row)
     since = m.get("since") or row.get("acquired_at")
     when = day_hhmmz(since) if since else "?"
@@ -87,28 +87,22 @@ LAPTOP_ROLE_TTL = 10 * 60          # s a silent holder keeps the role ($AGENTCTL
 LAPTOP_ROLE_MAX = 100 * 365 * 86400
 
 
-def laptop_role_path():
+def laptop_role_path() -> Any:
     return state_root("laptop-role.json")
 
 
-def laptop_role(store, t=None, take=False):
-    """This machine's claim on the laptop role: (True, its lease row) when it holds it (acquired, or renewed by this
-    pass), else (False, the other holder's live row). take: the role taken over from a live holder (`laptop take`)."""
-    t = store.clock() if t is None else t
-    me = laptop_role_holder()
-    ttl = env_num("AGENTCTL_LAPTOP_ROLE_TTL", LAPTOP_ROLE_TTL)
-    row = store.get(LAPTOP_ROLE_LEASE)
-    live = bool(row and row.get("holder") and float(row.get("expires_at") or 0) > t)
-    mine = read_record(laptop_role_path()) or {}
-    if live and row["holder"] != me and not take:
-        return False, row
-    if live and row["holder"] == me and mine.get("epoch") == row.get("epoch"):
-        r = store.renew(LAPTOP_ROLE_LEASE, mine["epoch"], mine["secret"], f"beat {t}", ttl)
-        if r in ("ok", "no_progress"):
-            return True, store.get(LAPTOP_ROLE_LEASE)
-    if live:  # taken over (`laptop take`), or ours from a state file this machine lost: the lease is begun again
-        store.revoke(LAPTOP_ROLE_LEASE, f"taken by {me}" if row["holder"] != me else "renewed after a restart")
-    got = store.acquire(LAPTOP_ROLE_LEASE, me, ttl, LAPTOP_ROLE_MAX, progress=f"beat {t}",
+def _laptop_role_ttl() -> Any:
+    return env_num("AGENTCTL_LAPTOP_ROLE_TTL", LAPTOP_ROLE_TTL)
+
+
+def _renewed_role(store: Any, mine: Any, t: Any) -> Any:
+    """This machine's lease renewed by its state file's epoch and secret (ok, or no progress to record)."""
+    return store.renew(LAPTOP_ROLE_LEASE, mine["epoch"], mine["secret"], f"beat {t}", _laptop_role_ttl()) in ("ok", "no_progress")
+
+
+def _acquired_role(store: Any, me: Any, t: Any, row: Any) -> Any:
+    """The role acquired by this machine (True, its row), else (False, the holder's row)."""
+    got = store.acquire(LAPTOP_ROLE_LEASE, me, _laptop_role_ttl(), LAPTOP_ROLE_MAX, progress=f"beat {t}",
                         meta={"kind": "laptop-role", "host": role_host(), "machine_id": machine_id(),
                               "since": t, "took_from": (row or {}).get("holder")})
     if "held" in got:
@@ -117,7 +111,30 @@ def laptop_role(store, t=None, take=False):
     return True, store.get(LAPTOP_ROLE_LEASE)
 
 
-def laptop_role_step(store):
+def _role_row_live(row: Any, t: Any) -> Any:
+    """Whether the role's lease row has a holder and has not expired."""
+    return bool(row and row.get("holder") and float(row.get("expires_at") or 0) > t)
+
+
+def laptop_role(store: Any, t: Any = None, take: Any = False) -> Any:
+    """This machine's claim on the laptop role: (True, its lease row) when it holds it (acquired, or renewed by this
+    pass), else (False, the other holder's live row). take: the role taken over from a live holder (`laptop take`)."""
+    t = store.clock() if t is None else t
+    me = laptop_role_holder()
+    row = store.get(LAPTOP_ROLE_LEASE)
+    if not _role_row_live(row, t):  # free or expired
+        return _acquired_role(store, me, t, row)
+    mine = read_record(laptop_role_path()) or {}
+    if row["holder"] != me and not take:
+        return False, row
+    if row["holder"] == me and mine.get("epoch") == row.get("epoch") and _renewed_role(store, mine, t):
+        return True, store.get(LAPTOP_ROLE_LEASE)
+    # taken over (`laptop take`), or ours from a state file this machine lost: the lease is begun again
+    store.revoke(LAPTOP_ROLE_LEASE, f"taken by {me}" if row["holder"] != me else "renewed after a restart")
+    return _acquired_role(store, me, t, row)
+
+
+def laptop_role_step(store: Any) -> Any:
     """The sync loop's first step: the role claimed or renewed. Standby: said to this machine's owner ONCE per holder
     (its inbox), then only in `agentctl status`. Returns True when this machine holds the role."""
     st = store
@@ -162,7 +179,7 @@ def _laptop_take_declined(line: Any, yes: Any) -> Any:
     return False
 
 
-def cmd_laptop(a, st):
+def cmd_laptop(a: Any, st: Any) -> Any:
     """`agentctl laptop status|take [--yes]`: who holds the laptop role; take it for this machine."""
     if a.lcmd == "status":
         return _laptop_status(st)
@@ -177,7 +194,7 @@ def cmd_laptop(a, st):
 LAPTOP_HOLDER_CALLS = ("acquire", "take", "revoke")
 
 
-def laptop_role_speaks(store, role):
+def laptop_role_speaks(store: Any, role: Any) -> Any:
     """None when a client naming `role` (X-Agentctl-Role; None: names none) speaks for the laptop; else why not."""
     row = store.get(LAPTOP_ROLE_LEASE)
     if not row:  # no role ever held (a fresh store, one machine, tests): nothing to refuse
@@ -189,19 +206,30 @@ def laptop_role_speaks(store, role):
     return f"{laptop_role_line(row).split(';')[0]}, and this client is {role}"
 
 
-def laptop_role_refusal(store, path, body, role):
+def _call_holder(store: Any, method: Any, body: Any) -> Any:
+    """The holder a store call names (a revoke's is the lease's own), or None."""
+    args, kw = body.get("args") or [], body.get("kwargs") or {}
+    if method != "revoke":
+        return _named_arg(args, kw, "holder", 1)
+    name = _named_arg(args, kw, "name", 0)
+    return (store.get(name) or {}).get("holder") if isinstance(name, str) else None
+
+
+def _named_arg(args: Any, kw: Any, key: Any, position: Any) -> Any:
+    """A store call's argument, by keyword else by position (None when absent)."""
+    if key in kw:
+        return kw[key]
+    return args[position] if len(args) > position else None
+
+
+def laptop_role_refusal(store: Any, path: Any, body: Any, role: Any) -> Any:
     """THE STORE ENFORCES THE ROLE: a `laptop:` lease (a fixer, an owner, a claim) is acquired, taken or revoked only by
     the machine that holds the laptop role (laptop_role_speaks; pawel-mbp's agentctl on 2026-11-18/19 named none). The
     refusal's text, or None."""
     m = path[len("/v1/store/"):] if path.startswith("/v1/store/") else ""
     if m not in LAPTOP_HOLDER_CALLS or not isinstance(body, dict):
         return None
-    args, kw = body.get("args") or [], body.get("kwargs") or {}
-    if m == "revoke":  # its holder is the lease's own
-        name = kw.get("name") if "name" in kw else (args[0] if args else None)
-        holder = (store.get(name) or {}).get("holder") if isinstance(name, str) else None
-    else:
-        holder = kw.get("holder") if "holder" in kw else (args[1] if len(args) > 1 else None)
+    holder = _call_holder(store, m, body)
     if not str(holder or "").startswith("laptop:"):
         return None
     why = laptop_role_speaks(store, role)

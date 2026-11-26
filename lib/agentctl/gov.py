@@ -209,7 +209,7 @@ GOV_ADMIT_MAX = 2 * 3600  # a check waits this long for the governor at most ($A
 class GovWait:
     """One unit of work waiting its turn at the governor: the loop that polls until it is the head and fits."""
 
-    def __init__(self, cls, mem: Any, cores: Any, label: Any, kind: Any, me: Any, report: Any, force: Any=False, wait: Any=True, max_wait: Any=None) -> None:
+    def __init__(self, cls, mem: Any, cores: Any, label: Any, kind: Any, me: Any, report: Any, force: Any = False, wait: Any = True, max_wait: Any = None) -> None:
         self.cls, self.mem, self.cores, self.label, self.kind = cls, mem, cores, label, kind
         self.me, self.report, self.force, self.wait, self.max_wait = me, report, force, wait, max_wait
         self.t0 = wall_epoch()

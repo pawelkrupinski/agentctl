@@ -124,6 +124,16 @@ class LaptopRoleTest(unittest.TestCase):
                                                 {"args": ["role/laptop", "role:pawel-mbp:41A0-MBP", 600, 1]}, None))
         self.assertIsNone(A.laptop_role_refusal(self.st, "/v1/store/renew", body, None), "renewals go on")
 
+    def test_a_revoke_names_its_lease_by_keyword_or_position_and_its_holder_is_the_leases_own(self):
+        self.step(PRO2)
+        held = self.st.acquire("laptop:claim:x", "laptop:fixer:a", 900, 10800)
+        self.assertNotIn("held", held)
+        for body in ({"args": ["laptop:claim:x"]}, {"kwargs": {"name": "laptop:claim:x"}}):
+            refused = A.laptop_role_refusal(self.st, "/v1/store/revoke", body, None)
+            self.assertIn("STANDBY: laptop:fixer:a refused", refused)
+        self.assertIsNone(A.laptop_role_refusal(self.st, "/v1/store/revoke", {"args": ["no-such-lease"]}, None))
+        self.assertIsNone(A.laptop_role_refusal(self.st, "/v1/store/revoke", {"args": [7]}, None), "a name that is no string")
+
     def api(self):
         return A.StoreAPI(self.st, ["pawel"], [], user_of={"tok": "pawel"}.get)
 

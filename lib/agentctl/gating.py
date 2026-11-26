@@ -34,7 +34,7 @@ class GateRegistryUnread(RuntimeError):
     """The gating checks registry could not be read and none was read before: the gate is unread (never green)."""
 
 
-def gating_checks_parse(text):
+def gating_checks_parse(text: Any) -> Any:
     """The registry's rows [{kind, workflow, name, proven, note}] (gating_checks.py load's, comments and header out)."""
     rows = []
     for line in (text or "").splitlines():
@@ -48,7 +48,7 @@ def gating_checks_parse(text):
     return rows
 
 
-def gating_checks_path():
+def gating_checks_path() -> Any:
     return state_root("gating-checks.json")
 
 
@@ -103,7 +103,7 @@ def keep_registry(o_r: Any, rows: Any, main: Any) -> None:
             write_json(gating_checks_path(), kept)
 
 
-def gating_checks(o_r):
+def gating_checks(o_r: Any) -> Any:
     """The registry's rows at main: from the repo's clone at origin/main (cached per main sha), else -- no clone here --
     through GitHub's contents API (kept GATING_API_TTL). Unreadable now (no file, a git or API error): the rows last read
     (kept in the state root: a stale registry is an earlier main's, never none); never read: raises GateRegistryUnread."""
@@ -135,7 +135,7 @@ def api_workflow_names(o_r: Any) -> Any:
     return hit[1]
 
 
-def gate_flow_names(o_r, files=()):
+def gate_flow_names(o_r: Any, files: Any = ()) -> Any:
     """{workflow file: name} for files (the registry's): main's own workflow files in the clone (main_workflow_files);
     those it does not name, GitHub's workflows list (api_workflow_names); still unnamed, the names last read (kept
     beside the registry's rows)."""
@@ -143,6 +143,11 @@ def gate_flow_names(o_r, files=()):
     if any(f not in names for f in files):
         names = {**api_workflow_names(o_r), **names}
     names = {f: names[f] for f in files if names.get(f)}
+    return _kept_names(o_r, files, names)
+
+
+def _kept_names(o_r: Any, files: Any, names: Any) -> Any:
+    """`names` with the names last read for the rest of files, the registry's record updated when a name moved."""
     try:
         kept = read_record(gating_checks_path()) or {}
         old = (kept.get(o_r) or {}).get("names") or {}
@@ -154,7 +159,7 @@ def gate_flow_names(o_r, files=()):
         return names
 
 
-def gate_flows(o_r):
+def gate_flows(o_r: Any) -> Any:
     """[(name, file)] of a gated repo's gate workflows: the registry's `workflow` rows, named as main names their files
     (gate_flow_names; the file itself when nothing names it)."""
     files = [r["workflow"] for r in gating_checks(o_r) if r["kind"] == "workflow" and r["proven"] != "aggregate"]
@@ -180,7 +185,7 @@ def note_workflow_file(txt: Any, path: Any, out: Any, meta: Any) -> None:
         meta["callers"].setdefault(called, []).append(name)
 
 
-def main_workflow_files(o_r):
+def main_workflow_files(o_r: Any) -> Any:
     """{workflow name: file} of the workflow files on origin/main (cached per main sha); {} when unreadable."""
     repo = scan_repo_for(o_r)
     if not repo or not os.path.isdir(repo):
@@ -200,11 +205,11 @@ def main_workflow_files(o_r):
     return _flow_files[main]
 
 
-def gate_dirty_path():
+def gate_dirty_path() -> Any:
     return state_root("gate.dirty")
 
 
-def mark_gate_dirty():
+def mark_gate_dirty() -> Any:
     """A push moved main: the processor re-reads the gate at its next tick (<= TICK s)."""
     try:
         os.makedirs(os.path.dirname(gate_dirty_path()), exist_ok=True)

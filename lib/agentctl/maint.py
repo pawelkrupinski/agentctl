@@ -20,12 +20,12 @@ from agentctl.jvmreap import (
     thread_dump, tree_cpu)
 
 
-def loop_body(cmd):
+def loop_body(cmd: Any) -> Any:
     m = re.search(r"eval '(.*)' < /dev/null", cmd, re.S)
     return m.group(1) if m else cmd
 
 
-def is_wait_loop(cmd):
+def is_wait_loop(cmd: Any) -> Any:
     if re.search(r"\bagentctl wait\b", cmd):
         return True
     if not re.match(r"\S*(zsh|bash|sh) ", cmd):
@@ -34,7 +34,7 @@ def is_wait_loop(cmd):
     return bool(re.search(r"\bsleep\b", body) and re.search(r"\b(until|while)\b", body))
 
 
-def loop_targets(body):
+def loop_targets(body: Any) -> Any:
     ids = set(re.findall(r"run (?:view|watch) (\d+)", body)) | set(re.findall(r"/runs/(\d+)", body))
     ids |= {i for m in re.findall(r"for \w+ in ((?:\d+\s+)*\d+)\s*;", body) for i in m.split()}
     m = re.search(r"(?:-R|--repo)[ =]([\w.-]+/[\w.-]+)", body) or re.search(r"agentctl wait run (\S+)", body)
@@ -47,7 +47,7 @@ def loop_targets(body):
     return repo, sorted(ids, key=int)
 
 
-def missing_tree_paths(text):
+def missing_tree_paths(text: Any) -> Any:
     gone = set()
     for p in re.findall(rf"{re.escape(HOME)}/(?:projects|bitcashier)/[\w.-]+", text):
         if not os.path.exists(p):
@@ -55,46 +55,57 @@ def missing_tree_paths(text):
     return sorted(gone)
 
 
-def owner_orphans_dead_only():
+def owner_orphans_dead_only() -> Any:
     """Cancel a DEAD owner's runs and drop its record (what --kill does to it), and log it; live owners untouched."""
     for rec in owner_records():
         if rec["alive"]:
             continue
-        for ext in (".json", ".verdict"):
-            try:
-                os.unlink(rec["path"][: -len(".json")] + ext)
-            except FileNotFoundError:
-                pass
+        _remove_owner_record(rec)
         reap_log(f"removed dead owner {rec.get('kind')} {rec.get('key')} pid {rec.get('pid')}")
 
 
-def owner_orphans(kill):
+def _remove_owner_record(rec: Any) -> Any:
+    """An owner's .json and .verdict files."""
+    for ext in (".json", ".verdict"):
+        with suppress(FileNotFoundError):
+            os.unlink(rec["path"][: -len(".json")] + ext)
+
+
+def _stale_owner_reasons(rec: Any, current: Any) -> Any:
+    """Why a live owner is a stray: running old code, or its cwd is gone."""
+    reasons = []
+    if current and rec.get("code") and rec["code"] != current:
+        reasons.append(f"running old code ({rec['code'][:8]}, now {current[:8]}): it restarts at its next poll")
+    if rec.get("cwd") and not os.path.isdir(rec["cwd"]):
+        reasons.append(f"cwd gone: {rec['cwd']}")
+    return reasons
+
+
+def _owner_orphan(rec: Any, current: Any, kill: Any) -> Any:
+    """(the stray row of an owner record, or None); with kill, a dead owner's record is removed and a live stray gets
+    SIGTERM."""
+    what = f"{rec.get('kind')} {rec.get('key')} ({rec.get('owner')}, since {rec.get('started')})"
+    if not rec["alive"]:
+        if kill:
+            _remove_owner_record(rec)
+            print(f"removed the dead owner's record {rec['path']}")
+        return ("owner", rec.get("pid"), "process gone, record left", what)
+    reasons = _stale_owner_reasons(rec, current)
+    if not reasons:
+        return None
+    if kill and rec.get("pid"):
+        with suppress(ProcessLookupError):
+            os.kill(int(rec["pid"]), signal.SIGTERM)
+            print(f"sent SIGTERM to owner pid {rec['pid']} ({rec.get('kind')})")
+    return ("owner", rec.get("pid"), "; ".join(reasons), what)
+
+
+def owner_orphans(kill: Any) -> Any:
     """Owner records that are strays: a dead process's, an owner on old code, an owner whose cwd is gone. With kill: a
     dead one's record is removed; a live one gets SIGTERM."""
-    found = []
     current = code_version()
-    for rec in owner_records():
-        what = f"{rec.get('kind')} {rec.get('key')} ({rec.get('owner')}, since {rec.get('started')})"
-        if not rec["alive"]:
-            found.append(("owner", rec.get("pid"), "process gone, record left", what))
-            if kill:
-                for ext in (".json", ".verdict"):
-                    with suppress(FileNotFoundError):
-                        os.unlink(rec["path"][: -len(".json")] + ext)
-                print(f"removed the dead owner's record {rec['path']}")
-            continue
-        reasons = []
-        if current and rec.get("code") and rec["code"] != current:
-            reasons.append(f"running old code ({rec['code'][:8]}, now {current[:8]}): it restarts at its next poll")
-        if rec.get("cwd") and not os.path.isdir(rec["cwd"]):
-            reasons.append(f"cwd gone: {rec['cwd']}")
-        if reasons:
-            found.append(("owner", rec.get("pid"), "; ".join(reasons), what))
-            if kill and rec.get("pid"):
-                with suppress(ProcessLookupError):
-                    os.kill(int(rec["pid"]), signal.SIGTERM)
-                    print(f"sent SIGTERM to owner pid {rec['pid']} ({rec.get('kind')})")
-    return found
+    rows = (_owner_orphan(rec, current, kill) for rec in owner_records())
+    return [row for row in rows if row]
 
 
 MAINTAIN_SWEEP_HOUR = 9  # local time: the daily sweep runs at the first maintain pass from 09:00 ($AGENTCTL_SWEEP_HOUR)
@@ -144,25 +155,45 @@ def in_use(wt: str, cwds: list[str]) -> bool:
     return any(c == real or c.startswith(real + os.sep) for c in cwds)
 
 
+def _repo_worktrees(repo: str) -> list[str]:
+    """The worktree paths of a repo that takes markers (it exists and has its info/exclude)."""
+    if not os.path.isdir(repo) or not spotlight_info_exclude(repo):
+        return []
+    out = git(repo, "worktree", "list", "--porcelain", check=False).stdout
+    return [l[len("worktree "):] for l in out.splitlines() if l.startswith("worktree ")]
+
+
+def _drop_markers(dirs: list[str]) -> list[str]:
+    """Marker files into dirs; the dirs it marked."""
+    marked = []
+    for d in dirs:
+        with suppress(OSError):
+            open(os.path.join(d, SPOTLIGHT_MARKER), "a").close()
+            marked.append(d)
+    return marked
+
+
+def _once(read: Callable[[], list[str]]) -> Callable[[], list[str]]:
+    """`read`, called on first use only, its answer kept."""
+    kept: list[list[str]] = []
+
+    def get() -> list[str]:
+        if not kept:
+            kept.append(read())
+        return kept[0]
+    return get
+
+
 def spotlight_exclude(repos: list[str] | None = None, cwds: Callable[[], dict[int, str]] = process_cwds) -> list[str]:
     """Markers into every worktree (and its target/) of the repos that no process works in (cwds: {pid: cwd}, read
     once, only when some tree lacks its marker); returns the paths it marked."""
     marked: list[str] = []
-    busy: list[str] | None = None
+    busy = _once(lambda: [os.path.realpath(c) for c in cwds().values()])
     for repo in repos if repos is not None else REPOS:
-        if not os.path.isdir(repo) or not spotlight_info_exclude(repo):
-            continue
-        out = git(repo, "worktree", "list", "--porcelain", check=False).stdout
-        for wt in (l[len("worktree "):] for l in out.splitlines() if l.startswith("worktree ")):
+        for wt in _repo_worktrees(repo):
             todo = spotlight_unmarked(wt)
-            if todo and busy is None:
-                busy = [os.path.realpath(c) for c in cwds().values()]
-            if todo and in_use(wt, busy or []):
-                continue  # in use: marked once nothing runs there
-            for d in todo:
-                with suppress(OSError):
-                    open(os.path.join(d, SPOTLIGHT_MARKER), "a").close()
-                    marked.append(d)
+            if todo and not in_use(wt, busy()):  # in use: marked once nothing runs there
+                marked += _drop_markers(todo)
     return marked
 
 
@@ -172,7 +203,7 @@ FIXTURE_SERVER = re.compile(r"serve\.py\b|FixtureServerMain")
 FIXTURE_MAX_AGE = 6 * 3600
 
 
-def fixture_reason(cmd, ppid, etime, isdir=os.path.isdir):
+def fixture_reason(cmd: Any, ppid: Any, etime: Any, isdir: Any = os.path.isdir) -> Any:
     """Why a test fixture server (`python -I <tmp>/serve.py`, tools.FixtureServerMain) is stale, or None: its temp dir is
     gone, or it is older than 6 h and orphaned (no live parent test)."""
     if not FIXTURE_SERVER.search(cmd) or "agentctl" in cmd:
@@ -185,7 +216,7 @@ def fixture_reason(cmd, ppid, etime, isdir=os.path.isdir):
     return None
 
 
-def cmd_orphans(a):
+def cmd_orphans(a: Any) -> Any:
     sbt_only = getattr(a, "sbt_only", False)  # the daily sweep: stuck sbt servers only
     owners = [] if sbt_only else cmd_owner_orphans(a)
     procs = ps()

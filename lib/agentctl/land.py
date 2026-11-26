@@ -96,7 +96,7 @@ _runnable_credit, _tree_seen = process_cache({}), process_cache({})
 STALL_CPU_SECONDS = 1.0  # CPU that counts as progress per window: a watchdog's polls are not work
 
 
-def stall_clock():
+def stall_clock() -> Any:
     """The stall judge's clock (tests drive it, with group_cpu_seconds, so no verdict depends on the machine's load)."""
     return time.monotonic()  # wall: waits on and times real processes and threads
 
@@ -104,8 +104,8 @@ def stall_clock():
 WATCHED_GROUPS = set()  # process groups run_watched started and that may still run: the watchdog ends them first
 
 
-def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=None, clock=None, wall=None,
-                quiet_ok=False, hook_stall=None, hooks=None):
+def run_watched(argv: Any, cwd: Any, env: Any, log_path: Any, step: Any, stall: Any = None, sampler: Any = None, cpu: Any = None, clock: Any = None, wall: Any = None,
+                quiet_ok: Any = False, hook_stall: Any = None, hooks: Any = None) -> Any:
     """Run argv (its own process group, stdin closed), its output into a file beside log_path. (returncode, output);
     returncode None when it STALLED: no output and no CPU in its process group for `stall` seconds, after which the
     group is ended. Waits with Popen.wait, never a sleep. `cpu` (pgid -> CPU seconds) and `clock` are the samples the
@@ -142,7 +142,7 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
 STALL_LINE = "agentctl: ended, "  # run_watched's last output line of a run it ended: STALL_LINE + why
 
 
-def stall_reason(output):
+def stall_reason(output: Any) -> Any:
     """Why run_watched ended a run (its output's STALL_LINE), or None."""
     for line in reversed((output or "").splitlines()):
         if line.startswith(STALL_LINE):
@@ -153,7 +153,7 @@ def stall_reason(output):
 HOOK_COMMAND = re.compile(r"(^|[\s/])hooks/pre-push(\s|$)")
 
 
-def group_runs_hook(pgid):
+def group_runs_hook(pgid: Any) -> Any:
     """Whether a live process of group `pgid` is a git pre-push hook (`.../hooks/pre-push <remote> <url>`)."""
     r = run_cmd(["ps", "-A", "-o", "pgid=,command="])
     for line in r.stdout.splitlines():
@@ -179,7 +179,7 @@ def _group_gone_on(p: Any, sig: Any) -> Any:
     return False
 
 
-def _end_group(p):
+def _end_group(p: Any) -> Any:
     """SIGTERM, then SIGKILL, the step's process group. macOS answers EPERM for a group whose members have all exited
     but are not reaped yet (2026-11-22: a quiet step ending as its watch ended it, at load 290): the step is over then;
     a live leader it refuses is signalled alone."""
@@ -193,7 +193,7 @@ def _end_group(p):
             continue
 
 
-def beat_mark(step, size, cpu, polls=0, quiet_ok=False):
+def beat_mark(step: Any, size: Any, cpu: Any, polls: Any = 0, quiet_ok: Any = False) -> Any:
     """The progress mark a poll renews the leases with: output bytes and whole CPU seconds -- and, for a quiet_ok step,
     the poll count (every poll is progress: its own stall bound judges it)."""
     return f"{step}:{size}:{int(cpu or 0)}" + (f":{polls}" if quiet_ok else "")
@@ -238,44 +238,61 @@ def poll_verdict(lease_why: Any, stalled: Any, bound: Any, in_hook: Any, waited:
     return None
 
 
-def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_ok=False, hook_stall=None, hooks=None):
+def _exited_within(p: Any, seconds: Any) -> Any:
+    """Whether the process exited within `seconds`."""
+    try:
+        p.wait(timeout=seconds)
+        return True
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def _in_hook(hook_stall: Any, hooks: Any, pid: Any) -> Any:
+    """Whether the group is in the pre-push hook (only judged when a hook bound is set)."""
+    return hook_stall is not None and hooks(pid)
+
+
+def _judged_end(p: Any, why: Any, step: Any) -> Any:
+    """Ends the group on the verdict `why` (and returns it) -- unless it exited while it was judged (a late wakeup under
+    load): its own end, None."""
+    if p.poll() is not None:
+        return None
+    err(f"{why}: ending {step}")
+    _end_group(p)
+    return why
+
+
+def _watch_group(p: Any, out_path: Any, step: Any, stall: Any, sampler: Any, cpu_of: Any, clock: Any, wall: Any, quiet_ok: Any = False, hook_stall: Any = None, hooks: Any = None) -> Any:
     """run_watched's wait: why it ended the group (it stalled, lost a lease, passed its wall bound), or None when the
     group exited by itself."""
     seen, polls, in_hook = GroupProgress(clock()), 0, False
     poll = max(0.2, min(15.0, stall / 4))
     need = env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
     t_start = clock()  # the wall bound reads the same clock: tests drive it, so no verdict depends on the load
-    while True:
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            p.wait(timeout=poll)
-            break
+    while not _exited_within(p, poll):
         if sampler:
             sampler()
         size, cpu = os.path.getsize(out_path), cpu_of(p.pid)
-        was_hook, in_hook = in_hook, hook_stall is not None and hooks(p.pid)
+        was_hook, in_hook = in_hook, _in_hook(hook_stall, hooks, p.pid)
         polls += 1
         why = watch_lease_loss(step, size, cpu, polls, quiet_ok or in_hook)
         now = clock()
         bound = hook_stall if in_hook else stall
         stalled = seen.stalled(size, cpu, now, need, was_hook != in_hook, bound)
         why = poll_verdict(why, stalled, bound, in_hook, now - t_start, wall)
-        if why and p.poll() is not None:  # it exited while it was judged (a late wakeup under load): its own end
-            break
         if why:
-            err(f"{why}: ending {step}")
-            _end_group(p)
-            return why
+            return _judged_end(p, why, step)
     return None
 
 
-def spawn_land(wt, env, log):
+def spawn_land(wt: Any, env: Any, log: Any) -> Any:
     """A detached `agentctl land` of wt (the normal hook; its verdicts reach the inbox). Its pid."""
     with open(log, "a") as logf:
         return spawn_detached([sys.executable, TOOL_PATH, "land"], cwd=wt, stdin=subprocess.DEVNULL, stdout=logf,
                               stderr=logf, start_new_session=True, env=env).pid
 
 
-def tool_env():
+def tool_env() -> Any:
     """os.environ with sdkman's sbt and java first on PATH (the movies hook's sbt check needs them) -- moved to the
     front when PATH already holds them further back (a fixer's environment: another java ahead of sdkman's)."""
     env = dict(os.environ)
@@ -312,7 +329,7 @@ PUSH_STALL_SECS = 180
 PUSH_WALL_MIN = 45
 
 
-def push_bounds():
+def push_bounds() -> Any:
     """A push's bounds: `stall` for its transport; while its pre-push hook runs, the hook's own -- the check outside the
     lock's (LAND_STALL_MIN), its leases renewed at every poll (run_watched hook_stall); `wall` over all of it."""
     return {"stall": env_num("AGENTCTL_PUSH_STALL_SECS", PUSH_STALL_SECS),
@@ -320,13 +337,13 @@ def push_bounds():
             "hook_stall": env_num("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN) * 60}
 
 
-def push_argv(remote, src, dst="main"):
+def push_argv(remote: Any, src: Any, dst: Any = "main") -> Any:
     argv = ["git", "push", remote, f"{src}:refs/heads/{dst}"]
     assert not any(a in ("--no-verify", "-n", "--force", "-f") or a.startswith("--force") for a in argv)
     return argv
 
 
-def landed(repo, sha, main_ref):
+def landed(repo: Any, sha: Any, main_ref: Any) -> Any:
     if git_ok(repo, "merge-base", "--is-ancestor", sha, main_ref):
         return "ancestor"
     commits, left = cherry_landed(repo, main_ref, sha)

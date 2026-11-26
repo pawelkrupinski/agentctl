@@ -18,7 +18,7 @@ from agentctl.laptoprole import laptop_role_holder
 from agentctl.core import state_root
 
 
-def contact_machine():
+def contact_machine() -> Any:
     """The machine this process's store calls speak for (A SILENT MACHINE'S LEASE CLOCKS PAUSE): $AGENTCTL_MACHINE, else
     `laptop` for the laptop's agentctl (the sync role on macOS: its holders are `laptop:...`), else None."""
     m = os.environ.get("AGENTCTL_MACHINE")
@@ -30,12 +30,12 @@ def contact_machine():
 class _StoreTransient(Exception):
     """One failed attempt of a store call; unsent: it never reached the server (safe to send again)."""
 
-    def __init__(self, msg, unsent=False):
+    def __init__(self, msg: Any, unsent: Any = False) -> None:
         super().__init__(msg)
         self.unsent = unsent
 
 
-def http_client_errors():
+def http_client_errors() -> Any:
     import http.client
     return http.client.HTTPException
 
@@ -53,21 +53,37 @@ STORE_RPC_SAFE = ("get", "item", "items", "offers", "offer_of", "meta_get", "eve
                   "set_meta", "release", "close_offer", "offer_reason", "mark_notified", "meta_set")
 
 
+def _raise_http_error(e: Any, method: Any, path: Any) -> Any:
+    """The store's answer to a failed call, as its exception: an auth failure, the store's own error class, a transient
+    one (retried by `call`), else unavailable."""
+    b: Any = attempt(lambda: json.loads(e.read() or b"{}"), {}, catch=(ValueError,))
+    said = f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}"
+    if e.code in (401, 403):
+        raise StoreAuthFailed(said) from None
+    cls = store_errors().get(b.get("error"))
+    if cls:
+        raise cls(b.get("message") or "")
+    if e.code in (500, 502, 503, 504):  # the tunnel, the service between restarts, a busy database (a 500: retried
+        # only when the call is safe -- `database is locked` after the 30 s busy timeout)
+        raise _StoreTransient(said, e.code == 503) from None
+    raise StoreUnavailable(said) from None
+
+
 class RemoteStore:
     """Store's methods over the phase-2 API (`POST /v1/store/<method>`), plus the §6.3 calls the sync needs. The token
     is the caller's own store token ($AGENTCTL_STORE_TOKEN, else the one agentctl reads for movies)."""
 
     needs_token = True  # a call goes out with the caller's token (the file store reads a local database: Store.needs_token)
 
-    def __init__(self, url, tok=None, clock=None, timeout=60, retries=None):
+    def __init__(self, url: Any, tok: Any = None, clock: Any = None, timeout: Any = 60, retries: Any = None) -> None:
         self.url, self._tok, self.clock, self.timeout = url.rstrip("/"), tok, clock or epoch_now, timeout
         self.retries = retries
         self.path = self.url
 
-    def _token(self):
+    def _token(self) -> Any:
         return self._tok or os.environ.get("AGENTCTL_STORE_TOKEN") or token(SHORT["movies"])
 
-    def call(self, method, path, body=None, timeout=None, safe=None):
+    def call(self, method: Any, path: Any, body: Any = None, timeout: Any = None, safe: Any = None) -> Any:
         """One API call, retried through a transient failure (a reset, a refusal, a timeout, a 502/503/504) up to
         STORE_RETRIES times with backoff. A call that may have taken effect (a mutation whose request was sent) is
         retried only when it never reached the server (refused). What is still failing after that raises
@@ -83,46 +99,39 @@ class RemoteStore:
                 # wall: waits on and times real processes and threads
                 time.sleep(env_num("AGENTCTL_STORE_RETRY_BASE", STORE_RETRY_BASE) * (2 ** attempt))
 
-    def _call_once(self, method, path, body=None, timeout=None):
-        data = json.dumps(body).encode() if body is not None else None
+    def _headers(self) -> Any:
         hdrs = {"Authorization": f"token {self._token()}", "Content-Type": "application/json"}
         if contact_machine():
             hdrs["X-Agentctl-Machine"] = contact_machine()
         if host_role() == "sync":  # which machine this laptop is (laptop_role_refusal): every sync client names it
             hdrs["X-Agentctl-Role"] = laptop_role_holder()
-        req = urllib.request.Request(self.url + path, data=data, method=method, headers=hdrs)
+        return hdrs
+
+    def _call_once(self, method: Any, path: Any, body: Any = None, timeout: Any = None) -> Any:
+        data = json.dumps(body).encode() if body is not None else None
+        req = urllib.request.Request(self.url + path, data=data, method=method, headers=self._headers())
         try:
             with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
                 return json.loads(r.read() or b"null")
         except urllib.error.HTTPError as e:
-            b: Any = attempt(lambda: json.loads(e.read() or b"{}"), {}, catch=(ValueError,))
-            if e.code in (401, 403):
-                raise StoreAuthFailed(f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}") from None
-            cls = store_errors().get(b.get("error"))
-            if cls:
-                raise cls(b.get("message") or "")
-            if e.code in (500, 502, 503, 504):  # the tunnel, the service between restarts, a busy database (a 500:
-                # retried only when the call is safe -- `database is locked` after the 30 s busy timeout)
-                raise _StoreTransient(f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}", e.code == 503) \
-                    from None
-            raise StoreUnavailable(f"{method} {path}: HTTP {e.code} {b.get('message') or e.reason}") from None
+            _raise_http_error(e, method, path)
         except (urllib.error.URLError, OSError, ValueError, http_client_errors()) as e:
             reason = getattr(e, "reason", e)
             raise _StoreTransient(f"{method} {path}: {e}", isinstance(reason, ConnectionRefusedError)) from None
 
-    def _rpc(self, m, args, kwargs):
+    def _rpc(self, m: Any, args: Any, kwargs: Any) -> Any:
         return self.call("POST", f"/v1/store/{m}", {"args": list(args), "kwargs": kwargs}, safe=m in STORE_RPC_SAFE)["result"]
 
-    def state(self):
+    def state(self) -> Any:
         return self.call("GET", "/v1/state")
 
-    def submit(self, entry):
+    def submit(self, entry: Any) -> Any:
         return self.call("POST", "/v1/changes", entry, safe=bool(entry.get("id")))  # an id: the same change twice
 
-    def cancel_change(self, eid, how="cancel"):
+    def cancel_change(self, eid: Any, how: Any = "cancel") -> Any:
         return self.call("POST", f"/v1/changes/{urllib.parse.quote(eid, safe='')}:{how}", {})
 
-    def nudge(self):
+    def nudge(self) -> Any:
         return self.call("POST", "/v1/tick", {}, safe=True)
 
 
