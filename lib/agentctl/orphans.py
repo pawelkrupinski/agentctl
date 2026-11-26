@@ -7,9 +7,10 @@ import json
 import os
 import re
 from contextlib import suppress
+from agentctl.landstate import landed_state
 from agentctl.core import attempt
 from agentctl.procrunner import process_runner
-from agentctl.core import branch_of, cherry_landed, env_num, git_ok, hashlib_sha1, remote
+from agentctl.core import branch_of, env_num, git_ok, hashlib_sha1, remote
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.waitingdir import WAITING_BRANCH, waiting_entries, waiting_state
@@ -39,7 +40,7 @@ ORPHAN_IDLE = 2 * 3600
 def orphan_key(repo: str, wt: str) -> tuple[Any, Optional[str]]:
     """The change's identity across rebases: its commits' patch-ids (not HEAD, which every rebase moves)."""
     main = f"refs/remotes/{remote()}/main"
-    plus = cherry_landed(wt, main, "HEAD")[1] or []  # landed by patch or by content: not the orphan's
+    plus = list(landed_state(wt, main, "HEAD").left)  # landed by patch or by content: not the orphan's (unknown: none)
     ids = []
     for sha in plus:  # bytes: a commit may carry binary content
         show = process_runner().run(["git", "-C", wt, "show", sha], capture_output=True, timeout=60).stdout
@@ -244,8 +245,7 @@ def orphan_covered_by(wt: str, items: dict[str, Any]) -> Optional[str]:
         head = (it.get("data") or {}).get("head")
         if not head or not git_ok(wt, "cat-file", "-e", f"{head}^{{commit}}"):
             continue
-        commits, left = cherry_landed(wt, head, "HEAD")
-        if commits is not None and not left:
+        if landed_state(wt, head, "HEAD").landed:  # unknown (git cannot compare): not covered
             found: str = it["id"]
             return found
     return None

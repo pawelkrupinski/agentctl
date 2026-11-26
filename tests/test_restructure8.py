@@ -6,6 +6,11 @@ import builtins, contextlib, glob as glob_module, inspect, io, os, shutil, sys, 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+
+
+def change_state_of(ok, via=None):
+    """The LandState a drawn (landed, via) stands for: True landed, None unknown, any other falsy not landed."""
+    return A.LandState(A.LANDED if ok else A.UNKNOWN if ok is None else A.NOT_LANDED, via=via if ok else None)
 from golden_cases import Probe, check as _check  # noqa: E402
 
 DIGESTS = os.path.join(HERE, "fixtures", "restructure8-digests.json")
@@ -252,7 +257,7 @@ class SuccessorStateTest(unittest.TestCase):
         r = case.rng
         trees_exist(case)
         case.patch(os.path, "isdir", lambda rng, p: rng.random() < 0.5)
-        case.fake("change_landed", lambda rng, repo, head: rng.choice([(None, None), (True, "s" * 12), (True, None), (False, None)]))
+        case.fake("change_state", lambda rng, repo, head: change_state_of(*rng.choice([(None, None), (True, "s" * 12), (True, None), (False, None)])))
         states = ["queued", "checking", "checked", "pushing", "landed", "rejected", "superseded", "cancelled", "waiting"]
 
         def item(rng, typ, cid):

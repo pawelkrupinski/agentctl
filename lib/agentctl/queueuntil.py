@@ -5,7 +5,8 @@ import argparse
 import os
 import re
 from typing import Any
-from agentctl.core import attempt, cherry_landed, env_num, git, remote
+from agentctl.core import attempt, env_num, git, remote
+from agentctl.landstate import landed_state
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.worktrees import worktrees
 from agentctl.cleanup import FREE_WAIT, close_worktree, free_worktree
@@ -118,10 +119,11 @@ def until_done_finish(repo: Any, eid: Any, sha: Any, a: Any, item: Any = None) -
     if why:
         return kept(why)
     git(repo, "fetch", "--quiet", remote(), "main", check=False)
-    commits, left = cherry_landed(repo, f"refs/remotes/{remote()}/main", "HEAD")
-    if commits is None:
+    state = landed_state(repo, f"refs/remotes/{remote()}/main", "HEAD")
+    if state.unknown:  # kept: nothing proves its commits landed
         return kept(f"git cherry could not compare it with {remote()}/main")
-    if left:
+    if state.left:
+        left = state.left
         return kept(f"{len(left)} local commit(s) whose patch is not on {remote()}/main ({', '.join(c[:10] for c in left[:3])})"
                     f": land them with {UNTIL_DONE_AGAIN}")
     if getattr(a, "keep_worktree", False):

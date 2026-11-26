@@ -12,7 +12,8 @@ import sys
 import time
 from typing import Any
 from contextlib import suppress
-from agentctl.core import attempt, cherry_landed, env_num, git, on_ci_runner, reds_dir, remote, spawn_detached, tilde
+from agentctl.landstate import landed_state
+from agentctl.core import attempt, env_num, git, on_ci_runner, reds_dir, remote, spawn_detached, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.store import StoreUnavailable
@@ -158,13 +159,16 @@ def spawn_fixer(repo: str, d: str, rec_path: str, rec: dict[str, Any], wt: str, 
 
 
 def unlanded_commits(wt: Any) -> Any:
-    """[(sha, author time)] of the worktree's commits not on origin/main (cherry_landed: a rebased copy on main counts as
-    landed), oldest first; [] when it is not a worktree."""
+    """[(sha, author time)] of the worktree's commits not on origin/main (landed_state: a rebased copy on main counts as
+    landed), oldest first; [] when it is not a worktree or nothing is left; None when git cannot compare (not "all
+    landed": a caller leaves what it knows as it is)."""
     if not wt or not os.path.isdir(wt):
         return []
-    shas = cherry_landed(wt, f"refs/remotes/{remote()}/main", "HEAD")[1] or []
+    state = landed_state(wt, f"refs/remotes/{remote()}/main", "HEAD")
+    if state.unknown:
+        return None
     out = []
-    for sha in shas:
+    for sha in state.left:
         r = git(wt, "log", "-1", "--format=%at", sha, check=False)
         out.append((sha, int(r.stdout.strip() or 0) if r.returncode == 0 and r.stdout.strip().isdigit() else 0))
     return out
@@ -214,7 +218,7 @@ def previous_fixer_tree(u: Any) -> Any:
     for wt in _fixer_trees(u):
         if _continuable(wt, found):
             left = unlanded_commits(wt)
-            if left:
+            if left:  # None (git cannot compare): the tree is not offered as the one to continue in
                 found[wt] = left
     if not found:
         return None
@@ -259,6 +263,8 @@ class FixerLandWatch:
         self.state = read_record(self.state_path) or {}
         left = unlanded_commits(self.wt)
         self.label = fixer_label(self.rec)
+        if left is None:  # git cannot compare: nothing is proved landed, the nudge state and an escalation stand
+            return []
         if not left:
             return self._landed()
         oldest = min((at for _s, at in left if at), default=self.t)

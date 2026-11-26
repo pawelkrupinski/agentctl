@@ -7,7 +7,8 @@ import time
 from contextlib import suppress
 from typing import Any
 from agentctl.timefmt import parse_time, ts
-from agentctl.core import attempt, cherry_landed, git, git_ok, process_cache, remote
+from agentctl.landstate import landed_state
+from agentctl.core import attempt, git, git_ok, process_cache, remote
 from agentctl.forge import gh_json
 from agentctl.trailers import trailer_values
 from agentctl.waitingdir import waiting_entries, waiting_state
@@ -384,10 +385,10 @@ def red_main_equivalent(repo, sha):
         return None  # main fetched (red_sha_on_main) and still no such commit: it is on no main
     key = (repo, sha, git(repo, "rev-parse", ref, check=False).stdout.strip())
     if key not in _main_equivalents:
-        commits, left = cherry_landed(repo, ref, sha, f"{sha}~1")
-        if commits is None:
+        state = landed_state(repo, ref, sha, after=f"{sha}~1")
+        if state.unknown:
             _main_equivalents[key] = sha  # git cannot tell (a root commit): unsure counts
-        elif left:
+        elif not state.landed:
             _main_equivalents[key] = None
         else:
             _main_equivalents[key] = attempt(lambda: equivalent_on(repo, sha, ref) or sha, sha,

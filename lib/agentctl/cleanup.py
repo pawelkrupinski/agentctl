@@ -1,6 +1,7 @@
 # agentctl, part `cleanup`: cleanup and the lifecycle.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.landstate import landed_state
 from agentctl.clock import Stopwatch, epoch_now, stopwatch, wall_epoch
 from typing import Any
 from collections.abc import Sequence
@@ -15,7 +16,7 @@ import subprocess
 import time
 from agentctl.procrunner import process_runner
 from agentctl.core import (
-    GIT_NET_SSH, HOME, PROTECTED_BRANCHES, cherry_landed, env_num, err, git, git_ok, remote, run_cmd, slug,
+    GIT_NET_SSH, HOME, PROTECTED_BRANCHES, env_num, err, git, git_ok, remote, run_cmd, slug,
     state_root)
 from agentctl.timefmt import now, ts
 from agentctl.forge import forge_branches
@@ -222,10 +223,10 @@ class WorktreeClosing:
         git(self.wt, "fetch", "--quiet", remote(), "main", check=False)
         self.main = f"refs/remotes/{remote()}/main"
         self.head = git(self.wt, "rev-parse", "HEAD").strip()
-        _commits, ahead = cherry_landed(self.wt, self.main, self.head)
-        if ahead is None:
+        state = landed_state(self.wt, self.main, self.head)
+        if state.unknown:  # kept: nothing proves it landed
             return f"git cherry could not compare it with {remote()}/main"
-        return f"{len(ahead)} commit(s) not on {remote()}/main" if ahead else None
+        return None if state.landed else f"{len(state.left)} commit(s) not on {remote()}/main"
 
     def removed(self) -> str | None:
         """Remove the worktree and its branch (the message says what), unless git refuses."""

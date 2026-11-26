@@ -3,7 +3,8 @@
 
 import os
 from typing import Any, Optional
-from agentctl.core import HOME, cherry_landed, git, git_ok, remote, state_root
+from agentctl.core import HOME, git, git_ok, remote, state_root
+from agentctl.landstate import landed_state
 from agentctl.timefmt import ts
 from agentctl.statefile import write_json
 from agentctl.procs import safe_cwd
@@ -104,12 +105,12 @@ def gitdir_activity(repo: str, wt_path: str) -> Optional[float]:
 
 
 def merged_reason(repo: str, head: str, main: str) -> Optional[str]:
-    if git_ok(repo, "merge-base", "--is-ancestor", head, main):
+    state = landed_state(repo, main, head)
+    if state.how == "ancestor":
         return f"ancestor of {remote()}/main"
-    commits, left = cherry_landed(repo, main, head)
-    if commits and not left:
-        return f"all {len(commits)} commit(s) patch-equivalent on {remote()}/main (by patch-id or changed lines)"
-    return None
+    if state.how == "patch-equivalent":
+        return f"all {len(state.commits)} commit(s) patch-equivalent on {remote()}/main (by patch-id or changed lines)"
+    return None  # not landed, or unknown (git cannot compare): no proof of a merge
 
 
 CACHE_TREES = os.path.join(HOME, ".cache") + "/"  # tool-owned trees (e.g. kinowo-identity measure-local): reused, not litter

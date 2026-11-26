@@ -5,7 +5,8 @@ from agentctl.clock import epoch_now
 import argparse
 from typing import Any
 import os
-from agentctl.core import PROTECTED_BRANCHES, attempt, cherry_landed, git, remote, tilde
+from agentctl.core import PROTECTED_BRANCHES, attempt, git, remote, tilde
+from agentctl.landstate import landed_state
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.procs import process_cwds
@@ -13,7 +14,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.worktrees import worktrees
 from agentctl.deletions import log_deletion
 from agentctl.conditions import recovery_dir
-from agentctl.queueclose import change_landed
+from agentctl.queueclose import change_state
 from agentctl.statemachines import machine_state
 
 
@@ -102,9 +103,9 @@ class SuccessorRead:
     def _head_on_main(self) -> Any:
         if not self.m.get("head"):
             return None
-        done, via = change_landed(self.repo, self.m["head"])
-        if done:
-            return "landed", f"{self.by}'s head {self.m['head'][:10]} is on main" + (f" ({via[:10]})" if via else "")
+        state = change_state(self.repo, self.m["head"])
+        if state.landed:  # unknown (this clone lacks the head): the next decision stage looks
+            return "landed", f"{self.by}'s head {self.m['head'][:10]} is on main" + (f" ({state.via[:10]})" if state.via else "")
         return None
 
     def _named_change(self) -> Any:
@@ -230,8 +231,11 @@ def _successor_worktree(path: Any, by: Any) -> Any:
     top = git(path, "rev-parse", "--show-toplevel", check=False).stdout.strip()
     if not top:
         raise ValueError(f"{by} is no git worktree")
-    _c, left = cherry_landed(top, f"refs/remotes/{remote()}/main", "HEAD")
-    if not left:
+    state = landed_state(top, f"refs/remotes/{remote()}/main", "HEAD")
+    if state.unknown:
+        raise ValueError(f"{os.path.basename(top)}: git cannot compare it with {remote()}/main, so what it carries is "
+                         "unknown: fetch, then mark it superseded again")
+    if not state.left:
         raise ValueError(f"{os.path.basename(top)} carries nothing that is not on main yet: mark it superseded once "
                          "its successor holds the work (commit it there first)")
     return os.path.basename(top), None, os.path.realpath(top), git(top, "rev-parse", "HEAD").strip()

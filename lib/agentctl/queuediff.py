@@ -10,7 +10,8 @@ from agentctl.repos import precheck_hook, waiting_supported
 from agentctl.waitingdir import waiting_state, wlog
 from agentctl.gating import mark_gate_dirty
 from agentctl.clones import fetch_main
-from agentctl.land import RACE, REDGATE, land_lock_if_free, landed, push_argv, push_bounds, run_watched, tool_env
+from agentctl.landstate import landed_state
+from agentctl.land import RACE, REDGATE, land_lock_if_free, push_argv, push_bounds, run_watched, tool_env
 from agentctl.queueslots import PUSH_ATTEMPTS_MAX, check_tree, queue_verdict, set_change, tree_slot
 from agentctl.conditions import open_condition, run_probe
 from agentctl.queue import (
@@ -212,7 +213,7 @@ class ChangePush:
         env = self._push_env()
         rc, out = run_watched(push_argv(remote(), head), self.tree, env, self.log_path, "push", **push_bounds())
         git(self.repo, "fetch", "--quiet", remote(), "main", check=False)
-        if landed(self.repo, head, f"refs/remotes/{remote()}/main"):  # verify: the tip is on main, whatever rc said
+        if landed_state(self.repo, f"refs/remotes/{remote()}/main", head).landed:  # verify: on main, whatever rc said (unknown: the rc decides)
             return self._landed(pushed_at)
         if rc is not None and (RACE.search(out or "") or REDGATE.search(out or "")):
             set_change(self.st, self.d, e, "checked",

@@ -7,6 +7,11 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+
+
+def change_state_of(ok, via=None):
+    """The LandState a drawn (landed, via) stands for: True landed, None unknown, any other falsy not landed."""
+    return A.LandState(A.LANDED if ok else A.UNKNOWN if ok is None else A.NOT_LANDED, via=via if ok else None)
 from golden_cases import check as _check  # noqa: E402
 
 DIGESTS = os.path.join(HERE, "fixtures", "restructure11-digests.json")
@@ -281,7 +286,7 @@ class ParkReleaseWhyTest(unittest.TestCase):
                 raise SystemExit(1)
             return rng.choice([None, {"state": "landed", "id": "c9"}, {"state": "open", "id": "c8"}])
         case.fake("change_chain_end", chain)
-        case.fake("change_landed", lambda rng, repo, commit: (rng.random() < 0.5, rng.choice([None, "", commit, "f" * 40])))
+        case.fake("change_state", lambda rng, repo, commit: change_state_of(rng.random() < 0.5, rng.choice([None, "", commit, "f" * 40])))
         return (a_mark(r, 0)[1], "/repo", "store", r.choice([None, 1_500_000.0, 5.0, 2_100_000.0]))
 
     def test_park_release_why(self):

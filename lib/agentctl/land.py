@@ -20,7 +20,7 @@ from agentctl.core import spawn_detached
 from agentctl.selfcode import TOOL_PATH
 from agentctl.core import SHORT, reds_dir
 from agentctl.forge import forge_env
-from agentctl.core import cherry_landed, git, git_ok, slug
+from agentctl.core import git, slug
 from agentctl.leases import LeaseHold, _landing
 
 
@@ -329,15 +329,6 @@ def push_argv(remote, src, dst: str = "main"):
     argv = ["git", "push", remote, f"{src}:refs/heads/{dst}"]
     assert not any(a in ("--no-verify", "-n", "--force", "-f") or a.startswith("--force") for a in argv)
     return argv
-
-
-def landed(repo, sha, main_ref):
-    if git_ok(repo, "merge-base", "--is-ancestor", sha, main_ref):
-        return "ancestor"
-    commits, left = cherry_landed(repo, main_ref, sha)
-    if commits and not left:
-        return "patch-equivalent"
-    return None
 
 
 # THE LANDING LOCK IS A LEASE (design §6, phase 1 step 3; the owner, 2026-10-28: a push hung on a dropped tunnel held

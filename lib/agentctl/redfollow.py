@@ -2,7 +2,8 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-from agentctl.core import cherry_landed, env_num, remote
+from agentctl.core import env_num, remote
+from agentctl.landstate import landed_state
 from agentctl.queueslots import ENTRY_STATUS
 from agentctl.fixchange import CHANGE_ENDED, red_change
 from agentctl.queuesubmit import entry_id_age
@@ -71,8 +72,8 @@ def _content_fix(f: dict[str, Any], ch: dict[str, Any], repo: Any, t: float) -> 
     head, base = cd.get("head"), cd.get("base")
     if not (repo and head):
         return None
-    commits, left = cherry_landed(repo, f"refs/remotes/{remote()}/main", head, *((base,) if base else ()))
-    if commits and left == []:
+    state = landed_state(repo, f"refs/remotes/{remote()}/main", head, after=base or None)
+    if state.how == "patch-equivalent":  # an ancestor is no fix of its own; unknown (git cannot compare) is none either
         return {"entry": f.get("entry"), "status": "landed", "sha": head, "at": t, "followed": f.get("entry"),
                 "by_content": True, "author": f.get("author")}
     return None

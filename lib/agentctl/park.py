@@ -13,7 +13,7 @@ from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.inboxentry import inbox_write
 from agentctl.conditions import recovery_dir
-from agentctl.queueclose import change_landed
+from agentctl.queueclose import change_state
 from agentctl.superseded import change_chain_end
 
 
@@ -66,9 +66,10 @@ def landed_change_why(store: Any, change: Any) -> Any:
 
 def landed_commit_why(repo: Any, commit: Any) -> Any:
     """Why the commit a parked mark waits on is met: it is on main (by content), else None."""
-    done, via = change_landed(repo, commit)
-    if not done:
+    state = change_state(repo, commit)
+    if not state.landed:  # not landed, or unknown (this clone cannot tell): the mark stands
         return None
+    via = state.via
     return f"its blocker {commit[:11]} is on main" + (f" ({via[:10]})" if via and via != commit else "")
 
 

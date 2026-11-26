@@ -47,8 +47,9 @@ class LandedByContentTest(RedBase):
         self.assertEqual(A.cherry_landed(wt, main, "HEAD"), ([sha], []))
         self.assertEqual(A.orphan_key(self.r.path, wt), ([], None))  # no UNLANDED ORPHAN
         self.assertEqual(A.unlanded_commits(wt), [])  # the fixers' view
-        self.assertEqual(A.change_landed(self.r.path, sha, [sha]), (True, twin))  # queue entries, change items, W1
-        self.assertEqual(A.landed(self.r.path, sha, main), "patch-equivalent")
+        st = A.change_state(self.r.path, sha, [sha])
+        self.assertEqual((st.state, st.via), (A.LANDED, twin))  # queue entries, change items, W1
+        self.assertEqual(A.landed_state(self.r.path, main, sha).how, "patch-equivalent")
         self.assertTrue(A.merged_reason(self.r.path, sha, main))
         self.assertEqual(A.equivalent_on(self.r.path, sha, main), twin)
 
@@ -58,8 +59,8 @@ class LandedByContentTest(RedBase):
         self.assertIsNone(A.content_twin(wt, sha, main))
         self.assertEqual(A.cherry_landed(wt, main, "HEAD"), ([sha], [sha]))
         self.assertEqual(A.orphan_key(self.r.path, wt)[0], [sha])
-        self.assertEqual(A.change_landed(self.r.path, sha, [sha]), (False, None))
-        self.assertIsNone(A.landed(self.r.path, sha, main))
+        self.assertEqual(A.change_state(self.r.path, sha, [sha]).state, A.NOT_LANDED)
+        self.assertFalse(A.landed_state(self.r.path, main, sha).landed)
 
     def test_changed_lines_leave_out_context_and_line_numbers(self):
         wt, sha, twin = self.drifted()

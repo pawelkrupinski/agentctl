@@ -79,8 +79,8 @@ class LandedByContentTest(OneQueueBase):
         self.entry("open-1", wt, head, status="queued")
         self.st.put_item("change", "far-1", "waiting", {"head": "1" * 40})
         self.assertEqual(A.close_landed_changes(self.r.path, A.Clock(), self.st, self.d), [])
-        self.assertEqual(A.change_landed(self.r.path, "1" * 40), (None, None))
-        self.assertEqual(A.change_landed(self.r.path, head), (False, None))
+        self.assertTrue(A.change_state(self.r.path, "1" * 40).unknown)
+        self.assertEqual(A.change_state(self.r.path, head).state, A.NOT_LANDED)
 
     def test_each_change_is_looked_at_once_per_interval(self):
         wt, head = self.change("later", "d\n")

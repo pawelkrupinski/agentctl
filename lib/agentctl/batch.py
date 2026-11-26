@@ -14,7 +14,6 @@ from agentctl.core import env_num, err, fmt_age, git, remote, spawn_detached
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, wlog
 from agentctl.storetoken import detached_env
-from agentctl.land import landed
 from agentctl.queueslots import CHECK_LEASE_TTL, check_tree, check_tree_slot, set_change
 from agentctl.conditions import open_condition, run_probe
 from agentctl.queue import VERIFY_MODE, forces_full_recheck, range_paths, verify_supported

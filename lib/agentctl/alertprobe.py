@@ -4,7 +4,8 @@
 from typing import Any, Callable
 import os
 import re
-from agentctl.core import cherry_landed, env_num, remote
+from agentctl.core import env_num, remote
+from agentctl.landstate import landed_state
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record
 from agentctl.inboxentry import CONDITION_KINDS
@@ -204,8 +205,8 @@ class AlertClearing:
         if self.t - float(probed.get(self.item) or 0) < env_num("AGENTCTL_ALERT_ORPHAN_PROBE", ALERT_ORPHAN_PROBE_EVERY):
             return None
         probed[self.item] = self.t
-        commits, left = cherry_landed(wt, f"refs/remotes/{remote()}/main", "HEAD")
-        return "its commits are on main" if commits is not None and not left else None
+        state = landed_state(wt, f"refs/remotes/{remote()}/main", "HEAD")
+        return "its commits are on main" if state.landed else None  # unknown (git cannot compare): not resolved
 
     def applies_watch(self) -> bool:
         return self.verdict.startswith("WATCH UNKNOWN") or self.item.startswith("watch:")

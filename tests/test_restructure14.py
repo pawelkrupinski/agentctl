@@ -6,6 +6,11 @@ import contextlib, io, os, sys, types, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+
+
+def change_state_of(ok, via=None):
+    """The LandState a drawn (landed, via) stands for: True landed, None unknown, any other falsy not landed."""
+    return A.LandState(A.LANDED if ok else A.UNKNOWN if ok is None else A.NOT_LANDED, via=via if ok else None)
 from golden_cases import Probe, check as _check  # noqa: E402
 
 DIGESTS = os.path.join(HERE, "fixtures", "restructure14-digests.json")
@@ -167,7 +172,7 @@ class CloseLandedChangesTest(unittest.TestCase):
                     "head": f"h{i}", "commits": r.choice([None, ["c"]])} for i in range(r.randint(0, 4))]
         case.fake("waiting_entries", lambda rng, d, open_only=True: entries)
         items = [{"id": r.choice([f"e{i}", f"i{i}"]), "state": r.choice(STATES), "data": r.choice([None, {"head": f"h{i}"}, {}])} for i in range(r.randint(0, 5))]
-        case.fake("change_landed", lambda rng, repo, head, commits=None: (rng.choice([True, False, None, 0]), rng.choice([None, "via1"])))
+        case.fake("change_state", lambda rng, repo, head, commits=None: change_state_of(rng.choice([True, False, None, 0]), rng.choice([None, "via1"])))
         case.fake("landed_look_due", lambda rng, cid, t: rng.random() < 0.7)
         case.fake("already_landed", lambda rng, st, d, e, via: None)
         case.fake("close_item_landed", lambda rng, st, cid, why, via=None: rng.random() < 0.6)
@@ -241,7 +246,7 @@ class MigrateLocalQueueTest(unittest.TestCase):
         entries = [{"id": f"e{i}", "status": r.choice(["waiting", "waiting", "landed", "queued"]), "head": f"h{i}", "worktree": r.choice([None, "/wt"]),
                     "migrate_told_at": r.choice([None, NOW - 10, NOW - 10 ** 5, NOW - 3600])} for i in range(r.randint(0, 4))]
         case.fake("waiting_entries", lambda rng, d, open_only=True: entries)
-        case.fake("change_landed", lambda rng, repo, head, commits=None: (rng.choice([True, False, None]), "via1"))
+        case.fake("change_state", lambda rng, repo, head, commits=None: change_state_of(rng.choice([True, False, None]), "via1"))
         case.fake("ts", lambda rng: "T")
         case.fake("save_entry", lambda rng, d, e: None)
         case.fake("close_item_landed", lambda rng, st, cid, why, via=None: True)

@@ -10,13 +10,13 @@ from agentctl.timefmt import ts
 from agentctl.statefile import read_record
 from agentctl.statemachines import StaleVersion, TerminalState, machine_state
 from agentctl.clock import Clock
-from agentctl.core import cherry_landed, env_num, fmt_age, git, git_ok, host_role, process_cache, remote
+from agentctl.landstate import UNKNOWN, LandState, landed_state
+from agentctl.core import env_num, fmt_age, git, git_ok, host_role, process_cache, remote
 from agentctl.repos import movies_repo_path, precheck_hook, waiting_supported
 from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries, waiting_state, wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_write
 from agentctl.clones import clone_shared
-from agentctl.patches import equivalent_on
 from agentctl.queueslots import check_tree_slot, checker_lease, entry_owned, set_change
 from agentctl.conditions import open_condition, run_probe
 from agentctl.queue import VERIFY_MODE
@@ -44,22 +44,13 @@ LANDED_LOOK_EVERY = 600
 _landed_looked = process_cache({})
 
 
-def change_landed(repo, head, commits = None):
-    """(landed, via): landed True when the change at head is on main by content (head an ancestor, or every commit of it
-    patch-equivalent there or with a content twin, cherry_landed), False when not, None when this clone cannot tell (head unknown here); via the main commit
-    carrying its last commit, when known."""
-    main = f"refs/remotes/{remote()}/main"
-    if not head or not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
-        return None, None
-    if git_ok(repo, "merge-base", "--is-ancestor", head, main):
-        return True, head
-    limit = [f"{commits[0]}^"] if commits and git_ok(repo, "cat-file", "-e", f"{commits[0]}^^{{commit}}") else []
-    commits, left = cherry_landed(repo, main, head, *limit)
-    if commits is None:
-        return None, None
-    if not commits or left:
-        return False, None
-    return True, equivalent_on(repo, head, main)
+def change_state(repo, head, commits = None):
+    """The LandState of the change at head against origin's main: its commits (the entry's, when it lists them) count
+    from the first one's parent, and `via` is the main commit carrying it. A change without a head is UNKNOWN."""
+    if not head:
+        return LandState(UNKNOWN)
+    after = f"{commits[0]}^" if commits and git_ok(repo, "cat-file", "-e", f"{commits[0]}^^{{commit}}") else None
+    return landed_state(repo, f"refs/remotes/{remote()}/main", head, after=after, with_via=True)
 
 
 def landed_look_due(cid, t) -> bool:
@@ -91,9 +82,9 @@ def _close_landed_entries(repo: Any, st: Any, d: Any, t: Any, did: list[str]) ->
         if e.get("status") in ENTRY_FINAL or e.get("status") == "pushing":
             continue
         carried.add(e["id"])
-        landed, via = change_landed(repo, e.get("head"), e.get("commits")) if landed_look_due(e["id"], t) else (0, 0)
-        if landed:
-            already_landed(st, d, e, via)
+        state = change_state(repo, e.get("head"), e.get("commits")) if landed_look_due(e["id"], t) else None
+        if state and state.landed:  # unknown (this clone lacks the head): stays open, looked at again next interval
+            already_landed(st, d, e, state.via)
             did.append(f"{e['id']}: its commits are on main (by content): landed")
             carried.discard(e["id"])
     return carried
@@ -110,8 +101,8 @@ def close_landed_changes(repo: Any, clock: Any, store: Any, d: Any = None) -> An
             continue
         if not landed_look_due(it["id"], t):
             continue
-        landed, via = change_landed(repo, (it.get("data") or {}).get("head"))
-        if landed and close_item_landed(st, it["id"], "its commits are on main (by content)", via):
+        state = change_state(repo, (it.get("data") or {}).get("head"))
+        if state.landed and close_item_landed(st, it["id"], "its commits are on main (by content)", state.via):
             did.append(f"{it['id']}: its commits are on main (by content): landed")
     return did
 
@@ -188,9 +179,9 @@ def migrate_local_queue(repo: Any, store: Any) -> Any:
     for e in waiting_entries(d, open_only=False):
         if e.get("status") in ENTRY_FINAL:
             continue
-        landed, via = change_landed(repo, e.get("head"), e.get("commits"))
-        if landed:
-            did.append(_migrate_landed(store, d, e, via))
+        state = change_state(repo, e.get("head"), e.get("commits"))
+        if state.landed:  # unknown: migrated to ci-runner's queue like an unlanded one, which decides there
+            did.append(_migrate_landed(store, d, e, state.via))
             continue
         why = _migration_failure(repo, store, d, e)
         if why is None:

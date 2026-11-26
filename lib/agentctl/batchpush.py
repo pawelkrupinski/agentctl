@@ -9,7 +9,8 @@ from agentctl.repos import precheck_hook
 from agentctl.waitingdir import waiting_state, wlog
 from agentctl.gating import mark_gate_dirty
 from agentctl.leases import lock_note
-from agentctl.land import RACE, REDGATE, land_lock_if_free, landed, push_argv, push_bounds, run_watched, tool_env
+from agentctl.landstate import landed_state
+from agentctl.land import RACE, REDGATE, land_lock_if_free, push_argv, push_bounds, run_watched, tool_env
 from agentctl.owned import Owned, lock_held
 from agentctl.queueslots import queue_verdict, set_change, tree_slot
 from agentctl.queue import hook_query, range_paths
@@ -139,7 +140,7 @@ class BatchPush:
         with open(os.path.join(self.d, "checks.log"), "a") as f:
             f.write(f"=== push {ts()} {self.tip[:10]} rc {rc}\n{out}\n")
         git(self.repo, "fetch", "--quiet", remote(), "main", check=False)
-        if landed(self.repo, self.tip, f"refs/remotes/{remote()}/main"):
+        if landed_state(self.repo, f"refs/remotes/{remote()}/main", self.tip).landed:  # unknown: the push's rc decides below
             return None
         if rc is not None and REDGATE.search(out or ""):
             self.say("assembling", "the gate went red before the push")

@@ -22,8 +22,9 @@ from agentctl.waitingdir import save_entry, waiting_entries, waiting_state
 from agentctl.lander import commit_keys, lander_note_direct
 from agentctl.gating import mark_gate_dirty
 from agentctl.leases import lock_note
+from agentctl.landstate import landed_state
 from agentctl.land import (
-    LAND_PRECHECK_ROUNDS, LAND_RETRIES, RACE, REDGATE, land_lock, landed, push_argv, push_bounds, run_watched,
+    LAND_PRECHECK_ROUNDS, LAND_RETRIES, RACE, REDGATE, land_lock, push_argv, push_bounds, run_watched,
     tool_env)
 from agentctl.worktrees import WorktreeGuard
 from agentctl.queuerecheck import queue_mode
@@ -318,12 +319,13 @@ def proven_push(repo, head, main_ref, log_path, a, store):
               f"it -- the network's ({(f.stderr or f.stdout).strip()[-160:]}), not the change's; `git fetch "
               f"{remote()} main` later shows it; see {log_path}", flush=True)
         return 2
-    how = landed(repo, head, main_ref)
-    if how:
-        print(f"LANDED {head}" + ("" if how == "ancestor" else f" ({how})"), flush=True)
+    state = landed_state(repo, main_ref, head)
+    if state.landed:
+        print(f"LANDED {head}" + ("" if state.how == "ancestor" else f" ({state.how})"), flush=True)
         a.landed_sha = head
         lander_note_direct(store, repo, head, getattr(a, "lander_keys", None))
         return 0
+    # unknown (git cannot compare) reads as not landed here: the push's own rc is no proof, and the entry stays for a look
     print(f"NOT LANDED: the push exited 0 but {head[:10]} is not on {remote()}/main after a fetch; see {log_path}")
     return 1
 

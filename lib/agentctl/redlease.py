@@ -4,7 +4,8 @@
 import os
 import re
 from typing import Any
-from agentctl.core import cherry_landed, env_num, remote
+from agentctl.core import env_num, remote
+from agentctl.landstate import landed_state
 from agentctl.repos import RED_PRIMARY
 from agentctl.claudefiles import claude_limit, claude_limit_reset
 from agentctl.allowedpaths import allowed_path
@@ -123,7 +124,8 @@ class LeaseEnd:
         """Its unlanded commits are never lost: the next fixer starts in the worktree that has them."""
         if not (wt and os.path.isdir(wt) and allowed_path(wt)):
             return None
-        left = [c[:10] for c in cherry_landed(wt, f"refs/remotes/{remote()}/main", "HEAD")[1] or []]
+        state = landed_state(wt, f"refs/remotes/{remote()}/main", "HEAD")
+        left = [c[:10] for c in state.left]  # unknown (git cannot compare): no prior work is claimed
         return {"worktree": wt, "commits": left[:20]} if left else None
 
     def hold_fix_pending(self, why: str, line: str, data: dict[str, Any]) -> None:

@@ -10,15 +10,15 @@ import time
 from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import (
-    MAX_FOREIGN, NO_SIGN, branch_of, cherry_landed, env_num, err, fmt_age, git, git_ok, host_role, process_cache,
-    remote, scratch)
+    MAX_FOREIGN, NO_SIGN, branch_of, env_num, err, fmt_age, git, git_ok, host_role, process_cache, remote, scratch)
 from agentctl.policy import policy_blocks
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.waitingdir import waiting_state
 from agentctl.storetoken import no_vault
 from agentctl.lander import commit_keys, lander_record
 from agentctl.inboxentry import inbox_write
-from agentctl.land import landed, run_watched, tool_env
+from agentctl.land import run_watched, tool_env
+from agentctl.landstate import landed_state
 from agentctl.worktrees import WorktreeGuard
 from agentctl.conflicts import conflict_resolve
 from agentctl.redfixes import fixes_of
@@ -211,8 +211,9 @@ def decided_while_away(repo: Any, main_ref: Any, head: Any, it: Any, store: Any)
 def enqueue_until_done(repo: Any, main_ref: Any, sh: Any, a: Any, clock: Any, store: Any) -> Any:
     """(None, rc) when the change needs no queue entry or none could be made, else (its new entry's id, None)."""
     git(repo, "fetch", "--quiet", remote(), "main", check=False)
-    commits, left = cherry_landed(repo, main_ref, "HEAD")
-    if commits is not None and not left and git_ok(repo, "rev-parse", "--verify", "-q", main_ref):
+    state = landed_state(repo, main_ref, "HEAD")
+    # nothing of its own left; unknown (git cannot compare) is no proof of that: the change is queued, the queue judges
+    if state.landed and git_ok(repo, "rev-parse", "--verify", "-q", main_ref):
         # nothing of its own left to land (it reached main another way, or there never was a commit)
         return None, until_done_finish(repo, "-", git(repo, "rev-parse", main_ref).strip(), a)
     a.until_done = True
@@ -351,7 +352,7 @@ def sync_onto_main(repo, main_ref, sh, clock, store, release_hold=False):
         print(failed)
         return 1, None
     head = git(repo, "rev-parse", "HEAD").strip()
-    if landed(repo, head, main_ref):
+    if landed_state(repo, main_ref, head).landed:  # unknown (cannot compare): not proven, so land goes on
         print(f"LANDED {head} (already on {remote()}/main)")
         return 0, None
     failed = landing_refusal(repo, head, store, release_hold) or rebase_onto_main(repo, sh)
@@ -359,7 +360,7 @@ def sync_onto_main(repo, main_ref, sh, clock, store, release_hold=False):
         print(failed)
         return 1, None
     head = git(repo, "rev-parse", "HEAD").strip()
-    if landed(repo, head, main_ref):
+    if landed_state(repo, main_ref, head).landed:
         print(f"LANDED {head} (the rebase left nothing: already on {remote()}/main)")
         return 0, None
     head = land_before_queue(repo, head)

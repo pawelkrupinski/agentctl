@@ -52,6 +52,8 @@ def red_owner_push(store: Any, o_r: Any, target: Any, note: Any = "", wt: Any = 
         return refusal
     git(wt, "fetch", "--quiet", remote(), "main", check=False)
     ahead = unlanded_commits(wt)
+    if ahead is None:
+        return 1, [f"NOT FILED: git cannot compare {tilde(wt)} with {remote()}/main: fetch, then file again"]
     if not ahead:
         return 1, [f"NOT FILED: nothing in {tilde(wt)} that is not on {remote()}/main"]
     items = red_targets(store, o_r, target, create=False)
