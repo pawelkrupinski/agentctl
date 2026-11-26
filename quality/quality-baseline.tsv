@@ -73,9 +73,7 @@ cognitive	run_verdict	20
 cognitive	session_worktrees	25
 cognitive	set_change	16
 cognitive	spotlight_exclude	19
-cognitive	status_agents	29
 cognitive	status_page_start	15
-cognitive	status_worktree	15
 cognitive	sweep_land_refs	20
 cognitive	sync_onto_main	18
 cognitive	sync_steps	11
@@ -167,9 +165,7 @@ cyclomatic	run_verdict	26
 cyclomatic	session_worktrees	18
 cyclomatic	set_change	18
 cyclomatic	spotlight_exclude	15
-cyclomatic	status_agents	26
 cyclomatic	status_page_start	11
-cyclomatic	status_worktree	17
 cyclomatic	sweep_land_refs	17
 cyclomatic	sync_onto_main	16
 cyclomatic	token	16
