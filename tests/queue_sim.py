@@ -876,7 +876,7 @@ class Sim:
         A.code_version = lambda path=None: "sim"
         parsed = {}
 
-        def waiting_entries(d, waiting_only=True):
+        def waiting_entries(d, open_only=True):
             """waiting.py's, each entry file parsed once per version on disk (its mtime and size): most of a seed's time
             was these reads."""
             out = []
@@ -897,7 +897,7 @@ class Sim:
                         e = json.loads(hit[1])
                     except ValueError:
                         continue
-                    if not waiting_only or e.get("status") == "waiting":
+                    if not open_only or e.get("status") == "waiting":
                         out.append(e)
             return sorted(out, key=lambda e: e["seq"])
         A.waiting_entries = waiting_entries
@@ -1193,7 +1193,7 @@ class Sim:
         if self.tick >= self.drain_from and self.reds and self.red_clears_at is None:
             self.red_clears_at = self.tick + 1  # the drain: the gate goes green
         if self.tick >= self.drain_from:  # and every red outside it no open fix is on its way for clears (a later run)
-            named = {str(f) for e in A.waiting_entries(self.d, waiting_only=False) if e.get("status") not in A.ENTRY_FINAL
+            named = {str(f) for e in A.waiting_entries(self.d, open_only=False) if e.get("status") not in A.ENTRY_FINAL
                      for f in e.get("fixes") or []}
             for name in set(self.outside) - named:
                 self.outside_clears.setdefault(name, self.tick + 1)
@@ -1246,7 +1246,7 @@ class Sim:
                 t.step()
         before = {e["id"]: dict(e) for e in A.queued_entries(self.d)}
         self.open_before = set(self.reds) | set(self.outside)
-        self.known_entries = {e["id"] for e in A.waiting_entries(self.d, waiting_only=False)}
+        self.known_entries = {e["id"] for e in A.waiting_entries(self.d, open_only=False)}
         reds = set(self.reds)
         A.project_changes(self.d, self.store)
         A.close_landed_changes(self.repo, self.sim_clock, self.store, self.d)
@@ -1298,7 +1298,7 @@ class Sim:
         return self
 
     def quiet(self):
-        return not self.reds and not self.outside and not [e for e in A.waiting_entries(self.d, waiting_only=False)
+        return not self.reds and not self.outside and not [e for e in A.waiting_entries(self.d, open_only=False)
                                       if e.get("status") not in A.ENTRY_FINAL] and not self.arrivals
 
     # ---------------------------------------------------------------- the invariants
@@ -1319,7 +1319,7 @@ class Sim:
         # 2. NEVER TWO PUSHES OF ONE CHANGE: forge_push (a patch twice on main)
         # 3. A RED FIX IS NEVER BEHIND A BATCH OR A NON-RED CHANGE -- (a) a fix of ANY open red, the gate's or one
         # outside it (08010c): its KIND, as the queue classifies it (changekind.py)
-        entries = {e["id"]: e for e in A.waiting_entries(self.d, waiting_only=False)}
+        entries = {e["id"]: e for e in A.waiting_entries(self.d, open_only=False)}
         redfix_holder = A.lease_live(f"slot/check/{os.path.basename(self.d.rstrip('/'))}/{A.RED_FIX_TREE}", self.store)
         # the simulation's own truth, never the classifier under test: its Fixes-Red names a red open before and after
         # this tick (the gate's episode, or one outside the gate)

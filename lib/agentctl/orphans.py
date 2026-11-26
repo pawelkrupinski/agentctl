@@ -114,7 +114,7 @@ def queued_worktrees(repo: str) -> set[str]:
     """The worktrees of the changes in the land queue (queued, checking, waiting): none of them is orphaned."""
     with suppress(Exception, SystemExit):
         d, _c, _w = waiting_state(repo)
-        return {os.path.realpath(e.get("worktree") or "") for e in waiting_entries(d, waiting_only=False)
+        return {os.path.realpath(e.get("worktree") or "") for e in waiting_entries(d, open_only=False)
                 if e.get("status") in ("queued", "checking", "waiting")}
     return set()
 

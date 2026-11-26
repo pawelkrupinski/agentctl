@@ -181,7 +181,7 @@ def failed_gate_runs(o_r: str) -> list[tuple[str, Entry]]:
 def queue_failure_keys(d: str, e: Entry, base: str, now: float) -> dict[str, str]:
     """{key: where} of the other changes' (another head's) failed checks on this base in the last day."""
     out: dict[str, str] = {}
-    for o in waiting_entries(d, waiting_only=False):
+    for o in waiting_entries(d, open_only=False):
         for k in other_failure_on(o, e, base, now):
             out.setdefault(k, f"change {o['id']} on the same main")
     return out

@@ -149,7 +149,7 @@ def land_status_tail(d: str, rows: list[dict[str, Any]]) -> None:
         print(f"stall at green: {prog['ticks']} tick(s): {prog.get('why')}")
     if not rows:
         print("  (no change queued or waiting)")
-    local = [e for e in waiting_entries(d, waiting_only=False) if e.get("status") not in ENTRY_FINAL]
+    local = [e for e in waiting_entries(d, open_only=False) if e.get("status") not in ENTRY_FINAL]
     if host_role() == "sync" and local:
         print(f"LOCAL QUEUE: {len(local)} entr(ies) in {d}, which nothing runs; the sync moves them to ci-runner's "
               f"queue: {', '.join(e['id'] for e in local)}")

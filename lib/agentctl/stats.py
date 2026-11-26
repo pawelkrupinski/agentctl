@@ -125,7 +125,7 @@ class StatsPass:
             self.since = self.t
             st.meta_set("stats_since", self.since)
         self.deadline = clock.monotonic() + knob_stats_pass_bound()
-        self.entries = {e["id"]: e for e in waiting_entries(d, waiting_only=False)} if d else {}
+        self.entries = {e["id"]: e for e in waiting_entries(d, open_only=False)} if d else {}
         self.waits: Any = None
         self.by_sha: dict[Any, Any] = {}
         self.changes: list[Any] = []

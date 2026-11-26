@@ -40,7 +40,7 @@ def project_changes(d, store):
     status moved. Returns the items."""
     st = store
     out = []
-    every = {x["id"]: x for x in waiting_entries(d, waiting_only=False)}
+    every = {x["id"]: x for x in waiting_entries(d, open_only=False)}
     for e in every.values():
         state, w = _entry_change_state(e, every)
         if not state:

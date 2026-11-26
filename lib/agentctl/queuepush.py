@@ -82,7 +82,7 @@ def _tick_changes(repo: str, d: str, clock: Any, st: Any) -> list[str]:
         newest[e["id"]] = e
     runs = [e for e in todo if e["id"] in newest]
     did = break_hold_cycles(st, d, runs)  # A HOLD CYCLE IS BROKEN (holdgraph.py)
-    stacks = stack_map(todo, waiting_entries(d, waiting_only=False))  # A STACKED CHANGE WAITS FOR ITS PARENT
+    stacks = stack_map(todo, waiting_entries(d, open_only=False))  # A STACKED CHANGE WAITS FOR ITS PARENT
     # PUSHES FIRST, THEN THE HOLDS (queue simulator, 2026-11-18): the holds below were read before this tick's pushes,
     # and a checked change's push due holds every backlog batch back (backlog_candidates) -- so the tree a finished
     # check had just freed went to the oldest lone check, never to the batch: under load (every tree busy, a tree

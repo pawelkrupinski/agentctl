@@ -170,7 +170,7 @@ class CloseLandedChangesTest(unittest.TestCase):
         r = case.rng
         entries = [{"id": f"e{i}", "status": r.choice(["waiting", "checking", "pushing", "landed", "rejected", "queued"]),
                     "head": f"h{i}", "commits": r.choice([None, ["c"]])} for i in range(r.randint(0, 4))]
-        case.fake("waiting_entries", lambda rng, d, waiting_only=True: entries)
+        case.fake("waiting_entries", lambda rng, d, open_only=True: entries)
         items = [{"id": r.choice([f"e{i}", f"i{i}"]), "state": r.choice(STATES), "data": r.choice([None, {"head": f"h{i}"}, {}])} for i in range(r.randint(0, 5))]
         case.fake("change_state", lambda rng, repo, head, commits=None: change_state_of(rng.choice([True, False, None, 0]), rng.choice([None, "via1"])))
         case.fake("landed_look_due", lambda rng, cid, t: rng.random() < 0.7)
@@ -245,7 +245,7 @@ class MigrateLocalQueueTest(unittest.TestCase):
         case.fake("waiting_state", lambda rng, repo: ("/d", 1, 2))
         entries = [{"id": f"e{i}", "status": r.choice(["waiting", "waiting", "landed", "queued"]), "head": f"h{i}", "worktree": r.choice([None, "/wt"]),
                     "migrate_told_at": r.choice([None, NOW - 10, NOW - 10 ** 5, NOW - 3600])} for i in range(r.randint(0, 4))]
-        case.fake("waiting_entries", lambda rng, d, waiting_only=True: entries)
+        case.fake("waiting_entries", lambda rng, d, open_only=True: entries)
         case.fake("change_state", lambda rng, repo, head, commits=None: change_state_of(rng.choice([True, False, None]), "via1"))
         case.fake("ts", lambda rng: "T")
         case.fake("save_entry", lambda rng, d, e: None)

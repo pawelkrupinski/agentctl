@@ -102,7 +102,7 @@ class SweepLandRefsTest(unittest.TestCase):
         case.fake("remote", lambda rng: "origin")
         case.fake("env_num", lambda rng, name, default: rng.choice([default, 5, 100000]))
         case.fake("entry_id_age", lambda rng, eid, t: rng.choice([None, 10, 10 ** 6]))
-        case.fake("waiting_entries", lambda rng, d, waiting_only=True: [{"id": r.choice(ids), "status": r.choice(["queued", "final", "landed"])}
+        case.fake("waiting_entries", lambda rng, d, open_only=True: [{"id": r.choice(ids), "status": r.choice(["queued", "final", "landed"])}
                                                                       for _ in range(r.randint(0, 3))])
         case.put("ENTRY_FINAL", ("final", "landed"))
         case.fake("machine_state", lambda rng, m, s: NS(terminal=s in ("landed", "dead")))

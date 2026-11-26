@@ -92,7 +92,7 @@ class WaitingTest(Base):
 
     def entries(self):
         d, _c, _w = A.waiting_state(self.r.path)
-        return {e["id"].rsplit("-", 1)[-1]: e for e in A.waiting_entries(d, waiting_only=False)}
+        return {e["id"].rsplit("-", 1)[-1]: e for e in A.waiting_entries(d, open_only=False)}
 
     def drive(self, n=10):
         """The batch to rest, as the processor's ticks drive it, its executors run in-process (step 8). ONE CLOCK: the

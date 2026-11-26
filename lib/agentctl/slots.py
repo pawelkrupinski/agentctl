@@ -447,7 +447,7 @@ def join(st, repo, log_path, a, head):
     branch = branch_of(repo)
     with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a seq of its own, beside a land queueing meanwhile
         fcntl.flock(seq_lock, fcntl.LOCK_EX)
-        seq = max([e["seq"] for e in waiting_entries(d, waiting_only=False)] + [0]) + 1
+        seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
         eid = f"{stamp('entry')}-{os.path.basename(repo)}-{seq}"
         supersede_older_waiting(st, d, repo, branch, eid)
         e = {"id": eid, "seq": seq, "worktree": repo, "branch": branch, "head": head, "commits": commits,

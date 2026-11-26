@@ -179,7 +179,7 @@ def joined_changes(d, w, st):
     """The queued changes that joined waiting entry w and are still open: entries from before ONE CHANGE, ONE ITEM
     (queue_join), when a queued change meeting a red gate became a waiting entry of its own, the queued one `joined`."""
     out = []
-    for q in waiting_entries(d, waiting_only=False):
+    for q in waiting_entries(d, open_only=False):
         if q.get("status") == "joined" and q.get("waiting_id") == w["id"] and q["id"] != w["id"]:
             it = st.item("change", q["id"])
             if it and not machine_state("change", it["state"]).terminal:

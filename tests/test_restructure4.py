@@ -86,7 +86,7 @@ class StatsPassTest(unittest.TestCase):
         for name, gen in (
                 ("stats_url", lambda rng: maybe(rng, "http://u", 0.85)),
                 ("env_num", lambda rng, name, default: rng.choice([1, 3, 20, 900]) if "SETTLE" in name else rng.choice([2, 4, 150]) if "PER_PASS" in name else rng.choice([5, 40])),
-                ("waiting_entries", lambda rng, d, waiting_only=True: [{"id": f"i{rng.randint(0, 3)}"} for _ in range(rng.randint(0, 2))]),
+                ("waiting_entries", lambda rng, d, open_only=True: [{"id": f"i{rng.randint(0, 3)}"} for _ in range(rng.randint(0, 2))]),
                 ("item_events", lambda rng, st, typ, iid: [{"to_state": "x"}]),
                 ("check_runs_of", lambda rng, *a: raising(rng, 0.2, [{"run_id": rng.randint(0, 2)}])),
                 ("change_paths", lambda rng, *a: ["p"]),
@@ -281,7 +281,7 @@ class RedFixesTest(unittest.TestCase):
                     raise SystemExit("no token")
                 return ("d", "c", "w")
             case.fake("waiting_state", state)
-            case.fake("waiting_entries", lambda rng, d, waiting_only=True: entries)
+            case.fake("waiting_entries", lambda rng, d, open_only=True: entries)
             case.fake("entry_fixes", lambda rng, repo, e, store: rng.choice([[], ["1"], ["2", "3"]]))
             case.fake("red_unrelated", lambda rng, repo, e: rng.random() < 0.3)
             case.fake("landed_fix_commits", lambda rng, store, repo: raising(rng, 0.15, [("sx", 5.0, {"1"}, "s")] * rng.randint(0, 2)))

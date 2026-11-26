@@ -119,7 +119,7 @@ def push_credential_condition(st: Any, d: str, why: str, detail: str | None, rep
     re-queue and naming every change it holds, cleared by the next push that succeeds (probe_push_credential) -- not an
     "infra failure" retried on a timer per change (2026-11-22: four changes held for hours by a dead helper)."""
     repo = repo or repo_of_waiting(d)
-    held = credential_held(waiting_entries(d, waiting_only=False))
+    held = credential_held(waiting_entries(d, open_only=False))
     text = (f"PUSH CREDENTIAL: GitHub refused {host_role()}'s push credential for {os.path.basename(repo)}; "
             f"{len(held)} change(s) wait on it ({', '.join(held[:6])}). Not the vault's and not the changes': "
             f"Its credential helper there must work again (the App helper on ci-runner, gh's login on the laptop). "
@@ -143,7 +143,7 @@ def probe_push_credential(a: dict[str, Any]) -> tuple[bool | None, str]:
     another host's clone and helper say nothing about it, so there it cannot tell."""
     if a.get("host") != host_role():
         return None, f"read on {a.get('host')} only, where the push failed"
-    entries = waiting_entries(a["d"], waiting_only=False)
+    entries = waiting_entries(a["d"], open_only=False)
     pushed = max((float((x.get("remote") or {}).get("pushed_at") or 0) for x in entries), default=0.0)
     if pushed > float(a.get("since") or 0):
         return True, f"a check-branch push succeeded at {iso_at(pushed)}"

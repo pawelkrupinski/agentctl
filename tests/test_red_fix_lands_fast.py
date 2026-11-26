@@ -52,7 +52,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
 
     def only_entry_id(self):
         d, _c, _w = A.waiting_state(self.r.path)
-        es = A.waiting_entries(d, waiting_only=False)
+        es = A.waiting_entries(d, open_only=False)
         self.assertEqual(len(es), 1, es)
         return es[0]["id"]
 
@@ -60,7 +60,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         """The processor, run whenever the fixer's await sleeps: the queued change's checks, then its push."""
         def sleep(_s):
             d, _c, _w = A.waiting_state(self.r.path)
-            for e in A.waiting_entries(d, waiting_only=False):
+            for e in A.waiting_entries(d, open_only=False):
                 if e["status"] in ("queued", "checking"):
                     A.check_entry(self.r.path, e["id"], *on_clock(self.clock))
                 elif e["status"] == "checked":

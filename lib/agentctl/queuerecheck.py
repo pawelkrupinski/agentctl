@@ -358,7 +358,7 @@ def same_change_source(e, worktree, branch):
 
 
 def queued_entries(d: str) -> list[dict[str, Any]]:
-    return [e for e in waiting_entries(d, waiting_only=False) if e.get("status") in ("queued", "checking", "checked", "pushing")]
+    return [e for e in waiting_entries(d, open_only=False) if e.get("status") in ("queued", "checking", "checked", "pushing")]
 
 
 def queue_mode(repo, a):

@@ -155,6 +155,7 @@ FANOUT = re.compile(r"xargs\b[^|;]*\s-P\s*\d|ProcessPoolExecutor|ThreadPoolExecu
 GOVERNED = re.compile(r"\bgoverned\(")
 ALLOWED = {
     "lib/agentctl/govpool.py": "the governed fan-out itself",
+    "devtools/design_rules/python_facts.py": "the movies rule core's table of effect names (a `concurrent.futures` string), no pool",
     "tests/test_govpool.py": "this guard: its patterns and seeded cases",
     "tests/test_seq_atomic.py": "four threads racing one store counter: a race under test, no CPU fan-out",
     "tests/test_state_files.py": "four threads racing one state file's write: a race under test, no CPU fan-out",

@@ -48,7 +48,7 @@ def landed_heads(repo):
     out = {}
     try:
         d, _c, _w = waiting_state(repo)
-        for e in waiting_entries(d, waiting_only=False):
+        for e in waiting_entries(d, open_only=False):
             if e.get("landed_sha"):
                 out[e["landed_sha"]] = {"worktree": e.get("worktree"), "session": e.get("session")}
     except (Exception, SystemExit) as e:

@@ -70,7 +70,7 @@ def watchdog_unheld(st, entries=None, now_=None):
     if entries is None:
         try:
             d, _c, _w = waiting_state(movies_repo_path())
-            entries = {e["id"]: e for e in waiting_entries(d, waiting_only=False)}
+            entries = {e["id"]: e for e in waiting_entries(d, open_only=False)}
         except (Exception, SystemExit):
             entries = {}
     return [f"{it['id']} ({it['state']}, past its deadline, nothing recorded holding it): agentctl issue "

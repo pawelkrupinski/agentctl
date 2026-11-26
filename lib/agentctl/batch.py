@@ -48,7 +48,7 @@ def backlog_reconcile(d, st):
     batch assembled again, held or gone) is queued again for the next batch (a push batch's: for its verify round, its
     full check kept). Returns what it did."""
     did = []
-    for e in waiting_entries(d, waiting_only=False):
+    for e in waiting_entries(d, open_only=False):
         bid = e.get("backlog_batch")
         if not bid or e.get("status") in ENTRY_FINAL:
             continue

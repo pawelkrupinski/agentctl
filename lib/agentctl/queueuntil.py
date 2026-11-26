@@ -29,7 +29,7 @@ def _unitemed_entries(repo: Any, known: Any, ours: Any) -> Any:
     """This host's queue entries that `ours` claims and no change item (`known`: their ids) holds yet, as items."""
     d = attempt(lambda: waiting_state(repo)[0], None, catch=(RuntimeError,))
     return [{"id": e["id"], "state": ENTRY_STATE[e["status"]], "data": e, "entered_at": e.get("seq") or 0}
-            for e in (waiting_entries(d, waiting_only=False) if d else [])
+            for e in (waiting_entries(d, open_only=False) if d else [])
             if e["id"] not in known and ours(e) and e.get("status") in ENTRY_STATE]
 
 

@@ -103,7 +103,7 @@ def sweep_land_refs(repo, d, store, now_=None):
     r = git(repo, "ls-remote", "--heads", remote(), "refs/heads/land/*", check=False)
     if r.returncode != 0:
         return []
-    every = {e["id"]: e for e in waiting_entries(d, waiting_only=False)}
+    every = {e["id"]: e for e in waiting_entries(d, open_only=False)}
     items = _change_items(store)
     if items is None:
         return []
