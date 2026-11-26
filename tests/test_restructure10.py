@@ -208,5 +208,52 @@ class WithInboxTest(unittest.TestCase):
         check(self, "with_inbox", lambda case: (self.build(case),), run, 5000)
 
 
+# ------------------------------------------------------------------------------------------------ waiting
+class ApplyEntryTest(unittest.TestCase):
+    def build(self, case):
+        r = case.rng
+        commits = [f"c{i}" * 6 for i in range(r.randint(0, 4))]
+        e = {"id": "e1", "commits": list(commits)}
+        for key, value in (("autoresolved", ["old"]), ("regenerated", ["old"]), ("provisional", ["old"]), ("dropped", [["x", "y"]])):
+            if r.random() < 0.25:
+                e[key] = value
+        autoresolve = r.choice([False, True, True])
+        via = lambda rng: rng.choice([None, "v1" * 6, "v2" * 6, "v3" * 6])
+
+        def pick(rng, wt, cs, dropped, regen, regenerated, provisional, resolved):
+            for c in cs:
+                if rng.random() < 0.3:
+                    dropped.append((c, via(rng)))
+            for _ in range(rng.choice([0, 0, 1, 2])):
+                regenerated.append(rng.choice(["b.tsv", "a.tsv", "c.html"]))
+            for _ in range(rng.choice([0, 0, 1, 2, 2])):
+                provisional.append(rng.choice(["p.tsv", "o.tsv", "p.tsv"]))
+            if resolved is not None:
+                for _ in range(rng.choice([0, 1, 2])):
+                    resolved.append({"file": rng.choice(["f.py", "g.py"]), "hunks": [rng.choice(["1-2", "5"]) for _ in range(rng.randint(1, 2))]})
+            if rng.random() < 0.2:
+                dropped.append(("extra" * 3, via(rng)))
+            return rng.choice([None, None, None, ["f.py"], ["f.py", "g.tsv (generated: no regen)"]])
+        case.fake("pick", pick)
+
+        def git_(rng, repo, *a, **k):
+            if "rev-parse" in a:
+                return rng.choice(["base0", "other", "base0"]) + "\n"
+            return proc(rng, rng.choice([0, 1]), "")
+        case.fake("git", git_)
+        case.fake("wlog", lambda rng, d, line: None)
+        case.fake("save_entry", lambda rng, d, entry: None)
+        case.fake("remote", lambda rng: "origin")
+        return ("/d", "/wt", e, "base0", r.choice([True, False]), autoresolve)
+
+    def test_apply_entry(self):
+        def run(A):
+            def apply(*args):
+                result = A.apply_entry(*args)
+                return result, args[2]
+            return apply
+        check(self, "apply_entry", self.build, run, 6000)
+
+
 if __name__ == "__main__":
     unittest.main()

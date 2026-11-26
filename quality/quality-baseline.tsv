@@ -6,7 +6,6 @@
 cognitive	RemoteStore._call_once	18
 cognitive	_gh_api_once	19
 cognitive	_watch_group	28
-cognitive	apply_entry	20
 cognitive	assemble	24
 cognitive	batch_check	19
 cognitive	bg_spent	16
@@ -90,7 +89,7 @@ copies	store	2
 cyclomatic	RemoteStore._call_once	16
 cyclomatic	_gh_api_once	18
 cyclomatic	_watch_group	21
-cyclomatic	apply_entry	31
+cyclomatic	apply_entry	12
 cyclomatic	assemble	15
 cyclomatic	batch_check	17
 cyclomatic	bg_spent	15

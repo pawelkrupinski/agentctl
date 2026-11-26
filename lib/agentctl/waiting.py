@@ -92,6 +92,54 @@ def wait_words(c: str, fixes: set[str], reds: set[str], open_names: set[str]) ->
             f"(the gate's runs {', '.join(sorted(reds)[:4])}; the red items' {', '.join(sorted(open_names)[:6]) or 'none'})")
 
 
+def record_autoresolved(d: Any, e: dict[str, Any], resolved: Any, conflict: Any) -> None:
+    """A SOURCE CONFLICT IS RESOLVED IN THE BATCH: what it took, kept on the entry for the author and bisect."""
+    if resolved and not conflict:
+        e["autoresolved"] = resolved
+        wlog(d, f"{e['id']}: auto-resolved in the batch, its full check the verification: "
+                + "; ".join(f"{m['file']} ({', '.join(m['hunks'])})" for m in resolved))
+    else:
+        e.pop("autoresolved", None)
+
+
+def record_regenerated(e: dict[str, Any], regenerated: Any) -> None:
+    """Resolved by regeneration in this build (GENERATED FILES ARE NO OVERLAP): a failure is not its own."""
+    if regenerated:
+        e["regenerated"] = sorted(regenerated)
+    else:
+        e.pop("regenerated", None)
+
+
+def record_provisional(d: Any, e: dict[str, Any], provisional: Any, conflict: Any) -> None:
+    """A row both sides changed on a host with no regen command: the tree's row kept, for the checks' ratchet to judge."""
+    if provisional and not conflict:
+        e["provisional"] = sorted(set(provisional))
+        wlog(d, f"{e['id']}: {', '.join(e['provisional'])}: a row both sides changed and this host runs no regen "
+                "command: kept the tree's row (main's), for the checks' ratchet to judge over the combined tree")
+    else:
+        e.pop("provisional", None)
+
+
+def dropped_on_main(wt: Any, dropped: Any, base: Any, first: bool) -> Any:
+    """The dropped (commit, via) pairs that main (base's history) carries: via is an ancestor of base, or the commit was
+    an empty pick of the entry's first commit."""
+    return [(c, v) for c, v in dropped
+            if (v and git(wt, "merge-base", "--is-ancestor", v, base, check=False).returncode == 0) or (not v and first)]
+
+
+def drop_landed(d: Any, e: dict[str, Any], on_main: Any) -> Any:
+    """The entry without its commits main carries (`dropped` keeps them); ('landed', via) when nothing is left of it."""
+    gone = {c for c, _v in on_main}
+    e["commits"] = [c for c in e["commits"] if c not in gone]
+    e.setdefault("dropped", []).extend([[c, v] for c, v in on_main])
+    save_entry(d, e)
+    wlog(d, f"{e['id']}: {len(on_main)} commit(s) already on {remote()}/main, dropped: "
+            + ", ".join(f"{c[:10]} (via {v[:10] if v else 'an empty pick'})" for c, v in on_main))
+    if not e["commits"]:
+        return "landed", next((v for _c, v in reversed(on_main) if v), None)
+    return None
+
+
 def apply_entry(d, wt, e, base, regen=True, autoresolve=False):
     """Pick the entry's commits onto wt's HEAD (base, or base plus earlier entries): ('ok', None), ('conflict', files),
     ('landed', via) or ('duplicate', via). A commit already on MAIN (base's history) is dropped from the entry for good
@@ -100,37 +148,17 @@ def apply_entry(d, wt, e, base, regen=True, autoresolve=False):
     first = git(wt, "rev-parse", "HEAD").strip() == base
     dropped, regenerated, provisional, resolved = [], [], [], [] if autoresolve else None
     conflict = pick(wt, e["commits"], dropped, regen, regenerated, provisional, resolved)
-    if resolved and not conflict:  # A SOURCE CONFLICT IS RESOLVED IN THE BATCH: what it took, for the author and bisect
-        e["autoresolved"] = resolved
-        wlog(d, f"{e['id']}: auto-resolved in the batch, its full check the verification: "
-                + "; ".join(f"{m['file']} ({', '.join(m['hunks'])})" for m in resolved))
-    else:
-        e.pop("autoresolved", None)
-    if regenerated:  # resolved by regeneration in this build (GENERATED FILES ARE NO OVERLAP): a failure is not its own
-        e["regenerated"] = sorted(regenerated)
-    else:
-        e.pop("regenerated", None)
-    if provisional and not conflict:
-        e["provisional"] = sorted(set(provisional))
-        wlog(d, f"{e['id']}: {', '.join(e['provisional'])}: a row both sides changed and this host runs no regen "
-                "command: kept the tree's row (main's), for the checks' ratchet to judge over the combined tree")
-    else:
-        e.pop("provisional", None)
+    record_autoresolved(d, e, resolved, conflict)
+    record_regenerated(e, regenerated)
+    record_provisional(d, e, provisional, conflict)
     if conflict:
         return "conflict", conflict
     if not dropped:
         return "ok", None
-    on_main = [(c, v) for c, v in dropped
-               if (v and git(wt, "merge-base", "--is-ancestor", v, base, check=False).returncode == 0) or (not v and first)]
-    if on_main:
-        gone = {c for c, _v in on_main}
-        e["commits"] = [c for c in e["commits"] if c not in gone]
-        e.setdefault("dropped", []).extend([[c, v] for c, v in on_main])
-        save_entry(d, e)
-        wlog(d, f"{e['id']}: {len(on_main)} commit(s) already on {remote()}/main, dropped: "
-                + ", ".join(f"{c[:10]} (via {v[:10] if v else 'an empty pick'})" for c, v in on_main))
-        if not e["commits"]:
-            return "landed", next((v for _c, v in reversed(on_main) if v), None)
+    on_main = dropped_on_main(wt, dropped, base, first)
+    landed = drop_landed(d, e, on_main) if on_main else None
+    if landed:
+        return landed
     if not [c for c in e["commits"] if c not in {x for x, _v in dropped}]:  # all of it is on an earlier entry
         return "duplicate", next((v for _c, v in reversed(dropped) if v), None)
     return "ok", None
