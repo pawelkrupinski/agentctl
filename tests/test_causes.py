@@ -66,10 +66,19 @@ class StoreCauseTest(unittest.TestCase):
         self.assertEqual(self.rows()[-1]["actor"], "session:s1")
 
     def test_a_legacy_client_s_move_is_written_unattributed(self):
-        args, kw = A.legacy_cause("transition", ["change", "c1", "checking", 1], {"event": {"text": "x"}})
+        to = self.st.transition
+        args, kw = A.legacy_cause("transition", ["change", "c1", "checking", 1], {"event": {"text": "x"}}, to)
         self.assertEqual(kw["event"]["cause"], "unattributed")
-        args, kw = A.legacy_cause("transition", ["change", "c1", "checking", 1, None, {"cause": "batch"}], {})
+        args, kw = A.legacy_cause("transition", ["change", "c1", "checking", 1, None, {"cause": "batch"}], {}, to)
         self.assertEqual(args[5]["cause"], "batch")
+
+    def test_the_shim_finds_the_event_where_the_store_method_takes_it(self):
+        """Review 2026-11-26 (C 8.6): legacy_cause wrote args[5] by position; a reordered transition would have had its
+        sixth argument -- not the event -- rewritten, and no test noticed. It reads the target's own signature."""
+        def reordered(typ, iid, to, event=None, expect_version=None, data=None):
+            return event
+        args, _kw = A.legacy_cause("transition", ["change", "c1", "checking", {"text": "x"}, 1, {"d": 1}], {}, reordered)
+        self.assertEqual((args[3]["cause"], args[5]), ("unattributed", {"d": 1}))
 
 
 class ProcessActorTest(unittest.TestCase):

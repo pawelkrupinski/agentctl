@@ -7,6 +7,7 @@
 # (checked_cause); a self-move (a reminder, an escalation) and a row no move wrote (an item opened, a lease archived)
 # may carry one.
 
+import inspect
 import json
 import sqlite3
 from typing import Any, Callable
@@ -62,18 +63,21 @@ def opened_event(typ: str, iid: str, state: str, at: float) -> dict[str, Any]:
             "item_type": typ, "item_id": iid, "from_state": None, "to_state": state}
 
 
-def legacy_cause(method: str, args: list[Any], kwargs: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
+def legacy_cause(method: str, args: list[Any], kwargs: dict[str, Any],
+                 target: Callable[..., Any]) -> tuple[list[Any], dict[str, Any]]:
     """A transition from a client older than causes.py (no cause on its event) is written as cause `unattributed`
     rather than refused: during an upgrade the laptop and ci-runner run different revisions for minutes. This code's
-    own moves always name one (tests/test_causes.py)."""
+    own moves always name one (tests/test_causes.py). `target`: the store method the call goes to; its own signature
+    says where `event` is (review 2026-11-26: the shim wrote args[5], silently wrong once transition's order moved)."""
     if method != "transition":
         return args, kwargs
     args, kwargs = list(args), dict(kwargs)
-    ev = dict((args[5] if len(args) > 5 else kwargs.get("event")) or {})
+    at = list(inspect.signature(target).parameters).index("event")
+    ev = dict((args[at] if len(args) > at else kwargs.get("event")) or {})
     if not ev.get("cause"):
         ev["cause"] = "unattributed"
-    if len(args) > 5:
-        args[5] = ev
+    if len(args) > at:
+        args[at] = ev
     else:
         kwargs["event"] = ev
     return args, kwargs

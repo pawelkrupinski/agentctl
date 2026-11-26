@@ -355,7 +355,7 @@ class StoreAPI:
             m = p[len("/v1/store/"):]
             if m not in STORE_RPC:
                 raise UnknownCall(m)
-            args, kwargs = legacy_cause(m, b.get("args", []), b.get("kwargs", {}))
+            args, kwargs = legacy_cause(m, b.get("args", []), b.get("kwargs", {}), getattr(st, m))
             return self._json(200, {"result": getattr(st, m)(*args, **kwargs)})
         raise KeyError(f"POST {p}")
 
