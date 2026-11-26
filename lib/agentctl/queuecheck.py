@@ -25,6 +25,7 @@ from agentctl.waiting import already_landed, cancel_entry_remote
 from agentctl.blamerecords import blame_land_refusal
 from agentctl.queuediff import rebase_in_tree
 from agentctl.queuefailure import CHECK_TIMEOUT, TIMEOUT_RETRIES, judge_failure, keys_text
+from agentctl.identitychange import change_paths_of
 
 
 def regen_commands(tree: Any, files: Any) -> Any:
@@ -238,7 +239,8 @@ def judge_check_failure(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any
                         where: str, now: float) -> tuple[int | None, str, Any]:
     """Failed checks judged: the change's own failure rejects it (1; a provisional one waits for its regen), one only
     as its base fails too waits behind that red (known_red)."""
-    side, what = judge_failure(repo, d, e, base, out, now)
+    paths = change_paths_of(repo, e)
+    side, what = judge_failure(repo, d, e, base, out, now, None if paths is None else set(paths))
     timed_out = bool(CHECK_TIMEOUT.search(out or ""))
     if side == "head" and e.get("provisional") and not timed_out:
         return regen_hold(st, d, e, tree, keys_text(what), out), where, None  # A ROW ONLY A REGEN DECIDES IS NO BOUNCE
@@ -248,6 +250,15 @@ def judge_check_failure(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any
         queue_verdict(st, d, e, "rejected", f"NOT LANDED: the pre-push checks failed ({where}){timed}; failing "
                       f"with this change only: {keys_text(what)}{provisional_hint(tree, e)}; the change "
                       f"{e['head'][:10]} stays in {e['worktree']}", (out or "").splitlines(), decided_on=base)
+        return 1, where, None
+    if side == "unrun":  # A TEST ITS BASE NEVER RAN IS NOBODY'S YET (queuefailure.py): unattributed, said so
+        # policy: checks-failed
+        queue_verdict(st, d, e, "rejected", f"NOT LANDED: the pre-push checks failed ({where}) in tests NOT RUN ON ITS "
+                      f"BASE -- unattributed, not shown to be this change's: {keys_text(what)} (neither in its diff nor "
+                      f"selected on {base[:10]}; main's own tree may fail them: run them on origin/main, e.g. "
+                      f"`scripts/run-script-tests {' '.join(w.split(' ')[0] for w in what[:3])}`, before changing "
+                      f"anything); the change {e['head'][:10]} stays in {e['worktree']}", (out or "").splitlines(),
+                      decided_on=base)
         return 1, where, None
     srcs = sorted(set(what.values()))
     wlog(d, f"{e['id']}: its checks failed only where its base fails too ({keys_text(what)}; {'; '.join(srcs)})"

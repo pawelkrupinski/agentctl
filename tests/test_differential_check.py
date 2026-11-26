@@ -126,6 +126,33 @@ class DifferentialCheckTest(test_queue.QueueTest):
         self.assertNotIn("scripts/a-test.sh", v)
         self.assertNotIn("no failing test named", v)
 
+    def test_a_script_test_its_base_never_ran_is_unattributed_never_the_changes_own(self):
+        """2026-11-26 10:20-11:05Z (20261126-103654-movies-stallwatch-shadow-24ef54 and others): "failing with this
+        change only: scripts/ci/python_floor_lint_test.py", which failed on main's own infra/bin/fleet-ssh. The test was
+        selected on the head by the change's paths (run-script-tests --changed) and never on the base: nothing
+        compared it there. Neither in the change's diff nor a test of a tool in it, it is NOT RUN ON ITS BASE."""
+        wt, _ = self.agent("stallwatch", "scripts/stall-watch.sh", "s\n")
+        eid, _ = self.queued(wt)
+        self.remote_fails(47, "PASS      3s  scripts/stall-watch-test.sh",
+                          "FAIL      9s  scripts/ci/python_floor_lint_test.py", "1 of 2 failed (12s)",
+                          "pre-push scripttests FAILED (13s)")
+        self.assertEqual(self.check(eid), 1)
+        v = self.verdicts("NOT_LANDED")[0]
+        self.assertNotIn("failing with this change only", v)
+        self.assertIn("NOT RUN ON ITS BASE", v)
+        self.assertIn("scripts/ci/python_floor_lint_test.py (FAIL)", v)
+        self.assertEqual(A.reject_cause(v), "check-failed-unknown")
+        self.assertEqual(A.reject_class("check-failed-unknown"), "unknown")
+
+    def test_a_failing_test_of_the_changes_own_tool_is_still_its_own(self):
+        wt, _ = self.agent("floor", "scripts/ci/python_floor_lint.py", "f\n")
+        eid, _ = self.queued(wt)
+        self.remote_fails(48, "FAIL      9s  scripts/ci/python_floor_lint_test.py", "1 of 1 failed (9s)",
+                          "pre-push scripttests FAILED (10s)")
+        self.assertEqual(self.check(eid), 1)
+        self.assertIn("failing with this change only: scripts/ci/python_floor_lint_test.py (FAIL)",
+                      self.verdicts("NOT_LANDED")[0])
+
     def test_a_check_stopped_at_its_time_cap_is_requeued_then_rejected(self):
         wt, _ = self.agent("slow", "web/src/main/Slow.scala", "s\n")
         eid, _ = self.queued(wt)

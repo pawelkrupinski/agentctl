@@ -21,6 +21,7 @@ CAUSES = {
     "check-passed": "its checks passed",
     "check-failed-test": "its checks failed on the change itself",
     "check-failed-infra": "its checks failed on the environment, not the change (a stall, the network, a lost runner)",
+    "check-failed-unknown": "its checks failed in a test its base never ran: unattributed, not shown to be the change's",
     "gate-red": "a red gate run holds it (or let it go when green)",
     "main-moved": "main moved under it: checked again or verified on the new main",
     "overlap-hold": "another open change touching the same files holds it",
@@ -76,11 +77,12 @@ def hold_attribution(hold: dict[str, object] | None) -> dict[str, object]:
     return {"cause": HOLD_CAUSE.get(str(h.get("kind") or ""), "timeout"), "detail": h.get("blocker")}
 
 
-REJECT_CLASS = {"check-failed-test": "test", "check-failed-infra": "infra", "no-longer-applies": "policy",
+REJECT_CLASS = {"check-failed-test": "test", "check-failed-infra": "infra", "check-failed-unknown": "unknown", "no-longer-applies": "policy",
                 "policy": "policy", "timeout": "infra", "batch": "test"}
 
 POLICY_REJECT = re.compile(r"Fixes-Red|fix-replay|Fix-Replay|red gate|refused|policy|not allowed|unapproved", re.I)
 NO_LONGER_APPLIES = re.compile(r"no longer applies|does not apply|conflicts? in ", re.I)
+NOT_RUN_ON_BASE = re.compile(r"NOT RUN ON ITS BASE")  # queuecheck.py: A TEST ITS BASE NEVER RAN IS NOBODY'S YET
 INFRA_REJECT = re.compile(r"log unreadable|runner lost|could not reach|no check job started|stalled", re.I)
 
 
@@ -97,8 +99,8 @@ def checked_cause(cause: object) -> str:
 
 def reject_cause(verdict: str, tail: Iterable[str] = ()) -> str:
     """THE reject classifier: the cause of a NOT LANDED verdict -- no-longer-applies (a conflict), policy (a rule
-    refused it), check-failed-infra (its tail is infra-shaped by ci-why's own signatures and names no failing test), else
-    check-failed-test (the queue judged it the change's own failure: `failing with this change only`)."""
+    refused it), check-failed-infra (its tail is infra-shaped by ci-why's own signatures and names no failing test),
+    check-failed-unknown (a failing test NOT RUN ON ITS BASE: unattributed), else check-failed-test (the queue judged it the change's own failure: `failing with this change only`)."""
     lines = [str(x) for x in tail]
     if NO_LONGER_APPLIES.search(verdict):
         return "no-longer-applies"
@@ -106,6 +108,8 @@ def reject_cause(verdict: str, tail: Iterable[str] = ()) -> str:
         return "policy"
     if not names_failing_test(lines) and infra_shaped(verdict, lines):
         return "check-failed-infra"
+    if NOT_RUN_ON_BASE.search(verdict):
+        return "check-failed-unknown"
     return "check-failed-test"
 
 
@@ -116,7 +120,8 @@ def infra_shaped(verdict: str, lines: list[str]) -> bool:
 
 
 def reject_class(cause: str | None) -> str:
-    """infra | test | policy for a reject's cause (unknown: test, the queue's judgement of the change's own failure)."""
+    """infra | test | policy | unknown (a test its base never ran) for a reject's cause (a cause it does not know:
+    test, the queue's judgement of the change's own failure)."""
     return REJECT_CLASS.get(cause or "", "test")
 
 

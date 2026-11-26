@@ -16,7 +16,7 @@ from agentctl.leases import LeaseHold
 from agentctl.land import REDGATE, run_watched, tool_env
 from agentctl.queueslots import queue_verdict, tree_slot
 from agentctl.queue import INFRA_CHECK_FAILURE
-from agentctl.identitychange import identity_model_commits
+from agentctl.identitychange import change_paths_of, identity_model_commits
 from agentctl.waiting import tail_of, waiting_commits
 from agentctl.recovery import batch_move
 from agentctl.batchitem import batch_fail, batch_members
@@ -349,4 +349,5 @@ def culprit_own_failure(repo, d, e, base, out, now):
     share."""
     if INFRA_CHECK_FAILURE.search(out or "") or CHECK_TIMEOUT.search(out or ""):
         return False
-    return judge_failure(repo, d, e, base, out, now)[0] == "head"
+    paths = change_paths_of(repo, e)
+    return judge_failure(repo, d, e, base, out, now, None if paths is None else set(paths))[0] == "head"

@@ -199,9 +199,32 @@ def unnamed(units: list[str]) -> list[str]:
     return [f"{u} (no failing test named)" for u in units]
 
 
-def judge_failure(repo: str, d: str, e: Entry, base: str, out: Optional[str], now: float) -> tuple[str, Any]:
-    """('base', {key: where}) when every failing job's tests fail on the base too; else ('head', [what is the
-    change's own]). The head's keys are kept on the entry (failed_on), the queue's own record of the base."""
+# A TEST ITS BASE NEVER RAN IS NOBODY'S YET (2026-11-26 10:20-11:05Z: several innocent movies changes, e.g.
+# 20261126-103654-movies-stallwatch-shadow-24ef54, NOT LANDED "failing with this change only:
+# scripts/ci/python_floor_lint_test.py" -- it failed on main's own infra/bin/fleet-ssh, but run-script-tests selects a
+# script test by the change's paths (--changed), so no base run had ever selected it, and "not among the base's
+# failures" read as "the change's"). A failing script test that is neither in the change's diff nor a test of a tool
+# in it was not compared with the same test on the base: it is NOT RUN ON ITS BASE -- unattributed, never this change's
+# own (its verdict says so and how to run it on main; its reject's cause is check-failed-unknown).
+def tested_paths(test: str) -> set[str]:
+    """The test's own path and the tools it tests (`x-test.sh` / `x_test.py` -> x, x.sh, x.py)."""
+    stem = re.sub(r"(?:-test\.sh|_test\.py)$", "", test)
+    return {test} | ({stem, f"{stem}.sh", f"{stem}.py"} if stem != test else set())
+
+
+def not_run_on_base(key: str, own_paths: Optional[set[str]]) -> bool:
+    """Whether a head-only failure key is a script test that neither the change's diff nor its base selected."""
+    if own_paths is None or not key.startswith("script "):
+        return False
+    return not (tested_paths(key.split(" ", 1)[1]) & own_paths)
+
+
+def judge_failure(repo: str, d: str, e: Entry, base: str, out: Optional[str], now: float,
+                  own_paths: Optional[set[str]] = None) -> tuple[str, Any]:
+    """('base', {key: where}) when every failing job's tests fail on the base too; ('unrun', [names]) when what fails
+    only on the head is script tests its base never ran (A TEST ITS BASE NEVER RAN IS NOBODY'S YET; own_paths: the
+    change's paths, None when unread); else ('head', [what is the change's own]). The head's keys are kept on the
+    entry (failed_on), the queue's own record of the base."""
     jobs = head_failure_jobs(repo, e, out)
     keys, unjudged = failure_keys(jobs)
     e["failed_on"] = {"base": base, "head": e.get("head"), "keys": sorted(keys), "at": now}
@@ -211,9 +234,12 @@ def judge_failure(repo: str, d: str, e: Entry, base: str, out: Optional[str], no
     if not keys:
         return "head", unnamed(unjudged) or ["(no failing test named)"]
     known = base_failure_keys(repo, d, e, base, now)
-    mine = sorted(n for k, n in keys.items() if k not in known)
+    unrun = sorted(n for k, n in keys.items() if k not in known and not_run_on_base(k, own_paths))
+    mine = sorted(n for k, n in keys.items() if k not in known and n not in unrun)
     if mine or unjudged:
-        return "head", mine + unnamed(unjudged)
+        return "head", mine + unnamed(unjudged) + [f"{n} (not run on its base)" for n in unrun]
+    if unrun:
+        return "unrun", unrun
     return "base", {keys[k]: known[k] for k in sorted(keys)}
 
 
