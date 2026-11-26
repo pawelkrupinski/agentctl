@@ -5,7 +5,7 @@
 import fnmatch
 from dataclasses import dataclass
 from typing import Any
-from agentctl.core import git, process_cache
+from agentctl.core import git, git_ok, process_cache, remote
 from agentctl.fixchange import fixes_named
 from agentctl.redfixes import commit_fixes
 
@@ -37,10 +37,21 @@ def is_production_path(p: str) -> bool:
 _production: dict[str, bool] = process_cache({})  # sha -> whether it touches a production path (a commit never changes)
 
 
-def touches_production(repo: str, c: str) -> bool:
+def fetch_entry_commits(repo: str, e: dict[str, Any], want: str | None = None) -> None:
+    """The entry's commits into this clone, fetched from refs/heads/land/<id> when it has not `want` (its head)."""
+    if not git_ok(repo, "cat-file", "-e", f"{want or e.get('head')}^{{commit}}"):
+        git(repo, "fetch", "--quiet", remote(), f"refs/heads/land/{e['id']}", check=False)
+
+
+def touches_production(repo: str, c: str) -> bool | None:
+    """Whether commit c touches a production path; None when this clone cannot read it (never raises: 2026-11-26
+    16:47Z-18:5xZ every change tick and batch tick on ci-runner died on `git diff-tree <sha>: bad object` for one
+    change's commit its clone lacked, and nothing landed)."""
     if c not in _production:
-        paths = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c).split("\n")
-        _production[c] = any(p and is_production_path(p) for p in paths)
+        r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c, check=False)
+        if r.returncode != 0:
+            return None
+        _production[c] = any(p and is_production_path(p) for p in r.stdout.split("\n"))
     return bool(_production[c])
 
 
@@ -101,7 +112,22 @@ def commit_rows(entry: dict[str, Any] | None, repo: str | None, commits: list[st
         commits = list(entry["commits"])
     if not repo or commits is None:
         return None
-    return [(c, touches_production(repo, c), set(commit_fixes(repo, c, store))) for c in commits]
+    rows = []
+    for c in commits:
+        prod = entry_commit_production(repo, entry, c)
+        if prod is None:
+            return None  # unread: the change is judged by its recorded names, never a dead tick
+        rows.append((c, prod, set(commit_fixes(repo, c, store))))
+    return rows
+
+
+def entry_commit_production(repo: str, entry: dict[str, Any] | None, c: str) -> bool | None:
+    """touches_production of the entry's commit c, fetched from its land ref first when the clone lacks it."""
+    prod = touches_production(repo, c)
+    if prod is None and entry and entry.get("id"):
+        fetch_entry_commits(repo, entry, c)
+        prod = touches_production(repo, c)
+    return prod
 
 
 def may_land_on_red(facts: dict[str, Any], entry: dict[str, Any] | None = None, repo: str | None = None,

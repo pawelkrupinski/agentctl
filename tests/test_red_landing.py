@@ -7,7 +7,7 @@ red-fix tree guard (`bool(e.get("fixes")) and ... ["red_fix"]`); gov.gov_class_o
 through the classifier. They diverged once (batch #124, 2026-11-25). MATRIX is what every copy answered before the
 consolidation, for each (gate, store, change) of the seeded matrix; the test holds the one rule to it, but for the
 disagreements resolved deliberately (RESOLVED, each with its own test below)."""
-import itertools, os, sys, tempfile, unittest
+import itertools, os, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -310,6 +310,47 @@ class RedLandingMatrixTest(unittest.TestCase):
         v = A.may_land_on_red(A.queue_facts({"8"}, st), {"fixes": ["404"]})
         self.assertEqual((v.red_fix, v.gate_fix), (False, False))
         self.assertIn("no run of the open gate red", v.wait)
+
+
+class UnfetchedCommitTest(unittest.TestCase):
+    """2026-11-26 16:47Z-18:5xZ: every change tick and batch tick on ci-runner died on `git diff-tree <sha>: bad object`
+    -- one queued change's commit its clone had never fetched -- and nothing landed for two hours."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        t = self.tmp.name
+        run = lambda *a, cwd=None: subprocess.run(a, cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+        run("git", "init", "-q", "--bare", "-b", "main", f"{t}/origin.git")
+        run("git", "clone", "-q", f"{t}/origin.git", f"{t}/work")
+        os.makedirs(f"{t}/work/web/src/main")
+        with open(f"{t}/work/README", "w") as f:
+            f.write("x\n")
+        run("git", "add", "README", cwd=f"{t}/work")
+        run("git", "commit", "-qm", "base", cwd=f"{t}/work")
+        run("git", "push", "-q", "origin", "HEAD:main", cwd=f"{t}/work")
+        run("git", "clone", "-q", f"{t}/origin.git", f"{t}/server")  # the reconciler's clone, before the change
+        with open(f"{t}/work/web/src/main/A.scala", "w") as f:
+            f.write("a\n")
+        run("git", "add", "web", cwd=f"{t}/work")
+        run("git", "commit", "-qm", "a production change", cwd=f"{t}/work")
+        self.sha = run("git", "rev-parse", "HEAD", cwd=f"{t}/work")
+        run("git", "push", "-q", "origin", "HEAD:refs/heads/land/c-1", cwd=f"{t}/work")
+        self.server = f"{t}/server"
+        self.st = A.Store(path=os.path.join(t, "store.db"))
+
+    def test_a_commit_the_clone_lacks_is_fetched_from_its_land_ref(self):
+        entry = {"id": "c-1", "head": self.sha, "commits": [self.sha]}
+        rows = A.commit_rows(entry, self.server, None, self.st)
+        self.assertEqual([(c, p) for c, p, _f in rows], [(self.sha, True)])
+
+    def test_a_commit_nowhere_to_be_read_leaves_the_change_unread_never_raises(self):
+        gone = "0" * 40
+        self.assertIsNone(A.touches_production(self.server, gone))
+        self.assertIsNone(A.commit_rows({"id": "c-2", "head": gone, "commits": [gone]}, self.server, None, self.st))
+        v = A.may_land_on_red({"gate": set(), "open": {}}, {"id": "c-2", "head": gone, "commits": [gone]}, self.server,
+                              store=self.st)
+        self.assertIsNone(v.wait, "no gate red: nothing to wait for, judged by its recorded names")
 
 
 if __name__ == "__main__":

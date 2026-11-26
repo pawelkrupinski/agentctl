@@ -4,15 +4,10 @@
 import fnmatch
 from typing import Any
 from agentctl.statefile import read_text_or
-from agentctl.core import git, git_ok, process_cache, remote
+from agentctl.core import git, process_cache
 from agentctl.repos import precheck_hook
 from agentctl.queue import hook_query
-
-
-def fetch_entry_commits(repo, e):
-    """The entry's commits into this clone, fetched from refs/heads/land/<id> when it has not its head."""
-    if not git_ok(repo, "cat-file", "-e", f"{e.get('head')}^{{commit}}"):
-        git(repo, "fetch", "--quiet", remote(), f"refs/heads/land/{e['id']}", check=False)
+from agentctl.redland import fetch_entry_commits
 
 
 def shared_paths(repo: Any, older: Any, younger: Any) -> list[str]:
