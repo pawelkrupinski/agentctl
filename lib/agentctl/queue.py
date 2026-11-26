@@ -253,6 +253,8 @@ def named_reader(tree, tip, paths, readers):
         return None
     for p in sorted(paths):
         r = git(tree, "grep", "-l", "-F", "-e", os.path.basename(p), tip, "--", *readers, check=False)
+        if r.returncode not in (0, 1):  # 1: no match; anything else: git could not look -- never "no reader names it"
+            return p, f"(git grep failed: {str(r.stderr).strip()[:80] or r.returncode})"
         hits = sorted(line.split(":", 1)[1] for line in r.stdout.splitlines() if ":" in line)
         if hits:
             return p, hits[0]
