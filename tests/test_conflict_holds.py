@@ -157,6 +157,19 @@ class ConflictHoldTest(test_derived.DerivedTest):
         self.assertEqual(A.stuck_recovery(hold, f"held for over {A.fmt_age(A.knob_change_hold_max())}"), "rederive")
         self.assertEqual(A.stuck_recovery({**hold, "kind": "trees"}, "held for over 6 h"), "escalate")
 
+    def test_a_quietly_held_changes_laps_thin_out_with_its_age(self):
+        """A LIVE HOLD'S LAPS THIN OUT (queueclose.py; the analysis' item 10: 1,074 quiet `held:` laps, one every
+        15 min): a quiet lap's next deadline is the change's age in its state, capped at 2 h."""
+        st = A.CurrentStore(A.process_store)
+        st.put_item("change", "c-held", "queued", {"worktree": "/w", "hold": {"kind": "trees", "since": A.epoch_now(),
+                                                                             "why": "every check tree is busy"}})
+        t = A.epoch_now() + 3600  # an hour in `queued`, past its 15-min deadline
+        A.lap_change_deadline(st, {"id": "c-held", "worktree": "/w"}, "queued", t)
+        it = st.item("change", "c-held")
+        self.assertGreater(it["deadline"] - A.epoch_now(), 50 * 60, "the next lap an hour on, not 15 min")
+        [lap] = [e for e in st.item_events("change", "c-held") if e["from_state"] == e["to_state"]]
+        self.assertEqual(lap["severity"], "info")
+
 
 for _name in list(test_derived.DerivedTest.__dict__) + list(test_generated.GeneratedQueueTest.__dict__) \
         + dir(test_backlog_batch.BacklogBatchTest):

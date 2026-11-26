@@ -414,6 +414,18 @@ def _overdue_change(st: Any, e: Any, state: Any, t: Any) -> Any:
     return it if it and it["state"] == state and t > it["deadline"] else None
 
 
+# A LIVE HOLD'S LAPS THIN OUT (2026-11-26, the transition analysis' item 10: 1,074 quiet `queued for N, held: ...`
+# laps in 28 days, the same line every 15 min). A quiet lap's next deadline is the change's age in its state -- 15,
+# 30 min, 1, 2 h -- capped at QUIET_LAP_MAX: a long wait says itself a few times, never every quarter hour. A stuck or
+# unheld lap keeps the state's own deadline. On the 2026-11-26 store copy: 1,074 laps -> 387.
+QUIET_LAP_MAX = 2 * 3600
+
+
+def quiet_lap_after(state: str, it: dict[str, Any], t: float) -> float:
+    """The seconds until a quietly held change's next lap: its age in the state, between its deadline and QUIET_LAP_MAX."""
+    return min(max(machine_state("change", state).deadline, t - float(it.get("entered_at") or t)), QUIET_LAP_MAX)
+
+
 def lap_change_deadline(st: Any, e: Any, state: Any, t: Any, note: Any = None) -> Any:
     """A queued or checked change past its deadline: said and re-deadlined -- quietly while its hold is live, an
     escalation when it is stuck (change_hold_stuck: nothing holds it, its blocker is gone, held too long). note: what
@@ -440,4 +452,5 @@ def lap_change_deadline(st: Any, e: Any, state: Any, t: Any, note: Any = None) -
                       event={"text": _lap_text(e, state, it, hold, stuck, note, issue, t),
                              **hold_attribution(hold),  # its "cause": the hold's kind, else its deadline
                              **({} if quiet else {"audience": {"worktree": e.get("worktree")}}),
-                             **({} if stuck and not issue else {"severity": "info"})})
+                             **({} if stuck and not issue else {"severity": "info"})},
+                      deadline_s=quiet_lap_after(state, it, t) if quiet else None)
