@@ -227,49 +227,73 @@ def change_waits(st, changes, now):
     return [w for c in changes for w in _change_waiting_spans(st, c, now)]
 
 
+class _GatePass:
+    """One pass over the gate runs the collector has exported: its time window (the history walk, else the lookback), the
+    runs of the window, and the record of one run."""
+
+    def __init__(self, st: Any, url: Any, t: Any, since: Any, out: Any) -> None:
+        self.st, self.url, self.t, self.since, self.out = st, url, t, since, out
+        frm = _num(st.meta_get(STATS_GATE_WALK))
+        if frm is None:
+            frm = t - STATS_GATE_HISTORY
+        self.walking = frm < t - STATS_GATE_LOOKBACK
+        self.lo, self.hi = (frm, min(frm + 7 * 86400, t)) if self.walking else (t - STATS_GATE_LOOKBACK, t)
+
+    def runs(self) -> Any:
+        """The window's gate runs, oldest first, each named by its gate workflow; None when the gate's workflows or the
+        runs could not be read (said on stderr)."""
+        try:
+            gate_files = {f: w for w, f in gate_flows(STATS_GATE_REPO)}
+        except (Exception, SystemExit) as ex:
+            err(f"stats: the gate's workflows could not be read ({str(ex)[:160]})")
+            return None
+        files = ", ".join(f'"{f}"' for f in gate_files)  # exact: a phrase filter `workflow:"Main"` also matched
+        # bitcashier/core's "Main Pipeline" (2026-11-17, the first backfill)
+        try:
+            rows = stats_query(self.url, f'source:ci kind:run branch:="main" repo:="{STATS_GATE_REPO}" workflow_file:in({files}) '
+                                         f'| fields {CI_FIELDS}, workflow_file', start=self.lo, end=self.hi)
+        except Exception as ex:
+            err(f"stats: the gate runs could not be read ({str(ex)[:160]})")
+            return None
+        rows = [{**r, "run_name": r.get("workflow"), "workflow": gate_files[r["workflow_file"]]} for r in rows
+                if r.get("repo") == STATS_GATE_REPO and r.get("workflow_file") in gate_files]
+        return sorted(rows, key=lambda r: _num(r.get("end")) or 0)
+
+    def record(self, run: Any, rid: str) -> bool:
+        """Posts and notes the record of one run; False (said on stderr) when its jobs or the post failed."""
+        try:
+            jobs = stats_query(self.url, f'source:ci kind:job run_id:"{run.get("run_id")}" | fields {CI_FIELDS}',
+                               start=self.lo - 86400, end=self.hi + 86400)
+            jobs = [j for j in jobs if str(j.get("run_attempt") or 1) == str(run.get("run_attempt") or 1)]
+            rec = gate_run_record(run, jobs, self.since)
+            stats_post(self.url, [rec])
+        except Exception as ex:
+            err(f"stats: gate run {rid} not recorded ({str(ex)[:160]}): the next pass tries again")
+            return False
+        self.st.meta_set(f"stats:gate_run:{rid}", self.t)
+        stats_echo([rec], self.out)
+        return True
+
+
 def gate_runs_pass(st, url, t, since, cap, out=None):
     """The gate runs the collector has exported (source:ci kind:run on main) and no record names yet: one record each.
     The first passes walk back STATS_GATE_HISTORY in 7-day windows (meta stats_gate_from); then the last 3 days."""
-    frm = _num(st.meta_get(STATS_GATE_WALK))
-    if frm is None:
-        frm = t - STATS_GATE_HISTORY
-    walking = frm < t - STATS_GATE_LOOKBACK
-    lo, hi = (frm, min(frm + 7 * 86400, t)) if walking else (t - STATS_GATE_LOOKBACK, t)
-    try:
-        gate_files = {f: w for w, f in gate_flows(STATS_GATE_REPO)}
-    except (Exception, SystemExit) as ex:
-        err(f"stats: the gate's workflows could not be read ({str(ex)[:160]})")
-        return 0
-    files = ", ".join(f'"{f}"' for f in gate_files)  # exact: a phrase filter `workflow:"Main"` also matched
-    # bitcashier/core's "Main Pipeline" (2026-11-17, the first backfill)
-    try:
-        rows = stats_query(url, f'source:ci kind:run branch:="main" repo:="{STATS_GATE_REPO}" workflow_file:in({files}) '
-                                f'| fields {CI_FIELDS}, workflow_file', start=lo, end=hi)
-    except Exception as ex:
-        err(f"stats: the gate runs could not be read ({str(ex)[:160]})")
+    window = _GatePass(st, url, t, since, out)
+    rows = window.runs()
+    if rows is None:
         return 0
     n = 0
-    rows = [{**r, "run_name": r.get("workflow"), "workflow": gate_files[r["workflow_file"]]} for r in rows
-            if r.get("repo") == STATS_GATE_REPO and r.get("workflow_file") in gate_files]
-    for run in sorted(rows, key=lambda r: _num(r.get("end")) or 0):
+    for run in rows:
         rid = f"{run.get('run_id')}.{run.get('run_attempt') or 1}"
         if stats_sent(st, "gate_run", rid):
             continue
         if n >= cap:
             return n
-        try:
-            jobs = stats_query(url, f'source:ci kind:job run_id:"{run.get("run_id")}" | fields {CI_FIELDS}', start=lo - 86400, end=hi + 86400)
-            jobs = [j for j in jobs if str(j.get("run_attempt") or 1) == str(run.get("run_attempt") or 1)]
-            rec = gate_run_record(run, jobs, since)
-            stats_post(url, [rec])
-        except Exception as ex:
-            err(f"stats: gate run {rid} not recorded ({str(ex)[:160]}): the next pass tries again")
+        if not window.record(run, rid):
             return n
-        st.meta_set(f"stats:gate_run:{rid}", t)
-        stats_echo([rec], out)
         n += 1
-    if walking:
-        st.meta_set(STATS_GATE_WALK, hi)
+    if window.walking:
+        st.meta_set(STATS_GATE_WALK, window.hi)
     return n
 
 
