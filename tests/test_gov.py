@@ -277,6 +277,18 @@ class GovernorTest(unittest.TestCase):
         self.assertFalse(os.path.exists(f"{self.d}/stops-older-root"), "never the root checkout's server")
         self.assertIn(f"evicted the idle sbt server of {old}", open(os.path.join(A.gov_dir(), "gov.log")).read())
 
+    def test_a_failed_stop_is_no_eviction(self):
+        """Review 2026-11-26 (D I2): gov_evict logged "evicted" and recorded idle -> evicted after `sbt-warm --stop`
+        without reading its exit: a stop that failed was reported as memory freed, and admission counted on it."""
+        root, p = self.server("stuck", idle=900)
+        with open(os.path.join(root, "scripts", "sbt-warm"), "w") as f:
+            f.write("#!/bin/sh\necho 'no server to stop' >&2\nexit 1\n")
+        self.assertIsNone(A.gov_evict("room for a check"))
+        log = open(os.path.join(A.gov_dir(), "gov.log")).read()
+        self.assertNotIn(f"evicted the idle sbt server of {root}", log)
+        self.assertIn(f"evict {root}: sbt-warm --stop failed (exit 1): no server to stop", log)
+        self.assertIsNone(p.poll(), "the server still runs")
+
     def test_a_server_a_call_is_running_in_is_never_evicted(self):
         self.set_free(2)
         root, _ = self.server("busy", idle=900)

@@ -145,6 +145,17 @@ def idle_servers(min_idle=None):
     return sorted(out, reverse=True)
 
 
+def _stop_failed(script: str, root: str) -> str | None:
+    """Why `sbt-warm --stop` did not stop the server of root (it timed out, or exited non-zero), or None."""
+    try:
+        r = process_runner().run([script, "--stop", "--root"], cwd=root, capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired:
+        return "sbt-warm --stop took over 3 min"
+    if r.returncode != 0:
+        return f"sbt-warm --stop failed (exit {r.returncode}): {(r.stderr or r.stdout or '').strip()[-160:]}"
+    return None
+
+
 def gov_evict(why):
     """Stop the idle kept server unused longest (holding its busy lock, so no call starts under the stop). The evicted
     checkout, or None."""
@@ -158,10 +169,10 @@ def gov_evict(why):
             script = os.path.join(root, "scripts", "sbt-warm")
             if not os.access(script, os.X_OK):
                 continue
-            try:
-                process_runner().run([script, "--stop", "--root"], cwd=root, capture_output=True, text=True, timeout=180)
-            except subprocess.TimeoutExpired:
-                gov_log(f"evict {root}: sbt-warm --stop took over 3 min")
+            failed = _stop_failed(script, root)
+            if failed:  # review 2026-11-26: a failed stop freed nothing, so it is no eviction
+                gov_log(f"evict {root}: {failed}")
+                continue
             gov_log(f"evicted the idle sbt server of {root} (unused {int(idle // 60)} min) for: {why}")
             note_event("sbt-server", root, "idle", "evicted", "governor", detail=why)
             return root
