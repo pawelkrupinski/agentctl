@@ -147,6 +147,23 @@ class GovernorTest(unittest.TestCase):
         os.environ["AGENTCTL_GOV_PS_PROBE"] = f"cat {ps}"
         self.assertAlmostEqual(A.gov_busy_cores(), 3.5)
 
+    def test_a_probe_is_argv_never_a_shell_command(self):
+        """Review 2026-11-26 (D B1): the governor ran $AGENTCTL_GOV_*_PROBE through `shell=True`, so any such variable
+        was a shell command it ran (`;`, `$(...)`, pipes). Now each is argv: the `;` is an argument of echo."""
+        marker = os.path.join(self.d, "ran")
+        saved = {k: os.environ.get(k) for k in ("AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_LOAD_PROBE")}
+        try:
+            os.environ["AGENTCTL_GOV_FREE_PROBE"] = f"echo 5; touch {marker}"
+            self.assertIsNone(A.free_gb())
+            os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo 2 && touch {marker}"
+            self.assertEqual(A.gov_busy_cores(), 0.0)
+            self.assertFalse(os.path.exists(marker), "the probe ran through a shell")
+            os.environ["AGENTCTL_GOV_FREE_PROBE"] = "echo 5"
+            self.assertEqual(A.free_gb(), 5.0)
+        finally:
+            for k, v in saved.items():
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+
     def test_capacity_prints_one_line(self):
         self.set_busy(A.machine_cores() * 0.2)
         with contextlib.redirect_stdout(io.StringIO()) as out:

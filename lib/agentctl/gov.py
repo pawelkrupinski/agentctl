@@ -11,7 +11,7 @@ import sys
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import attempt, err, pid_alive, process_cache, run_cmd
+from agentctl.core import attempt, err, pid_alive, probe_output, process_cache
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json, note_failure, unlink_file
 from agentctl.procs import proc_alive, process_start
@@ -76,9 +76,9 @@ def gov_machine():
     without the load: each class has its own) ($AGENTCTL_GOV_PRESSURE_PROBE / _LOAD_PROBE: the tests')."""
     load1, _cpu, pressure, _swap = machine_sample()
     if os.environ.get("AGENTCTL_GOV_PRESSURE_PROBE"):
-        pressure = float(run_cmd(os.environ["AGENTCTL_GOV_PRESSURE_PROBE"], shell=True).stdout.strip() or 0)
+        pressure = float(probe_output(os.environ["AGENTCTL_GOV_PRESSURE_PROBE"]).strip() or 0)
     if os.environ.get("AGENTCTL_GOV_LOAD_PROBE"):
-        load1 = float(run_cmd(os.environ["AGENTCTL_GOV_LOAD_PROBE"], shell=True).stdout.strip() or 0)
+        load1 = float(probe_output(os.environ["AGENTCTL_GOV_LOAD_PROBE"]).strip() or 0)
     try:
         laptop = laptop_pressure(None if knob_laptop_pressure() is not None else pressure_reading(), load=False)
     except Exception:

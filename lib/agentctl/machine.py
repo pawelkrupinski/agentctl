@@ -6,7 +6,7 @@ import os
 import re
 from typing import Any, Optional
 from agentctl.statefile import read_text_or
-from agentctl.core import HOME, run_cmd
+from agentctl.core import HOME, probe_output, run_cmd
 from agentctl.govknobs import knob_disk_path
 
 
@@ -104,7 +104,7 @@ def free_gb() -> Optional[float]:
     probe = os.environ.get("AGENTCTL_GOV_FREE_PROBE")
     if probe:
         try:
-            return float(run_cmd(probe, shell=True).stdout.strip())
+            return float(probe_output(probe).strip())
         except ValueError:
             return None
     free: Optional[float] = mem_stats()["free_gb"]

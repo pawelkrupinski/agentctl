@@ -224,6 +224,8 @@ class JvmReapTest(unittest.TestCase):
             case.fake("run_cmd", lambda rng, cmd, **kw: types.SimpleNamespace(stdout=rng.choice(["10 1 ?? 01:00 00:10 java -jar x\n11 2 ?? 1 2 java y\nbad\n", "", "5\n6\nx\n"]), returncode=0))
             case.fake("lsof_cwds", lambda rng, pids: {p: rng.choice(["/a", "/b", "/zz"]) for p in pids if rng.random() < 0.7})
             case.fake("allowed_path", lambda rng, p: p != "/not-allowed")
+            case.fake("sbt_serving", lambda rng: {rng.choice(["/a", "/b"]): (1, None, "x")} if rng.random() < 0.5 else {})
+            case.fake("pid_alive", lambda rng, pid: rng.random() < 0.7)
             case.fake("jvm_knob", lambda rng, name, default: rng.choice([default, "9000 9001", ""]))
             return (files,)
 

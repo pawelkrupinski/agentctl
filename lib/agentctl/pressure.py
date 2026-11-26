@@ -6,7 +6,7 @@ import os
 import re
 import sys
 from typing import Any
-from agentctl.core import attempt, run_cmd
+from agentctl.core import attempt, probe_output, run_cmd
 from agentctl.procs import ps_rows
 from agentctl.psparse import PsRow, parse_ps
 from agentctl.statefile import read_record, write_json, note_failure
@@ -26,7 +26,7 @@ def gov_busy_cores():
     busy), $AGENTCTL_GOV_PS_PROBE (ps's `pcpu args` rows)."""
     for cmd in (knob_gov_busy_probe(), knob_gov_load_probe()):
         if cmd:
-            return attempt(lambda: float(run_cmd(cmd, shell=True).stdout.strip() or 0), 0.0, catch=(ValueError,))
+            return attempt(lambda: float(probe_output(cmd).strip() or 0), 0.0, catch=(ValueError,))
     probe = knob_gov_ps_probe()
     fixed = machine_fixed() if not probe else None
     if fixed is not None:  # the tests' fixed machine (AGENTCTL_MACHINE): its busy cores, else its load
@@ -39,7 +39,7 @@ def ps_busy_cores(probe=None):
     """ps's %CPU summed (the machine's own ticks unreadable, or the tests' $AGENTCTL_GOV_PS_PROBE rows), less the
     governor's waiters and idle Claude sessions."""
     cols = ("pcpu", "args")
-    rows = parse_ps(run_cmd(probe, shell=True).stdout, cols) if probe else ps_rows(cols)
+    rows = parse_ps(probe_output(probe), cols) if probe else ps_rows(cols)
     return sum(ps_row_percent(row) for row in rows) / 100.0
 
 

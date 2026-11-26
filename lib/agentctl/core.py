@@ -53,6 +53,7 @@ agentctl never runs `secrets unlock` (Touch ID is the user's). Output never cont
 import glob
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -178,6 +179,14 @@ def run_cmd(args: Sequence[str], timeout: float = 60, text: bool = True, **kw: A
     except subprocess.TimeoutExpired:
         empty = "" if text else b""
         return subprocess.CompletedProcess(args, 124, empty, empty or f"timed out after {timeout} s")
+
+
+def probe_output(cmd: str | None) -> str:
+    """The stdout of a seam's command (the tests' $AGENTCTL_*_PROBE, a fixed ps line), run as ARGV: shlex-split, never
+    through a shell (review 2026-11-26: shell=True made any such environment variable a shell command the governor
+    ran -- `;`, `$(...)` and pipes included). "" for no command."""
+    argv = shlex.split(cmd or "")
+    return str(run_cmd(argv).stdout) if argv else ""
 
 
 def git_ok(repo: str, *args: str) -> bool:

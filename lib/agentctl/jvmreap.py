@@ -11,7 +11,7 @@ import time
 from contextlib import suppress
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, pid_alive, run_cmd, state_root
+from agentctl.core import HOME, pid_alive, probe_output, run_cmd, state_root
 from agentctl.timefmt import ts
 from agentctl.procs import lsof_cwds, ps_rows
 from agentctl.psparse import tosec
@@ -318,7 +318,7 @@ def _scan_read(fixture: str, cmd: str) -> str:
     if fixture:
         with open(fixture) as f:
             return f.read()
-    return str(run_cmd(cmd, shell=True).stdout)
+    return probe_output(cmd)
 
 
 def _scan_rows() -> list[tuple[int, int, str, str, str, str]]:
