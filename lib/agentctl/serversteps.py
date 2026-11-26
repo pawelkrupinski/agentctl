@@ -3,6 +3,9 @@
 
 from typing import Any, Callable, Sequence
 from agentctl.timelinecmd import timeline_step
+from agentctl.remote import remote_run_jobs
+from agentctl.filelog import drain_event_log
+from agentctl.core import slug
 from agentctl.inboxentry import inbox_write
 from agentctl.queuestall import queue_stall_step
 from agentctl.core import reap_children
@@ -124,6 +127,8 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
             ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues(store)]),
             ("reverts", lambda: [wlog(d, f"tick: {x}") for x in tick_reverts(repo, store)]),  # reverts.py: told their landers
             ("queue stall", lambda: logged(d, queue_stall_step(store))),
-            ("timeline", lambda: logged(d, timeline_step(store, clock.time(), owner_summary))),
+            ("file events", lambda: drain_event_log(store)),  # filelog.py: this host's file-held state's moves
+            ("timeline", lambda: logged(d, timeline_step(store, clock.time(), owner_summary,
+                                                         lambda run: remote_run_jobs(slug(repo), run), clock.sleep))),
             ("quiet deadlines", lambda: [wlog(d, f"tick: {x}") for x in tick_quiet_deadlines(store)]),
             ("stats", shared(lambda: maybe_stats_pass(repo, d, clock, store))))

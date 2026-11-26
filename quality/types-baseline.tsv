@@ -85,7 +85,7 @@ mypy-errors	owners	3
 mypy-errors	ownerwrapper	46
 mypy-errors	park	34
 mypy-errors	patches	3
-mypy-errors	policy	43
+mypy-errors	policy	20
 mypy-errors	pressure	16
 mypy-errors	processorlink	16
 mypy-errors	procwatch	2
@@ -141,7 +141,7 @@ mypy-errors	redverify	18
 mypy-errors	redview	25
 mypy-errors	redwaits	6
 mypy-errors	redworkflow	4
-mypy-errors	remote	45
+mypy-errors	remote	42
 mypy-errors	remotejobs	28
 mypy-errors	remotestore	28
 mypy-errors	repos	26

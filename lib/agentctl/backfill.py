@@ -11,10 +11,12 @@
 # IGNORE on the event's seq / the derived row's dedupe) and re-runnable: maintain's `backfill` step runs it on the
 # server, against the live store, after each new batch of events.
 
+import json
 import re
 import sqlite3
 from typing import Any, Callable, Iterable, Optional
 
+from agentctl.checkrows import check_run_record
 from agentctl.causes import HOLD_CAUSE, red_move_cause, reject_cause
 from agentctl.statefile import json_object
 
@@ -24,6 +26,8 @@ BACKFILL_SCHEMA = (
     "CREATE TABLE IF NOT EXISTS derived_events (dedupe TEXT PRIMARY KEY, at REAL NOT NULL, kind TEXT NOT NULL, "
     "item_type TEXT, item_id TEXT, from_state TEXT, to_state TEXT, actor TEXT, cause TEXT, detail TEXT, "
     "source TEXT NOT NULL, confidence TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS derived_check_runs (run TEXT PRIMARY KEY, change TEXT NOT NULL, record TEXT NOT NULL, "
+    "fetched_at REAL NOT NULL)",
 )
 
 Derived = Optional[tuple[str, str, str]]  # (cause, source, confidence)
@@ -190,12 +194,60 @@ def backfill_store(open_db: Callable[[], sqlite3.Connection], page: int = 5000) 
         c.close()
 
 
-def derived_rows(open_db: Callable[[], sqlite3.Connection]) -> dict[str, list[dict[str, Any]]]:
-    """Both derived tables, whole (empty before the first backfill)."""
+def derived_rows(open_db: Callable[[], sqlite3.Connection]) -> dict[str, Any]:
+    """The derived tables, whole (empty before the first backfill): `check_runs` is run id -> its fetched record."""
     c = open_db()
     try:
         ensure_backfill_tables(c)
         return {"backfill": [dict(r) for r in c.execute("SELECT * FROM event_backfill ORDER BY seq")],
-                "derived": [dict(r) for r in c.execute("SELECT * FROM derived_events ORDER BY at")]}
+                "derived": [dict(r) for r in c.execute("SELECT * FROM derived_events ORDER BY at")],
+                "check_runs": {r["run"]: {**json_object(r["record"]), "change": r["change"]}
+                               for r in c.execute("SELECT * FROM derived_check_runs") if json_object(r["record"]).get("rows")}}
+    finally:
+        c.close()
+
+
+CHECK_RUN_BUDGET = 30     # runs one backfill pass fetches from GitHub at most (the rest wait for the next pass)
+CHECK_RUN_PACE = 0.5      # s between two fetches
+CHECK_RUN_RETRY = 86400   # s before a run whose jobs could not be read is asked again
+
+
+def _check_runs_todo(c: sqlite3.Connection, now: float) -> list[tuple[str, str, dict[str, Any]]]:
+    """(run, change, its `check` summary) of each change's last remote check run with no rows yet: neither its own
+    `check_runs` record nor a derived one (a derived one without jobs is asked again after CHECK_RUN_RETRY)."""
+    done = {r[0]: (float(r[1]), bool(json_object(r[2]).get("rows")))
+            for r in c.execute("SELECT run, fetched_at, record FROM derived_check_runs")}
+    todo = []
+    for iid, data in c.execute("SELECT id, data FROM items WHERE type='change'"):
+        d = json_object(data)
+        chk = d.get("check") or {}
+        run = str(chk.get("run") or "")
+        if run and run not in {str(r.get("run")) for r in d.get("check_runs") or ()} and _due(done.get(run), now):
+            todo.append((run, iid, chk))
+    return todo
+
+
+def _due(fetched: Optional[tuple[float, bool]], now: float) -> bool:
+    """A run is fetched when it never was, or gave no jobs over CHECK_RUN_RETRY ago."""
+    return fetched is None or (not fetched[1] and now - fetched[0] > CHECK_RUN_RETRY)
+
+
+def backfill_check_runs(open_db: Callable[[], sqlite3.Connection], fetch: Callable[[str], list[dict[str, Any]]],
+                        now: float, pause: Callable[[float], Any], budget: int = CHECK_RUN_BUDGET) -> int:
+    """THE ROWS OF THE CHECK RUNS DECIDED BEFORE checkrows.py: each change item's last remote check run (`check.run`)
+    with no `check_runs` record of its own is fetched from GitHub (fetch: run id -> its jobs) at most `budget` a pass,
+    `pause`d between, and cached as a derived row (exact: GitHub's own job times); a run that gave no jobs is asked
+    again a day later. Returns the runs fetched."""
+    c = open_db()
+    try:
+        ensure_backfill_tables(c)
+        todo = _check_runs_todo(c, now)[:budget]
+        for i, (run, iid, chk) in enumerate(todo):
+            if i:
+                pause(CHECK_RUN_PACE)
+            rec = check_run_record(chk, fetch(run))
+            c.execute("INSERT OR REPLACE INTO derived_check_runs VALUES (?,?,?,?)", (run, iid, json.dumps(rec), now))
+            c.commit()
+        return len(todo)
     finally:
         c.close()

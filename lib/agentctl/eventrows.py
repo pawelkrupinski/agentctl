@@ -9,7 +9,7 @@
 
 import json
 import sqlite3
-from typing import Any
+from typing import Any, Callable
 
 from agentctl.causes import checked_cause
 
@@ -77,3 +77,31 @@ def legacy_cause(method: str, args: list[Any], kwargs: dict[str, Any]) -> tuple[
     else:
         kwargs["event"] = ev
     return args, kwargs
+
+
+def recorded_row(ev: dict[str, Any]) -> dict[str, Any]:
+    """A file-held state's event (filelog.py) checked for the feed: its item, kind, dedupe and time are required, a move
+    between two states names a cause of CAUSES (MissingCause otherwise), severity info (it reaches no inbox)."""
+    for k in ("at", "kind", "item_type", "item_id", "to_state", "dedupe"):
+        if ev.get(k) in (None, ""):
+            raise ValueError(f"a recorded event needs {k}: {ev!r:.200}")
+    if ev.get("from_state") != ev.get("to_state") or ev.get("cause"):
+        checked_cause(ev.get("cause"))
+    return {**ev, "severity": "info", "audience": {}, "refs": ev.get("refs") or {}}
+
+
+def record_rows(open_db: Callable[[], sqlite3.Connection], rows: list[dict[str, Any]]) -> int:
+    """File-held state's moves (filelog.py's offline log) into the feed in one transaction, idempotent by dedupe;
+    the rows new to it. A row the feed refuses (recorded_row) refuses the batch: nothing written."""
+    checked = [recorded_row(r) for r in rows]
+    c = open_db()
+    try:
+        c.execute("BEGIN IMMEDIATE")
+        before = c.total_changes
+        for r in checked:
+            insert_event(c, r)
+        n = c.total_changes - before
+        c.execute("COMMIT")
+        return n
+    finally:
+        c.close()

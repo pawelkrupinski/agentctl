@@ -7,6 +7,7 @@ import subprocess
 import sys
 from typing import Any, Callable, Sequence
 from contextlib import suppress
+from agentctl.filelog import drain_event_log
 from agentctl.core import (
     NoToken, err, git, git_ok, process_cache, reap_children, reds_dir, remote, run_bounded,
     spawn_detached, state_root)
@@ -122,7 +123,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequenc
     s = _SyncDuties(repo, o_r, clock, store)
     duty = s.duty
     return (("laptop role", s.claim_role),
-            ("outbox", lambda: flush_outbox(store)), ("state mirror", s.mirror), ("children", reap_children),
+            ("outbox", lambda: flush_outbox(store)), ("file events", lambda: drain_event_log(store)), ("state mirror", s.mirror), ("children", reap_children),
             ("events", lambda: project_events(store)), ("notifier", duty(lambda: notify_escalations(store))),
             ("alerts", duty(lambda: reconcile_alerts(store))),
             ("workspace trust", lambda: [err(x) for x in trust_asks()]),

@@ -9,6 +9,7 @@ import time
 from typing import Any, Optional
 from contextlib import suppress
 from agentctl.govpool import gov_dir_path
+from agentctl.filelog import note_event
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
 from agentctl.owned import lock_held
@@ -49,8 +50,10 @@ def gov_tickets() -> list[dict[str, Any]]:
 def gov_log_end(ticket_id: str, at: Optional[float] = None) -> None:
     """A ticket's end, in admits.jsonl beside its admission (`gov replay` reads both): exact for a ticket released in
     process, the first look after it for one a shell held (the kernel freed it)."""
+    end = round(at or epoch_now(), 1)
     with open(os.path.join(gov_dir(), "admits.jsonl"), "a") as af:
-        af.write(json.dumps({"end": round(at or epoch_now(), 1), "id": ticket_id}) + "\n")
+        af.write(json.dumps({"end": end, "id": ticket_id}) + "\n")
+    note_event("gov-ticket", ticket_id, "admitted", "released", "work-ended", at=end, key="released")
 
 
 def gov_bump() -> None:

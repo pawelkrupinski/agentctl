@@ -17,7 +17,8 @@ from typing import Any, Iterable, Optional
 
 from agentctl.timefmt import iso_at
 
-TERMINAL = {"landed", "rejected", "cancelled", "superseded", "verified", "cleared", "ok", "red", "unknown", "closed"}
+TERMINAL = {"landed", "rejected", "cancelled", "superseded", "verified", "cleared", "ok", "red", "unknown", "closed",
+            "released", "acked", "evicted"}  # the last three: file-held state (filelog.py)
 SKIP_KINDS = re.compile(r"\.illegal$|^policy\.unapproved$")
 
 

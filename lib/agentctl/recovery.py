@@ -1,6 +1,7 @@
 # agentctl, part `recovery`: the recovery registry.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.filelog import file_event, note_events
 from agentctl.clock import epoch_now
 import argparse
 import json
@@ -294,6 +295,7 @@ def inbox_acknowledge(a: argparse.Namespace, entries: list[dict[str, Any]]) -> N
     os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)
     for e in mine:
         open(os.path.join(inbox_dir(), "acked", e["id"]), "a").close()
+    note_events([file_event("inbox", e["id"], "unread", "acked", "agent", key="acked") for e in mine])
     left = len(entries) - len(mine)
     print(f"inbox: acknowledged {len(mine)} entr{'y' if len(mine) == 1 else 'ies'}"
           + (f"; {left} left unread for the agents they belong to (`--all` acks them: the owner's)" if left else ""))

@@ -2959,6 +2959,22 @@ items' recorded times), each row with its source and confidence (`exact`: a stat
 store copy: 0% own (the history predates the columns), 56% own-or-exact, ~100% with inferred. Once a week the tick sends
 the owner the top 3 time sinks (`TIME SINKS (7 d)`).
 
+PER-ROW RUNTIME (checkrows.py): a decided remote check's jobs become ROWS on its change item (`check_runs`, one record
+a run, the newest 10: the run, the tip it checked, its verdict, and each row's runner wait, start, end, seconds and
+conclusion; a run decided by its conclusion reads its jobs once more for their ends). The runs decided before this (an
+item's `check.run`) are fetched from GitHub by the hourly backfill, 30 a pass, 0.5 s apart, cached in
+`derived_check_runs` (a run that gave no jobs asked again a day later). `analyze` ranks the rows (`check rows`: n,
+p50, p90, total, runner-wait p50, failures, the slowest change); `history <change>` lists its runs and rows.
+
+FILE-HELD STATE AS EVENTS (filelog.py): the governor's tickets (`gov-ticket`: opened `waiting` when it asked -- cause
+`check-slot` for a class's cap, else `governor`, the hold in `detail` -- then `admitted`, `released`), an idle sbt
+server evicted (`sbt-server`), the inbox (`inbox`: `unread`, `acked`) and the waiting entries' statuses (`entry`) are
+lines of this host's OFFLINE LOG ($AGENTCTL_STATE_ROOT/events/offline.jsonl, appended under an flock: no network on
+the write). The processor's tick on either host drains it into the store (`record_events`, idempotent by dedupe) from a
+byte cursor that moves only once the store took a page: a store that is down, or a server older than the call, keeps
+the lines -- nothing is lost. A line the store would refuse is skipped, never a block; a drained log past 1 MB starts
+again. `analyze --type gov-ticket` (or inbox, entry) reads them like any item's.
+
 QUEUE STALLED (queuestall.py, the server's tick): changes open and no change item moved (a reminder is no move) for
 60 min ($AGENTCTL_QUEUE_STALL_AFTER) opens one STALLED condition naming the head blocker -- the oldest open change, its
 state, age and hold, and the open gate red. An alert, never a hold. The owner, 2026-11-26: kept, warn-only, its bound

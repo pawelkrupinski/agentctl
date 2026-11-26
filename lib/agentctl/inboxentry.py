@@ -1,6 +1,7 @@
 # agentctl, part `inboxentry`: the inbox's entries: its directory, the kinds a verdict names, who wrote it, the condition kinds only open_condition writes, and inbox_write, which hands a built entry to the writer the composition root wired (the alert router).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.filelog import note_event
 from agentctl.ids import stamp
 from agentctl.clock import epoch_now
 import datetime as dt
@@ -89,13 +90,18 @@ def wire_inbox_writer(writer: Callable[[dict[str, Any]], Any], now: Callable[[],
 
 
 def write_inbox_entry(rec: dict[str, Any]) -> Any:
-    """rec into the inbox: through the wired writer, else as its own file; the id of the entry that carries it."""
+    """rec into the inbox: through the wired writer, else as its own file; the id of the entry that carries it (its
+    opening an event of the offline log, filelog.py)."""
     if _inbox_writers:
-        return _inbox_writers[0](rec)
-    d = inbox_dir()
-    os.makedirs(d, exist_ok=True)
-    write_json(os.path.join(d, rec["id"] + ".json"), rec)
-    return rec["id"]
+        got = _inbox_writers[0](rec)
+    else:
+        d = inbox_dir()
+        os.makedirs(d, exist_ok=True)
+        write_json(os.path.join(d, rec["id"] + ".json"), rec)
+        got = rec["id"]
+    note_event("inbox", str(got or rec["id"]), None, "unread", "notified", at=rec.get("at"), detail=rec.get("kind"),
+               text=str(rec.get("verdict") or "")[:160], key="opened")
+    return got
 
 
 def claude_pid_env() -> int | None:

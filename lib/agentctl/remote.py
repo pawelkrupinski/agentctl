@@ -15,6 +15,7 @@ from agentctl.procs import Terminated
 from agentctl.wait import fetch_failed_log, job_log_lines, relevant_lines
 from agentctl.leases import lock_beat
 from agentctl.dispatches import record_dispatch, save_dispatch
+from agentctl.checkrows import check_run_record, with_run
 from agentctl.remotejobs import REMOTE_WORKFLOW, jobs_verdict, remote_progress, remote_read_bounds, verdict_jobs
 from agentctl.owned import backoff, cancel_run
 from agentctl.queue import VERIFY_AREAS_MODE, VERIFY_MODE
@@ -84,10 +85,11 @@ def remote_ghost(o_r, rem, jobs, t):
     return rem
 
 
-def remote_jobs_summary(jobs):
+def remote_jobs_summary(jobs: Any) -> list[dict[str, Any]]:
     """The run's jobs as `land status <id>` prints them: name, status, conclusion, started."""
     return [{"name": j.get("name"), "status": j.get("status"), "conclusion": j.get("conclusion"),
-             "started_at": j.get("started_at")} for j in jobs or []]
+             "created_at": j.get("created_at"), "started_at": j.get("started_at"),
+             "completed_at": j.get("completed_at")} for j in jobs or []]
 
 
 def remote_poll(o_r, rem, now):
@@ -116,7 +118,16 @@ def remote_poll(o_r, rem, now):
         return remote_decided_by_jobs(o_r, rem, run, name, jobs, now)
     if status in ("success", "failure", "cancelled", "skipped"):
         remote_decided_by_run(o_r, rem, run, name, status, now)
+        rem["jobs"] = remote_jobs_summary(remote_run_jobs(o_r, rem["run"]))  # the rows' ends (checkrows.py)
     return rem
+
+
+def remote_run_jobs(o_r: str, run: Any) -> list[dict[str, Any]]:
+    """The run's jobs; none when the forge cannot list them (the verdict stands without its rows)."""
+    try:
+        return (api(o_r, "GET", f"actions/runs/{run}/jobs", {"per_page": 100}) or {}).get("jobs") or []
+    except Exception:
+        return []
 
 
 def remote_progressed(o_r: str, rem: Any, status: Any, run: Any, now: float) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -200,18 +211,32 @@ def save_remote(d, e, rem, st):
 # WHAT A CHECKING CHANGE WAITS ON (2026-11-20: `land status <id>` said only "OPEN: checking for 25 min" for five changes
 # whose checks ran, queued or were lost on ci-runner): the remote check's run, branch, jobs and progress go on the change
 # item too, which every host's `land status` reads.
-def remote_mirror(eid, rem, st):
+def remote_mirror(eid: Any, rem: dict[str, Any], st: Any) -> None:
     """rem's summary on change item eid (`check`), when it changed; quiet when the store cannot take it."""
     if not eid:
         return
-    keep = ("branch", "run", "run_status", "status", "pushed_at", "progress_at", "unlisted_at", "jobs", "decided_at")
-    summary = {k: rem.get(k) for k in keep if rem.get(k) is not None}
     try:
         it = st.item("change", eid)
-        if it and (it.get("data") or {}).get("check") != summary:
-            st.update_item("change", eid, it["version"], {"check": summary})
+        new = mirror_update((it or {}).get("data") or {}, rem)
+        if it and new:
+            st.update_item("change", eid, it["version"], new)
     except Exception:
         pass  # the next poll mirrors it
+
+
+MIRRORED = ("branch", "run", "run_status", "status", "pushed_at", "progress_at", "unlisted_at", "jobs", "decided_at")
+
+
+def mirror_update(d: dict[str, Any], rem: dict[str, Any]) -> dict[str, Any]:
+    """What the change item's data `d` lacks of rem: its `check` summary, and -- once decided -- the run's rows in
+    `check_runs`, linked to the change (checkrows.py)."""
+    summary = {k: rem.get(k) for k in MIRRORED if rem.get(k) is not None}
+    new: dict[str, Any] = {"check": summary} if d.get("check") != summary else {}
+    if rem.get("status") and rem.get("run") is not None:
+        runs = with_run(d.get("check_runs"), check_run_record(rem, rem.get("jobs") or ()))
+        if runs != d.get("check_runs"):
+            new["check_runs"] = runs
+    return new
 
 
 def remote_check_lines(c, t):

@@ -13,8 +13,8 @@ from agentctl.core import state_root
 from agentctl.statefile import json_object
 from agentctl.offers import OfferTable
 from agentctl.leasetable import LeaseLost
-from agentctl.backfill import backfill_store, derived_rows
-from agentctl.eventrows import insert_event, migrate_events, move_event, opened_event
+from agentctl.backfill import backfill_store, derived_rows, backfill_check_runs
+from agentctl.eventrows import insert_event, migrate_events, move_event, opened_event, record_rows
 from agentctl.statemachines import (
     ARCHIVE, IllegalTransition, MACHINES, check_move, level_after, StaleVersion, StateSpec, TerminalState, change_exit_event, machine_state)
 
@@ -256,8 +256,14 @@ class Store(OfferTable):
     def events(self, after=0, limit=500):  # the feed after cursor `after`
         return self._event_rows("SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?", (after, limit))
 
-    def derived(self) -> dict[str, list[dict[str, Any]]]:  # the backfill's derived rows (backfill.py)
+    def record_events(self, rows: list[dict[str, Any]]) -> int:  # file-held state's moves (filelog.py, eventrows.py)
+        return record_rows(self.db, rows)
+
+    def derived(self) -> dict[str, Any]:  # the backfill's derived rows (backfill.py)
         return derived_rows(self.db)
+
+    def backfill_check_runs(self, fetch: Any, now: float, pause: Any) -> int:  # old runs' rows (backfill.py; server)
+        return backfill_check_runs(self.db, fetch, now, pause)
 
     def backfill(self) -> dict[str, int]:  # derive what the history lacks (backfill.py; idempotent)
         return backfill_store(self.db)

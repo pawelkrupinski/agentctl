@@ -53,6 +53,15 @@ class GovernorTest(unittest.TestCase):
         rec["at"] -= seconds
         A.write_json(t.path[:-5] + ".json", rec)
 
+    def test_a_tickets_wait_admission_and_release_are_events_of_the_offline_log(self):
+        """filelog.py: the governor's file-held state as transition events (opened waiting, admitted, released)."""
+        t = self.admit("suite", 1, job="suite", cores=0)
+        t.release()
+        rows = [json.loads(x) for x in open(A.log_path())]
+        mine = [(r["from_state"], r["to_state"], r["cause"]) for r in rows if r["item_id"] == os.path.basename(t.path)]
+        self.assertEqual(mine, [(None, "waiting", "governor"), ("waiting", "admitted", "governor"),
+                                ("admitted", "released", "work-ended")])
+
     def test_admitted_by_expected_memory_against_free_memory_less_the_reserve(self):
         self.set_free(5)
         self.assertIsNone(self.admit("agent", 5), "5 GB free less a 3 GB reserve is 2: no room for the 2.5 it needs now")

@@ -43,7 +43,7 @@ def http_client_errors():
 
 
 STORE_RPC_SAFE = ("get", "item", "items", "offers", "offer_of", "meta_get", "events", "item_events", "list", "renew", "note",
-                  "set_meta", "release", "close_offer", "offer_reason", "mark_notified", "meta_set")
+                  "set_meta", "release", "close_offer", "offer_reason", "mark_notified", "meta_set", "record_events")
 
 
 def _raise_http_error(e, method, path) -> None:

@@ -38,6 +38,9 @@ CAUSES = {
     "ci-verdict": "a CI run decided (green, red, a newer run)",
     "red-fix": "a red's fix moved (pending, verified, refuted)",
     "probe": "a condition's own probe decided (opened, or passed and closed)",
+    "governor": "the governor held, admitted or evicted it (its memory, cores or a class's cap)",
+    "work-ended": "the work holding it ended (a governor ticket released)",
+    "notified": "an inbox entry was written for it",
     "unattributed": "a legacy client that sent no cause (server.py's shim); never written by this code",
 }
 
@@ -115,3 +118,17 @@ def infra_shaped(verdict: str, lines: list[str]) -> bool:
 def reject_class(cause: str | None) -> str:
     """infra | test | policy for a reject's cause (unknown: test, the queue's judgement of the change's own failure)."""
     return REJECT_CLASS.get(cause or "", "test")
+
+
+# the cause of a waiting entry's status move (filelog.py's `entry` events, waitingdir.save_entry)
+ENTRY_CAUSE = {**PROJECTED_CAUSE, "joined": "batch", "migrated": "submitted", "abandoned": "check-failed-infra"}
+
+
+def entry_cause(status: str, why: str = "") -> str:
+    """The cause of a waiting entry entering `status` (a reject by THE classifier over its reason)."""
+    return reject_cause(why) if status == "rejected" else ENTRY_CAUSE.get(status, "agent")
+
+
+def governor_cause(waited_on: object) -> str:
+    """A governor wait's cause: a class's cap (the suite or check cap) is a slot; memory, cores, pressure the governor."""
+    return "check-slot" if waited_on and " cap)" in str(waited_on) else "governor"

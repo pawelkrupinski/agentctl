@@ -17,6 +17,8 @@ from agentctl.statefile import read_record, write_json
 from agentctl.procs import proc_alive, process_start
 from agentctl.owned import lock_held
 from agentctl.machine import free_gb, machine_cores, machine_sample
+from agentctl.filelog import file_event, note_event, note_events
+from agentctl.causes import governor_cause
 from agentctl.govtickets import gov_bump, gov_change_mark, gov_dir, gov_log, gov_log_end, gov_tickets, gov_wait_change
 from agentctl.jvmreap import sbt_warm_state
 from agentctl.govbudget import GOV_MEM_GB, gov_budget
@@ -164,6 +166,7 @@ def gov_evict(why):
             except subprocess.TimeoutExpired:
                 gov_log(f"evict {root}: sbt-warm --stop took over 3 min")
             gov_log(f"evicted the idle sbt server of {root} (unused {int(idle // 60)} min) for: {why}")
+            note_event("sbt-server", root, "idle", "evicted", "governor", detail=why)
             return root
         finally:
             f.close()
@@ -315,8 +318,14 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
 
 
 def gov_admit_write(d: Any, path: Any, rec: Any) -> Any:
-    """The admission's record beside its ticket, and one line of the admits log."""
+    """The admission's record beside its ticket, one line of the admits log, and its wait and admission as events
+    (filelog.py: the ticket opened `waiting` when it asked, `admitted` now; why it waited the wait's cause)."""
     write_json(path[:-5] + ".json", rec)
+    what = f"{rec['class']} {rec.get('job') or rec.get('kind')} ({rec.get('label')}, {rec['cores']:g} cores)"
+    note_events([file_event("gov-ticket", rec["id"], None, "waiting", governor_cause(rec.get("waited_on")),
+                            at=rec["at"] - rec["waited"], detail=rec.get("waited_on"), text=what, key="opened"),
+                 file_event("gov-ticket", rec["id"], "waiting", "admitted", "governor", at=rec["at"], text=what,
+                            key="admitted")])
     with open(os.path.join(d, "admits.jsonl"), "a") as af:
         af.write(json.dumps({k: rec[k] for k in ("class", "mem", "cores", "job", "label", "kind", "at", "waited",
                                                  "waited_on", "id")}) + "\n")

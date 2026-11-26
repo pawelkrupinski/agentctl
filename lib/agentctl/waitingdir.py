@@ -5,6 +5,8 @@ import glob
 import os
 import re
 from typing import Any
+from agentctl.filelog import note_event
+from agentctl.causes import entry_cause
 from agentctl.core import git, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -58,6 +60,9 @@ def save_entry(d: str, e: dict[str, Any]) -> None:
     if disk.get("status") in ENTRY_FINAL and e.get("status") not in ENTRY_FINAL:
         e.update({k: disk[k] for k in ("status", "why", "decided", "superseded_by", "landed_sha") if k in disk})
     write_json(p, e)
+    if e.get("status") and e.get("status") != disk.get("status"):  # its status moved: an event (filelog.py)
+        note_event("entry", str(e["id"]), disk.get("status"), str(e["status"]),
+                   entry_cause(str(e["status"]), str(e.get("why") or "")), detail=e.get("why"))
 
 
 def wlog(d: str, msg: str) -> None:

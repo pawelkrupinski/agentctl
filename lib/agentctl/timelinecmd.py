@@ -8,10 +8,12 @@ import argparse
 import re
 from typing import Any, Callable
 
+from agentctl.checkrows import change_rows_lines, change_runs, rows_lines, rows_report
 from agentctl.timeline import (analyze, as_json, find_items, history_lines, merge, render_text, render_tsv, top_sinks,
                                traces)
 
-ITEM_TYPES = ("change", "red", "watch", "batch", "condition", "hold", "revert", "issue", "branch-red")
+ITEM_TYPES = ("change", "red", "watch", "batch", "condition", "hold", "revert", "issue", "branch-red",
+              "gov-ticket", "inbox", "entry", "sbt-server")  # the last four: file-held state (filelog.py)
 WEEK = 7 * 86400
 HISTORY_MAX = 5  # items one `history` prints at most
 
@@ -71,7 +73,8 @@ def cmd_history(a: argparse.Namespace, store: Any, now: Callable[[], float]) -> 
     if a.json:
         print(as_json([_history_doc(it, tr) for it, tr in shown]))
         return 0
-    print("\n".join(line for it, tr in shown for line in history_lines(tr, it, t)))
+    print("\n".join(line for it, tr in shown
+                    for line in history_lines(tr, it, t) + change_rows_lines((it.get("data") or {}).get("check_runs") or ())))
     if len(hits) > HISTORY_MAX:
         print(f"  ... and {len(hits) - HISTORY_MAX} more matching items")
     return 0
@@ -79,28 +82,37 @@ def cmd_history(a: argparse.Namespace, store: Any, now: Callable[[], float]) -> 
 
 def cmd_analyze(a: argparse.Namespace, store: Any, now: Callable[[], float]) -> int:
     t = now()
-    events = merge(all_events(store), derived_of(store))
+    derived = derived_of(store)
+    events = merge(all_events(store), derived)
     since = t - a.since if a.since else 0.0
     if a.tsv:
         trs = traces(events, t, a.type).values()
         print(render_tsv(s for tr in trs for s in tr.segments if s.end >= since), end="")
         return 0
     rep = analyze(events, t, since, a.type)
-    print(as_json(rep) if a.json else render_text(rep))
+    if a.type == "change":  # the CI rows the check time went to (checkrows.py)
+        rep["check_rows"] = rows_report(change_runs(store.items("change"), derived.get("check_runs")), since)
+    print(as_json(rep) if a.json else "\n".join([render_text(rep)] + (
+        ["", *rows_lines(rep["check_rows"])] if "check_rows" in rep else [])))
     return 0
 
 
 BACKFILL_EVERY = 3600  # s between two backfill passes of the server's tick
 
 
-def timeline_step(store: Any, now: float, write: Callable[[str, list[str]], Any]) -> list[str]:
-    """The server's tick, on the live store in-process: the backfill (idempotent) at most hourly, and the weekly
-    summary of the top time sinks to the owner (write: the inbox). Its lines."""
+def timeline_step(store: Any, now: float, write: Callable[[str, list[str]], Any],
+                  fetch_jobs: Callable[[str], list[dict[str, Any]]] | None = None,
+                  pause: Callable[[float], Any] = lambda s: None) -> list[str]:
+    """The server's tick, on the live store in-process: the backfill (idempotent) at most hourly -- with the rows of
+    the old check runs (fetch_jobs: a run's jobs from GitHub, paced by `pause`) --, and the weekly summary of the top
+    time sinks to the owner (write: the inbox). Its lines."""
     out = []
     if now - float(store.meta_get("backfill_at", 0) or 0) >= BACKFILL_EVERY:
         n = store.backfill()
         store.meta_set("backfill_at", now)
-        out.append(f"backfill: {n.get('attributed', 0)} attribution(s), {n.get('opened', 0)} opening event(s) derived")
+        runs = store.backfill_check_runs(fetch_jobs, now, pause) if fetch_jobs else 0
+        out.append(f"backfill: {n.get('attributed', 0)} attribution(s), {n.get('opened', 0)} opening event(s) derived"
+                   + (f", {runs} old check run(s)' rows fetched" if runs else ""))
     said = weekly_time_sinks(store, now, write)
     return out + ([said] if said else [])
 
