@@ -8,6 +8,7 @@ import os
 import re
 import time
 from contextlib import suppress
+from typing import Any, Iterator
 from agentctl.core import HOME, attempt, env_num, hashlib_sha1
 from agentctl.statefile import read_record, write_json
 from agentctl.claudefiles import claude_projects_root
@@ -39,7 +40,7 @@ SESSION_PATH_DEPTH = 10  # path components kept per named path (a worktree is ne
 NAMED_PATH = re.compile(r"(?<![\w.~/$-])(~|\$HOME|\$\{HOME\})?(/[^\s\"'`;|&<>(){}\\,*?\[\]]+)")
 
 
-def tool_call_paths(text):
+def tool_call_paths(text: Any) -> set[str]:
     """The absolute paths a tool call's text names (`~/` and `$HOME/` expanded), each cut to SESSION_PATH_DEPTH parts."""
     out = set()
     for m in NAMED_PATH.finditer(str(text or "")):
@@ -51,7 +52,7 @@ def tool_call_paths(text):
     return out
 
 
-def tool_input_strings(x):
+def tool_input_strings(x: Any) -> Iterator[str]:
     if isinstance(x, str):
         yield x
     elif isinstance(x, dict):
@@ -83,46 +84,74 @@ def session_transcripts(t=None, active=None):
     return {k: v for k, v in groups.items() if any(t - m <= active for _p, m in v)}
 
 
+def _transcript_tail(path: str, cache: dict[str, Any]) -> tuple[dict[str, Any], bytes]:
+    """(the cache record of transcript `path` to extend, the bytes it has not read yet): a rewritten file is read whole."""
+    size = os.path.getsize(path)
+    with open(path, "rb") as f:
+        head = hashlib_sha1(f.read(512).decode("utf-8", "replace"))
+        rec = cache.get(path)
+        if not rec or rec.get("head") != head or int(rec.get("offset") or 0) > size:
+            rec = {"head": head, "offset": 0, "paths": []}
+        f.seek(int(rec["offset"]))
+        return rec, f.read()
+
+
+def _assistant_tool_calls(line: bytes) -> list[dict[str, Any]]:
+    """The tool calls of one transcript line (an assistant line naming a tool call; else none)."""
+    if b'"tool_use"' not in line or b"/" not in line:
+        return []
+    try:
+        r = json.loads(line)
+    except ValueError:
+        return []
+    if r.get("type") != "assistant":
+        return []
+    return [c for c in (r.get("message") or {}).get("content") or [] if isinstance(c, dict) and c.get("type") == "tool_use"]
+
+
 def transcript_paths(path, cache):
     """The paths the tool calls of transcript `path` named, read on from where cache[path] stopped (re-read whole when
     the file was rewritten). Updates cache in place."""
     try:
-        size = os.path.getsize(path)
-        with open(path, "rb") as f:
-            head = hashlib_sha1(f.read(512).decode("utf-8", "replace"))
-            rec = cache.get(path)
-            if not rec or rec.get("head") != head or int(rec.get("offset") or 0) > size:
-                rec = {"head": head, "offset": 0, "paths": []}
-            f.seek(int(rec["offset"]))
-            data = f.read()
+        rec, data = _transcript_tail(path, cache)
     except OSError:
         return set((cache.get(path) or {}).get("paths") or [])
     end = data.rfind(b"\n") + 1  # a line still being written is read next time
     paths = set(rec["paths"])
     for line in data[:end].split(b"\n"):
-        if b'"tool_use"' not in line or b"/" not in line:
-            continue
-        try:
-            r = json.loads(line)
-        except ValueError:
-            continue
-        if r.get("type") != "assistant":
-            continue
-        for c in (r.get("message") or {}).get("content") or []:
-            if isinstance(c, dict) and c.get("type") == "tool_use":
-                for text in tool_input_strings(c.get("input")):
-                    paths |= tool_call_paths(text)
+        for call in _assistant_tool_calls(line):
+            for text in tool_input_strings(call.get("input")):
+                paths |= tool_call_paths(text)
     rec.update(offset=int(rec["offset"]) + end, paths=sorted(paths))
     cache[path] = rec
     return paths
 
 
-def session_worktrees(wts, t=None, active=None):
-    """{realpath of a worktree of wts: the session that owns it} -- see OWNERSHIP FOLLOWS ACTIVITY."""
+def _worktree_forms(wts: Any) -> dict[str, set[str]]:
+    """{realpath: the spellings a tool call may name it by} of the worktrees wts (the non-empty strings)."""
     want = {}
     for w in wts:
         if isinstance(w, str) and w:
             want[os.path.realpath(w)] = {w.rstrip("/"), os.path.realpath(w)}
+    return want
+
+
+def _transcript_ids(path: str) -> tuple[str, str]:
+    """(the session id, the project directory name) of a transcript, its own or a subagent's."""
+    proj_dir = os.path.dirname(path) if "subagents" not in path else os.path.dirname(os.path.dirname(os.path.dirname(path)))
+    return os.path.basename(path)[:-len(".jsonl")], os.path.basename(proj_dir)
+
+
+def _claim_worktrees(want: dict[str, set[str]], out: dict[str, str], sid: str, proj: str, paths: set[str]) -> None:
+    """Adds to out each worktree of want (not yet owned) the transcript's project is, or whose path its tool calls named."""
+    for rp, forms in want.items():
+        if rp not in out and (proj == live_slug(rp) or any(p == f or p.startswith(f + "/") for p in paths for f in forms)):
+            out[rp] = f"session {sid[:12]}"
+
+
+def session_worktrees(wts, t=None, active=None):
+    """{realpath of a worktree of wts: the session that owns it} -- see OWNERSHIP FOLLOWS ACTIVITY."""
+    want = _worktree_forms(wts)
     if not want:
         return {}
     cache_path = recovery_dir(SESSION_PATHS)
@@ -130,16 +159,10 @@ def session_worktrees(wts, t=None, active=None):
     seen, out = {}, {}
     for _key, files in session_transcripts(t, active).items():
         for path, _m in sorted(files):
-            sid = os.path.basename(path)[:-len(".jsonl")]
-            proj = os.path.basename(os.path.dirname(path) if "subagents" not in path else
-                                    os.path.dirname(os.path.dirname(os.path.dirname(path))))
+            sid, proj = _transcript_ids(path)
             paths = transcript_paths(path, cache)
             seen[path] = cache.get(path)
-            for rp, forms in want.items():
-                if rp in out:
-                    continue
-                if proj == live_slug(rp) or any(p == f or p.startswith(f + "/") for p in paths for f in forms):
-                    out[rp] = f"session {sid[:12]}"
+            _claim_worktrees(want, out, sid, proj, paths)
     with suppress(OSError):
         os.makedirs(os.path.dirname(cache_path), exist_ok=True)
         write_json(cache_path, {k: v for k, v in seen.items() if v})  # only live sessions' transcripts are kept
