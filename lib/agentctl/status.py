@@ -78,7 +78,7 @@ def status_sources(sources, bound, keep=False):
     for the next refresh (one read per source at a time) -- a slow source never empties its section; else it is an
     error."""
     out, threads = {}, []
-    start = epoch_now()
+    start = time.monotonic()  # wall: a thread join's bound is real time, whatever the injected clock says
     for name, fn, factor in sources:
         th = _status_reading.get(name) if keep else None
         if not (th and th.is_alive()):
@@ -88,18 +88,18 @@ def status_sources(sources, bound, keep=False):
                 _status_reading[name] = th
         threads.append((name, th, bound * factor))
     for _name, th, b in threads:
-        th.join(max(0.0, start + b - epoch_now()))
+        th.join(max(0.0, start + b - time.monotonic()))  # wall: as above
     return status_answers(threads, out, keep)
 
 
 def status_read(name: Any, fn: Any, out: Any, keep: Any) -> Any:
     """One source read in its thread: its answer (or its error) and how long it took, into out (and, keep, the last)."""
-    t0 = epoch_now()
+    t0 = time.monotonic()  # wall: how long the read really took
     try:
         v = fn()
     except (Exception, SystemExit) as e:
         v = status_err(e)
-    out[name] = (epoch_now(), v, round(epoch_now() - t0, 2))
+    out[name] = (epoch_now(), v, round(time.monotonic() - t0, 2))  # wall: as above
     if keep:
         _status_last[name] = out[name]
 
@@ -252,14 +252,15 @@ def status_families(st, t):
 
 def status_store_probe(st, t):
     """Is the store answering, and the reconciler's own tick (the remote /v1/state's tick_at) when it is remote."""
-    t0 = epoch_now()
+    t0 = time.monotonic()  # wall: the store's real latency
     if isinstance(st, RemoteStore):
         snap = st.state() or {}
         tick = snap.get("tick_at")
-        return {"remote": st.url, "reachable": True, "ms": int((epoch_now() - t0) * 1000), "tick_at": tick,
+        return {"remote": st.url, "reachable": True, "ms": int((time.monotonic() - t0) * 1000),  # wall: as above
+                "tick_at": tick,
                 "tick_age": t - float(tick) if tick else None, "code": snap.get("version")}
     st.meta_get("last_alive", 0)
-    return {"remote": None, "reachable": True, "ms": int((epoch_now() - t0) * 1000)}
+    return {"remote": None, "reachable": True, "ms": int((time.monotonic() - t0) * 1000)}  # wall: as above
 
 
 def status_pressure():

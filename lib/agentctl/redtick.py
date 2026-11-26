@@ -1,7 +1,7 @@
 # agentctl, part `redtick`: the tick's red step (the processor; ci-why never acts).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
+from agentctl.clock import epoch_now, wall_epoch
 import functools
 import os
 import threading
@@ -405,9 +405,9 @@ def maybe_publish_gate(repo, store):
     summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
     # a push to main since the last publish (mark_gate_dirty): publish now, not at the 45 s mark
     marked = attempt(lambda: os.path.getmtime(gate_dirty_path()) > _last_gate_publish[0], False, catch=(OSError,))
-    if not marked and epoch_now() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
+    if not marked and wall_epoch() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
         return
-    _last_gate_publish[0] = epoch_now()
+    _last_gate_publish[0] = wall_epoch()  # the wall's: it is compared with a file's mtime above
 
     if not run_bounded("gate-publish", lambda: gate_publish_cycle(repo, store), env_num("AGENTCTL_STEP_BOUND", 120)):
         err("gate summary: still reading from an earlier cycle (the loop goes on)")
