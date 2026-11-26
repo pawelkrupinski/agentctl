@@ -57,6 +57,20 @@ def _deep_offer(d: dict[str, Any], sev: dict[str, Any], verdict: str | None, esc
     return sev, verdict, {**(data or {}), "deep_told": int(d.get("attempts") or 0)}
 
 
+def _offer_terms(d: dict[str, Any], tier: str, deadline: Any, escalate: bool, quiet: bool, verdict: Any,
+                 data: Any) -> tuple[dict[str, Any], dict[str, Any], Any, Any]:
+    """(severity, audience, verdict, data) the tier gives an offer: the author's own line and audience, the deep tier's
+    escalation, else what the caller said."""
+    sev: dict[str, Any] = {"severity": "escalate"} if escalate or tier == "deep" else {"severity": "info"} if quiet else {}
+    aud = {"audience": {k: v for k, v in (d.get("author") or {}).items() if k in ("worktree", "session")}} \
+        if tier == "author" else {}
+    if tier == "author":
+        verdict = _author_verdict(d, deadline)
+    elif tier == "deep":
+        sev, verdict, data = _deep_offer(d, sev, verdict, escalate, data)
+    return sev, aud, verdict, data
+
+
 def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=None, tail=None, quiet=False):
     """Into `offered`, with its tier from the ladder, its deadline and its offer (the picture a taker gets). quiet: a
     re-offer that is no escalation (its culprit decided: blame.py)."""
@@ -66,13 +80,7 @@ def red_offer(store, it, text, data=None, repo=None, escalate=False, verdict=Non
         d["culprit"] = decided_revert(d, store.clock())
         data = {**(data or {}), "culprit": d["culprit"]}
     deadline = _offer_deadline(store, d, tier)
-    sev = {"severity": "escalate"} if escalate or tier == "deep" else {"severity": "info"} if quiet else {}
-    aud = {"audience": {k: v for k, v in (d.get("author") or {}).items() if k in ("worktree", "session")}} \
-        if tier == "author" else {}
-    if tier == "author":
-        verdict = _author_verdict(d, deadline)
-    elif tier == "deep":
-        sev, verdict, data = _deep_offer(d, sev, verdict, escalate, data)
+    sev, aud, verdict, data = _offer_terms(d, tier, deadline, escalate, quiet, verdict, data)
     if verdict:
         sev["refs"] = {"key": d.get("key"), "run": (d.get("last_run") or {}).get("number"), "workflow": d.get("workflow"),
                        "verdict": verdict, "tail": tail or [d.get("line") or ""], "command": "red"}
@@ -146,6 +154,33 @@ def red_culprit_search(store, ob, repo, t, o_r):
     return out
 
 
+def _attach_update(d: dict[str, Any], ob: dict[str, Any], newer: bool, cv: str) -> dict[str, Any]:
+    """The fields a newer run failing the same way sets (THE JOBS FAILING NOW, issue 20261104T040527-1b4212:
+    convergence #834's prompt named the German leg, which failed in #818 and passed in #834): a newer run's failing jobs
+    replace the red's; every job it was ever seen failing stays in jobs_seen, which the re-keyed merge matches on."""
+    runs = sorted(set(d.get("runs") or []) | set(ob["names"]))
+    seen = sorted(set(d.get("jobs_seen") or d.get("jobs") or []) | set(ob["jobs"]))
+    upd = {"runs": runs, "jobs": sorted(ob["jobs"]) if newer else sorted(set(d.get("jobs") or []) | set(ob["jobs"])),
+           "jobs_seen": seen, "classifier": cv}  # observed under this classifier's key
+    if newer:
+        upd["last_run"] = ob["run"]
+    return upd
+
+
+def _attach_stored(store: Any, it: Any, upd: dict[str, Any]) -> Any:
+    """upd stored on the red; a ticking writer moved it (StaleVersion): re-read and re-apply, never lose the attach --
+    an unattached newer run reads as "no longer this failure" to a block's probe and discards its question."""
+    for attempt in range(5):
+        try:
+            store.update_item("red", it["id"], it["version"], upd)
+            break
+        except StaleVersion:
+            if attempt == 4:
+                raise
+            it = store.item("red", it["id"])
+    return store.item("red", it["id"])
+
+
 def red_attach_obs(store, it, ob):
     """A newer run failing the same way: attached to the red (its runs, its newest run)."""
     d = it["data"]
@@ -155,23 +190,7 @@ def red_attach_obs(store, it, ob):
     if runs == d.get("runs") and not newer and sorted(ob["jobs"]) == sorted(d.get("jobs") or []) \
             and d.get("classifier") == cv:
         return it
-    # THE JOBS FAILING NOW (issue 20261104T040527-1b4212: convergence #834's prompt named the German leg, which failed
-    # in #818 and passed in #834): a newer run's failing jobs replace the red's; every job it was ever seen failing stays
-    # in jobs_seen, which the re-keyed merge matches on
-    seen = sorted(set(d.get("jobs_seen") or d.get("jobs") or []) | set(ob["jobs"]))
-    upd = {"runs": runs, "jobs": sorted(ob["jobs"]) if newer else sorted(set(d.get("jobs") or []) | set(ob["jobs"])),
-           "jobs_seen": seen, "classifier": cv}  # observed under this classifier's key
-    if newer:
-        upd["last_run"] = ob["run"]
-    for attempt in range(5):  # a ticking writer moved it (StaleVersion): re-read and re-apply, never lose the attach --
-        try:  # an unattached newer run reads as "no longer this failure" to a block's probe and discards its question
-            store.update_item("red", it["id"], it["version"], upd)
-            break
-        except StaleVersion:
-            if attempt == 4:
-                raise
-            it = store.item("red", it["id"])
-    return store.item("red", it["id"])
+    return _attach_stored(store, it, _attach_update(d, ob, newer, cv))
 
 
 def stamp_author(store: Any, it: Any, author: Any, run: Any) -> Any:
@@ -256,16 +275,28 @@ def _tell_verdicts(done: dict[str, Any], d: dict[str, Any], row: Any, snap: Any,
     return did
 
 
+def _diagnoses_red(c: dict[str, Any], names: set[str], since: float) -> bool:
+    """Change c names one of the red's runs in its `Diagnoses-Red:` and landed no earlier than `since`."""
+    return bool(names & {str(x) for x in (c.get("data") or {}).get("diagnoses") or []}) and float(c.get("entered_at") or 0) >= since
+
+
+def _landed_diagnoses(store: Any, d: dict[str, Any]) -> list[Any] | None:
+    """The landed changes diagnosing red d, since just before it opened; None when the store cannot be read."""
+    names = {str(x) for x in red_names(d) if x is not None}
+    try:
+        since = float(d.get("opened_at") or 0) - 3600
+        return [c for c in store.items("change", ["landed"]) if _diagnoses_red(c, names, since)]
+    except Exception:  # an unread store decides nothing
+        return None
+
+
 def red_diagnosis_step(store, it, row, snap, repo, o_r, t):
     """A leased red's landed `Diagnoses-Red:` changes: each dispatched once to collect its evidence, and the first
     decided run after that dispatch told to the holder. The lines it did."""
     d = it["data"]
-    names = {str(x) for x in red_names(d) if x is not None}
     done = dict(d.get("diagnosis_runs") or {})
-    try:
-        landed = [c for c in store.items("change", ["landed"]) if names & {str(x) for x in (c.get("data") or {}).get(
-            "diagnoses") or []} and float(c.get("entered_at") or 0) >= float(d.get("opened_at") or 0) - 3600]
-    except Exception:  # an unread store decides nothing
+    landed = _landed_diagnoses(store, d)
+    if landed is None:
         return []
     did = _dispatch_diagnoses(landed, done, d, row, repo, o_r, t) + _tell_verdicts(done, d, row, snap, t)
     if did:
@@ -293,16 +324,15 @@ def red_history(row, t):
             "worktree": wt, "log": log, "dispatched": m.get("kind") in ("fixer", "owned")}
 
 
-def red_callable_evidence(d, snap, repo, o_r):
-    """For an outside red of a workflow that on main runs only when called (snap's callable_only): the line proving it
-    fixed, else None. Proof is BOTH: its file changed on main since the failing run (the first such commit C), and a
-    caller's newest decided run on main that contains C passed -- the forge expands the called file into the caller's
-    run, so a green one says the forge parses and runs the new file. A red caller vetoes nothing: it fails for reasons of
-    its own (Report run timings has 36 callers, some red at any hour; a "none failed" rule never let #38 clear).
-    "Report run timings" #38 (2026-10-19, a `workflow_call.secrets` block Forgejo 15 rejected; 32d1805de fixed it that
-    night) stayed red for 10 days: no run of its own could come to clear it. Never closed on the trigger alone:
-    5cf3f69's 811 re-opened retirements."""
-    if not repo or d.get("red_kind") != "outside" or d.get("workflow") not in ((snap or {}).get("callable_only") or ()):
+def _callable_only_outside_red(d: dict[str, Any], snap: Any, repo: Any) -> bool:
+    """An outside red of a workflow snap says runs on main only when called, in a repository we can read."""
+    return bool(repo) and d.get("red_kind") == "outside" and d.get("workflow") in ((snap or {}).get("callable_only") or ())
+
+
+def _callable_first_change(d: dict[str, Any], snap: Any, repo: Any, o_r: Any) -> tuple[str, list[str]] | None:
+    """(the first commit on main to change the workflow's file since the failing run, the names of its callers),
+    for an outside red of a workflow that on main runs only when called; None otherwise."""
+    if not _callable_only_outside_red(d, snap, repo):
         return None
     run = d.get("last_run") or {}
     main = f"refs/remotes/{remote()}/main"
@@ -312,15 +342,33 @@ def red_callable_evidence(d, snap, repo, o_r):
         return None
     log = git(repo, "log", "--format=%H", f"{run['headSha']}..{main}", "--", path, check=False)
     changes = log.stdout.split() if log.returncode == 0 else []
-    if not changes:
-        return None
-    first = changes[-1]
+    return (changes[-1], meta["callers"].get(os.path.basename(path), [])) if changes else None
+
+
+def _callers_passed(repo: Any, first: str, callers: list[str], snap: Any) -> list[str]:
+    """Each caller's newest decided run on main that contains commit `first` and passed, as `name #number`."""
     latest = (snap or {}).get("latest") or {}
-    passed = sorted(f"{name} #{last.get('number')}" for name, last in
-                    ((n, latest.get(n) or {}) for n in meta["callers"].get(os.path.basename(path), []))
-                    if last.get("conclusion") == "success" and contains_local(repo, first, last.get("headSha")))
+    runs = ((n, latest.get(n) or {}) for n in callers)
+    return sorted(f"{name} #{last.get('number')}" for name, last in runs
+                  if last.get("conclusion") == "success" and contains_local(repo, first, last.get("headSha")))
+
+
+def red_callable_evidence(d, snap, repo, o_r):
+    """For an outside red of a workflow that on main runs only when called (snap's callable_only): the line proving it
+    fixed, else None. Proof is BOTH: its file changed on main since the failing run (the first such commit C), and a
+    caller's newest decided run on main that contains C passed -- the forge expands the called file into the caller's
+    run, so a green one says the forge parses and runs the new file. A red caller vetoes nothing: it fails for reasons of
+    its own (Report run timings has 36 callers, some red at any hour; a "none failed" rule never let #38 clear).
+    "Report run timings" #38 (2026-10-19, a `workflow_call.secrets` block Forgejo 15 rejected; 32d1805de fixed it that
+    night) stayed red for 10 days: no run of its own could come to clear it. Never closed on the trigger alone:
+    5cf3f69's 811 re-opened retirements."""
+    found = _callable_first_change(d, snap, repo, o_r)
+    if found is None:
+        return None
+    first, callers = found
+    passed = _callers_passed(repo, first, callers, snap)
     if not passed:
         return None
-    return (f"{d.get('workflow')} runs only when called: its file changed on main since #{run.get('number')} "
+    return (f"{d.get('workflow')} runs only when called: its file changed on main since #{(d.get('last_run') or {}).get('number')} "
             f"({first[:10]}), and its callers' runs since passed: {', '.join(passed[:3])}"
             + (f" and {len(passed) - 3} more" if len(passed) > 3 else ""))
