@@ -141,6 +141,47 @@ class BreakerTest(CrashLoopBase):
         self.assertNotIn("crash_loop", it["data"])
 
 
+class LaunchCauseTest(CrashLoopBase):
+    """2026-11-24 (Main #2877, Alert backtest #26, Tool self-tests #533): three launches each died at launch, the red
+    climbed to the deep tier, died there too, and ended a HARNESS FAULT -- though one cause (the vault locked: a session
+    `blocked` on Touch ID) was the owner's, and no tier could have launched past it."""
+    VAULT = "ended with no LANDED / GAVE UP (session ab12cd34: blocked)"
+    VAULT_NOTES = "waiting for Touch ID: secrets unlock movies"
+
+    def died(self, it, n, outcome, notes, minutes=1):
+        for _ in range(n):
+            it, acts = self.launch(it, outcome=outcome, notes=notes, minutes=minutes)
+        return it, acts
+
+    def test_three_launches_dying_at_launch_of_the_vault_wait_on_the_owner_not_a_deeper_tier(self):
+        it, acts = self.died(self.red(), 3, self.VAULT, self.VAULT_NOTES)
+        self.assertEqual(it["state"], "blocked-external")
+        self.assertEqual(it["data"]["crash_loop"]["stage"], "owner")
+        self.assertEqual(it["data"]["tier"], "fresh")  # never moved up: a deeper tier dies of the same vault
+        blk = A.red_block_of(it, self.st)
+        self.assertTrue(blk["cause"].startswith("vault-"), blk["cause"])
+        self.assertEqual(self.st.items("issue", ("open",)), [])  # the owner's, never agentctl's own issue
+
+    def test_the_same_cause_that_is_no_owners_skips_the_deep_tier_for_the_harness_block(self):
+        it, _ = self.died(self.red(), 3, "ended with no LANDED / GAVE UP (session ab12cd34: blocked)", "claude: model overloaded")
+        self.assertEqual(it["state"], "blocked-external")
+        self.assertEqual(it["data"]["crash_loop"]["stage"], "harness")
+        self.assertEqual(it["data"]["tier"], "fresh")
+        self.assertIn("all dying at launch of", A.red_block_of(it, self.st)["text"])
+
+    def test_launches_dying_of_different_causes_climb_the_ladder_as_before(self):
+        it = self.red()
+        for notes in ("claude: model overloaded", "claude: disk full", "claude: bad config"):
+            it, _ = self.launch(it, outcome="ended with no LANDED / GAVE UP", notes=notes, minutes=1)
+        self.assertEqual((it["state"], it["data"]["tier"]), ("offered", "deep"))
+
+    def test_launch_cause_reads_two_deaths_of_one_thing_alike(self):
+        a = {"outcome": "NOT STARTED: ended with no LANDED / GAVE UP (session ab12cd34: blocked)", "notes": "see /tmp/x1/log 42"}
+        b = {"outcome": "NOT STARTED: ended with no LANDED / GAVE UP (session 99ee77ff: blocked)", "notes": "see /tmp/y2/log 7"}
+        self.assertEqual(A.launch_cause(a), A.launch_cause(b))
+        self.assertIsNone(A.crash_cause([a, {"outcome": "ended with no LANDED", "notes": ""}]))  # one lived past launch
+
+
 class BlockTextTest(CrashLoopBase):
     """2026-11-01, #579: the block said `less ?` -- the owner's lapses carried no worktree -- and only the newest
     launch's outcome. It names the real log (the owner's wrapper log, its stderr) and every launch's stop reason."""

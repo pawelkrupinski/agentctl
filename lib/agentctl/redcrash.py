@@ -56,11 +56,30 @@ def red_crash_streak(d):
 LAUNCH_FAILURE = re.compile(r"^(?:NOT STARTED: )+`claude --bg` (.*)$", re.S)
 
 
-def launch_failure(outcome):
+def launch_failure(outcome: Any) -> str | None:
     """A launch `claude --bg` refused (fixer.bg_start: `exit N: <its stderr>`, or `failed (<error>)`): that text, which
     is the whole story -- the session never started, so there is no log to read. None for any other outcome."""
     m = LAUNCH_FAILURE.match(str(outcome or ""))
     return " ".join(m.group(1).split()) if m else None
+
+
+def launch_cause(h: dict[str, Any]) -> str:
+    """WHY one launch died, as a comparable line: what `claude --bg` refused, or the outcome and the last line the wrapper
+    said, lowercased with every id, number and path reduced to `#` -- so two launches dying of one thing read alike."""
+    out = re.sub(r"^(?:NOT STARTED: )+", "", str(h.get("outcome") or ""))
+    failed = launch_failure(h.get("outcome"))
+    last = [l.strip() for l in str(h.get("notes") or "").splitlines() if l.strip()]
+    text = failed if failed is not None else f"{out} {last[-1] if last else ''}"
+    return " ".join(re.sub(r"[0-9a-f]{6,}|\d+|/\S+", "#", text.lower()).split())[:300]
+
+
+def crash_cause(streak: list[dict[str, Any]]) -> str | None:
+    """The one cause a streak of launches that all DIED AT LAUNCH (NOT STARTED: within RED_QUICK_EXIT of their lease,
+    redlease.red_end_outcome) share, else None: a loop of one cause is no tier's to climb out of, it is the cause's to fix."""
+    if not streak or not all(str(h.get("outcome") or "").startswith("NOT STARTED") for h in streak):
+        return None
+    causes = {launch_cause(h) for h in streak}
+    return causes.pop() if len(causes) == 1 else None
 
 
 def red_crash_evidence(streak):
@@ -110,16 +129,17 @@ def red_crash_launches(streak):
     return "; ".join(out)
 
 
-def red_crash_loop(store, it, upd, streak, t):
+def red_crash_loop(store, it, upd, streak, t, same_cause=None):
     """RED_CRASH_LOOP launches in a row with no result: escalated once, with the evidence, and moved up -- deep tier,
-    or (the deep tier crash-looped too) an owner block that clears itself."""
+    or (the deep tier crash-looped too) an owner block that clears itself. same_cause (crash_cause): every launch died
+    at launch of one thing -- a deeper tier dies of it too, so the red goes straight to the harness block."""
     d = {**it["data"], **upd}
     key, n = d["key"], len(streak)
     tail = red_crash_evidence(streak)
     mark = len(d.get("history") or [])
     tier = it["data"].get("tier")
     run = (d.get("last_run") or {}).get("number")
-    if not (d.get("crash_loop") or {}).get("stage") and tier != "deep":
+    if not (d.get("crash_loop") or {}).get("stage") and tier != "deep" and not same_cause:
         verdict = (f"RED ESCALATE: {red_what(d)}: CRASH LOOP -- {n} fixer launches in a row ({tier}) ended with no "
                    f"LANDED / GAVE UP; not dispatched that way again: moved up to the deep tier "
                    f"(`~/bin/agentctl red status -v`)")
@@ -131,7 +151,7 @@ def red_crash_loop(store, it, upd, streak, t):
     cmd = red_crash_cmd(streak)
     issue = red_harness_issue(store, d, n, tier, red_crash_launches(streak), cmd)
     text = (f"HARNESS FAULT: the fixers crash on {red_what(d)}: {n} launches in a row at the {tier} tier ended with "
-            f"no LANDED / GAVE UP ({red_crash_launches(streak)}). The fixer harness, not the code, is what fails: "
+            f"no LANDED / GAVE UP ({red_crash_launches(streak)})" + (f", all dying at launch of: {same_cause}" if same_cause else "") + f". The fixer harness, not the code, is what fails: "
             f"agentctl's own bug, filed for its maintainer as issue {issue} (logs: `{cmd}`). Auto-clears when {until}, "
             f"when the issue is closed, or in {fmt_age(knob_red_crash_block_max())} "
             "(offered again)")

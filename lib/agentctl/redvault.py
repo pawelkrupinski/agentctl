@@ -137,7 +137,7 @@ def red_vault_decide(store, ns, answer):
                "it; if the action fails you are told" for line in out]
 
 
-def red_vault_block(store, it, upd, ns, why, t):
+def red_vault_block(store: Any, it: dict[str, Any], upd: dict[str, Any], ns: str, why: Any, t: float) -> list[str]:
     """The red waits on vault ns: it joins the vault's ONE lease (opened when none is live). Moved quietly: the tick's
     red_owner_reminders tells the owner once, with `decide vault-<ns>`."""
     d = {**it["data"], **upd}

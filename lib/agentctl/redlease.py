@@ -6,7 +6,7 @@ import re
 from typing import Any
 from agentctl.core import remote
 from agentctl.landstate import landed_state
-from agentctl.repos import RED_PRIMARY
+from agentctl.repos import RED_PRIMARY, red_repo_of
 from agentctl.claudefiles import claude_limit, claude_limit_reset
 from agentctl.allowedpaths import allowed_path
 from agentctl.redrecord import red_closed_of, red_what
@@ -16,8 +16,9 @@ from agentctl.redask import red_decision
 from agentctl.redmove import red_close, red_move
 from agentctl.redopen import red_history, red_offer
 from agentctl.redcrash import (
-    AGENTCTL_DEFECT_CAUSE, probe_red_newer_verdict, red_blamed_issue, red_crash_loop, red_crash_streak,
+    AGENTCTL_DEFECT_CAUSE, crash_cause, probe_red_newer_verdict, red_blamed_issue, red_crash_loop, red_crash_streak,
     red_harness_block, red_newer_probe)
+from agentctl.escalationtable import OWNER_SIGNALS
 from agentctl.reddecision import RED_DECIDE, red_ask_route, red_decision_block, red_decision_needed
 from agentctl.fixerlife import GAVE_UP_DECIDE, GAVE_UP_FIXED
 from agentctl.redvault import red_vault_block, vault_ask_ns, vault_ask_unfounded
@@ -210,9 +211,20 @@ class LeaseEnd:
 
     def crash_loop(self) -> list[str] | None:
         streak = red_crash_streak({**self.d, **self.upd})
-        if len(streak) >= knob_red_crash_loop():
-            return red_crash_loop(self.store, self.it, self.upd, streak, self.t)
-        return None
+        if len(streak) < knob_red_crash_loop():
+            return None
+        cause = crash_cause(streak)
+        if cause and OWNER_SIGNALS.search(cause):
+            return self.owner_crash_loop(streak, cause)
+        return red_crash_loop(self.store, self.it, self.upd, streak, self.t, same_cause=cause)
+
+    def owner_crash_loop(self, streak: list[dict[str, Any]], cause: str) -> list[str]:
+        """EVERY LAUNCH DIED AT LAUNCH OF AN OWNER-ONLY CAUSE (the vault, Touch ID): no tier and no harness fix helps, so no
+        fixer is launched again -- the red waits on the vault's one lease and the owner is told once (`decide vault-<ns>`)."""
+        ns = red_repo_of(self.d).rsplit("/", 1)[-1]
+        upd = {**self.upd, "crash_loop": {"stage": "owner", "mark": len(self.d.get("history") or []) + 1, "at": self.t,
+                                           "from": self.d.get("tier"), "launches": len(streak), "cause": cause}}
+        return red_vault_block(self.store, self.it, upd, ns, f"{len(streak)} fixer launches in a row died at launch: {cause}", self.t)
 
     def offer_again(self) -> list[str]:
         h, what = self.h, red_what(self.d)
