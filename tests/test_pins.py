@@ -123,7 +123,7 @@ class ReconcilerReadsTheStoreTest(PinsBase):
 
     def test_end_to_end_the_laptop_stores_and_the_reconciler_reads(self):
         self.laptop()
-        A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), now_=time.time())
+        A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), now_=A.epoch_now())
         self.server()
         self.assertEqual(A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store))["pins"], {"pl": "528", "de": "528"})
         self.assertEqual(A.pinned_recording(), "528")

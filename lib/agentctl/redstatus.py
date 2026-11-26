@@ -1,7 +1,7 @@
 # agentctl, part `redstatus`: `agentctl red status`: its text from the status model, and the snapshot the tick writes of it
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-import time
+from agentctl.clock import epoch_now
 from typing import Any
 from agentctl.core import tilde
 from agentctl.statefile import read_record, write_json
@@ -29,7 +29,7 @@ def revert_lines(rv: Any) -> list[str]:
         return [f"reverts: unread ({rv['error']})"]
     if not rv:
         return []
-    return [f"reverts ({len(rv)} unacked: `agentctl revert ack <id> --rework|--drop`):"] + [revert_line(r, time.time()) for r in rv]
+    return [f"reverts ({len(rv)} unacked: `agentctl revert ack <id> --rework|--drop`):"] + [revert_line(r, epoch_now()) for r in rv]
 
 
 def untracked_lines(never: Any) -> list[str]:
@@ -110,7 +110,7 @@ def owner_context_lines(o: dict[str, Any]) -> list[str]:
 
 def red_status_text(store: Any, verbose: bool = False) -> str:
     """`agentctl red status`'s text, from the status model (its reds, families and dispatcher sections)."""
-    t = store.clock() if hasattr(store, "clock") else time.time()
+    t = store.clock() if hasattr(store, "clock") else epoch_now()
     try:
         stalled = red_fix_liveness(store, t)
     except (Exception, SystemExit):
@@ -121,13 +121,13 @@ def red_status_text(store: Any, verbose: bool = False) -> str:
 
 def write_red_status_snapshot(store: Any) -> None:
     """The sync's step: the rendered red status, for `red status` to print at once."""
-    write_json(red_status_snapshot_path(), {"at": time.time(), "text": red_status_text(store or status_store())})
+    write_json(red_status_snapshot_path(), {"at": epoch_now(), "text": red_status_text(store or status_store())})
 
 
 def red_status(store: Any, verbose: bool = False, live: bool = False) -> int:
     """`agentctl red status`: the sync's fresh snapshot, else read now."""
     snap = {} if verbose or live else (read_record(red_status_snapshot_path()) or {})
-    age = time.time() - float(snap.get("at") or 0)
+    age = epoch_now() - float(snap.get("at") or 0)
     if snap.get("text") and 0 <= age <= RED_STATUS_FRESH:
         print(f"{snap['text']}\n(as of {age:.0f} s ago: the sync's snapshot; `agentctl red status --live` reads the store)")
         return 0

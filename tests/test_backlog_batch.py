@@ -624,8 +624,8 @@ class PushBatchTest(test_queue.QueueTest):
         saved = A.push_change
         A.push_change = lambda repo, d, e, clock, st: "the landing lease is busy"
         try:
-            A.tick_changes(self.r.path, self.d, *on_clock(FakeClock(time.time() + 20 * 60)))
-            A.tick_changes(self.r.path, self.d, *on_clock(FakeClock(time.time() + 40 * 60)))
+            A.tick_changes(self.r.path, self.d, *on_clock(FakeClock(A.epoch_now() + 20 * 60)))
+            A.tick_changes(self.r.path, self.d, *on_clock(FakeClock(A.epoch_now() + 40 * 60)))
         finally:
             A.push_change = saved
         st = A.process_store()
@@ -762,11 +762,11 @@ class OverlapTest(BacklogBatchTest):
             row = next(r for r in A.change_rows(st) if r["id"] == eid)
             self.assertIn(f"waits for {blocker}", row["hold"], "land status names the real hold")
         self.assertIsNone(A.change_hold_stuck(st, st.item("change", ef)["data"]["hold"], st.item("change", ef),
-                                              time.time()))
+                                              A.epoch_now()))
         it = st.item("change", ee)
-        self.assertIsNone(A.change_hold_stuck(st, None, it, time.time()), "between ticks: its hold not yet recorded")
-        self.assertIn("nothing holds it", A.change_hold_stuck(st, None, it, time.time() + A.UNHELD_GRACE + 1))
-        self.assertIn("held for over", A.change_hold_stuck(st, it["data"]["hold"], it, time.time() + 7 * 3600))
+        self.assertIsNone(A.change_hold_stuck(st, None, it, A.epoch_now()), "between ticks: its hold not yet recorded")
+        self.assertIn("nothing holds it", A.change_hold_stuck(st, None, it, A.epoch_now() + A.UNHELD_GRACE + 1))
+        self.assertIn("held for over", A.change_hold_stuck(st, it["data"]["hold"], it, A.epoch_now() + 7 * 3600))
 
     def test_a_change_waiting_for_a_green_gate_holds_no_younger_change_sharing_its_file(self):
         """2026-11-20, Main #2716 red: metrics-packages and phase7-houses sat `queued ... held: its check waits for
@@ -811,7 +811,7 @@ class OverlapTest(BacklogBatchTest):
     def test_land_status_of_a_checking_change_names_its_remote_run_and_jobs(self):
         """2026-11-20: five changes `checking`, and `land status <id>` said only "OPEN: checking for 25 min"."""
         import contextlib, io
-        st, t = A.process_store(), time.time()
+        st, t = A.process_store(), A.epoch_now()
         st.put_item("change", "20261120-055534-movies-x-1", "checking", {"worktree": "/w", "head": "a" * 40})
         A.remote_mirror("20261120-055534-movies-x-1", {
             "branch": "check/x-1", "run": 44682642375, "run_status": "waiting", "pushed_at": t - 5400,

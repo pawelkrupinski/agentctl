@@ -1,6 +1,7 @@
 # agentctl, part `owned`: owned long-running modes.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now, wall_epoch
 import fcntl
 import glob
 import json
@@ -254,9 +255,9 @@ def restart_if_changed(owned: Sequence["Owned"] = (), argv: list[str] | None = N
     once the file on disk changed.
     The owned locks are released with their records kept: the new process takes them back."""
     every = env_num("AGENTCTL_RESTART_CHECK", OWNERS_RESTART_CHECK)
-    if time.time() - _last_code_check[0] < every:
+    if epoch_now() - _last_code_check[0] < every:
         return
-    _last_code_check[0] = time.time()
+    _last_code_check[0] = epoch_now()
     now_code = code_version()
     if not now_code or now_code == START_CODE:
         return
@@ -359,7 +360,7 @@ class WaitLoop:
 
     def __init__(self, waiters: list[Any], timeout: float, floor: float, cap: float) -> None:
         self.waiters, self.timeout = waiters, timeout
-        self.deadline = time.time() + timeout
+        self.deadline = wall_epoch() + timeout
         self.attach_poll = env_num("AGENTCTL_ATTACH_POLL", 15)
         self.delays = backoff(floor, cap)
         self.next_check = 0.0
@@ -381,13 +382,13 @@ class WaitLoop:
 
     def poll_owned(self, pending: list[Any]) -> None:
         """The checks of the waiters this process owns, when the backoff's next one is due."""
-        if time.time() < self.next_check:
+        if wall_epoch() < self.next_check:
             return
         for w in pending:
             if w.owned:
                 self.last[w.key] = w.poll_owned()
                 self.announce(w)
-        self.next_check = time.time() + next(self.delays)
+        self.next_check = wall_epoch() + next(self.delays)
 
     def poll_attached(self, pending: list[Any]) -> None:
         """The waiters another process owns: its verdict when it is in (or the target taken over when it left none)."""
@@ -407,10 +408,10 @@ class WaitLoop:
 
     def pause(self, pending: list[Any]) -> None:
         """Sleep to the next poll, never past the deadline (an attached waiter is read every ATTACH_POLL s)."""
-        step = self.next_check - time.time()
+        step = self.next_check - wall_epoch()
         if any(not w.owned for w in pending):
             step = min(step, self.attach_poll)
-        time.sleep(max(0.05, min(step, self.deadline - time.time())))
+        time.sleep(max(0.05, min(step, self.deadline - wall_epoch())))  # wall: waits on and times real processes and threads
 
     def run(self) -> int:
         """Block until every waiter has a verdict. Exit 0 all ok, 1 any failed, 2 timeout."""
@@ -424,7 +425,7 @@ class WaitLoop:
                 if not pending:
                     return self.verdict()
                 restart_if_changed([w.own for w in self.waiters if w.owned])
-                if time.time() >= self.deadline:
+                if wall_epoch() >= self.deadline:
                     return self.timeout_report(pending)
                 self.pause(pending)
         finally:

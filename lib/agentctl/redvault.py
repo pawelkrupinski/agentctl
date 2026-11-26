@@ -1,6 +1,7 @@
 # agentctl, part `redvault`: vault asks, blocks nobody can see clear.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import re
 import time
 from dataclasses import dataclass
@@ -368,7 +369,7 @@ def block_meta(a: Any, plan: BlockPlan) -> dict[str, Any]:
                                         (f" -- {a.note}" if getattr(a, "note", "") else ""),
             "probe": {"kind": ip.kind, "args": ip.args}, "until": plan.words, "keys": plan.keys, "text": text,
             "details": plan.details, "verify": not (ip.kind == "workflow_green" and ip.args.get("workflow") == plan.workflow),
-            "probed_at": time.time()}
+            "probed_at": epoch_now()}
 
 
 def open_block(st: Any, a: Any, plan: BlockPlan) -> str:
@@ -376,7 +377,7 @@ def open_block(st: Any, a: Any, plan: BlockPlan) -> str:
     NotBlocked when another holder has the name."""
     cause, ip, oc = getattr(a, "cause", None), plan.iprobe, plan.owner_cause
     lname = plan.lname or block_lease(plan.keys[0])
-    r = st.acquire(lname, f"owner:{oc}", BLOCK_TTL, BLOCK_MAX, progress=f"{ip.detail}@{int(time.time())}",
+    r = st.acquire(lname, f"owner:{oc}", BLOCK_TTL, BLOCK_MAX, progress=f"{ip.detail}@{int(epoch_now())}",
                    meta={**block_meta(a, plan), "category": OWNER_CAUSE_CATEGORY[oc]})
     same = st.get(lname) if "held" in r else None
     if "held" in r and lease_meta(same).get("kind") != "block":

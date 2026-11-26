@@ -1,6 +1,7 @@
 # agentctl, part `watchdog`: `agentctl watchdog`, the cheap launchd pass over the invariants (invariants.py): their conditions, the processor kicked awake.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now, wall_epoch
 import json
 import os
 import re
@@ -32,7 +33,7 @@ def awake_since(st, now_=None):
     """When the laptop last woke, as the watchdog saw it: a pass whose own previous pass is older than
     WATCHDOG_SLEEP_GAP slept through the gap (launchd runs no job while the laptop sleeps) and starts the clock again.
     0 when the watchdog has never seen a gap (no evidence of sleep). Call before this pass's write_beat."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     gap = beat_age("watchdog")
     if gap is not None and gap > env_num("AGENTCTL_WATCHDOG_SLEEP_GAP", WATCHDOG_SLEEP_GAP):
         return t
@@ -52,12 +53,12 @@ def kick_processor() -> str:
     launchctl("kickstart", "-k", f"gui/{os.getuid()}/{SERVICE_LABEL}")
     if not TOKEN_SHAPE.fullmatch(held):
         return "it held no token"
-    end = time.time() + env_num("AGENTCTL_KICK_HANDOFF_WAIT", KICK_HANDOFF_WAIT)
-    while time.time() < end:
+    end = wall_epoch() + env_num("AGENTCTL_KICK_HANDOFF_WAIT", KICK_HANDOFF_WAIT)
+    while wall_epoch() < end:
         if not (old_pid and old_pid != os.getpid() and pid_alive(old_pid)):
             if hand_token(path, held) is not None:
                 return "its token handed to the new processor"
-        time.sleep(0.5)
+        time.sleep(0.5)  # wall: waits on and times real processes and threads
     return f"the new processor did not listen within {fmt_age(env_num('AGENTCTL_KICK_HANDOFF_WAIT', KICK_HANDOFF_WAIT))}: its token is lost"
 
 

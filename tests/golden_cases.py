@@ -60,6 +60,9 @@ class Case:
         """A plain replacement (a module, a constant) of the name, restored afterwards."""
         self.saved.setdefault(name, getattr(self.A, name))
         setattr(self.A, name, value)
+        if name == "time":  # the code reads the time through the process's clock (clock.epoch_now) and the wall (wall_epoch)
+            self.put("epoch_now", value.time)
+            self.put("wall_epoch", value.time)
 
     def patch(self, obj, attr, gen):
         """obj.attr (a function of the standard library: os.path.isdir, glob.glob) replaced by a recorded fake, restored

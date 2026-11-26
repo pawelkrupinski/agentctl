@@ -12,7 +12,7 @@ DAY = 86400
 class CacheExpiryTest(unittest.TestCase):
     def setUp(self):
         self.root = os.path.realpath(tempfile.mkdtemp(prefix="state-"))
-        self.now = time.time()
+        self.now = A.epoch_now()
 
     def put(self, rel, age_days, text="x"):
         p = os.path.join(self.root, rel)

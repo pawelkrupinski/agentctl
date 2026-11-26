@@ -10,7 +10,6 @@ from agentctl.classify import check_push_failure, credential_failure
 from agentctl.store import LeaseLost
 from agentctl.forge import api, forge_actions_run, forge_actions_runs, forge_delete_branch, forge_find_run
 from agentctl.waitingdir import save_entry, waiting_state, wlog
-from agentctl.storetoken import token
 from agentctl.procs import Terminated
 from agentctl.leases import lock_beat
 from agentctl.wait import fetch_failed_log, job_log_lines, relevant_lines

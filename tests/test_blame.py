@@ -33,7 +33,7 @@ class BlameBase(RedsBase):
                                    **({"seeds": True} if b["kind"] == "drift" and v != "none" else {})})
             me = os.getpid()  # no verdict scripted: a probe still running on CI (a live pid)
             return {"boundary": i, "commit": commit, "out": out, "pid": None if v else me,
-                    "start": None if v else A.process_start(me), "at": time.time(), "kind": b["kind"]}
+                    "start": None if v else A.process_start(me), "at": A.epoch_now(), "kind": b["kind"]}
         A.blame_probe_start = fake_probe
 
     def tearDown(self):
@@ -444,7 +444,7 @@ class RevertTest(BlameBase):
         self.assertIsNone(A.red_stop_holder(self.st, "k1", "its fix is on its way", "fix submitted"))
         self.assertTrue(A.lease_is_live(self.st.get("red/k1"), self.t[0]))
         self.assertEqual(A.red_stop_holder(self.st, "k1", "refuted", "fix refuted", force=True), "laptop:fixer:x")
-        self.assertFalse(A.lease_is_live(self.st.get("red/k1"), time.time()))
+        self.assertFalse(A.lease_is_live(self.st.get("red/k1"), A.epoch_now()))
 
     def test_a_refuted_revert_relands_the_change_before_the_normal_fixer_starts(self):
         self.red_one()
@@ -574,7 +574,7 @@ class ReviveTest(ReviveBase):
         fails = [e for e in A.inbox_entries() if e["verdict"].startswith("LAUNCH FAILED")]
         self.assertEqual(len(fails), 1)
         self.assertIn("Workspace not trusted", fails[0]["verdict"])
-        self.t[0] = time.time()
+        self.t[0] = A.epoch_now()
         self.tick(dispatch=True)
         it = self.only()
         self.assertIn("Workspace not trusted", it["data"]["blame"]["revive_failed"])

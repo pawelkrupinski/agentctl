@@ -98,7 +98,7 @@ STALL_CPU_SECONDS = 1.0  # CPU that counts as progress per window: a watchdog's 
 
 def stall_clock():
     """The stall judge's clock (tests drive it, with group_cpu_seconds, so no verdict depends on the machine's load)."""
-    return time.monotonic()
+    return time.monotonic()  # wall: waits on and times real processes and threads
 
 
 WATCHED_GROUPS = set()  # process groups run_watched started and that may still run: the watchdog ends them first
@@ -108,7 +108,7 @@ def run_watched(argv, cwd, env, log_path, step, stall=None, sampler=None, cpu=No
                 quiet_ok=False, hook_stall=None, hooks=None):
     """Run argv (its own process group, stdin closed), its output into a file beside log_path. (returncode, output);
     returncode None when it STALLED: no output and no CPU in its process group for `stall` seconds, after which the
-    group is ended. Waits with Popen.wait, never time.sleep. `cpu` (pgid -> CPU seconds) and `clock` are the samples the
+    group is ended. Waits with Popen.wait, never a sleep. `cpu` (pgid -> CPU seconds) and `clock` are the samples the
     verdict reads: group_cpu_seconds and stall_clock unless given. quiet_ok: a step that legitimately waits quietly
     (a remote run polled without output) renews the leases this process holds at every poll, so its own `stall`
     bound ends it, not the leases' TTL. hook_stall (a push's): while a pre-push hook runs in the group (`hooks`, pgid

@@ -35,7 +35,7 @@ class BinWorktreeTest(unittest.TestCase):
         with open(f, "w") as fh:
             fh.write("edited\n")
         self.assertTrue(A.inv_wb(A.Clock(), A.CurrentStore(A.process_store))[0], "edited just now: somebody is at it")
-        old = time.time() - 3600
+        old = A.epoch_now() - 3600
         os.utime(f, (old, old))
         saved = A.process_cwds
         A.process_cwds = lambda: {}

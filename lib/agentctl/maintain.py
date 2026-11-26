@@ -1,6 +1,7 @@
 # agentctl, part `maintain`: `agentctl maintain`: the periodic pass -- the iOS simulators' sweep, the caches' expiry, the orphans' duty
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 from typing import Any, Callable
 import argparse
 import datetime as dt
@@ -10,7 +11,6 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.timefmt import ts
@@ -118,7 +118,8 @@ def _sweep_section(a: Any, store: Any) -> None:
     """The daily sweep: forced, or at the first pass from the sweep hour when today's has not run."""
     path = state_root("maintain.json")
     st = read_record(path) or {}
-    today, hour = dt.date.today().isoformat(), dt.datetime.now().hour
+    local = dt.datetime.fromtimestamp(epoch_now())
+    today, hour = local.date().isoformat(), local.hour
     if a.sweep or (st.get("sweep") != today and hour >= int(env_num("AGENTCTL_SWEEP_HOUR", MAINTAIN_SWEEP_HOUR))):
         print("== sweep (daily)")
         rc = cmd_sweep(argparse.Namespace(repo=None, idle_days=SWEEP_IDLE_DAYS, dry_run=a.dry_run, no_report=a.dry_run), store)
@@ -258,7 +259,7 @@ def expire_cache(root: str | None = None, days: float | None = None, now: float 
     days = env_num("AGENTCTL_CACHE_EXPIRE_DAYS", CACHE_EXPIRE_DAYS) if days is None else days
     if not allowed_path(root):
         return []
-    expiry = CacheExpiry(root, days, (time.time() if now is None else now) - days * 86400, dry_run)
+    expiry = CacheExpiry(root, days, (epoch_now() if now is None else now) - days * 86400, dry_run)
     expiry.files()
     expiry.red_dirs()
     expiry.tree_tags()

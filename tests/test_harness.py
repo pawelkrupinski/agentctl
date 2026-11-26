@@ -147,12 +147,15 @@ class DefaultClockTest(unittest.TestCase):
         self.assertAlmostEqual(lag, harness.TEST_CLOCK_LAG, delta=5)
         self.assertAlmostEqual(self.wall() - A.Clock().monotonic(), harness.TEST_CLOCK_LAG, delta=5)
 
-    def test_an_agentctl_modules_direct_wall_read_is_counted(self):
-        """The guard: `time.time()` read straight in an agentctl module (not through a Clock) is the wall by design
-        (file mtimes live on it) and is counted in harness.WALL_READS, so the family's remaining readers stay visible."""
+    def test_an_agentctl_modules_time_is_the_test_clock_and_the_wall_read_is_counted(self):
+        """The guard: an agentctl module's `time.time()` (tests/test_wall_reads.py keeps production from one) reads the
+        test clock; `clock.wall_epoch()` (a file's mtime lives on the wall) is the wall and is counted in
+        harness.WALL_READS, so the family's remaining readers stay visible."""
         import agentctl.core as core
         before = len(harness.WALL_READS)
-        self.assertAlmostEqual(core.time.time(), self.wall(), delta=5)
+        self.assertAlmostEqual(self.wall() - core.time.time(), harness.TEST_CLOCK_LAG, delta=5)
+        self.assertEqual(len(harness.WALL_READS), before)
+        self.assertAlmostEqual(A.wall_epoch(), self.wall(), delta=5)
         self.assertEqual(len(harness.WALL_READS), before + 1)
 
     def test_the_default_clock_moves_only_when_slept_on(self):

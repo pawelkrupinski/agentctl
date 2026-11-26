@@ -1,10 +1,10 @@
 # agentctl, part `netwatch`: the network and tunnel watches: the default route, the uplink's loss, the tunnel's health, each outage a condition
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
 import subprocess
-import time
 from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import err, host_role, run_cmd
@@ -193,5 +193,5 @@ def tunnel_watch(store, now_=None, probe=None, kick=None, uplink=None):
     """One processor cycle of the health probe. Returns what it did: ok, down, kicked, restored, escalated, network, or
     ''. A tunnel that fails while the laptop's own uplink loses packets is the network's fault: no kickstart (it only
     churns the tunnel), no STALLED escalation, one NETWORK note per outage."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     return TunnelCycle(store, t, probe, kick, uplink).run()

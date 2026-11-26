@@ -61,7 +61,7 @@ class ChangeKindTest(unittest.TestCase):
         runs = [run(8), run(7), run(6), run(5, ok=True), run(4)]
         for n, line in ((8, "Failed: A"), (7, "Failed: A"), (6, "Failed: B"), (4, "Failed: A")):
             signed(n, line)
-        A.state_update(ci={"repo": "pawelkrupinski/movies", "at": time.time(), "gate": [
+        A.state_update(ci={"repo": "pawelkrupinski/movies", "at": A.epoch_now(), "gate": [
             {"name": "Main", "decided": runs[0], "newer": [], "since": "2026-11-25T10:00:00Z", "count": 3, "runs": runs}]})
         self.st.put_item("red", "k8", "leased", {"key": "k8", "workflow": "Main", "gate": True, "red_kind": "test",
                                                 "job": "Unit tests", "line": "Failed: A", "runs": ["8"]})
@@ -87,7 +87,7 @@ class ChangeKindTest(unittest.TestCase):
         self.assertEqual(why(), (None, None))
 
     def test_a_verify_round_running_now_is_the_verify_class(self):
-        t = time.time()
+        t = A.epoch_now()
         k = A.classify_change({"verify": True, "status": "queued"}, A.gate_facts(set()), t)
         self.assertEqual((k["priority"], k["rank"]), ("verify", 1))
         k = A.classify_change({"verify": True, "status": "queued", "retry_after": t + 60}, A.gate_facts(set()), t)
@@ -132,8 +132,8 @@ class WatchdogKindTest(unittest.TestCase):
         self.addCleanup(os.environ.pop, "AGENTCTL_UNHELD_GRACE", None)
         self.st.put_item("red", "r-out", "fix-pending", {"key": "r-out", "runs": ["6"], "gate": False,
                                                           "red_kind": "outside"})
-        self.st.put_item("change", "c-fix", "checked", {"fixes": ["6"], "submitted_at": time.time() - 3600})
-        self.st.put_item("change", "c-wait", "waiting", {"fixes": ["6"], "submitted_at": time.time()})
+        self.st.put_item("change", "c-fix", "checked", {"fixes": ["6"], "submitted_at": A.epoch_now() - 3600})
+        self.st.put_item("change", "c-wait", "waiting", {"fixes": ["6"], "submitted_at": A.epoch_now()})
         ok, why = A.inv_wr(A.Clock(), st=self.st, reds=set())
         self.assertFalse(ok, why)
         self.assertIn("c-fix (red fix of 6 (outside)) is checked", why)
@@ -143,7 +143,7 @@ class WatchdogKindTest(unittest.TestCase):
         """2026-11-25: the gate sat red for hours, its fix `waiting` for green, and `status` said nothing of it. Over
         RED_LIVENESS_MAX (60 min, $AGENTCTL_RED_LIVENESS_MAX) red with a red fix that does not move: ONE line with the
         change and the rule blocking it, in `status` and `red status`; none while the gate is young or the fix moves."""
-        t = time.time()
+        t = A.epoch_now()
         snap = lambda ago: {"repo": "pawelkrupinski/movies", "at": t, "gate": [{
             "name": "Main", "decided": {"number": 8, "conclusion": "failure"}, "newer": [], "count": 1, "runs": [],
             "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t - ago))}]}
@@ -165,7 +165,7 @@ class WatchdogKindTest(unittest.TestCase):
     def test_a_stale_hold_is_re_derived_by_the_tick_never_paged(self):
         """THE HOLD TABLE's recovery (policy.py HOLDS, 2026-11-20): a hold whose blocker ended, or past its kind's own
         bound, describes a world that moved -- the lap drops it (the tick derives it afresh), quietly, no issue."""
-        t = time.time()
+        t = A.epoch_now()
         for eid, hold in (("c-gone", {"kind": "overlap", "why": "its check waits for x", "blocker": "x-gone", "since": t}),
                           ("c-old", {"kind": "backlog-batch", "why": "the next backlog batch", "since": t - 3 * 3600})):
             self.st.put_item("change", eid, "queued", {"worktree": f"/w/{eid}", "hold": hold})
@@ -182,7 +182,7 @@ class WatchdogKindTest(unittest.TestCase):
         self.assertEqual(self.st.items("issue", ("open",)), [], "a stale hold is no agentctl bug")
 
     def test_a_change_past_its_deadline_with_no_recorded_hold_is_filed_once_as_an_agentctl_issue(self):
-        t = time.time()
+        t = A.epoch_now()
         self.st.put_item("change", "c-silent", "checked", {"worktree": "/w/silent"})
         self.st.put_item("change", "c-held", "checked", {"worktree": "/w/held", "hold": {"kind": "batch", "why": "x"}})
         self.st.put_item("change", "c-young", "queued", {"worktree": "/w/young"})
@@ -200,7 +200,7 @@ class WatchdogKindTest(unittest.TestCase):
                          "the owner is not paged")
 
     def test_a_batch_member_or_a_retry_is_a_visible_hold(self):
-        t = time.time()
+        t = A.epoch_now()
         it = self.st.put_item("change", "c-m", "queued", {})
         self.assertIsNotNone(A.change_hold_visible(self.st, it, {"backlog_batch": "b#1"}, t))
         self.assertIsNotNone(A.change_hold_visible(self.st, it, {"retry_after": t + 60}, t))

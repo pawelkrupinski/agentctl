@@ -67,6 +67,7 @@ def _harness(module, script, log, tmp, stack):
     clock = type("Clock", (), {"time": staticmethod(lambda: 1000.0), "strftime": staticmethod(time.strftime),
                                "localtime": staticmethod(time.localtime)})
     stack.enter_context(mock.patch.object(module, "time", clock))
+    stack.enter_context(mock.patch.object(module, "epoch_now", clock.time, create=True))
     return Store(), shown
 
 

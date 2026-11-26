@@ -1,8 +1,8 @@
 # agentctl, part `landhold`: the land hold (`land hold|release`): an item in the store, so ci-runner's reconciler honours a hold made on the laptop
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
-import time
 from typing import Any
 from agentctl.fixerrecords import agent_name
 from agentctl.queue import land_hold, land_holds
@@ -38,7 +38,7 @@ def land_hold_set(st: Any, secs: int, why: str | None, by: str) -> Any:
     """Hold, or extend the hold in force to now + secs. Returns the hold item."""
     secs = max(60, min(int(secs), LAND_HOLD_MAX))
     cur = land_hold(st)
-    data = {"by": by, "why": why or "", "at": time.time()}
+    data = {"by": by, "why": why or "", "at": epoch_now()}
     if cur:
         st.transition("hold", cur["id"], "held", cur["version"], data=data, deadline_s=secs,
                       event={"text": f"land hold {cur['id']} extended by {by}: {why or 'no reason given'}",

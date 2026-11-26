@@ -92,7 +92,7 @@ class LeaseTest(unittest.TestCase):
     """The store's leases (design §6) and the landing lease (step 3): a holder that stops progressing loses it."""
     def test_a_push_hanging_under_the_landing_lease_loses_it_and_ends(self):
         d = tempfile.mkdtemp()
-        st = A.Store(path=os.path.join(d, "store.db"))
+        st = A.Store(path=os.path.join(d, "store.db"), clock=A.wall_epoch)  # a real wait: the lease lapses on the wall
         h = A.LeaseHold("land/x", 2, 300, store=st)
         self.assertTrue(h.acquire())
         A._landing[0] = h
@@ -158,7 +158,7 @@ class PushHookTest(unittest.TestCase):
 
     def test_a_transport_hanging_after_the_hook_still_loses_the_lease(self):
         d = tempfile.mkdtemp()
-        st = A.Store(path=os.path.join(d, "store.db"))
+        st = A.Store(path=os.path.join(d, "store.db"), clock=A.wall_epoch)  # a real wait: the lease lapses on the wall
         h = A.LeaseHold("land/x", 2, 300, store=st)
         self.assertTrue(h.acquire())
         A._landing[0] = h
@@ -294,7 +294,7 @@ class UnboundTest(unittest.TestCase):
 class BatchRetryTest(unittest.TestCase):
     def test_three_failed_landings_hold_the_batch_with_a_condition(self):
         d = tempfile.mkdtemp()
-        st = A.Store(path=os.path.join(d, "store.db"))
+        st = A.Store(path=os.path.join(d, "store.db"), clock=A.wall_epoch)  # a real wait: the lease lapses on the wall
         saved = A.open_condition, A.wlog
         opened = []
         A.open_condition = lambda kind, text, probe, acts, **kw: opened.append((kind, text, acts)) or {"key": kw.get("key")}
@@ -332,7 +332,7 @@ class RequeueTest(unittest.TestCase):
     def test_an_infra_requeue_backs_off_escalates_from_the_third_and_never_rejects(self):
         d = tempfile.mkdtemp()
         os.makedirs(os.path.join(d, "entries"))
-        st = A.Store(path=os.path.join(d, "store.db"))
+        st = A.Store(path=os.path.join(d, "store.db"), clock=A.wall_epoch)  # a real wait: the lease lapses on the wall
         e = {"id": "e1", "seq": 1, "status": "checking", "worktree": "/w"}
         A.write_json(os.path.join(d, "entries", "e1.json"), e)
         saved_wlog = A.wlog
@@ -340,8 +340,8 @@ class RequeueTest(unittest.TestCase):
         try:
             waits = []
             for _ in range(4):
-                A.requeue_infra(st, d, e, "the push failed on infra (closed by remote host)", time.time())
-                waits.append(round(e["retry_after"] - time.time()))
+                A.requeue_infra(st, d, e, "the push failed on infra (closed by remote host)", A.epoch_now())
+                waits.append(round(e["retry_after"] - A.epoch_now()))
                 self.assertEqual(e["status"], "queued")
                 st.transition("change", "e1", "checking", st.item("change", "e1")["version"])
                 e["status"] = "checking"

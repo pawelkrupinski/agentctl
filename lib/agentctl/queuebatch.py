@@ -1,6 +1,7 @@
 # agentctl, part `queuebatch`: overlapping changes checked as one, the batch tiers, generated overlaps, held waits, one item per change.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import subprocess
 import sys
@@ -291,7 +292,7 @@ def spawn_executor(repo, d, eid):
         spawn_detached([sys.executable, TOOL_PATH, "waiting", "check", eid, "--repo", repo],
                          stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True, cwd=repo,
                          env=detached_env(repo))
-    time.sleep(1)  # it takes its tree slot before the next looks
+    time.sleep(1)  # it takes its tree slot before the next looks  # wall: waits on and times real processes and threads
 
 
 # ONE CHANGE, ONE ITEM (2026-11-18 07:15Z: `waiting: 6 — movies-sentry, movies-tg-inapp, flapmem, movies-sentry, ...`
@@ -413,4 +414,4 @@ def batch_round(d: str, reds: set[str], st: Any, t: float | None,
                 facts: dict[str, Any] | None) -> tuple[float, Any, list[dict[str, Any]]]:
     """What a backlog or push batch's round reads at a green gate: (now, the queue's facts -- queue_facts, read from
     the store when None --, its queued entries)."""
-    return (t if t is not None else time.time()), (queue_facts(reds, st) if facts is None else facts), queued_entries(d)
+    return (t if t is not None else epoch_now()), (queue_facts(reds, st) if facts is None else facts), queued_entries(d)

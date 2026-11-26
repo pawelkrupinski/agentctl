@@ -2,12 +2,12 @@
 # printed every GH_TALLY_SECONDS.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import contextlib
 import os
 import re
 import sys
 import threading
-import time
 from collections.abc import Iterator
 from types import FrameType
 from typing import Any
@@ -27,7 +27,7 @@ GH_TALLY_PLUMBING = {"forge_env", "gh_tally", "gh_json", "api", "_gh_api_once", 
                      "forge_release_asset", "tool_env", "drift_env",
                      "<lambda>", "<listcomp>", "<dictcomp>", "<genexpr>", "wrapper", "inner"}
 _gh_tally_lock = threading.Lock()
-_gh_tally_state: dict[str, Any] = {"since": time.time(), "calls": {}, "free": 0}
+_gh_tally_state: dict[str, Any] = {"since": epoch_now(), "calls": {}, "free": 0}
 _gh_tally_kind = threading.local()
 
 
@@ -57,7 +57,7 @@ def gh_tally(kind: str | None = None, free: bool = False, now_: float | None = N
     """Count one gh process (or, `free`, mark the last one a 304) against its caller, and print the tally once
     GH_TALLY_SECONDS have passed since the last. `kind` names what ran; None: what gh_json/_gh_api_once said."""
     kind = kind or getattr(_gh_tally_kind, "what", None) or "gh"
-    t = time.time() if now_ is None else now_
+    t = epoch_now() if now_ is None else now_
     with _gh_tally_lock:
         st = _gh_tally_state
         if free:

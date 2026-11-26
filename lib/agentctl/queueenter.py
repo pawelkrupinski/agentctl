@@ -1,6 +1,7 @@
 # agentctl, part `queueenter`: entering the land queue: enqueue, the server submit, the precheck and land-until-done
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import argparse
 import datetime as dt
 import os
@@ -61,7 +62,7 @@ def submit_to_server(repo, d, fields, store, note="", after_queued=None, waits=F
     which the sync sends). Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code. waits: this land then
     waits for the verdict itself (a red fixer's, fixer_land)."""
     head = fields["head"]
-    e = {**fields, "id": f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
+    e = {**fields, "id": f"{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
     if not submit_ref(repo, d, e, to_server=True):
         print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
               f"{push_failure_why(e.get('push_error'))}: land again")
@@ -117,11 +118,11 @@ def cmd_land_precheck(a, store):
     """The detached half of start_fast_precheck: run the repo's precheck, and on a refusal cancel the queued change."""
     # Its own process group, ended WHOLE at the bound (review 2026-11-07: subprocess.run killed only the script, so what
     # it started -- sbt, a test JVM -- lived on, and kept the output pipe, and so this wait, open): run_watched.
-    t0 = time.time()
+    t0 = epoch_now()
     rc, out = run_watched([os.path.join(a.repo, FAST_PRECHECK), "--base", a.base, "--head", a.head], a.repo, None,
                           os.path.join(scratch(), f"agentctl-precheck-{a.entry}"), "precheck",
                           stall=FAST_PRECHECK_BOUND, wall=FAST_PRECHECK_BOUND)
-    note_precheck(a.entry, time.time() - t0, rc, out, store)
+    note_precheck(a.entry, epoch_now() - t0, rc, out, store)
     if rc is None:
         print(f"{out or ''}PRECHECK UNCHECKED: past its {FAST_PRECHECK_BOUND} s bound, ended with its children: "
               "could not check, its landing check judges it", flush=True)

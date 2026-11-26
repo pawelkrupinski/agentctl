@@ -1,6 +1,7 @@
 # agentctl, part `queuecheck`: a change's check round's pieces: main fetched, its commits, the run adopted, the rebase, the refusals, the mode, the failure judged
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import time
 from typing import Any
 from agentctl.timefmt import ts
@@ -55,7 +56,7 @@ def regen_hold(st, d, e, tree, failing, out):
     files = e.get("provisional") or []
     cmds = regen_commands(tree, files)
     cmd = f"cd {e['worktree']} && ~/bin/agentctl land"
-    t = time.time()
+    t = epoch_now()
     why = (f"REGEN NEEDED {e['id']}: its {', '.join(files)} kept {remote()}/main's rows where both sides changed them "
            f"(ci-runner runs no {' / '.join(cmds) or 'regen command'}) and its checks failed over them ({failing}); it "
            f"keeps its place in the queue: run `{cmd}` (rebases onto {remote()}/main and runs "

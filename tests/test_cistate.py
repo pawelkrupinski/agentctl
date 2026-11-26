@@ -54,7 +54,7 @@ class SnapshotTest(RedBase):
     def test_a_stale_snapshot_is_unread(self):
         A.ci_state_refresh(MOVIES)
         self.assertIsNotNone(A.ci_state_load(MOVIES))
-        self.assertIsNone(A.ci_state_load(MOVIES, now=time.time() + A.CI_STATE_MAX_AGE + 5))
+        self.assertIsNone(A.ci_state_load(MOVIES, now=A.epoch_now() + A.CI_STATE_MAX_AGE + 5))
         self.assertIsNone(A.ci_state_load("x/y"))
 
     def test_the_processor_publishes_the_snapshot_time_so_an_old_one_ages_out_as_unread(self):

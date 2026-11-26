@@ -1,8 +1,8 @@
 # agentctl, part `changekind`: THE CHANGE CLASSIFIER -- what kind of change a queued change is, decided in one place.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 from operator import itemgetter
-import time
 from typing import Any
 from contextlib import suppress
 from typing import Any
@@ -132,7 +132,7 @@ def classify_change(e, facts, t=None, repo=None):
     """THE KIND of change entry e (or an item's data) under facts (queue_facts). repo: also ask whether a queued change
     is an identity change (batch.identity_change, cached per entry and head) when nothing else already keeps it out of
     a backlog batch; otherwise `identity` is None (unasked)."""
-    t = t if t is not None else time.time()
+    t = t if t is not None else epoch_now()
     names = fixes_named(e)
     reds = named_reds(names, facts.get("gate") or set(), facts.get("open") or {})
     red_fix = bool(reds)

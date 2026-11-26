@@ -6,6 +6,7 @@ import fcntl
 import os
 import re
 import time
+from agentctl.clock import wall_epoch
 from typing import Any
 from agentctl.core import _bounded, err, git, git_ok, pid_alive, reds_dir, remote, tilde
 from agentctl.timefmt import ts
@@ -60,7 +61,7 @@ def write_baseline_out(main, out):
     for name in os.listdir(d):
         p = os.path.join(d, name)
         try:
-            if time.time() - os.path.getmtime(p) > 3 * 86400:
+            if wall_epoch() - os.path.getmtime(p) > 3 * 86400:
                 os.unlink(p)
         except OSError:
             pass

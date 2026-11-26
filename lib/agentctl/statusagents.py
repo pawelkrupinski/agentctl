@@ -1,6 +1,7 @@
 # agentctl, part `statusagents`: the status page's agents: each live session and fixer, its worktree's head and dirt, its logs and last words
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import glob
 import json
 import os
@@ -205,13 +206,13 @@ def status_worktree_read(wt, head):
         if head is None or c.get("head") != head or "commits" not in c:
             commits, recent = _worktree_log(wt)
             c.update(head=head, commits=commits, recent_files=recent[:20])
-        if time.time() - float(c.get("dirty_at") or 0) >= STATUS_DIRTY_TTL:
+        if epoch_now() - float(c.get("dirty_at") or 0) >= STATUS_DIRTY_TTL:
             c["dirty"] = [ln for ln in status_git(wt, "status", "--porcelain").splitlines() if ln][:20]
-            c["dirty_at"] = time.time()
+            c["dirty_at"] = epoch_now()
         c.pop("error", None)
     except (OSError, subprocess.SubprocessError) as e:
         c["error"] = str(e)[:200]
-    c["at"] = time.time()
+    c["at"] = epoch_now()
     with _status_wt_lock:
         _status_wt[wt] = c
 
@@ -222,7 +223,7 @@ STATUS_GIT_FIELDS = ("commits", "recent_files", "dirty")  # what a worktree's gi
 def _worktree_fresh(c: Any, head: Any) -> bool:
     """The cached read holds the commits of this HEAD and its status is still young."""
     return bool(c and "commits" in c and head is not None and c.get("head") == head
-                and time.time() - float(c.get("dirty_at") or 0) < STATUS_DIRTY_TTL)
+                and epoch_now() - float(c.get("dirty_at") or 0) < STATUS_DIRTY_TTL)
 
 
 def _read_and_wait(wt: str, head: Any, bound: float) -> Any:
@@ -316,9 +317,9 @@ def status_enrich_all(agents, bound=None):
     ths = [threading.Thread(target=work, args=(i, a), daemon=True, name="status:agent") for i, a in enumerate(agents)]
     for th in ths:
         th.start()
-    end = time.time() + b + 2
+    end = epoch_now() + b + 2
     for th in ths:
-        th.join(max(0.0, end - time.time()))
+        th.join(max(0.0, end - epoch_now()))
     for i, a in enumerate(agents):
         if i not in done:
             a.setdefault("detail_error", f"details not read within {b + 2:.0f} s")

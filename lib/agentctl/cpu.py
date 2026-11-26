@@ -1,5 +1,6 @@
 # agentctl, part `cpu`: the whole machine's CPU, as the governor and laptop_pressure read it (gov.py uses it).
 
+from agentctl.clock import epoch_now
 import os
 import time
 from typing import Any, Callable, Optional
@@ -63,8 +64,8 @@ def machine_busy_cores(n: int, read: Optional[Callable[[], Optional[tuple[int, i
                        sleep: Optional[Callable[[float], Any]] = None, state: Optional[str] = None) -> Optional[float]:
     """The cores the whole machine is busy on (user + sys + nice), from a tick delta: against the sample kept in
     <gov>/cpu-ticks.json when it is 0.5-120 s old, else two samples CPU_SAMPLE_GAP apart. None where unreadable."""
-    read, path, now_ = read or cpu_ticks, state or cpu_sample_path(), time.time()
-    start = _tick_start(path, read, sleep or time.sleep, now_)
+    read, path, now_ = read or cpu_ticks, state or cpu_sample_path(), epoch_now()
+    start = _tick_start(path, read, sleep or time.sleep, now_)  # wall: waits on and times real processes and threads
     end = read()
     if not start or not end or end[1] <= start[1]:
         return None

@@ -1,6 +1,7 @@
 # agentctl, part `conditions`: THE CONDITION MACHINE: a non-green condition opened with the probe that closes it, rechecked with backoff, escalated, closed with its recovery actions; the probe and action registries
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import glob
 import json
 import os
@@ -26,7 +27,7 @@ class ProbeResult:
     def __init__(self, kind, args, ok, detail, _made_by_run_probe=None):
         if _made_by_run_probe is not _RUN_PROBE_TOKEN:
             raise ConditionBypass("a ProbeResult is made by run_probe only: the check that opens is the check that closes")
-        self.kind, self.args, self.ok, self.detail, self.at = kind, dict(args), ok, str(detail)[:300], time.time()
+        self.kind, self.args, self.ok, self.detail, self.at = kind, dict(args), ok, str(detail)[:300], epoch_now()
 
 
 _RUN_PROBE_TOKEN = object()
@@ -101,9 +102,9 @@ _last_recovery = [0.0]
 
 
 def maybe_recovery_tick(store: Any) -> None:
-    if time.time() - _last_recovery[0] < 5:
+    if epoch_now() - _last_recovery[0] < 5:
         return
-    _last_recovery[0] = time.time()
+    _last_recovery[0] = epoch_now()
     recovery_tick(store)
 
 
@@ -264,8 +265,8 @@ def migrate_condition_files(store):
             continue
         if c.get("kind") != "BLOCKED" and not condition_item_of(store, c["key"]):
             data = {k: v for k, v in c.items() if k != "path"}
-            data.setdefault("opened_at", time.time())
-            data["escalate_after"] = time.time() + CONDITION_ESCALATE_EVERY  # its inbox entry told already: no storm
+            data.setdefault("opened_at", epoch_now())
+            data["escalate_after"] = epoch_now() + CONDITION_ESCALATE_EVERY  # its inbox entry told already: no storm
             store.put_item("condition", c["key"], "open", data)
             out.append(f"migrated the condition {c['key']}")
         try:
@@ -292,7 +293,7 @@ def recovery_tick(store, now_=None, force=False):
     server only (one writer of escalations): the state's self-transition, an escalate event the notifier delivers.
     Returns the RECOVERED lines."""
     st = store
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     out: list[str] = []
     server = host_role() == "server"
     out += attempt(lambda: migrate_condition_files(st), [], catch=(Exception, SystemExit),
@@ -356,7 +357,7 @@ def cmd_recover(a, store):
     if not cs:
         print("recover: no open conditions")
         return 0
-    t = time.time()
+    t = epoch_now()
     for c in cs:
         lr = c.get("last_result") or {}
         print(f"{c['kind']} {c['key']} (open since {c.get('opened')}{', ESCALATED' if c.get('level') else ''}): "

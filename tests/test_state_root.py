@@ -63,9 +63,9 @@ class CachedSummaryTest(unittest.TestCase):
         return rc, out.getvalue()
 
     def test_fresh_and_stale_lines_come_from_the_file_only(self):
-        rc, out = self.run_cached(f"{int(time.time())}\tpawelkrupinski/movies\tgate green · no reds\n")
+        rc, out = self.run_cached(f"{int(A.epoch_now())}\tpawelkrupinski/movies\tgate green · no reds\n")
         self.assertEqual((rc, out.strip()), (0, "gate green · no reds"))
-        rc, out = self.run_cached(f"{int(time.time()) - 3600}\tpawelkrupinski/movies\tgate RED (main #1 → x)\n")
+        rc, out = self.run_cached(f"{int(A.epoch_now()) - 3600}\tpawelkrupinski/movies\tgate RED (main #1 → x)\n")
         self.assertEqual(rc, 2)
         self.assertTrue(out.startswith("gate UNREAD (as of "), out)
         self.assertIn("RED (main #1 → x)", out)
@@ -75,7 +75,7 @@ class StatusLineTest(unittest.TestCase):
     """Step 13: the status line is state.json alone; its staleness words come from the snapshot's own times."""
     def test_the_line_and_a_stalled_reconciler(self):
         path = os.path.join(tempfile.mkdtemp(), "state.json")
-        t = time.time()
+        t = A.epoch_now()
         with open(path, "w") as f:
             json.dump({"summary": {"at": int(t), "repo": "pawelkrupinski/movies", "line": "gate green · no reds"},
                        "tick_at": t - 10, "waiting": ["/p/movies-wt-a"], "queued": ["/p/movies-wt-b"]}, f)

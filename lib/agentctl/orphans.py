@@ -1,11 +1,11 @@
 # agentctl, part `orphans`: orphaned work: a worktree with commits nothing lands, found, offered to a fixer or escalated
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now, wall_epoch
 from typing import Any, Callable, Optional, TypeGuard
 import json
 import os
 import re
-import time
 from contextlib import suppress
 from agentctl.core import attempt
 from agentctl.procrunner import process_runner
@@ -77,7 +77,7 @@ def last_land_entry(wt: str, lands: Any = None) -> Optional[dict[str, Any]]:
 
 def live_lease_worktrees(store: Any) -> set[str]:
     """The worktrees a live lease names (a fixer's, an interactive claim's): somebody works there."""
-    out, t = set(), time.time()
+    out, t = set(), epoch_now()
     for r in store.list():
         if r["holder"] and r["expires_at"] > t:
             wt = (json.loads(r["meta"] or "{}") or {}).get("worktree")
@@ -91,7 +91,7 @@ def orphan_candidates(repo: str, store: Any, now_: Optional[float] = None, dead:
     """[(worktree, commits, key, last verdict)] of the orphans now. A worktree holding a withdrawn or refuted blame
     revert (blame_land_refusal) is never one: it goes to `dead` [(worktree, why)] when given; one whose work is not for
     landing (orphan_refusal) goes to `refused` [(worktree, key, why)]. lands: the pass's land_entries_once reader."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else wall_epoch()  # worktree activity is read off file mtimes and git times
     lands = lands or land_entries_once()
     cwds, landers, live, sessions = worktrees_in_use(repo, store, t)
     records = blame_records(store)

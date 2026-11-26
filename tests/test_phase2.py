@@ -135,7 +135,7 @@ class RemoteStoreTest(Phase2Base):
         r.transition("condition", "c1", "closed", it["version"], event={"text": "closed"})
         with self.assertRaises(A.StaleVersion):  # the store's exceptions cross the wire as themselves
             r.transition("condition", "c1", "open", it["version"])
-        oid = r.offer("fixer", "red:1", "red/y", "fresh", 1, time.time() + 600, {"workflow": "Main"})
+        oid = r.offer("fixer", "red:1", "red/y", "fresh", 1, A.epoch_now() + 600, {"workflow": "Main"})
         self.assertEqual([o["id"] for o in r.offers("fixer")], [oid])
         got = r.take(oid, "laptop:fixer:c", 900, 3600)
         self.assertEqual(got["picture"]["workflow"], "Main")
@@ -377,7 +377,7 @@ class RemoteStatusLineTest(Phase2Base):
             A.RemoteStore = saved
 
     def test_the_line_reads_ci_runners_tick_and_gate_and_says_store_unreachable_when_it_does_not_answer(self):
-        t = time.time()
+        t = A.epoch_now()
         self.sync()
         # the laptop's own state.json: its last local tick and gate line, from before the cutover
         A.state_update(tick_at=t - 600, summary={"at": int(t - 600), "repo": "o/r", "line": "gate RED (main #1)"})
@@ -403,13 +403,13 @@ class DispatcherRemoteTest(Phase2Base):
     def test_the_laptops_dispatcher_takes_ci_runners_offer_over_the_remote_store(self):
         it = self.st.put_item("red", "k1", "offered", {"key": "k1", "workflow": "Main"})
         pic = {"key": "k1", "workflow": "Main", "job": "test", "run": {"number": 20, "databaseId": 40}, "kind": "test"}
-        oid = self.st.offer("fixer", f"red:{it['id']}", A.red_lease("k1"), "fresh", 1, time.time() + 600, pic)
+        oid = self.st.offer("fixer", f"red:{it['id']}", A.red_lease("k1"), "fresh", 1, A.epoch_now() + 600, pic)
         spawned, saved = [], (A.red_spawn, A.cached_dispatch_blocker, A.fixer_records)
         A.red_spawn = lambda store, o_r, repo, off, took, extra=(): spawned.append((off["id"], took["epoch"])) or (True, "ok")
         A.cached_dispatch_blocker = lambda: None
         A.fixer_records = lambda: []
         try:
-            acts = A.red_dispatcher(self.remote, "pawelkrupinski/movies", self.repo, time.time())
+            acts = A.red_dispatcher(self.remote, "pawelkrupinski/movies", self.repo, A.epoch_now())
         finally:
             A.red_spawn, A.cached_dispatch_blocker, A.fixer_records = saved
         self.assertEqual(acts, ["ok"])
@@ -464,7 +464,7 @@ class FixerContinuityTest(Phase2Base):
         commit(old, "step one")
         commit(old, "step two")
         _c, other = git_tree(self.tmp, "movies-wt-red-2400")
-        commit(other, "older attempt", at=time.time() - 86400)
+        commit(other, "older attempt", at=A.epoch_now() - 86400)
         _c, empty = git_tree(self.tmp, "movies-wt-red-2380")
         self.record(2473, "k3", old, alive=False, n=7)
         self.record(2400, "k3", other, alive=False, n=1)
@@ -503,7 +503,7 @@ class RedFamilyTest(Phase2Base):
                                                       "last_run": {"number": run, "databaseId": run + 1000}})
         pic = {"key": key, "workflow": workflow, "job": job, "jobs": [job], "run": {"number": run, "databaseId": run + 1000},
                "kind": "test", "line": f"{job} failed"}
-        return self.st.offer("fixer", f"red:{it['id']}", A.red_lease(key), "fresh", 1, time.time() + 600, pic)
+        return self.st.offer("fixer", f"red:{it['id']}", A.red_lease(key), "fresh", 1, A.epoch_now() + 600, pic)
 
     def test_the_family_comes_from_config_by_workflow_or_by_a_failing_job(self):
         self.assertEqual(A.red_family({"workflow": "Identity model convergence", "jobs": ["leg (poland)"]}), "convergence")
@@ -598,7 +598,7 @@ class RedFamilyTest(Phase2Base):
         owners = self.outside_gate_owned()
         claimer, wt = self.claimed_ablation()
         self.red("oi1", "Order independence", "scala (reverse)", 46)
-        acts = A.red_dispatcher(self.st, "o/r", self.repo, time.time())
+        acts = A.red_dispatcher(self.st, "o/r", self.repo, A.epoch_now())
         self.assertFalse(any("joined" in a for a in acts), acts)
         self.assertEqual(len(owners), 1, "the family's owner takes the new red")
         self.assertNotEqual(self.st.get("red/oi1")["holder"], claimer)
@@ -610,7 +610,7 @@ class RedFamilyTest(Phase2Base):
         new red of the family would have started a SECOND session (an owner) beside it. A claim made INSIDE a dispatched
         fixer (its record on the lease) is the holder: the new red is claimed for it, in its worktree, and it is told."""
         owners = self.outside_gate_owned()
-        t = time.time()
+        t = A.epoch_now()
         claimer, wt = self.claimed_ablation(fixer=os.path.join(self.tmp, "fixer-5.json"))
         self.red("oi1", "Order independence", "scala (reverse)", 46)
         acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
@@ -632,7 +632,7 @@ class RedFamilyTest(Phase2Base):
         self.assertEqual(len(owners), 1)
 
     def test_a_new_convergence_red_goes_under_the_live_family_fixers_lease_and_it_is_told(self):
-        t = time.time()
+        t = A.epoch_now()
         wt = os.path.join(self.tmp, "movies-wt-red-2527")
         os.makedirs(wt)
         self.st.put_item("red", "a07", "leased", {"key": "a07", "workflow": "Identity model convergence", "job": "leg (uk)",
@@ -657,7 +657,7 @@ class RedFamilyTest(Phase2Base):
 
     def joined_to_a_family_fixer(self, idle_min):
         """Red v1 joined to convergence's live fixer (a07, in a git worktree), joined idle_min minutes ago: (t, wt)."""
-        t = time.time()
+        t = A.epoch_now()
         wt = os.path.join(self.tmp, "movies-wt-red-2527")
         subprocess.run(["git", "init", "-q", wt], check=True)
         subprocess.run(["git", "-C", wt, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty",
@@ -731,7 +731,7 @@ class RedFamilyTest(Phase2Base):
                                                    "history": list(history)})
         self.st.acquire(f"red/{key}", "laptop:owner:outside-gate", 4 * 3600, 48 * 3600, item=f"red:{key}",
                         meta={"kind": "owned", "family": "outside-gate", "worktree": wt})
-        return time.time() + held_min * 60, wt
+        return A.epoch_now() + held_min * 60, wt
 
     def commit(self, wt, msg, at):
         env = {**os.environ, "GIT_COMMITTER_DATE": f"@{int(at)} +0000", "GIT_AUTHOR_DATE": f"@{int(at)} +0000"}
@@ -763,7 +763,7 @@ class RedFamilyTest(Phase2Base):
         by = time.strftime("%H:%M", time.localtime(self.st.get("red/ab21")["acquired_at"] + 45 * 60))
         self.assertIn(f"lapses {by} without progress", A.red_view(self.st, self.st.item("red", "ab21"), t)[0],
                       "its own progress deadline, never the beat-renewed expiry")
-        recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 170 * 60))
+        recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(A.epoch_now() + 170 * 60))
         t, _wt = self.owner_held(180, history=[{"at": recent, "outcome": "DIAGNOSED: the young-alert verdict"}], key="ab22")
         A.red_renew_holders(self.st, t)
         self.assertTrue(A.lease_is_live(self.st.get("red/ab22"), t), "DIAGNOSED 10 min ago")
@@ -778,13 +778,13 @@ class RedFamilyTest(Phase2Base):
         _t, _wt = self.owner_held(180, key="ab22")
         row = self.st.get("red/ab22")
         A.red_joined_progress(self.st, row, "note: bisecting the young alerts")  # `red claim 21 --note` in the owner
-        A.red_renew_holders(self.st, time.time() + 600)
-        self.assertTrue(A.lease_is_live(self.st.get("red/ab22"), time.time() + 600), "noted now: within its window")
-        A.red_renew_holders(self.st, time.time() + 46 * 60)
-        self.assertFalse(A.lease_is_live(self.st.get("red/ab22"), time.time() + 46 * 60), "46 min after the note")
+        A.red_renew_holders(self.st, A.epoch_now() + 600)
+        self.assertTrue(A.lease_is_live(self.st.get("red/ab22"), A.epoch_now() + 600), "noted now: within its window")
+        A.red_renew_holders(self.st, A.epoch_now() + 46 * 60)
+        self.assertFalse(A.lease_is_live(self.st.get("red/ab22"), A.epoch_now() + 46 * 60), "46 min after the note")
 
     def test_with_no_family_fixer_at_work_one_fixer_takes_every_open_red_of_the_family(self):
-        t = time.time()
+        t = A.epoch_now()
         self.red("c1", "Identity model convergence", "leg (uk)", 2527)
         self.red("c2", "Verify scrape recording", "convergence (germany)", 2530)
         A.red_dispatcher(self.st, "o/r", self.repo, t)
@@ -813,7 +813,7 @@ class RedFamilyTest(Phase2Base):
         self.family_fixer()
         self.own_red()
         self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
-        A.red_dispatcher(self.st, "o/r", self.repo, time.time())
+        A.red_dispatcher(self.st, "o/r", self.repo, A.epoch_now())
         self.assertEqual(len(self.spawned), 1)
 
     def test_a_family_fixer_with_a_live_lease_takes_a_new_red_of_its_family(self):
@@ -821,7 +821,7 @@ class RedFamilyTest(Phase2Base):
         self.own_red()
         self.st.acquire("red/c2527", "laptop:fixer:red-c2527-5", 900, 3600, meta={"kind": "fixer"})
         self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
-        t = time.time()
+        t = A.epoch_now()
         acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
         self.assertEqual(self.spawned, [])
         self.assertTrue(any("joined its family convergence's fixer" in a for a in acts), acts)
@@ -839,7 +839,7 @@ class RedFamilyTest(Phase2Base):
     def closed_reds_fixer(self, alive):
         self.family_fixer(alive=alive)  # its own red, c2527, is not open
         self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
-        t = time.time()
+        t = A.epoch_now()
         A.red_dispatcher(self.st, "o/r", self.repo, t)
         self.assertEqual([o["picture"]["key"] for o, _x in self.spawned], ["c3"])
 
@@ -848,7 +848,7 @@ class RedFamilyTest(Phase2Base):
         recovers itself: the offer's reason is cleared and the dispatcher takes it again."""
         off = self.red("c4", "Verify scrape recording", "convergence (spain)", 2532)
         self.st.offer_reason(off, "its previous fixer pid 20496 (~/x) is still at work on it: it stays the holder")
-        t = time.time() + 300
+        t = A.epoch_now() + 300
         self.assertEqual([it["id"] for it in A.red_unheld(self.st, t)], ["c4"])
         acts = A.red_enforce(self.st, None, t)
         self.assertTrue(any("no live lease" in a for a in acts), acts)
@@ -863,7 +863,7 @@ class LandAsYouGoTest(Phase2Base):
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(self.tmp, "inbox")
         self.addCleanup(os.environ.pop, "AGENTCTL_INBOX_DIR", None)
         clone, wt = git_tree(self.tmp, "movies-wt-red-2473-5")
-        t = time.time()
+        t = A.epoch_now()
         commit(wt, "a step", at=t - 30 * 60)
         A.write_json(A.reds_dir("2473", "fixer-7.json"), {"workflow": "W", "run": 2473, "worktree": wt, "job": "leg",
                                                          "pid": os.getpid(), "process_start": A.process_start(os.getpid())})
@@ -968,7 +968,7 @@ class LandHoldTest(Phase2Base):
         self.sync()
         st = A.state_read()
         self.assertEqual(st["hold"]["why"], "infra deploy")
-        line = A.status_header(time.time(), d=st, probes=False)["line"]
+        line = A.status_header(A.epoch_now(), d=st, probes=False)["line"]
         self.assertIn("LAND HELD until", line)
         rc, out = self.land("status")
         self.assertIn("HELD until", out)
@@ -983,7 +983,7 @@ class LandHoldTest(Phase2Base):
         os.environ["AGENTCTL_ROLE"] = "server"
         os.environ.pop("AGENTCTL_STORE_URL")
         self.assertIsNotNone(A.land_hold(self.st))
-        self.assertIsNone(A.land_hold(self.st, time.time() + 120))
+        self.assertIsNone(A.land_hold(self.st, A.epoch_now() + 120))
         self.assertEqual(self.st.items("hold", ["held"]), [])
         self.assertTrue(any(e["kind"] == "hold.expired" for e in self.st.events()))
         ticked = []
@@ -1034,7 +1034,7 @@ class W7Test(Phase2Base):
         self.st.transition("condition", "w7", "closed", it["version"], event={"text": "x"})
         seq = max(e["seq"] for e in self.st.events())
         c = self.st.db()
-        c.execute("UPDATE events SET at=? WHERE seq=?", (time.time() - 3600, seq))
+        c.execute("UPDATE events SET at=? WHERE seq=?", (A.epoch_now() - 3600, seq))
         c.close()
         ok, why = A.inv_w7(A.Clock(), A.CurrentStore(A.process_store))
         self.assertEqual(ok, False)

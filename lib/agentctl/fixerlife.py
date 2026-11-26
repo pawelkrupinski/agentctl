@@ -1,6 +1,7 @@
 # agentctl, part `fixerlife`: one fixer lifecycle: the wrapper a dispatched fixer and a family owner share.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import wall_epoch
 import json
 import os
 import re
@@ -180,7 +181,7 @@ class RedFixerWrapper:
         self.every = env_num("AGENTCTL_RED_RENEW", RED_RENEW_EVERY)
         self.cli = claude_cli()
         self.label = fixer_label(self.rec)
-        self.t0 = self.last_renew = time.time()
+        self.t0 = self.last_renew = wall_epoch()
         self.missing, self.unclaimed_told = 0, False
 
     def leases(self) -> Any:
@@ -263,7 +264,7 @@ class RedFixerWrapper:
         argv, self.env = self.command()
         if rec.get("session"):
             bind_fixer_session(rec["session"], self.a.record)
-        self.t0 = self.last_renew = time.time()
+        self.t0 = self.last_renew = wall_epoch()
         launch = rec.get("launch_cwd") if rec.get("launch_cwd") and os.path.isdir(rec["launch_cwd"]) else self.wt
         bid, why = bg_start(argv, launch, self.env)  # a revived lander: in its session's own cwd, where `--resume` finds it
         if not bid:
@@ -292,7 +293,7 @@ class RedFixerWrapper:
         for sg in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(sg, self.cancelled)
         self.stall = env_num("AGENTCTL_RED_STALL", RED_STALL)
-        self.prog = TurnProgress(self.stall, time.time())
+        self.prog = TurnProgress(self.stall, wall_epoch())
         try:
             while self.verdict is None and self.step():
                 pass
@@ -302,7 +303,7 @@ class RedFixerWrapper:
     def step(self) -> Any:
         """One poll: False when the session's turn is over (or it is gone from the list), else True with self.verdict
         set when the wrapper must stop it."""
-        time.sleep(self.poll)
+        time.sleep(self.poll)  # wall: waits on and times real processes and threads
         ent = bg_session(self.cli, self.bid)
         self.adopt_transcript(ent)
         self.missing = self.missing + 1 if ent is None else 0
@@ -332,7 +333,7 @@ class RedFixerWrapper:
         `red claim` never got going -- ended with what `claude agents` says of it, never a silent "never got going".
         One that works but never ran `red claim` is said once, on its lease and the inbox."""
         rec, claim_within = self.rec, env_num("AGENTCTL_FIXER_CLAIM_WITHIN", FIXER_CLAIM_WITHIN)
-        if time.time() - self.t0 <= claim_within or (read_record(self.a.record) or {}).get("note"):
+        if wall_epoch() - self.t0 <= claim_within or (read_record(self.a.record) or {}).get("note"):
             return None
         if not rec.get("transcript"):
             return (f"NOT STARTED: session {self.bid} never claimed in {fmt_age(claim_within)} (`claude agents`: "
@@ -352,7 +353,7 @@ class RedFixerWrapper:
     def limit_stop(self) -> Any:
         """TIMED OUT past the wall time, or STOPPED by the worktree's RED-STOP.md."""
         wall = env_num("AGENTCTL_RED_FIXER_WALL", RED_FIXER_WALL)
-        if time.time() - self.t0 > wall:
+        if wall_epoch() - self.t0 > wall:
             return f"TIMED OUT after {int(wall // 60)} min (maximum wall time)"
         stop_file = os.path.join(self.wt, "RED-STOP.md")
         return "STOPPED: " + open(stop_file).readline().strip() if os.path.exists(stop_file) else None
@@ -378,20 +379,20 @@ class RedFixerWrapper:
     def renew_due(self, ent: Any) -> Any:
         """Each beat, when due: judge the session's progress (PROOF OF WORK: a living wrapper is not one) and renew the
         leases by it -- the run's other reds with the first. Why it must stop, else None."""
-        if time.time() - self.last_renew < self.every:
+        if wall_epoch() - self.last_renew < self.every:
             return None
         rec = self.rec
         note = (read_record(self.a.record) or {}).get("note")
         mark, _moved, stalled = self.prog.judge(rec["log"], rec.get("bg_id"), self.wt, ent, rec.get("transcript"),
-                                                time.time(), self.every)
+                                                wall_epoch(), self.every)
         stop = f"STALLED: no progress (transcript, worktree) for {fmt_age(self.stall)}" if stalled else None
         if not stop:
-            beat = f"{mark} beat {int(time.time())}"
+            beat = f"{mark} beat {int(wall_epoch())}"
             for h in self.held[1:]:
                 h.renew(self.st, beat, note=note)
             gone = self.own.renew(self.st, beat, note=note)
             stop = lease_stop_line(*gone) if gone else None
-        self.last_renew = time.time()
+        self.last_renew = wall_epoch()
         return stop
 
     def release_lease(self, lease: Any, verdict: Any, tail: Any) -> Any:
@@ -406,7 +407,7 @@ class RedFixerWrapper:
                 return
             except StoreUnavailable as e:  # never answered: the lease lapses by its TTL, and the red is offered again
                 print(f"{ts()} could not release {n_} ({e}){'' if left > 1 else ': it lapses by its TTL'}", flush=True)
-                time.sleep(self.poll)
+                time.sleep(self.poll)  # wall: waits on and times real processes and threads
 
     def session_verdict(self, text: Any) -> Any:
         """The wrapper's verdict if it stopped the session, else the session's own final line, else why it has none."""

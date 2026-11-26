@@ -1,6 +1,7 @@
 # agentctl, part `queue`: the land queue and submission.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
 import subprocess
@@ -124,7 +125,7 @@ def push_credential_condition(st: Any, d: str, why: str, detail: str | None, rep
             f"Its credential helper there must work again (the App helper on ci-runner, gh's login on the laptop). "
             f"Cleared by the next check-branch push that succeeds. Last: {redact_credentials(why)}")
     tail = redact_credentials(detail or why).strip().splitlines()[-15:]
-    probe = run_probe("push_credential", {"d": d, "since": time.time(), "host": host_role()})
+    probe = run_probe("push_credential", {"d": d, "since": epoch_now(), "host": host_role()})
     return open_condition("STALLED", text, probe, [], key=f"push-credential-{os.path.basename(os.path.abspath(repo))}",
                           command="land", tail=tail, grace=0, store=st)
 
@@ -393,7 +394,7 @@ def land_hold(st: Any, now_: float | None = None, expire: bool = True) -> dict[s
     """The land hold in force, or None. A hold past its deadline is moved to `expired` here (an event says so): every
     reader -- the tick, `land status`, the snapshot -- lifts a forgotten hold the moment it is due. expire=False: only
     read (the status page never writes)."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     live = None
     for it in land_holds(st):
         if it["deadline"] <= t:

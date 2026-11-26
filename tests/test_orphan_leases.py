@@ -47,7 +47,7 @@ class OwnerWrapperTest(OwnerBase):
         name = A.red_lease(self.only()["data"]["key"])
         self.assertTrue(self.wait(lambda: "blocked" in self.lease_outcome(name)), self.lease_outcome(name))
         self.assertTrue(self.lease_outcome(name).startswith("ended with no LANDED"))
-        self.assertFalse(A.lease_is_live(self.st.get(name), time.time()))
+        self.assertFalse(A.lease_is_live(self.st.get(name), A.epoch_now()))
         self.assertTrue(self.wait(lambda: self.rec().get("in_turn") is False))
 
     def test_a_turn_with_no_progress_is_stalled_its_session_stopped_and_its_reds_released(self):
@@ -68,7 +68,7 @@ class ReapTest(OwnerBase):
 
     def setUp(self):
         super().setUp()
-        self.now = time.time()
+        self.now = A.epoch_now()
         self.transcript = os.path.join(self.tmp.name, "t.jsonl")
         open(self.transcript, "w").write("{}\n")
         os.utime(self.transcript, (self.now - 3600, self.now - 3600))  # last written an hour ago

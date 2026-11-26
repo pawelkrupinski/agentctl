@@ -1,6 +1,7 @@
 # agentctl, part `queuesubmit`: submitting a change: by ref, without the vault, the queued line, the fast precheck, a red fix's land.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
 import subprocess
@@ -64,7 +65,7 @@ def sweep_land_refs(repo, d, store, now_=None):
     changes live in ci-runner's STORE, not in entries/ (2026-11-04: every queued change looked unknown and lost its
     ref at the next sweep): a change either source holds open keeps its ref; one NEITHER knows is deleted only past
     LAND_REF_UNKNOWN_AGE, and logged."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     if t - _last_ref_sweep[0] < env_num("AGENTCTL_LAND_REF_SWEEP", LAND_REF_SWEEP_EVERY):
         return []
     _last_ref_sweep[0] = t
@@ -176,7 +177,7 @@ def _note_precheck_once(store: Any, eid: Any, rec: Any) -> Any:
     return False, why
 
 
-def note_precheck(eid, secs, rc, out, store, sleep=time.sleep):
+def note_precheck(eid, secs, rc, out, store, sleep=time.sleep):  # wall: waits on and times real processes and threads
     """The precheck's duration and outcome on its change item (`precheck`: the landing record's precheck_* fields),
     before a refusal cancels it; never fatal."""
     outcome, step = precheck_outcome(rc, out)
@@ -334,7 +335,7 @@ def take_delivery(it, store):
     if (it.get("data") or {}).get("delivered_at") or it.get("version") is None:  # said already, or a queue entry
         return  # the tick has not made an item of yet (own_change_item): nothing to record it on
     try:
-        store.update_item("change", it["id"], it["version"], {"delivered_at": time.time()})
+        store.update_item("change", it["id"], it["version"], {"delivered_at": epoch_now()})
     except (StaleVersion, StoreUnavailable):
         pass
 

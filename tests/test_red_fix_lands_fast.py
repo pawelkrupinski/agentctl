@@ -212,7 +212,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
     # -- the invariant ------------------------------------------------------------------------------------------------
     def test_watchdog_wr_escalates_a_red_fix_waiting_on_green_or_queued_too_long(self):
         st = A.process_store()
-        st.put_item("change", "c-fix", "waiting", {"fixes": ["7"], "submitted_at": A.time.time()})
+        st.put_item("change", "c-fix", "waiting", {"fixes": ["7"], "submitted_at": A.epoch_now()})
         ok, why = A.inv_wr(A.Clock(), st=st, reds={"7"})
         self.assertFalse(ok, why)
         self.assertIn("c-fix", why)
@@ -220,8 +220,8 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         os.environ["AGENTCTL_UNHELD_GRACE"] = "0"  # c-slow's lack of a hold is stuck at once (UNHELD_GRACE passed)
         self.addCleanup(os.environ.pop, "AGENTCTL_UNHELD_GRACE", None)
         st2 = A.Store(path=os.path.join(self.tmp.name, "store2.db"))
-        st2.put_item("change", "c-slow", "queued", {"fixes": ["7"], "submitted_at": A.time.time() - 3600})
-        st2.put_item("change", "c-plain", "waiting", {"submitted_at": A.time.time() - 3600})
+        st2.put_item("change", "c-slow", "queued", {"fixes": ["7"], "submitted_at": A.epoch_now() - 3600})
+        st2.put_item("change", "c-plain", "waiting", {"submitted_at": A.epoch_now() - 3600})
         ok, why = A.inv_wr(A.Clock(), st=st2, reds={"7"})
         self.assertFalse(ok, why)
         self.assertIn("c-slow", why)

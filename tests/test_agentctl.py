@@ -268,7 +268,7 @@ class Repo:
 def make_old(path):
     """Make a worktree look idle (its gitdir files untouched for a day)."""
     gd = subprocess.run(["git", "-C", path, "rev-parse", "--absolute-git-dir"], capture_output=True, text=True).stdout.strip()
-    old = time.time() - 86400
+    old = A.epoch_now() - 86400
     for f in ("HEAD", "index", "logs/HEAD", "ORIG_HEAD"):
         fp = os.path.join(gd, f)
         if os.path.exists(fp):
@@ -771,8 +771,8 @@ class WaitAndStateTest(Base):
         errs = []
         reader = threading.Thread(target=lambda: errs.extend(second.stderr), daemon=True)
         reader.start()
-        t1 = time.time()
-        while not any("attached to existing waiter" in l for l in errs) and second.poll() is None and time.time() - t1 < 60:
+        t1 = A.epoch_now()
+        while not any("attached to existing waiter" in l for l in errs) and second.poll() is None and A.epoch_now() - t1 < 60:
             time.sleep(0.1)
         with open(target, "w") as f:
             f.write("ok")

@@ -2,6 +2,7 @@
 # (`gh api`). Forgejo was switched off on 2026-10-31; GitHub is the only forge.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import contextlib
 import json
 import os
@@ -194,14 +195,14 @@ def forge_workflow_names(o_r):
     """{workflow id: name, workflow path: name} of o_r's workflows; {} when the page cannot be read (a run then keeps
     REST's own `name`)."""
     at, names = _workflow_names.get(o_r, (0.0, None))
-    if names is None or time.time() - at >= WORKFLOW_NAMES_TTL:
+    if names is None or epoch_now() - at >= WORKFLOW_NAMES_TTL:
         try:
             flows = (api(o_r, "GET", "actions/workflows", {"per_page": 100}) or {}).get("workflows") or []
             names = _workflow_name_index(flows)
         except (Exception, SystemExit) as e:
             err(f"forge: could not read {o_r}'s workflows ({str(e)[:120]}): runs keep their run-names")
             names = names or {}
-        _workflow_names[o_r] = (time.time(), names)
+        _workflow_names[o_r] = (epoch_now(), names)
     return names
 
 
@@ -392,7 +393,7 @@ def runner_queue(now_=None):
     try:
         with open(path) as f:
             q = json.load(f)
-        fresh = (now_ if now_ is not None else time.time()) - float(q["ok"]) <= RUNNERS_PAGE_MAX_AGE
+        fresh = (now_ if now_ is not None else epoch_now()) - float(q["ok"]) <= RUNNERS_PAGE_MAX_AGE
     except (OSError, ValueError, KeyError, TypeError):
         return None
     return q if fresh else None

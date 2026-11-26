@@ -1,6 +1,7 @@
 # agentctl, part `inboxentry`: the inbox's entries: its directory, the kinds a verdict names, who wrote it, the condition kinds only open_condition writes, and inbox_write, which hands a built entry to the writer the composition root wired (the alert router).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import datetime as dt
 import glob
 import itertools
@@ -75,11 +76,11 @@ _inbox_writers: list[Callable[[dict[str, Any]], Any]] = []
 
 
 # The time an entry is stamped with is the process's clock, wired beside the writer (the wall's until wired).
-_inbox_times: list[Callable[[], float]] = [time.time]
+_inbox_times: list[Callable[[], float]] = [epoch_now]
 _inbox_seq = itertools.count()  # a clock that stands still (a test's) must not give two entries one id
 
 
-def wire_inbox_writer(writer: Callable[[dict[str, Any]], Any], now: Callable[[], float] = time.time) -> None:
+def wire_inbox_writer(writer: Callable[[dict[str, Any]], Any], now: Callable[[], float] = epoch_now) -> None:
     _inbox_writers[:] = [writer]
     _inbox_times[:] = [now]
 

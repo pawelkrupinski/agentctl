@@ -1,6 +1,7 @@
 # agentctl, part `branches`: branch runs: their inputs against main's, their state, branch reds and their route; `agentctl dispatch`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import datetime as dt
 import json
 import os
@@ -305,7 +306,7 @@ def route_branch_red(o_r: Any, e: Any) -> Any:
 def route_branch_reds(o_r, snap, now_=None):
     """ONE inbox entry per failed branch run (BRANCH RED) whose branch still exists, with ci-why's first error lines;
     signatures saved, so a PREDICTS MAIN RED run is a red unit. Returns the lines written."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     return [route_branch_red(o_r, e) for e in (snap or {}).get("branches") or [] if branch_red_unrouted(e, t)]
 
 
@@ -391,7 +392,7 @@ def dispatch_owner_state(r: Any, unmatched: bool) -> str:
 
 def dispatch_run(a: Any, o_r: str, inputs: Any) -> int:
     """`agentctl dispatch run`: start the workflow on a.ref, record the dispatch, and find the run it created."""
-    t0 = dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=60)
+    t0 = dt.datetime.fromtimestamp(epoch_now(), dt.timezone.utc) - dt.timedelta(seconds=60)
     args = ["workflow", "run", a.workflow, "--ref", a.ref]
     for k, v in inputs.items():
         args += ["-f", f"{k}={v}"]
@@ -402,7 +403,7 @@ def dispatch_run(a: Any, o_r: str, inputs: Any) -> int:
         return r.returncode
     rec = record_dispatch(branch=a.ref, run_id=None, workflow=a.workflow,
                           purpose=a.purpose, inputs=inputs,
-                          key=None if a.ref != "main" else f"main-{re.sub(r'[^A-Za-z0-9._-]', '_', a.workflow)}-{int(time.time())}")
+                          key=None if a.ref != "main" else f"main-{re.sub(r'[^A-Za-z0-9._-]', '_', a.workflow)}-{int(epoch_now())}")
     rid = dispatched_run_id(o_r, a, t0)
     if rid:
         rec = save_dispatch(dict(rec, run_id=rid), None if a.ref != "main" else dispatch_key(None, rid))
@@ -422,5 +423,6 @@ def dispatched_run_id(o_r: str, a: Any, t0: Any) -> Any:
                 return max(x["databaseId"] for x in fresh)
         except (Exception, SystemExit):
             pass
+        # wall: waits on and times real processes and threads
         time.sleep(env_num("AGENTCTL_DISPATCH_FIND_POLL", 5))
     return None

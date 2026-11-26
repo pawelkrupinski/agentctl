@@ -4,6 +4,7 @@
 import json
 import os
 import re
+from agentctl.clock import epoch_now
 import time
 from typing import Any, Callable
 from agentctl.core import env_num, state_root
@@ -68,7 +69,7 @@ class Store(OfferTable):
 
     def __init__(self, path: str | None = None, clock: Callable[[], float] | None = None) -> None:
         self.path = path or state_root("store.db")
-        self.clock = clock or time.time
+        self.clock = clock or epoch_now
 
     def db(self):
         import sqlite3

@@ -1,12 +1,12 @@
 # agentctl, part `statuspage`: the read-only status page: its HTTP server on a daemon thread, its URL, `agentctl status` and `--open`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import http.server
 import json
 import os
 import re
 import threading
-import time
 import urllib.parse
 from typing import Any
 from contextlib import suppress
@@ -50,7 +50,7 @@ STATUS_PAGE_HOSTS = (STATUS_PAGE_HOST, "127.0.0.1", "localhost")
 def cmd_status(a, store):
     if getattr(a, "open", False):
         return status_page_open()
-    t = time.time()
+    t = epoch_now()
     h = status_header(t, probes=False)
     if a.line:  # THE STATUS LINE IS THE SNAPSHOT ALONE: no store RPC, no network (2026-11-22: 2-4.6 s, "gate ?")
         print(h["line"])
@@ -257,7 +257,7 @@ def status_page_start() -> Any:
             err(f"status page: {'; '.join(why)}: serving {url} instead")
         err(f"status page: {url} (127.0.0.1:{p})")
         try:
-            write_json(status_page_file(), {"url": url, "port": p, "pid": os.getpid(), "at": time.time(), "fallback": why})
+            write_json(status_page_file(), {"url": url, "port": p, "pid": os.getpid(), "at": epoch_now(), "fallback": why})
         except OSError as e:
             err(f"status page: {status_page_file()} not written: {e}")
         return url

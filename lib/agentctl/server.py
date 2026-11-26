@@ -1,6 +1,7 @@
 # agentctl, part `server`: the store over HTTP (`agentctl store serve`): its API, the change submissions it takes, its metrics
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import datetime as dt
 import fcntl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -125,7 +126,7 @@ def queue_change(st, d, fields, entry_id=None):
         # two submissions of one worktree in the same second got one id, and the second was answered with the first
         # entry: lost. The id's number is the highest ever drawn (`drawn`), whatever seq an entry ends up with.
         seq = max([max(int(e["seq"]), int(e.get("drawn") or 0)) for e in every] + [0]) + 1
-        eid = entry_id or f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(fields['worktree'])}-{seq}"
+        eid = entry_id or f"{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%d-%H%M%S')}-{os.path.basename(fields['worktree'])}-{seq}"
         if any(x["id"] == eid for x in every):
             e = next(x for x in every if x["id"] == eid)
             return e, max(len(queued_entries(d)) - 1, 0)
@@ -467,9 +468,9 @@ def store_serve_command(a: Any) -> int:
 def store_alive_beat(st: Any) -> None:
     """Every 30 s the store's `last_alive` (store_grace reads it at the next start to extend the leases by the downtime)."""
     while True:
-        time.sleep(30)
+        time.sleep(30)  # wall: waits on and times real processes and threads
         try:
-            st.meta_set("last_alive", time.time())
+            st.meta_set("last_alive", epoch_now())
         except Exception as e:
             err(f"store: last_alive not written ({e})")
 

@@ -1,6 +1,7 @@
 # agentctl, part `gov`: the governor: ONE admission control for the laptop's memory and cores: its capacity, its waiters, a ticket admitted or refused, idle sbt servers evicted
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import wall_epoch
 import fcntl
 import glob
 import json
@@ -108,7 +109,7 @@ def gov_charged(tickets):
 
 
 def gov_ramp(tickets, now=None):
-    now = now or time.time()
+    now = now or wall_epoch()
     return sum(float(t.get("mem") or 0) for t in tickets if now - t.get("at", 0) < GOV_RAMP)
 
 
@@ -141,7 +142,7 @@ def gov_capacity(tickets=None, m=None):
     state = _capacity_state(busy, measured, n, prev)
     if state != prev:
         with suppress(OSError):
-            write_json(path, {"state": state, "busy": busy, "at": time.time()})
+            write_json(path, {"state": state, "busy": busy, "at": wall_epoch()})
             gov_log(f"capacity {prev} -> {state}: {busy:.1f} of {n} cores busy ({charged:g} charged, {measured:.1f} "
                     "measured)")
     return {"state": state, "busy": busy, "charged": charged, "measured": measured, "cores": n,
@@ -207,11 +208,11 @@ def gov_waiter_alive(rec):
         return False
     k = (pid, str(start))
     at = _gov_alive.get(k)
-    if at is not None and time.time() - at < GOV_ALIVE_TTL:
+    if at is not None and wall_epoch() - at < GOV_ALIVE_TTL:
         return True
     ok = proc_alive(pid, start)  # a reused pid is not the waiter
     if ok:
-        _gov_alive[k] = time.time()
+        _gov_alive[k] = wall_epoch()
     return ok
 
 
@@ -253,7 +254,7 @@ def idle_servers(min_idle=None):
     for f in glob.glob(os.path.join(sbt_warm_state(), "*.root")):
         prefix = f[:-5]
         root = evictable_root(f, prefix)
-        idle = attempt(lambda: time.time() - os.path.getmtime(prefix + ".used"), None, catch=(OSError,)) if root else None
+        idle = attempt(lambda: wall_epoch() - os.path.getmtime(prefix + ".used"), None, catch=(OSError,)) if root else None
         if idle is not None and idle >= min_idle:
             out.append((idle, root, prefix))
     return sorted(out, reverse=True)
@@ -319,7 +320,7 @@ class GovWait:
     def __init__(self, cls, mem: Any, cores: Any, label: Any, kind: Any, me: Any, report: Any, force: Any=False, wait: Any=True, max_wait: Any=None) -> None:
         self.cls, self.mem, self.cores, self.label, self.kind = cls, mem, cores, label, kind
         self.me, self.report, self.force, self.wait, self.max_wait = me, report, force, wait, max_wait
-        self.t0 = time.time()
+        self.t0 = wall_epoch()
         self.said, self.report_at, self.waited_on = False, 0.0, None
         self.idle = env_num("AGENTCTL_GOV_POLL", GOV_POLL)  # a waiter behind the head backs off to GOV_IDLE_MAX
 
@@ -333,28 +334,28 @@ class GovWait:
         return gov_fits(self.cls, self.mem, tickets, gov_machine(), self.kind, self.cores)
 
     def check_timeout(self, why: Any) -> Any:
-        if self.max_wait is not None and time.time() - self.t0 > self.max_wait:
+        if self.max_wait is not None and wall_epoch() - self.t0 > self.max_wait:
             raise GovTimeout(f"the governor did not admit {self.cls} work ({self.label}) in "
                              f"{int(self.max_wait // 60)} min: {why}")
 
     def keep_leases(self) -> Any:
         try:  # a check waiting its turn holds its leases (bounded by max_wait and their max hold), never loses them
-            lock_beat(f"gov-wait:{self.label}:{int(time.time() // 60)}")
+            lock_beat(f"gov-wait:{self.label}:{int(wall_epoch() // 60)}")
         except LeaseLost as ex:
             raise GovTimeout(f"{ex} while waiting for the governor") from None
 
     def maybe_report(self, why: Any, tickets: Any) -> Any:
-        if time.monotonic() < self.report_at:
+        if time.monotonic() < self.report_at:  # wall: waits on and times real processes and threads
             return
         self.report(f"{'still ' if self.said else ''}waiting for the governor ({self.cls}, {self.mem:g} GB, "
                     f"{self.cores:g} cores, {self.label}): {why}; {len(tickets)} admitted, "
                     f"{gov_committed(tickets):.0f}/{gov_budget():.0f} GB, {gov_charged(tickets):g} cores charged")
-        self.said, self.report_at = True, time.monotonic() + GOV_REPORT
+        self.said, self.report_at = True, time.monotonic() + GOV_REPORT  # wall: waits on and times real processes and threads
 
     def pause(self, head: Any, mark: Any) -> Any:
         if head:  # the head reads the machine every poll: memory and load free up with no event
             self.idle = env_num("AGENTCTL_GOV_POLL", GOV_POLL)
-            time.sleep(self.idle)
+            time.sleep(self.idle)  # wall: waits on and times real processes and threads
         else:
             gov_wait_change(mark, self.idle)
             self.idle = min(self.idle * 2, env_num("AGENTCTL_GOV_IDLE_MAX", GOV_IDLE_MAX))
@@ -362,6 +363,7 @@ class GovWait:
     def evicted(self, head: Any, on_mem: Any, why: Any) -> Any:
         """The head, held on memory, freed some by evicting idle work (the freed memory shows in vm_stat)."""
         if head and on_mem and self.cls != "measure" and gov_evict(f"{self.cls} {self.label} ({why})"):
+            # wall: waits on and times real processes and threads
             time.sleep(env_num("AGENTCTL_GOV_EVICT_SETTLE", 3))
             return True
         return False
@@ -417,9 +419,9 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
             return None
         # THE TICKET BEFORE THE WAITER GOES: the next head never looks between the two and misses this admission
         path, f = gov_take_ticket(d, t0, ticket, fd)
-        waited = round(time.time() - t0, 1)
+        waited = round(wall_epoch() - t0, 1)
         rec = {"class": cls, "mem": mem, "cores": cores, "job": job, "label": label, "kind": kind,
-               "pid": pid or os.getpid(), "cwd": cwd or os.getcwd(), "at": time.time(), "since": ts(), "waited": waited,
+               "pid": pid or os.getpid(), "cwd": cwd or os.getcwd(), "at": wall_epoch(), "since": ts(), "waited": waited,
                "waited_on": waiter.waited_on if waited >= 1 else None, "id": os.path.basename(path)}
         gov_admit_write(d, path, rec)
         if waiter.said:

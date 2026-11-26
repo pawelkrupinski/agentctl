@@ -7,13 +7,12 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
-from agentctl.clock import Clock  # noqa: E402
+from agentctl.clock import Clock, epoch_now  # noqa: E402
 
 
 class FakeClock(Clock):
     def __init__(self, t=None, on_sleep=None):
-        import time
-        self.t = time.time() if t is None else t  # default: now, so what it stamps reads as fresh beside real stamps
+        self.t = epoch_now() if t is None else t  # default: now on the process's clock, beside what the code stamps from it
         self.on_sleep = on_sleep
         self.slept = []
 
@@ -53,3 +52,20 @@ def lagging_clock():
     """A FakeClock LOADED_RUN_LAG s behind the wall, as a slow test's frozen clock reads late in its run."""
     import time
     return FakeClock(time.time() - LOADED_RUN_LAG)
+
+
+class RealTimeClock(Clock):
+    """The clock of a test that drives the real world -- git commits, files, a fixer's process -- whose stamps are the
+    wall's: `A.wire_clock(RealTimeClock())`. A test that fakes its world keeps the default test clock."""
+
+    def time(self):
+        import time
+        return time.time()
+
+    def monotonic(self):
+        import time
+        return time.monotonic()
+
+    def sleep(self, secs):
+        import time
+        time.sleep(secs)

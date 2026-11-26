@@ -1,6 +1,7 @@
 # agentctl, part `queueclose`: one queue closed by content: bounces, regen-only rows, overdue regen holds.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import time
 from typing import Any
@@ -176,8 +177,8 @@ def migrate_local_queue(repo, store):
         line = (f"LOCAL QUEUE: {e['id']} ({e.get('worktree')}) is in the laptop's local queue, which nothing runs: {why}; "
                 "tried again every sync cycle")
         did.append(line)
-        if time.time() - float(e.get("migrate_told_at") or 0) > 3600:
-            e["migrate_told_at"] = time.time()
+        if epoch_now() - float(e.get("migrate_told_at") or 0) > 3600:
+            e["migrate_told_at"] = epoch_now()
             save_entry(d, e)
             inbox_write("land", line, [line], [], 1, cwd=e.get("worktree") or safe_cwd())
     return did

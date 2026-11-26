@@ -14,7 +14,7 @@ import json, os, signal, subprocess, sys, time, types, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
-from fake_clock import FakeClock  # noqa: E402
+from fake_clock import FakeClock, RealTimeClock  # noqa: E402
 from agentctl.clock import Clock  # noqa: E402
 from test_red import RedBase, run, FAIL_LINE, MOVIES  # noqa: E402
 
@@ -65,7 +65,8 @@ class RedsBase(RedBase):
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
         os.environ["AGENTCTL_RECOVERY_DIR"] = os.path.join(self.tmp.name, "recovery")
         os.environ["AGENTCTL_RUNNERS_PAGE_CACHE"] = os.path.join(self.tmp.name, "runners-page.json")
-        self.t = [time.time()]
+        A.wire_clock(RealTimeClock())  # these tests make real git commits and run a real fixer: the wall's stamps
+        self.t = [A.epoch_now()]
         self.st = A.process_store(clock=lambda: self.t[0])
         A._blocker_cache.clear()
 
@@ -220,7 +221,7 @@ class ClaimTest(RedsBase):
         it = self.only()
         row = self.st.get(A.red_lease(it["data"]["key"]))
         self.assertTrue(row["holder"].startswith("laptop:claim:fixer-agent@"))
-        self.t[0] = time.time()
+        self.t[0] = A.epoch_now()
         self.tick()
         self.assertEqual(self.only()["state"], "leased")
         self.assertIn("fixer-agent", self.why()[1])
@@ -1101,7 +1102,7 @@ class OwnerTest(RedsBase):
         self.assertEqual(it["state"], "blocked-external")
         wt = self.r.worktree("repo-wt-fx", branch="fx")
         self.assertEqual(self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)[0], 0)
-        self.t[0] = time.time()
+        self.t[0] = A.epoch_now()
         self.tick()
         self.tick()
         self.assertEqual(self.only()["state"], "leased")
@@ -1132,9 +1133,9 @@ class OwnerTest(RedsBase):
         self.assertEqual(rc, 0, out)
         self.assertIn("RED BLOCKED ON OWNER", out)
         lease = self.st.get(A.red_lease(it["data"]["key"]))
-        self.assertFalse(A.lease_is_live(lease, time.time()))  # handed over: its wrapper ends with the block's verdict
+        self.assertFalse(A.lease_is_live(lease, A.epoch_now()))  # handed over: its wrapper ends with the block's verdict
         self.assertTrue(A.lease_meta(lease)["outcome"].startswith("BLOCKED ON OWNER"))
-        self.t[0] = time.time()
+        self.t[0] = A.epoch_now()
         self.tick()
         self.assertEqual(self.only()["state"], "blocked-external")
 
@@ -1152,7 +1153,7 @@ class OwnerTest(RedsBase):
         self.assertEqual(rc, 0, out)
         self.assertIn("already blocked", out)
         self.assertIn(it["data"]["key"], A.lease_meta(self.st.get(A.block_lease(it["data"]["key"])))["keys"])
-        self.assertFalse(A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), time.time()), lease)
+        self.assertFalse(A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), A.epoch_now()), lease)
 
     def test_a_fixer_blocks_its_own_red_named_by_its_key(self):
         # issue 20261119T030011-293b9a: `red block 0c8eea91b712` failed looking the key up as a run, and a run whose
@@ -1263,7 +1264,7 @@ class OwnerTest(RedsBase):
         self.assertEqual(A.notify_escalations(self.st), 0)  # once
         wt = self.r.worktree("repo-wt-taker", branch="taker")
         self.assertEqual(self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)[0], 0)
-        self.t[0] = time.time()
+        self.t[0] = A.epoch_now()
         self.tick()
         self.assertEqual(A.escalated_now(self.st), [])  # held now: the escalation is gone by itself
 
@@ -1279,7 +1280,7 @@ class OwnerTest(RedsBase):
                             for e in self.st.events(limit=10 ** 6)))
         wt = self.r.worktree("repo-wt-holder", branch="holder")
         self.assertEqual(self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)[0], 0)
-        self.t[0] = time.time()
+        self.t[0] = A.epoch_now()
         self.tick()
         self.assertEqual(self.only()["state"], "leased")
         shown = []
@@ -1293,11 +1294,11 @@ class OwnerTest(RedsBase):
         self.assertFalse([e for e in self.st.events(limit=10 ** 6) if e["severity"] == "escalate" and not e.get("notified_at")])
         n = len(self.st.events(limit=10 ** 6))
         self.assertEqual(self.tool("red", "release", "20", "--repo", "movies", cwd=wt)[0], 0)
-        self.t[0] = time.time()
+        self.t[0] = A.epoch_now()
         self.tick(dispatch=True)
         self.tick(dispatch=True, advance=A.RED_OFFER["gate"] - 120)  # lapsed, inside the offer's grace
         self.assertEqual(self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)[0], 0)
-        self.t[0] = time.time() + A.RED_OFFER["gate"] - 60
+        self.t[0] = A.epoch_now() + A.RED_OFFER["gate"] - 60
         self.tick(dispatch=True, advance=0)
         self.tick(dispatch=True, advance=A.RED_OFFER["gate"] + 1)
         self.assertFalse([e for e in self.st.events(limit=10 ** 6)[n:] if "UNCLAIMED" in str(e.get("text"))])
@@ -1346,7 +1347,7 @@ class DispatchTest(RedsBase):
                 time.sleep(0.2)
         finally:
             os.environ.pop("FAKE_CLAUDE_RESULT")
-        self.t[0] = time.time()
+        self.t[0] = A.epoch_now()
         self.tick()
         it = self.only()
         self.assertEqual(it["state"], "offered")
@@ -1659,7 +1660,7 @@ class UnkickedTest(RedsBase):
             self.assertEqual([i["state"] for i in its], ["offered"])
             self.assertIn(head[:10], its[0]["data"]["line"])
             runs = json.load(open(os.path.join(self.d, "runs.json")))
-            later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 60))
+            later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(A.epoch_now() + 60))
             self.put("runs.json", [run(99, 30, "Identity model convergence", "identity-model-convergence.yml", head,
                                        status="in_progress", created=later)] + runs)
             self.tick()
@@ -1681,7 +1682,7 @@ class UnkickedTest(RedsBase):
         self.r.write("worker/x.scala", "x\n")
         head = self.r.commit("a pipeline change")
         self.r.push()
-        later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() + 60))
+        later = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(A.epoch_now() + 60))
         runs = json.load(open(os.path.join(self.d, "runs.json")))
         self.put("runs.json", [run(99, 30, "Identity model convergence", "identity-model-convergence.yml", head,
                                    status="in_progress", created=later)] + runs)
@@ -1835,7 +1836,7 @@ class BackgroundSessionTest(RedsBase):
         last_drop = max(i for i, (m, r) in enumerate(flaky.calls) if r == "dropped" and m != "release")
         self.assertIn(("renew", "ok"), flaky.calls[last_drop + 1:], flaky.calls)  # renewed once the store answered
         lease = self.st.get(name)
-        self.assertFalse(A.lease_is_live(lease, time.time()))  # released with its verdict: the release was asked again
+        self.assertFalse(A.lease_is_live(lease, A.epoch_now()))  # released with its verdict: the release was asked again
         self.assertEqual(A.lease_meta(lease)["outcome"], "LANDED abcdef1234")
         self.assertEqual(A.lease_meta(lease)["session"], rec["session"])  # sent again: a resume goes back to it
 
@@ -1856,7 +1857,7 @@ class QuickExitTest(RedsBase):
             t0 = time.time()
             while A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), time.time()) and time.time() - t0 < 60:
                 time.sleep(0.2)
-            self.t[0] = time.time()
+            self.t[0] = A.epoch_now()
             self.tick(dispatch=True)
             self.tick(dispatch=True)
         finally:
@@ -1877,7 +1878,7 @@ class QuickExitTest(RedsBase):
             t0 = time.time()
             while A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), time.time()) and time.time() - t0 < 60:
                 time.sleep(0.2)
-            self.t[0] = time.time()
+            self.t[0] = A.epoch_now()
             self.tick(dispatch=True)
             self.tick(dispatch=True)
         finally:
@@ -1931,7 +1932,7 @@ class LaunchErrorTest(RedsBase):
             t0 = time.time()
             while A.lease_is_live(self.st.get(A.red_lease(it["data"]["key"])), time.time()) and time.time() - t0 < 60:
                 time.sleep(0.2)
-            self.t[0] = time.time()
+            self.t[0] = A.epoch_now()
             self.tick(dispatch=True)
             self.tick(dispatch=True)
         finally:
@@ -2007,7 +2008,7 @@ class AuditTest(RedsBase):
                 os.environ["AGENTCTL_MOVIES_REPO"] = saved[2]
 
     def test_8_a_run_stuck_past_three_times_its_p90_is_a_red_until_it_decides(self):
-        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5 * 3600))
+        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(A.epoch_now() - 5 * 3600))
         runs = json.load(open(os.path.join(self.d, "runs.json")))
         self.put("runs.json", [run(80, 30, "Identity model convergence", "identity-model-convergence.yml", self.sha,
                                    status="in_progress", created=old)] + runs)
@@ -2023,12 +2024,12 @@ class AuditTest(RedsBase):
     def stuck_after(self, jobs, busy):
         """The stuck-run reds after a tick with a bisect run created 5 h ago on the `measure` label (4 slots, `busy` of
         them running) whose jobs are `jobs`."""
-        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 5 * 3600))
+        old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(A.epoch_now() - 5 * 3600))
         runs = json.load(open(os.path.join(self.d, "runs.json")))
         self.put("runs.json", [run(81, 31, "Convergence bisect", "convergence-bisect.yml", self.sha, status="queued",
                                    created=old)] + runs)
         self.put("run-81.json", {"jobs": jobs})
-        page = {"ok": time.time(), "limits": {"runners": {"runner-measure": {"capacity": 4, "state": "running",
+        page = {"ok": A.epoch_now(), "limits": {"runners": {"runner-measure": {"capacity": 4, "state": "running",
                                                                               "labels": '["measure"]'}}},
                 "running": [{"runner": "runner-measure", "run": "30"} for _ in range(busy)],
                 "waiting_jobs": [{"label": '["measure"]', "repo": MOVIES, "run": "29", "secs": "18500"},
@@ -2048,7 +2049,7 @@ class AuditTest(RedsBase):
         self.assertEqual(len(self.stuck_after([{"name": "preflight", "status": "queued", "startedAt": None}], busy=3)), 1)
 
     def test_8_a_run_is_as_old_as_its_first_jobs_start_not_its_creation(self):
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 60))
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(A.epoch_now() - 60))
         self.assertEqual(self.stuck_after([{"name": "preflight", "status": "in_progress", "startedAt": now}], busy=4), [])
 
 

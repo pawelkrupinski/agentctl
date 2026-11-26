@@ -1,6 +1,7 @@
 # agentctl, part `orphanpass`: one maintain pass over the orphans: one action each (a submit from a throwaway tree, again on infra; one fixer for a real failure), then UNLANDED ORPHAN
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import glob
 import os
 import re
@@ -247,7 +248,7 @@ class OrphanPass:
         after = self._verdict_since(o, last_at)
         if after is not None and orphan_infra(after):  # (3) infra, not the change: submitted again, never escalated
             self._infra_retry(o, after, last_at)
-        elif time.time() - last_at >= env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE):  # its action had its time
+        elif epoch_now() - last_at >= env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE):  # its action had its time
             self._fixer_or_person(o, after if after is not None else o.verdict)
 
     def _verdict_since(self, o: Orphan, last_at: float) -> Optional[str]:
@@ -259,7 +260,7 @@ class OrphanPass:
 
     def _infra_retry(self, o: Orphan, after: str, last_at: float) -> None:
         n = int(o.rec.get("infra_retries") or 0)
-        if time.time() - last_at < ORPHAN_INFRA_BACKOFF[min(n, len(ORPHAN_INFRA_BACKOFF) - 1)]:
+        if epoch_now() - last_at < ORPHAN_INFRA_BACKOFF[min(n, len(ORPHAN_INFRA_BACKOFF) - 1)]:
             return
         if not store_answers(self.store):
             if o.rec.get("infra_said") != after[:120]:

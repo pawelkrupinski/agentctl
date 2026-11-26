@@ -1,6 +1,7 @@
 # agentctl, part `outsideflows`: the workflows outside the gate: their runs, their history and timeout bounds, a stuck run, the outside reds
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import re
 import time
 from agentctl.core import err, git, process_cache, remote
@@ -29,12 +30,12 @@ def stuck_history(o_r, name):
     if not wfile:
         return []
     at, runs = _flow_history.get(wfile, (0.0, None))
-    if runs is None or time.time() - at >= OUTSIDE_FLOW_RECHECK:
+    if runs is None or epoch_now() - at >= OUTSIDE_FLOW_RECHECK:
         try:
             # listing: samples of a workflow's run lengths (the stuck limit); fewer samples widen it, never narrow it
             runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--status", "completed",
                            "--limit", "30", "--json", RUN_FIELDS)
-            _flow_history[wfile] = (time.time(), runs)
+            _flow_history[wfile] = (epoch_now(), runs)
         except (Exception, SystemExit) as e:
             err(f"stuck limit: could not list {wfile} ({str(e)[:120]})")
             runs = runs or []
@@ -119,12 +120,12 @@ def outside_gate(o_r):
         if name in lists or name in gated:
             continue
         at, mine = _flow_runs.get(wfile, (0.0, None))
-        if mine is None or time.time() - at >= OUTSIDE_FLOW_RECHECK:
+        if mine is None or epoch_now() - at >= OUTSIDE_FLOW_RECHECK:
             try:
                 # listing: the workflow's own newest 30, read because the cross-workflow 200 left it out
                 mine = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
                                "--json", RUN_FIELDS)
-                _flow_runs[wfile] = (time.time(), mine)
+                _flow_runs[wfile] = (epoch_now(), mine)
             except Exception as e:  # this workflow unread this time: the others stand
                 err(f"outside the gate: could not list {wfile} ({str(e)[:120]})")
                 mine = mine or []

@@ -57,12 +57,12 @@ class QuotaTest(unittest.TestCase):
 
     def test_an_owner_block_on_a_spent_quota_no_longer_holds(self):
         it = self.red("q2", SPENT)
-        why = A.block_invalid(self.st, it, {"owner_cause": "credentials", "cmd": "rotate"}, time.time())
+        why = A.block_invalid(self.st, it, {"owner_cause": "credentials", "cmd": "rotate"}, A.epoch_now())
         self.assertIn("spent quota resets on its own", why)
         # #2426's block: its red's line moved on (a newer run's), the block's own text still names the spent quota
         other = self.red("q3", "step failed: Set up job")
         why = A.block_invalid(self.st, other, {"owner_cause": "credentials", "cmd": "rotate",
-                                               "text": "BLOCKED ON OWNER: failing: preflight: " + SPENT}, time.time())
+                                               "text": "BLOCKED ON OWNER: failing: preflight: " + SPENT}, A.epoch_now())
         self.assertIn("spent quota resets on its own", why)
 
     def test_the_probe_passes_once_a_run_after_the_wait_gets_past_its_preflight(self):

@@ -1,12 +1,12 @@
 # agentctl, part `live`: the live sessions: their registry (leased, transcripts found), each one's state and annotation
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import glob
 import json
 import os
 import re
 import threading
-import time
 from typing import Any
 from agentctl.core import attempt, dispatches_dir, process_cache, reds_dir
 from agentctl.statefile import mtime, read_json_file, read_record, tail_bytes
@@ -166,7 +166,7 @@ def live_registry_read(t: float | None = None) -> dict[str, dict[str, Any]]:
     """{agent id: entry} of every agent whose transcript may be streamed, from files only (fixer records, dispatch
     records, the subagent globs) plus the lease holders the last Agents read saw. One transcript has one id: a fixer's
     wins over its session's."""
-    read = RegistryRead(time.time() if t is None else t)
+    read = RegistryRead(epoch_now() if t is None else t)
     read.fixers()
     read.sessions()
     read.leased()
@@ -176,8 +176,8 @@ def live_registry_read(t: float | None = None) -> dict[str, dict[str, Any]]:
 
 def live_registry(fresh=False):
     with _live_reg_lock:
-        if fresh or _live_reg["reg"] is None or time.time() - _live_reg["at"] >= LIVE_REGISTRY_TTL:
-            _live_reg["reg"], _live_reg["at"] = live_registry_read(), time.time()
+        if fresh or _live_reg["reg"] is None or epoch_now() - _live_reg["at"] >= LIVE_REGISTRY_TTL:
+            _live_reg["reg"], _live_reg["at"] = live_registry_read(), epoch_now()
         return _live_reg["reg"]
 
 
@@ -250,7 +250,7 @@ def _process_state(alive: Any, stop: Any) -> tuple[str, str] | None:
 def live_state(e: dict[str, Any], info: dict[str, Any], t: float | None = None) -> tuple[str, str]:
     """(state, why): working, waiting on background, done or failed -- from the fixer record's end, the process, and
     the transcript's last conversational entry (a turn that ended with end_turn is an answer given)."""
-    t = time.time() if t is None else t
+    t = epoch_now() if t is None else t
     if e.get("ended"):
         rc = e.get("rc")
         return ("done" if rc == 0 else "failed"), (e.get("verdict") or f"ended, rc {rc}")
@@ -311,7 +311,7 @@ def live_annotate(agents: list[dict[str, Any]], t: float | None = None) -> list[
     """Give each Agents row whose transcript may be streamed its live id and state (a lease holder's transcript
     becomes known as session-<stem>), then add a row for every other known session or subagent written within
     LIVE_RECENT (newest first, LIVE_ROWS_MAX at most)."""
-    t = time.time() if t is None else t
+    t = epoch_now() if t is None else t
     _live_leased.clear()
     _live_leased.update(_leased_agents(agents))
     reg = live_registry(fresh=True)

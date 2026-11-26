@@ -1,10 +1,10 @@
 # agentctl, part `dispatchblock`: what blocks a fixer's dispatch here: no claude CLI, an interactive session, a fixer or land in this cwd
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
 import subprocess
-import time
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, process_cache, reds_dir
 from agentctl.statefile import read_record
@@ -41,10 +41,10 @@ def cached_dispatch_blocker(ttl=60):
     key = (reds_dir(), os.path.exists(reds_dir("DISPATCH_OFF")), os.environ.get("AGENTCTL_CLAUDE"),
            os.environ.get("AGENTCTL_CLAUDE_SETTINGS"))
     hit = _blocker_cache.get(key)
-    if hit and time.time() - hit[0] < ttl:
+    if hit and epoch_now() - hit[0] < ttl:
         return hit[1]
     v = dispatch_blocker()
-    _blocker_cache[key] = (time.time(), v)
+    _blocker_cache[key] = (epoch_now(), v)
     return v
 
 

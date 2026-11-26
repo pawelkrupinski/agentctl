@@ -1,6 +1,7 @@
 # agentctl, part `remotestore`: the store over HTTP: RemoteStore, the phase-2 API's client, its retries of an unsent call, and the machine its calls speak for
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import json
 import os
 import sys
@@ -59,7 +60,7 @@ class RemoteStore:
     needs_token = True  # a call goes out with the caller's token (the file store reads a local database: Store.needs_token)
 
     def __init__(self, url, tok=None, clock=None, timeout=60, retries=None):
-        self.url, self._tok, self.clock, self.timeout = url.rstrip("/"), tok, clock or time.time, timeout
+        self.url, self._tok, self.clock, self.timeout = url.rstrip("/"), tok, clock or epoch_now, timeout
         self.retries = retries
         self.path = self.url
 
@@ -79,6 +80,7 @@ class RemoteStore:
             except _StoreTransient as e:
                 if attempt == tries or not (safe or e.unsent):
                     raise StoreUnavailable(str(e)) from None
+                # wall: waits on and times real processes and threads
                 time.sleep(env_num("AGENTCTL_STORE_RETRY_BASE", STORE_RETRY_BASE) * (2 ** attempt))
 
     def _call_once(self, method, path, body=None, timeout=None):

@@ -1,6 +1,7 @@
 # agentctl, part `jvmreap`: stale JVMs: a stuck or idle sbt server, an orphaned sbt or test JVM, and their reap
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import datetime as dt
 import glob
 import os
@@ -48,7 +49,7 @@ SBT_SAMPLE_CLOCK = getattr(time, "CLOCK_UPTIME_RAW", time.CLOCK_MONOTONIC)
 
 def awake_now():
     """Seconds of the awake clock the sbt reaper dates its CPU samples by (SBT_SAMPLE_CLOCK)."""
-    return time.clock_gettime(SBT_SAMPLE_CLOCK)
+    return time.clock_gettime(SBT_SAMPLE_CLOCK)  # wall: waits on and times real processes and threads
 
 
 # IDLE DETACHED SERVERS (2026-11-07): two lone servers (core-wt-red-822/824, -Xmx6000M each) sat idle for 3 h while
@@ -184,7 +185,7 @@ def sbt_stuck_reasons(pid: int, cwd: str, cpu: float, clients: dict[str, Any], s
 def thread_dump(pid: int, cwd: str) -> str:
     d = state_root("sbt-dumps")
     os.makedirs(d, exist_ok=True)
-    path = os.path.join(d, f"{pid}-{dt.datetime.now().strftime('%Y%m%dT%H%M%S')}.txt")
+    path = os.path.join(d, f"{pid}-{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%dT%H%M%S')}.txt")
     try:
         r = process_runner().run(["jcmd", str(pid), "Thread.print"], capture_output=True, text=True, timeout=60)
         with open(path, "w") as f:
@@ -443,7 +444,7 @@ def _end_jvm(pid: int, rule: str, args: str, grace: float) -> str | None:
         return None
     waited = 0.0
     while waited < grace and pid_alive(pid):
-        time.sleep(0.5)
+        time.sleep(0.5)  # wall: waits on and times real processes and threads
         waited += 0.5
     how = f"SIGTERM, {waited:.0f}s"
     if pid_alive(pid):

@@ -1,11 +1,11 @@
 # agentctl, part `rundispatch`: a workflow run dispatched on main (red_verify_dispatch), and the inputs a dispatched run carries, read back
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 from typing import Any
 import json
 import os
 import re
-import time
 import urllib.error
 from agentctl.core import dispatches_dir, remote
 from agentctl.statefile import read_record
@@ -39,7 +39,7 @@ def red_verify_dispatch(o_r, repo, workflow, sha, run_id=None):
     try:
         api(o_r, "POST", f"actions/workflows/{os.path.basename(path)}/dispatches", body={"ref": "main", "inputs": inputs})
         record_dispatch(branch="main", workflow=workflow, sha=sha, agent="red verify", pid=os.getpid(), inputs=inputs,
-                        purpose=f"verify the fix {sha[:10]}", key=f"verify-{os.path.basename(path)}-{int(time.time())}")
+                        purpose=f"verify the fix {sha[:10]}", key=f"verify-{os.path.basename(path)}-{int(epoch_now())}")
     except (Exception, SystemExit) as e:
         return f"FIX UNVERIFIED: could not dispatch {workflow} ({http_error_text(e)[:240]})"
     return f"dispatched {workflow} on main to verify {sha[:10]}" + (f" with {json.dumps(inputs)}" if inputs else "")

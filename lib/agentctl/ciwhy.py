@@ -1,6 +1,7 @@
 # agentctl, part `ciwhy`: the gate's runs read: main's runs per workflow, decided or not, the red streak, a run resolved by id or number; the CI snapshot
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import datetime as dt
 import itertools
 import json
@@ -284,7 +285,7 @@ def red_for(since, now=None):
         return "?"
     if now is None:  # $AGENTCTL_NOW: the tests' clock
         now = (dt.datetime.fromisoformat(os.environ["AGENTCTL_NOW"].replace("Z", "+00:00")) if os.environ.get("AGENTCTL_NOW")
-               else dt.datetime.now(dt.timezone.utc))
+               else dt.datetime.fromtimestamp(epoch_now(), dt.timezone.utc))
     mins = max(0, int((now - t).total_seconds() // 60))
     d, h, m = mins // 1440, mins % 1440 // 60, mins % 60
     return f"{d}d {h}h" if d else f"{h}h {m}m" if h else f"{m}m"
@@ -352,7 +353,7 @@ def ci_state_load(o_r: str, now: float | None = None) -> dict[str, Any] | None:
     """The snapshot when it is for o_r and at most CI_STATE_MAX_AGE old, else None (unread)."""
     try:
         snap = state_read().get("ci") or {}
-        age = (now or time.time()) - float(snap["at"])
+        age = (now or epoch_now()) - float(snap["at"])
     except (KeyError, TypeError, ValueError):
         return None
     return snap if snap.get("repo") == o_r and -5 <= age <= CI_STATE_MAX_AGE else None

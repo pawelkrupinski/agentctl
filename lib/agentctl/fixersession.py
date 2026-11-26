@@ -1,6 +1,7 @@
 # agentctl, part `fixersession`: a fixer is a background Claude session: launching it, workspace trust, reading its session's state.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now, wall_epoch
 import json
 import os
 import re
@@ -120,7 +121,7 @@ def trust_asks():
         gap = claude_trust_gap(clone) if clone else None
         if not gap:
             continue
-        now_asked[clone] = asked.get(clone) or time.time()
+        now_asked[clone] = asked.get(clone) or epoch_now()
         if clone not in asked:
             inbox_write("red", trust_ask_line(clone, gap), [], [], 1, item=TRUST_ASK_PREFIX + os.path.realpath(clone))
             out.append(f"asked the owner to trust {tilde(clone)} ({c['repo']})")
@@ -317,7 +318,7 @@ def bg_turn_over(ent, path, now=None):
         return True
     if turn["pending"]:
         return False
-    quiet = (now or time.time()) - mtime(path)
+    quiet = (now or wall_epoch()) - mtime(path)
     return quiet >= env_num("AGENTCTL_BG_IDLE_GRACE", BG_IDLE_GRACE)
 
 

@@ -1,10 +1,10 @@
 # agentctl, part `leases`: the leases this process holds (LeaseHold): acquired, renewed together on progress (lock_beat), noted (lock_note), the landing lease among them; `agentctl lease list`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 from typing import Any, Optional
 import json
-import time
 import re
 from agentctl.core import process_cache
 from agentctl.timefmt import ts
@@ -109,7 +109,7 @@ LEASE_LIST_RECENT = 3600         # `lease list` shows the live leases and those 
 def cmd_lease(a, st):
     """`agentctl lease list [prefix] [--all]` (debugging; the leases' holders, epochs, expiry, notes): the live ones and
     those free for under an hour; --all every one still in the table."""
-    now_ = time.time()
+    now_ = epoch_now()
     rows = st.list(a.prefix or "")
     hidden = 0 if a.all else sum(1 for r in rows if not (r["holder"] and r["expires_at"] > now_)
                                  and now_ - r["expires_at"] > LEASE_LIST_RECENT)

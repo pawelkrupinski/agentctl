@@ -1,9 +1,9 @@
 # agentctl, part `redretired`: retired checks: a red whose job or workflow no longer exists on main.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
-import time
 from typing import Any
 from agentctl.core import env_num, process_cache
 from agentctl.timefmt import parse_time
@@ -28,7 +28,7 @@ _retire_cache = process_cache({})
 
 def _retire_get(key, ttl, f):
     hit = _retire_cache.get(key)
-    now = time.time()
+    now = epoch_now()
     if hit and (ttl is None or now - hit[0] < ttl):
         return hit[1]
     v = f()
@@ -294,7 +294,7 @@ def red_job_retired(name, cur, old, steps=None):
 
 
 def _retire_fail(o_r):
-    _retire_cache[("fail", o_r)] = (time.time(), True)
+    _retire_cache[("fail", o_r)] = (epoch_now(), True)
 
 
 class RetiredRun:
@@ -319,7 +319,7 @@ class RetiredRun:
 
     def stale(self, cpath: Any, ctext: Any) -> Any:
         """"stale: ..." when the workflow made no run on main for RED_STALE_DAYS while main moved, else None."""
-        t = self.now if self.now is not None else time.time()
+        t = self.now if self.now is not None else epoch_now()
         if workflow_triggers(ctext) == {"workflow_call"}:
             return None
         newest = retire_newest(self.o_r, cpath) or self.r
@@ -368,13 +368,13 @@ def red_run_retired(o_r, workflow, run, jobs=None, now=None):
     rid = (run or {}).get("databaseId") or (run or {}).get("id")
     if not rid or not workflow:
         return None
-    if _retire_cache.get(("fail", o_r)) and time.time() - _retire_cache[("fail", o_r)][0] < RETIRE_FAIL_TTL:
+    if _retire_cache.get(("fail", o_r)) and epoch_now() - _retire_cache[("fail", o_r)][0] < RETIRE_FAIL_TTL:
         return None
     try:
         return RetiredRun(o_r, workflow, run, rid, jobs, now).why()
     except (Exception, SystemExit) as e:
         _retire_fail(o_r)  # silent (the status line and ci-why call this): the red stays, the reason kept for a look
-        _retire_cache[("why", o_r)] = (time.time(), f"{workflow} #{(run or {}).get('number')}: {str(e)[:200]}")
+        _retire_cache[("why", o_r)] = (epoch_now(), f"{workflow} #{(run or {}).get('number')}: {str(e)[:200]}")
         return None
 
 

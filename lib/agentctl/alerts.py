@@ -1,6 +1,7 @@
 # agentctl, part `alerts`: THE ALERT MODEL -- who must act on what: the alert index (written, acked, closed, reconciled each tick) and `inbox wait`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now, wall_epoch
 import contextlib
 import os
 import re
@@ -103,7 +104,7 @@ def alert_live(d, idx, item, t=None):
     e = read_record(os.path.join(d, eid + ".json"))
     if e is None:
         return None
-    t = time.time() if t is None else t
+    t = epoch_now() if t is None else t
     if alert_acked(d, eid) and t - float(e.get("at") or 0) > env_num("AGENTCTL_ALERT_QUIET_MAX", ALERT_QUIET_MAX):
         return None  # read and quiet for a day: its item's next event is news again
     return e
@@ -144,7 +145,7 @@ def _fold_item(d: Any, es: Any) -> Any:
 def alert_migrate(d):
     """THE SWITCH-OVER: every unread entry routed and stamped (audience, item); one item's older unread alerts folded
     into its newest (acked, counted in it). Returns the new index."""
-    idx = {"v": ALERT_INDEX_VERSION, "items": {}, "seen": [], "migrated_at": time.time()}
+    idx = {"v": ALERT_INDEX_VERSION, "items": {}, "seen": [], "migrated_at": epoch_now()}
     groups = _unread_by_item(d)
     for item, es in groups.items():
         idx["items"][item] = _fold_item(d, es)["id"]
@@ -162,7 +163,7 @@ def alert_index(d):
 # ---------------------------------------------------------------- the write path
 def alert_routed(rec: Any, st: Any, red: Any, condition: Any) -> Any:
     """rec with its audience, item and counters set (routed unless it names both), its tier when a red is given."""
-    t = rec.get("at") or time.time()
+    t = rec.get("at") or epoch_now()
     if not rec.get("audience") or not rec.get("item"):
         aud, item = alert_route(rec, st=st, t=t, red=red, condition=condition)
         rec.setdefault("audience", aud)
@@ -226,7 +227,7 @@ def alert_write(rec, st, red=None, condition=None, d=None):
     one, closing what its verdict closes. Returns the id of the entry that carries it (the live one when merged)."""
     d = d or inbox_dir()
     os.makedirs(d, exist_ok=True)
-    t = rec.get("at") or time.time()
+    t = rec.get("at") or epoch_now()
     alert_routed(rec, st, red, condition)
     with alert_lock(d):
         idx = alert_index(d)
@@ -299,7 +300,7 @@ def alert_close(d, idx, item, why):
     p = os.path.join(d, eid + ".json")
     e = read_record(p)
     if e and not e.get("closed"):
-        e["closed"] = {"at": time.time(), "why": why}
+        e["closed"] = {"at": epoch_now(), "why": why}
         write_json(p, e)
     alert_ack(d, eid)
     return True
@@ -311,7 +312,7 @@ def _close_entry(d: Any, idx: Any, live: Any, e: Any, why: Any) -> None:
         alert_close(d, idx, live[e["id"]], why)
         return
     rec = {k: v for k, v in e.items() if k != "read"}
-    rec["closed"] = {"at": time.time(), "why": why}
+    rec["closed"] = {"at": epoch_now(), "why": why}
     write_json(os.path.join(d, e["id"] + ".json"), rec)
     alert_ack(d, e["id"])
 
@@ -339,7 +340,7 @@ def reconcile_alerts(store, force=False):
     again when it became the owner's. Returns what it did."""
     d = inbox_dir()
     st = store
-    t = time.time()
+    t = epoch_now()
     last = attempt(lambda: float((read_record(alert_index_path(d)) or {}).get("reconciled_at") or 0), 0,
                    catch=(TypeError, ValueError))
     if not force and t - last < env_num("AGENTCTL_ALERT_RECONCILE", ALERT_RECONCILE_EVERY):
@@ -400,7 +401,7 @@ def inbox_wait(kinds=None, since_ack=False, timeout=0, verbose=False, forever=Fa
     with alert_lock(d):
         alert_index(d)  # the first use migrates the backlog into the model: no flood
     poll = env_num("AGENTCTL_INBOX_POLL", INBOX_WAIT_POLL)
-    t0, seen, printed = time.time(), None, set()
+    t0, seen, printed = wall_epoch(), None, set()
     while True:
         stamp = inbox_stamp(d)
         if stamp != seen:
@@ -410,10 +411,10 @@ def inbox_wait(kinds=None, since_ack=False, timeout=0, verbose=False, forever=Fa
                 stream_hits(hits, printed, verbose)
             elif hits:
                 return inbox_routed(hits, verbose)
-        if timeout and time.time() - t0 >= timeout and not forever:
+        if timeout and wall_epoch() - t0 >= timeout and not forever:
             print(f"inbox: no unread {','.join(sorted(want))} entry within {int(timeout)} s")
             return 2
-        time.sleep(poll)
+        time.sleep(poll)  # wall: waits on and times real processes and threads
 
 
 def wanted_kinds(kinds: Any) -> set[str]:

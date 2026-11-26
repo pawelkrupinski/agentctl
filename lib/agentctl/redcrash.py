@@ -1,6 +1,7 @@
 # agentctl, part `redcrash`: the crash-loop breaker, harness faults, decisions for the owner, old runs.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import datetime as dt
 import os
 import re
@@ -88,7 +89,7 @@ def _sleep_log_text() -> Any:
 def sleep_intervals():
     """[(start, end)] epoch seconds of the host's recent sleeps, from `pmset -g log` (or $AGENTCTL_SLEEP_LOG, a file in
     its format). [] when unreadable. Cached for a minute."""
-    now = time.time()
+    now = epoch_now()
     if now - _SLEEP_CACHE[0] < 60 and not os.environ.get("AGENTCTL_SLEEP_LOG"):
         return _SLEEP_CACHE[1]
     text = _sleep_log_text()

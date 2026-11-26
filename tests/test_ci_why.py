@@ -560,7 +560,7 @@ class CachedGateTest(CiWhyTest):
     def write(self, line, age=0, repo=None):
         import json, time
         with open(self.gs, "w") as f:
-            json.dump({"summary": {"at": int(time.time()) - age, "repo": repo or A.slug("movies"), "line": line}}, f)
+            json.dump({"summary": {"at": int(A.epoch_now()) - age, "repo": repo or A.slug("movies"), "line": line}}, f)
 
     def test_fresh_file_is_printed_without_a_live_read(self):
         self.write("gate RED (main #9 -> NOBODY)")

@@ -1,10 +1,10 @@
 # agentctl, part `govusage`: a job's cores: its class's default, else what its recorded runs measured; each run's usage recorded
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 from typing import Any
 import json
 import os
-import time
 from agentctl.core import pct
 from agentctl.machine import machine_cores, machine_load1
 from agentctl.govtickets import gov_dir
@@ -34,7 +34,7 @@ GOV_USAGE_METER = "tree"
 
 def gov_usage(days=GOV_USAGE_DAYS, now=None):
     """usage.jsonl's records of the last `days`: {at, job, wall, cpu, cores, load1, machine_cores}."""
-    cutoff = (now or time.time()) - days * 86400
+    cutoff = (now or epoch_now()) - days * 86400
     out = []
     try:
         with open(os.path.join(gov_dir(), "usage.jsonl")) as f:
@@ -85,7 +85,7 @@ def gov_record_usage(job, wall, cpu, load1=None, label="", meter=""):
     (`meter`: only GOV_USAGE_METER's are counted); a run under GOV_USAGE_MIN_WALL is not recorded."""
     if wall < GOV_USAGE_MIN_WALL:
         return None
-    rec = {"at": time.time(), "job": job, "label": label, "wall": round(wall, 1), "cpu": round(cpu, 1),
+    rec = {"at": epoch_now(), "job": job, "label": label, "wall": round(wall, 1), "cpu": round(cpu, 1),
            "cores": round(cpu / wall, 2), "load1": machine_load1() if load1 is None else load1,
            "machine_cores": machine_cores(), "meter": meter}
     with open(os.path.join(gov_dir(), "usage.jsonl"), "a") as f:

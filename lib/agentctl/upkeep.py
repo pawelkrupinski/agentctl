@@ -1,6 +1,7 @@
 # agentctl, part `upkeep`: upkeep.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 from collections.abc import Iterator
 import glob
 import os
@@ -204,7 +205,7 @@ def maybe_upkeep(store, now_=None):
     """The tick's upkeep step: at most every UPKEEP_EVERY s, or within 10 min when the disk is low (DISK_MIN_GB); and
     WD, the disk invariant: still low with the last upkeep done, an INVARIANT condition whose probe is that same
     free-space check (it closes itself once space is back; it escalates only while it stays open)."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     min_gb = env_num("AGENTCTL_DISK_MIN_GB", DISK_MIN_GB)
     pr = run_probe("disk_free", {"path": os.environ.get("AGENTCTL_DISK_PATH") or HOME, "min_gb": min_gb})
     low = pr.ok is False

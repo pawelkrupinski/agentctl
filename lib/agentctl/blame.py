@@ -1,6 +1,7 @@
 # agentctl, part `blame`: the culprit search: the boundaries of a red's range, probed one by one until the change that turned it red is found
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
 import signal
@@ -242,7 +243,7 @@ def blame_probe_start(repo, o_r, d, b, i):
     with open(out[:-5] + ".log", "a") as logf:
         p = spawn_detached(argv, cwd=repo, stdin=subprocess.DEVNULL, stdout=logf, stderr=logf, start_new_session=True)
     return {"boundary": i, "commit": blame_boundary(b, i), "out": out, "pid": p.pid, "start": process_start(p.pid),
-            "at": time.time(), "kind": b["kind"]}
+            "at": epoch_now(), "kind": b["kind"]}
 
 
 def blame_tokens(d):

@@ -1,8 +1,8 @@
 # agentctl, part `redrecord`: a red's record: its lease's name and liveness, its terminal states, the names it answers to and what it is.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import re
-import time
 from typing import Any
 from agentctl.repos import RED_PRIMARY, red_repo_of, red_repo_short
 from agentctl.workflows import LOCAL_FLOW
@@ -17,7 +17,7 @@ def red_lease(key: str) -> str:
 
 
 def lease_is_live(row: dict[str, Any] | None, t: float | None = None) -> bool:
-    return bool(row and row.get("holder") and row["expires_at"] > (t if t is not None else time.time()))
+    return bool(row and row.get("holder") and row["expires_at"] > (t if t is not None else epoch_now()))
 
 
 def red_names(d: dict[str, Any]) -> set[Any]:

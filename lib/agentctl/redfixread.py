@@ -1,6 +1,7 @@
 # agentctl, part `redfixread`: a fix's reach: Fixes-Red commits on main, what a red's failing jobs read and whether a fix touches it.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
 import subprocess
@@ -48,10 +49,10 @@ def red_main_current(repo, snap):
     if not missing:
         return False
     at = _main_fetched.get((repo, missing))
-    if at and time.time() - at < RED_MAIN_REFETCH:  # a head main never had (a run of a commit since gone): not every tick
+    if at and epoch_now() - at < RED_MAIN_REFETCH:  # a head main never had (a run of a commit since gone): not every tick
         return False
     _main_fetched.clear()
-    _main_fetched[(repo, missing)] = time.time()
+    _main_fetched[(repo, missing)] = epoch_now()
     ok, why = fetch_main(repo)
     if not ok:
         err(f"red tick: main moved past the clone and could not be fetched ({why[-160:]}): fixes read from the old main")

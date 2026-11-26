@@ -98,7 +98,7 @@ def take_ticket(gov: str, gov_dir: str, cls: str, want: int, job: str, label: st
                 run: Callable[..., "subprocess.CompletedProcess[bytes]"], env: Mapping[str, str]) -> Optional[tuple[int, str]]:
     """(descriptor, ticket path) once the governor admits the pool, or None (refused or failed); GovernorBusy past `wait`."""
     os.makedirs(gov_dir, exist_ok=True)
-    ticket = os.path.join(gov_dir, f"t-{job}-{os.getpid()}-{time.monotonic_ns()}.lock")
+    ticket = os.path.join(gov_dir, f"t-{job}-{os.getpid()}-{time.monotonic_ns()}.lock")  # wall: waits on and times real processes and threads
     fd = os.open(ticket, os.O_WRONLY | os.O_CREAT | os.O_APPEND)
     try:
         if run(admit_args(gov, fd, ticket, cls, want, job, label), pass_fds=(fd,), timeout=wait,

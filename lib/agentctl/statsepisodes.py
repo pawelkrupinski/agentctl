@@ -1,6 +1,7 @@
 # agentctl, part `statsepisodes`: the statistics' episode records: a red episode, its owner decision, a condition spell and a gate run
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import re
 import time
 from typing import Any, Iterable, Optional, cast
@@ -173,7 +174,7 @@ def gate_run_record(run: Rec, jobs: Iterable[Rec], since: Optional[float] = None
            "runner_wait_s": _total(jobs, "queue_s"), "run_s": _total(jobs, "duration_s"),
            "job_queue_max_s": _peak(jobs, "queue_s"),
            "failed_jobs": ",".join(sorted(cast(str, j.get("job")) for j in jobs if j.get("conclusion") == "failure"))[:600],
-           "_time": iso_at(end or time.time())}
+           "_time": iso_at(end or epoch_now())}
     rec["_msg"] = (f"agentctl.gate_run {run.get('workflow')} #{run.get('run_number')}: {run.get('run_conclusion')} "
                    f"in {mins_of(rec['duration_s'])}, critical {rec['critical_job']}")
     return stats_common(rec, end, since)

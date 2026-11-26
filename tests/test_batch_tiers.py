@@ -75,7 +75,7 @@ class TiersTest(test_generated.GeneratedQueueTest):
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertNotEqual(self.held(ey).get("kind"), "overlap", self.held(ey))
         self.assertIsNone(A.overlap_hold(A.CurrentStore(A.process_store), self.r.path, self.d, self.entry(ey), [self.entry(eo), self.entry(ey)], None,
-                                         A.time.time()), "nothing holds it behind scrapers-2")
+                                         A.epoch_now()), "nothing holds it behind scrapers-2")
 
     def test_a_snapshot_git_merges_cleanly_is_regenerated_all_the_same_and_lands_in_one_check(self):
         ea = self.change("a", files={"src/a.txt": "a\n", SNAP: "a\nm\n"})

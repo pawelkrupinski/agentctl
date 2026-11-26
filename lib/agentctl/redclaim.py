@@ -1,6 +1,7 @@
 # agentctl, part `redclaim`: interactive holders: claim, beat, release a red.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import time
 from typing import Any, Callable
@@ -120,7 +121,7 @@ def _claim_one(store: Any, it: dict[str, Any], holder: str, wt: str, who: str, n
     name = red_lease(it["data"]["key"])
     row = store.get(name)
     if lease_is_live(row, store.clock()) and row["holder"] == holder:
-        store.renew(name, row["epoch"], row["secret"], f"beat {time.time()}", RED_CLAIM_TTL, note=note or None)
+        store.renew(name, row["epoch"], row["secret"], f"beat {epoch_now()}", RED_CLAIM_TTL, note=note or None)
         return 0, f"renewed {red_what(it['data'])} ({name})"
     r = store.acquire(name, holder, RED_CLAIM_TTL, RED_CLAIM_MAX, progress=red_wt_mark(wt), item=f"red:{it['id']}",
                       meta=_claim_meta(it, wt, who, note, own))
@@ -228,4 +229,4 @@ def red_wt_mark(wt):
 def red_joined_progress(store, row, why):
     """Mark a joined (or owner-held) red's lease as worked on (why: `note: ...`, `commit <sha>`, `fix <entry>`): a joined
     red's backstop is done; an owner-held one's RED_HELD_IDLE counts from now."""
-    store.set_meta(row["name"], row["epoch"], row["secret"], {"progressed": str(why)[:200], "progressed_at": time.time()})
+    store.set_meta(row["name"], row["epoch"], row["secret"], {"progressed": str(why)[:200], "progressed_at": epoch_now()})

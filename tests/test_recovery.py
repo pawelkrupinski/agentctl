@@ -96,7 +96,7 @@ class SameProbeTest(RegistryBase):
     def test_a_failing_probe_backs_off_and_a_passing_one_opens_nothing(self):
         A.PROBES["tcp"] = Recorder(fails=3)
         A.open_condition("UNKNOWN", "UNKNOWN: port", A.run_probe("tcp", {"host": "h", "port": 1}), [], key="p", store=A.CurrentStore(A.process_store))
-        t = time.time()
+        t = A.epoch_now()
         self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), t + 1000), [])
         c = A.open_conditions(A.CurrentStore(A.process_store))[0]
         self.assertEqual(c["fails"], 1)
@@ -176,7 +176,7 @@ class HostTest(RegistryBase):
                              store=st)
         self.assertEqual(c["host"], "sync")
         self.role("server")
-        t = time.time() + 3 * 3600
+        t = A.epoch_now() + 3 * 3600
         self.assertEqual(A.recovery_tick(st, t, force=True), [])
         self.assertEqual(len(rec.calls), 1, "ci-runner never runs the laptop's probe")
         self.assertEqual(st.item("condition", "w5")["level"], 1, "the server escalates it")
@@ -193,7 +193,7 @@ class HostTest(RegistryBase):
                              key="token-movies", store=st)
         self.assertEqual(c["host"], "server")
         self.role("sync-test")  # only the laptop has the processor's socket
-        self.assertEqual(A.recovery_tick(st, time.time() + 1, force=True)[0][:10], "RECOVERED:")
+        self.assertEqual(A.recovery_tick(st, A.epoch_now() + 1, force=True)[0][:10], "RECOVERED:")
 
 
 class ConditionItemTest(RegistryBase):
@@ -206,7 +206,7 @@ class ConditionItemTest(RegistryBase):
         st = A.process_store()
         it = st.item("condition", "k1")
         self.assertEqual((it["state"], it["level"]), ("open", 0))
-        self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), now_=time.time() + 11 * 60), [])
+        self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), now_=A.epoch_now() + 11 * 60), [])
         it = st.item("condition", "k1")
         self.assertEqual(it["level"], 1)
         self.assertEqual([e["severity"] for e in st.events() if e["item_id"] == "k1"][-1], "escalate")
@@ -330,7 +330,7 @@ class UntilGreenTest(RedBase):
         os.environ["AGENTCTL_STATE_ROOT"] = os.path.join(self.tmp.name, "state")
         self.addCleanup(lambda: os.environ.__setitem__("AGENTCTL_STATE_ROOT", saved) if saved is not None
                         else os.environ.pop("AGENTCTL_STATE_ROOT", None))
-        self.t = [time.time()]  # the test's one time: the command stamps its lease with it, the tick reads it
+        self.t = [A.epoch_now()]  # the test's one time: the command stamps its lease with it, the tick reads it
         self.st = A.process_store(clock=lambda: self.t[0])
 
     def tool(self, *argv, cwd=None, clock=None):

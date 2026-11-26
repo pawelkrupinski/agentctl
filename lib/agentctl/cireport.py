@@ -1,7 +1,7 @@
 # agentctl, part `cireport`: the CI report: ci_why's explanation of main's runs and who holds each red, and the CI-state snapshot's refresh
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-import time
+from agentctl.clock import epoch_now
 from typing import Any, Optional
 from agentctl.core import err, remote
 from agentctl.forge import RED_CONCLUSIONS, is_cancelled
@@ -305,7 +305,7 @@ def ci_state_refresh(o_r: str, write: bool = True) -> dict[str, Any]:
     """Read the gate and every other workflow on main once, write the snapshot (unless write=False: ci_state_write
     later), return it. Raises when the gate cannot be read (nothing is written: the old snapshot ages out)."""
     gate = gate_runs(o_r)
-    snap = {"at": time.time(), "repo": o_r, "outside_error": None, "outside": [],
+    snap = {"at": epoch_now(), "repo": o_r, "outside_error": None, "outside": [],
             "gate": [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
                       "runs": _gate_lists.get(n, []), "no_verdict": _gate_no_verdict.get(n)} for n, d, nw, st in gate]}
     if gated_repo(o_r):

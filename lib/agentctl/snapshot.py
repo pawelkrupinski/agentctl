@@ -1,6 +1,7 @@
 # agentctl, part `snapshot`: the tick's part of state.json: the open items, the tick's own time and code version
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import time
 from typing import Any
 from agentctl.selfcode import code_version
@@ -23,7 +24,7 @@ def write_snapshot(d: str, store: Any) -> None:
                        **({"hold": ((i["data"] or {}).get("hold") or {}).get("why")}
                           if i["state"] in HOLD_SHOWN and (i["data"] or {}).get("hold") else {})}
     rows = change_rows(st)  # ONE QUEUE: the store's items, never a host's entry files
-    state_update(tick_at=time.time(), version=code_version(), rev=start_rev(),
+    state_update(tick_at=epoch_now(), version=code_version(), rev=start_rev(),
                  changes=[brief(i) for i in open_("change")], batch=[brief(i) for i in open_("batch")],
                  reds=[brief(i) for i in open_("red")] if "red" in MACHINES else [],
                  conditions=[brief(i) for i in open_("condition")] if "condition" in MACHINES else [],

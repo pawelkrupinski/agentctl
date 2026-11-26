@@ -1,7 +1,7 @@
 # agentctl, part `storestate`: the store as the status line sees it: its last unanswered call, ci-runner's state mirrored to the laptop, the remote mode's line state, a port's probe
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-import time
+from agentctl.clock import epoch_now
 from agentctl.store import StoreUnavailable
 from agentctl.cistate import state_read, state_update
 from agentctl.remotestore import RemoteStore
@@ -18,7 +18,7 @@ STORE_UNREACHABLE_AFTER = 60  # s without a good read of ci-runner's /v1/state: 
 
 def note_store_error(e, t=None):
     """The remote store did not answer: kept in state.json (since when, why) for the status line."""
-    t = t if t is not None else time.time()
+    t = t if t is not None else epoch_now()
     prev = state_read().get("store_error") or {}
     state_update(store_error={"since": prev.get("since") or t, "at": t, "why": str(e).replace("agentctl: ", "")[:200]})
 
@@ -55,5 +55,5 @@ def mirror_state(st, now_=None):
     except StoreUnavailable as e:
         note_store_error(e, now_)
         raise
-    state_update(**{**snap, "fetched_at": now_ if now_ is not None else time.time(), "store_error": None})
+    state_update(**{**snap, "fetched_at": now_ if now_ is not None else epoch_now(), "store_error": None})
     return snap

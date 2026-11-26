@@ -1,6 +1,7 @@
 # agentctl, part `checkslot`: a check slot: its lease (Slot, check_slot), a check's record, and the slot cap adjusted to the machine's memory pressure
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import contextlib
 import json
 import os
@@ -24,8 +25,8 @@ class Slot:
         self.samples, self.running, self.cap, self._last_sample = [], 0, 0, 0.0
 
     def sample(self, force=False):
-        if force or time.monotonic() - self._last_sample >= 30:
-            self._last_sample = time.monotonic()
+        if force or time.monotonic() - self._last_sample >= 30:  # wall: waits on and times real processes and threads
+            self._last_sample = time.monotonic()  # wall: waits on and times real processes and threads
             try:
                 self.samples.append(machine_sample())
             except Exception:
@@ -52,13 +53,13 @@ def check_slot(repo, label, cls="check"):
                             max_wait=env_num("AGENTCTL_GOV_ADMIT_MAX", GOV_ADMIT_MAX))
     slot.waited, slot.cap = slot.ticket.waited, checks_cap()
     slot.running = len(slot_holders())
-    slot.t0, slot.rc = time.monotonic(), None
+    slot.t0, slot.rc = time.monotonic(), None  # wall: waits on and times real processes and threads
     slot.sample(force=True)
     try:
         yield slot
     finally:
         slot.sample(force=True)
-        record_check(slot, time.monotonic() - slot.t0)
+        record_check(slot, time.monotonic() - slot.t0)  # wall: waits on and times real processes and threads
         slot.ticket.release()
         try:
             maybe_adjust_cap()
@@ -70,7 +71,7 @@ def record_check(slot, duration):
     def mx(i):
         vals = [x[i] for x in slot.samples if x and x[i] is not None]
         return max(vals) if vals else None
-    rec = {"at": time.time(), "label": slot.label, "duration": round(duration, 1), "waited": round(slot.waited, 1),
+    rec = {"at": epoch_now(), "label": slot.label, "duration": round(duration, 1), "waited": round(slot.waited, 1),
            "cap": slot.cap, "running": slot.running, "rc": slot.rc, "load1": mx(0), "cpu": mx(1), "pressure": mx(2),
            "swap_mb": mx(3), "swap_mb_start": slot.samples[0][3] if slot.samples and slot.samples[0] else None}
     with open(os.path.join(checks_dir(), "runs.jsonl"), "a") as f:
@@ -150,7 +151,7 @@ class CapReview:
 def maybe_adjust_cap(now=None):
     if os.environ.get("AGENTCTL_MAX_CHECKS"):
         return None
-    now = now or time.time()
+    now = now or epoch_now()
     st = cap_state()
     cap = int(st.get("cap", CHECKS_DEFAULT_CAP))
     new, why = adjust_cap(check_runs(7, now), cap, gov_max_checks(), st.get("changed_at"), now)

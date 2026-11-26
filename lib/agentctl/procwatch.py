@@ -23,6 +23,7 @@
 # known memory CEILING is judged against it (CEILINGS: a JVM's -Xmx, a mongod's cache, a VM's guest memory), and growth must reach
 # WP_GROWTH_PCT or WP_GROWTH_MB over the window: 1% of a big long-lived server is its noise.
 
+from agentctl.clock import epoch_now
 import glob
 import os
 import re
@@ -326,7 +327,7 @@ def inv_wp(ps_out: Optional[str] = None, now_: Optional[float] = None, state_pat
     growing for WP_PERSIST_MIN minutes, or over WP_CPU_PCT (a ticket's charged cores) for WP_CPU_MIN minutes (any
     process: a system daemon too). Its samples are kept in procwatch.json between passes. The tests give `ps_out`
     (or a fixed machine), and with it `args_of`, `tickets`, `ram` and `home`: none read from the real machine but its RAM and HOME."""
-    path, t = state_path or state_root("procwatch.json"), now_ if now_ is not None else time.time()
+    path, t = state_path or state_root("procwatch.json"), now_ if now_ is not None else epoch_now()
     state = read_record(path) or {}
     found = proc_watch(proc_rows(ps_out), state, t, *_wp_machine(ps_out, tickets, args_of, ram, home))
     try:
@@ -359,7 +360,7 @@ def inv_wt(tmp_root: Optional[str] = None, now_: Optional[float] = None,
            projects: Optional[str] = None) -> tuple[bool, str]:
     """WT: the test suite's roots past twice the sweep's bound stay under WT_STALE_MAX (upkeep removes the ones no
     runner holds); said with them, how many worktrees hold build output (target/, node_modules)."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     tmp_root, projects = _wt_places(tmp_root, projects)
     stale = [p for p in glob.glob(os.path.join(tmp_root, "agentctl-t-*")) if _older_than(p, t, 2 * TEST_TMP_MAX_AGE)]
     trees = glob.glob(os.path.join(projects, "movies-*"))

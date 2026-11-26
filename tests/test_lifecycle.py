@@ -13,7 +13,7 @@ from test_watch import MOVIES, run  # noqa: E402
 def old_gitdir(path, days):
     """Make a worktree look idle for `days` (its gitdir files untouched)."""
     gd = subprocess.run(["git", "-C", path, "rev-parse", "--absolute-git-dir"], capture_output=True, text=True).stdout.strip()
-    old = time.time() - days * 86400
+    old = A.epoch_now() - days * 86400
     for f in ("HEAD", "index", "logs/HEAD", "ORIG_HEAD"):
         fp = os.path.join(gd, f)
         if os.path.exists(fp):
@@ -22,7 +22,7 @@ def old_gitdir(path, days):
 
 def age(repo, branch, days):
     """Rewrite nothing: make the branch's tip commit `days` old by committing it with an old date."""
-    t = int(time.time() - days * 86400)
+    t = int(A.epoch_now() - days * 86400)
     env = dict(os.environ, GIT_COMMITTER_DATE=f"{t} +0000", GIT_AUTHOR_DATE=f"{t} +0000")
     return env
 
@@ -58,7 +58,7 @@ class CloseAfterWatchTest(Base):
         import contextlib, io
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            rc = A.watch_landed(wt, sha, time.time(), *on_clock(FakeClock()), o_r=MOVIES, close=wt)
+            rc = A.watch_landed(wt, sha, A.epoch_now(), *on_clock(FakeClock()), o_r=MOVIES, close=wt)
         return rc, out.getvalue()
 
     def branches(self):

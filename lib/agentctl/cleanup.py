@@ -1,6 +1,7 @@
 # agentctl, part `cleanup`: cleanup and the lifecycle.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now, wall_epoch
 from typing import Any
 from collections.abc import Sequence
 import argparse
@@ -37,7 +38,7 @@ CLEANUP_REMOVE_RESERVE = 300  # $AGENTCTL_CLEANUP_REMOVE_RESERVE
 
 def cleanup_left(until: float | None) -> float:
     """Seconds left before the cleanup's deadline (monotonic `until`); inf without one."""
-    return float("inf") if until is None else until - time.monotonic()
+    return float("inf") if until is None else until - time.monotonic()  # wall: waits on and times real processes and threads
 
 
 DEADLINE_NOTE = "not looked at: the cleanup's deadline passed"
@@ -83,8 +84,8 @@ class TreeReview:
         if busy:
             return f"in use by pid {busy[:3]}"
         act = gitdir_activity(self.repo, path)
-        if act and time.time() - act < self.min_age_h * 3600:
-            return f"active {int((time.time() - act) / 60)} min ago"
+        if act and epoch_now() - act < self.min_age_h * 3600:
+            return f"active {int((epoch_now() - act) / 60)} min ago"
         return None
 
     def unclean(self, path: str) -> str | None:
@@ -100,7 +101,7 @@ class TreeReview:
 
     def by_git(self, path: str, sha: str) -> tuple[str, str]:
         """(action, reason) from the tree's own git reads: dirty, then merged into main."""
-        t0 = time.monotonic()
+        t0 = time.monotonic()  # wall: waits on and times real processes and threads
         why = self.unclean(path)
         if why:
             return "skip", why
@@ -110,8 +111,8 @@ class TreeReview:
         if not why:
             n = git(self.repo, "rev-list", "--count", f"{self.main}..{sha}", check=False, timeout=self.item).stdout.strip() or "?"
             return "skip", f"unmerged ({n} commit(s) not on {remote()}/main)"
-        if time.monotonic() - t0 > 30:
-            err(f"cleanup: {path} took {time.monotonic() - t0:.0f} s to decide")
+        if time.monotonic() - t0 > 30:  # wall: waits on and times real processes and threads
+            err(f"cleanup: {path} took {time.monotonic() - t0:.0f} s to decide")  # wall: waits on and times real processes and threads
         return "delete", why
 
 
@@ -307,9 +308,9 @@ def free_worktree(wt: str, out: Any = print) -> dict[int, str]:
         out(f"scripts/sbt-warm --stop in {wt}: exit {r.returncode}", flush=True)
         held = worktree_holders(wt)
     stop_session_holders(held, out)
-    deadline = time.time() + env_num("AGENTCTL_FREE_WAIT", FREE_WAIT)
-    while held and time.time() < deadline:
-        time.sleep(0.5)
+    deadline = wall_epoch() + env_num("AGENTCTL_FREE_WAIT", FREE_WAIT)
+    while held and wall_epoch() < deadline:
+        time.sleep(0.5)  # wall: waits on and times real processes and threads
         held = worktree_holders(wt)
     return held
 
@@ -336,7 +337,7 @@ class RepoSweep:
 
     def __init__(self, repo: str, idle_days: float, dry: bool, out: list[str], store: Any) -> None:
         self.repo, self.idle_days, self.dry, self.out, self.store = repo, idle_days, dry, out, store
-        self.name, self.now_ = os.path.basename(repo), time.time()
+        self.name, self.now_ = os.path.basename(repo), epoch_now()
         self.main, self.o_r = "", ""
         self.checked_out: set[str] = set()
 
@@ -445,6 +446,6 @@ def cmd_sweep(a, store):
     print(text)
     if not a.no_report:
         os.makedirs(sweep_dir(), exist_ok=True)
-        with open(os.path.join(sweep_dir(), dt.date.today().isoformat() + ".txt"), "w") as f:
+        with open(os.path.join(sweep_dir(), dt.date.fromtimestamp(epoch_now()).isoformat() + ".txt"), "w") as f:
             f.write(text + "\n")
     return rc

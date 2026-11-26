@@ -86,7 +86,7 @@ class HostDifferencesTest(unittest.TestCase):
             other = os.path.join(tmp, "agentctl-test-x")
             os.makedirs(sock)
             os.makedirs(other)
-            old = time.time() - 10 * 86400
+            old = A.epoch_now() - 10 * 86400
             for p in (sock, other):
                 os.utime(p, (old, old))
             saved = (A.user_tmp_dir, os.environ.get("AGENTCTL_SOCK_DIR"))
@@ -114,7 +114,7 @@ class HostDifferencesTest(unittest.TestCase):
                 os.makedirs(os.path.join(p, "repo", "remote.git"))
             with open(os.path.join(live, "owner.pid"), "w") as f:
                 f.write(str(os.getpid()))
-            old = time.time() - 3 * 3600
+            old = A.epoch_now() - 3 * 3600
             for p in (dead, live, busy, os.path.join(dead, "repo"), os.path.join(live, "repo"),
                       os.path.join(live, "owner.pid")):
                 os.utime(p, (old, old))

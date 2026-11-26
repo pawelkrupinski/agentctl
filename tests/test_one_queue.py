@@ -85,7 +85,7 @@ class LandedByContentTest(OneQueueBase):
     def test_each_change_is_looked_at_once_per_interval(self):
         wt, head = self.change("later", "d\n")
         self.entry("later-1", wt, head)
-        t = time.time()
+        t = A.epoch_now()
         self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t), self.st, self.d), [])
         self.land_rebased(head)
         self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t + 5), self.st, self.d), [])
@@ -171,7 +171,7 @@ class StrandedTest(OneQueueBase):
         self.assertIn("STRANDED CHANGE x-101", c["text"])
         A.cancel_submitted(A.CurrentStore(A.process_store), "x-101", repo=self.r.path)  # `land cancel` reaches an item no entry carries
         self.assertEqual(self.st.item("change", "x-101")["state"], "cancelled")
-        A.recovery_tick(now_=time.time() + 3600, force=True, store=self.st)
+        A.recovery_tick(now_=A.epoch_now() + 3600, force=True, store=self.st)
         self.assertEqual([c for c in A.open_conditions(self.st) if c["key"].startswith("change-stranded")], [])
 
 
@@ -191,8 +191,8 @@ class OneViewTest(OneQueueBase):
     def test_w1_counts_only_unlanded_work_and_names_it_and_why(self):
         wt, head = self.change("proxy-park", "a\n")
         self.st.put_item("change", "x-92", "waiting", {"worktree": wt, "head": head,
-                                                       "submitted_at": time.time() - 11 * 3600})
-        self.st.put_item("change", "x-112", "queued", {"worktree": wt, "head": "3" * 40, "submitted_at": time.time()})
+                                                       "submitted_at": A.epoch_now() - 11 * 3600})
+        self.st.put_item("change", "x-112", "queued", {"worktree": wt, "head": "3" * 40, "submitted_at": A.epoch_now()})
         saved = os.environ.get("AGENTCTL_MOVIES_REPO")
         os.environ["AGENTCTL_MOVIES_REPO"] = self.r.path
         try:

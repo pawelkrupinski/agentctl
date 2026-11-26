@@ -459,10 +459,10 @@ class Round4BackfillTest(unittest.TestCase):
             self.assertEqual(len(A._retire_cache[("why", "o/rb")][1]), len("W #None: ") + 200)
             self.assertIsNone(A.red_run_retired(*args))  # within the TTL: not asked again
             self.assertEqual(len(calls), 1)
-            A._retire_cache[("fail", "o/rb")] = (time.time() - A.RETIRE_FAIL_TTL - 1, 0)
+            A._retire_cache[("fail", "o/rb")] = (A.epoch_now() - A.RETIRE_FAIL_TTL - 1, 0)
             A.red_run_retired(*args)  # expired: asked again
             self.assertEqual(len(calls), 2)
-            A._retire_cache[("fail", "o/rb")] = (time.time() - A.RETIRE_FAIL_TTL + 5, 0)
+            A._retire_cache[("fail", "o/rb")] = (A.epoch_now() - A.RETIRE_FAIL_TTL + 5, 0)
             A.red_run_retired(*args)  # still inside
             self.assertEqual(len(calls), 2)
         finally:

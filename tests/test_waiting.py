@@ -453,7 +453,7 @@ class WaitingTest(Base):
         line = A.status_line()
         self.assertIn("LAND HELD until", line)
         self.assertIn("infra deploy", line)
-        self.assertIn("infra deploy", A.status_landing(A.process_store(), time.time())["hold"]["why"])
+        self.assertIn("infra deploy", A.status_landing(A.process_store(), A.epoch_now())["hold"]["why"])
         # a second hold extends the one in force (one hold, never two)
         self.run_tool("land", "hold", "--for", "60", cwd=self.r.path)
         self.assertEqual(len(A.process_store().items("hold", ["held"])), 1)

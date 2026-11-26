@@ -1,11 +1,11 @@
 # agentctl, part `ghapp`: THE RECONCILER'S GITHUB IDENTITY -- GitHub App installation tokens (forge = github).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import json
 import os
 import re
 import sys
-import time
 import urllib.error
 import urllib.request
 from agentctl.procrunner import process_runner
@@ -70,7 +70,7 @@ def _b64url(b):
 
 def ghapp_jwt(app_id, key_file, now_=None):
     """The App's JWT (RS256, 9 min, iat 60 s back for clock drift), signed by openssl with the key file."""
-    t = int(now_ if now_ is not None else time.time())
+    t = int(now_ if now_ is not None else epoch_now())
     head = _b64url(json.dumps({"alg": "RS256", "typ": "JWT"}, separators=(",", ":")).encode())
     body = _b64url(json.dumps({"iat": t - 60, "exp": t + 540, "iss": str(app_id)}, separators=(",", ":")).encode())
     signing = f"{head}.{body}".encode()
@@ -116,7 +116,7 @@ def ghapp_token(o_r, role=None, now_=None):
     """An installation token of o_r's App (the lander on its repos, else the reader), scoped to o_r alone. Raises
     NoReadAccess (a SystemExit, like every missing credential) when that App is not configured."""
     role = role or ghapp_role(o_r)
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     tok = _ghapp_cached(role, o_r, t)
     if tok:
         return tok

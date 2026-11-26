@@ -69,8 +69,8 @@ class MappingTest(LiveBase):
         self.fixer(2527, 2, transcript=p, label="red fixer #2527", pid=4242, worktree=wt, session=SESSION)
         p2 = self.transcript("/Users/p/projects/movies-wt-flips", "aaaa-1111")
         self.dispatch("d1", session="aaaa-1111", worktree="/Users/p/projects/movies-wt-flips", purpose="flip measure",
-                      epoch=time.time(), pid=77)
-        self.dispatch("d2", session=SESSION, worktree=wt, epoch=time.time())  # the fixer's own session: one id
+                      epoch=A.epoch_now(), pid=77)
+        self.dispatch("d2", session=SESSION, worktree=wt, epoch=A.epoch_now())  # the fixer's own session: one id
         real = self.subagent("a01e71d6262987b68", {"description": "Live output", "finished": True})
         with open(os.path.join(self.tasks, "bash1.output"), "w") as f:  # a background shell's output: not an agent
             f.write("plain text\n")
@@ -91,17 +91,17 @@ class MappingTest(LiveBase):
     def test_lease_holders_become_known_through_the_agents_section(self):
         p = self.transcript("/w/y", "lease-sess")
         rows = A.live_annotate([{"pid": None, "holder": "laptop:claim:x", "kind": "claim", "transcript": p,
-                                 "leases": [{"name": "red/k"}]}], time.time())
+                                 "leases": [{"name": "red/k"}]}], A.epoch_now())
         self.assertEqual(rows[0]["live"], "session-lease-sess")
         self.assertEqual(A.live_lookup("session-lease-sess")["transcript"], os.path.realpath(p))
 
     def test_recent_sessions_and_subagents_get_rows_of_their_own(self):
         self.subagent("abc", {"description": "probe"})
-        rows = A.live_annotate([], time.time())
+        rows = A.live_annotate([], A.epoch_now())
         self.assertEqual([(r["live"], r["label"], r["kind"]) for r in rows], [("task-abc", "probe", "subagent")])
-        old = time.time() - A.LIVE_RECENT - 60
+        old = A.epoch_now() - A.LIVE_RECENT - 60
         os.utime(A.live_registry_read()["task-abc"]["transcript"], (old, old))
-        self.assertEqual(A.live_annotate([], time.time()), [])
+        self.assertEqual(A.live_annotate([], A.epoch_now()), [])
 
 
 class PathTest(LiveBase):
@@ -144,7 +144,7 @@ class PathTest(LiveBase):
 
 class StateTest(LiveBase):
     def test_states(self):
-        t = time.time()
+        t = A.epoch_now()
         end = {"stop": "end_turn", "mtime": t}
         mid = {"stop": None, "mtime": t}
         self.assertEqual(A.live_state({"ended": "x", "rc": 0}, mid, t)[0], "done")
@@ -311,12 +311,12 @@ class StreamServerTest(LiveBase):
     def read_until(self, s, pred, secs=5):
         """(the response head, every event so far on s) once pred(events) holds."""
         bufs = self.__dict__.setdefault("bufs", {})
-        buf, end = bufs.get(id(s), b""), time.time() + secs
+        buf, end = bufs.get(id(s), b""), A.epoch_now() + secs
         if buf:
             text = buf.decode("utf-8", "replace")
             if pred(sse_events(text.split("\r\n\r\n", 1)[1])):
                 return text.split("\r\n\r\n", 1)[0], sse_events(text.split("\r\n\r\n", 1)[1])
-        while time.time() < end:
+        while A.epoch_now() < end:
             try:
                 b = s.recv(65536)
             except OSError:

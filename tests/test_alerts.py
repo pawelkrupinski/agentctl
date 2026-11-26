@@ -222,17 +222,17 @@ class HysteresisTest(AlertBase):
         self.assertEqual(e["audience"], "fixer")
         self.assertEqual(self.owner_wait()[0], 2)
         it = A.condition_item_of(self.st, "invariant-W5")
-        self.st.update_item("condition", it["id"], it["version"], {"opened_at": time.time() - 2 * 3600})
+        self.st.update_item("condition", it["id"], it["version"], {"opened_at": A.epoch_now() - 2 * 3600})
         A.reconcile_alerts(self.st, force=True)
         [e] = self.unread()
         self.assertEqual((e["audience"], e["surfaced"]), ("owner", 2), "outlived its bound: the owner's now")
         self.assertEqual(self.owner_wait()[0], 0)
 
     def test_other_invariants_are_the_owners_at_once(self):
-        self.assertEqual(A.alert_condition_audience("INVARIANT", {"verdict": "INVARIANT W6 violated: x"}, time.time(),
-                                                    time.time()), "owner")
-        self.assertEqual(A.alert_condition_audience("INVARIANT", {"verdict": "INVARIANT WM violated: x"}, time.time(),
-                                                    time.time()), "fixer")
+        self.assertEqual(A.alert_condition_audience("INVARIANT", {"verdict": "INVARIANT W6 violated: x"}, A.epoch_now(),
+                                                    A.epoch_now()), "owner")
+        self.assertEqual(A.alert_condition_audience("INVARIANT", {"verdict": "INVARIANT WM violated: x"}, A.epoch_now(),
+                                                    A.epoch_now()), "fixer")
 
 
 class MigrationTest(AlertBase):
@@ -268,7 +268,7 @@ class ClearedOwnerAlertTest(AlertBase):
 
     def legacy(self, verdict, item, cwd=None, command="red", at=None):
         """An owner alert as written before its item was typed (a `run:`/`text:`/`orphan:` key no probe knew)."""
-        at = time.time() - 7200 if at is None else at
+        at = A.epoch_now() - 7200 if at is None else at
         rec = {"id": f"20261101T000000{len(os.listdir(self.inbox)) if os.path.isdir(self.inbox) else 0:06d}-1-{command}",
                "time": "t", "at": at, "command": command, "cwd": cwd or self.wt, "final": True, "exit": 1,
                "verdict": verdict, "kind": A.inbox_kind(verdict), "verdicts": [verdict], "tail": [],
@@ -357,7 +357,7 @@ class ClearedOwnerAlertTest(AlertBase):
         state = os.path.join(self.root, "state.json")
         os.environ["AGENTCTL_STATE_FILE"] = state
         self.addCleanup(os.environ.pop, "AGENTCTL_STATE_FILE", None)
-        at = time.time() - 3600
+        at = A.epoch_now() - 3600
         eid = self.legacy("WATCH UNKNOWN: Main or the convergence still undecided for bc29c46b5e after 3 h: a stuck run",
                           "text:x", command="watch", at=at)
         def gate(created):
@@ -394,11 +394,13 @@ class ClearedOwnerAlertTest(AlertBase):
         quoted = ("red c494fec65b9d (Main #2128) went RED BLOCKED ON OWNER (inbox ev3602, 'WAITING ON YOU: either "
                   "design and measure...') and 13 min later RED ESCALATE")  # the quote routes it to the owner
         it = A.issue_open(self.st, "A red parked on the owner is offered back: " + quoted, "session 8de717dc")
+        A.Clock().sleep(1)  # the second issue is the later one: the weekly escalation takes them oldest first
         open_one = A.issue_open(self.st, "Still open: a fixer read 'WAITING ON YOU: accept Hen as known-wrong' as no "
                                 "decision", "session x")
-        t = time.time() + 8 * 86400
+        t = A.epoch_now() + 8 * 86400
         for n in range(2):  # the reconciler's weekly escalation, one issue a pass
             self.assertTrue(A.tick_issues(self.st, now_=t + n * 3600))
+            A.Clock().sleep(1)  # the escalated one re-enters `open` later than the other, which is the next one due
         A.project_events(self.st)
         alerts = {e.get("item"): e["id"] for e in self.unread("owner")}
         self.assertIn(f"issue:{it['id']}", alerts, alerts)

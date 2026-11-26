@@ -1,6 +1,7 @@
 # agentctl, part `govcmd`: agentctl gov and agentctl checks: the governor's and the check slots' command lines.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import argparse
 import datetime as dt
 import json
@@ -106,7 +107,7 @@ def gov_status_cmd(a: Any) -> int:
 
 def _admit_waits(days: int) -> None:
     """The stats table of the admissions of the last `days` days: a row per class that admitted any."""
-    cutoff = time.time() - days * 86400
+    cutoff = epoch_now() - days * 86400
     rows = [r for r in admit_rows() if r.get("at", 0) >= cutoff]
     print(f"{'class':>7} {'admits':>6} {'p50 wait':>9} {'p90 wait':>9} {'waited>1m':>9}")
     for cls in GOV_CLASSES:

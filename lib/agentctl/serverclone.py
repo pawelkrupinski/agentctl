@@ -1,6 +1,7 @@
 # agentctl, part `serverclone`: ci-runner's own clone: cloned into a temp dir and verified, kept healthy, repaired by a swap under its exclusive lock
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import contextlib
 import datetime as dt
 import fcntl
@@ -72,7 +73,7 @@ CLONE_TIMEOUT = 1800
 
 def clone_keepalive(what, started):
     """One keepalive for a clone running since started (monotonic)."""
-    status = f"STATUS={what} ({int(time.monotonic() - started)} s)"
+    status = f"STATUS={what} ({int(time.monotonic() - started)} s)"  # wall: waits on and times real processes and threads
     if SD_READY[0]:
         return sd_notify(f"WATCHDOG=1\n{status}")
     every = env_num("AGENTCTL_CLONE_KEEPALIVE", CLONE_KEEPALIVE)
@@ -84,7 +85,7 @@ def run_clone(cmd, what):
     subprocess.TimeoutExpired (the clone killed) past the bound."""
     bound = env_num("AGENTCTL_CLONE_TIMEOUT", CLONE_TIMEOUT)
     every = env_num("AGENTCTL_CLONE_KEEPALIVE", CLONE_KEEPALIVE)
-    started = time.monotonic()
+    started = time.monotonic()  # wall: waits on and times real processes and threads
     got = {}
 
     def work():  # subprocess.run (bounded, waited for): the keepalives go on in this thread meanwhile
@@ -112,7 +113,7 @@ def clone_into_tmp(repo, url):
     import shutil
     parent, base = os.path.split(os.path.abspath(repo))
     os.makedirs(parent, exist_ok=True)
-    tmp = os.path.join(parent, f".{base}{CLONE_TMP}{os.getpid()}-{int(time.time() * 1000)}")
+    tmp = os.path.join(parent, f".{base}{CLONE_TMP}{os.getpid()}-{int(epoch_now() * 1000)}")
     try:
         r = run_clone(["git", "clone", "--quiet", "--origin", remote(), url, tmp], f"cloning {url} into {tmp}")
     except subprocess.TimeoutExpired as x:
@@ -137,7 +138,7 @@ def _clone_server_repo(repo: str) -> None:
     if os.path.isdir(repo) and not os.listdir(repo):
         os.rmdir(repo)
     elif os.path.lexists(repo):  # something that is no clone: kept aside, never overwritten
-        os.rename(repo, f"{repo}.broken-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}")
+        os.rename(repo, f"{repo}.broken-{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%d-%H%M%S')}")
     os.rename(tmp, repo)
 
 
@@ -193,16 +194,16 @@ def clone_exclusive(repo, wait=None):
     with open(clone_side(repo, "clone-gate.lock"), "a+") as gate, open(clone_side(repo, "clone.lock"), "a+") as lk:
         fcntl.flock(gate, fcntl.LOCK_EX)
         try:
-            deadline = time.monotonic() + wait
+            deadline = time.monotonic() + wait  # wall: waits on and times real processes and threads
             while True:
                 try:
                     fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:
-                    if time.monotonic() >= deadline:
+                    if time.monotonic() >= deadline:  # wall: waits on and times real processes and threads
                         yield False
                         return
-                    time.sleep(0.2)
+                    time.sleep(0.2)  # wall: waits on and times real processes and threads
             try:
                 yield True
             finally:
@@ -294,7 +295,7 @@ def repair_clone(repo, why, store):
     if not _clone_repairing.acquire(blocking=False):
         return None
     try:
-        _clone_repair_at[os.path.realpath(repo)] = time.time()
+        _clone_repair_at[os.path.realpath(repo)] = epoch_now()
         url = os.environ.get("AGENTCTL_MOVIES_REMOTE")
         if not url:
             raise SystemExit(f"agentctl: cannot repair {repo}: no $AGENTCTL_MOVIES_REMOTE")
@@ -305,7 +306,7 @@ def repair_clone(repo, why, store):
             err(f"clone repair: the CLONE condition could not be opened ({str(e)[:160]})")
         err(f"clone repair: {repo} is broken ({why.splitlines()[0][:200]}): cloning {url} afresh")
         tmp = clone_into_tmp(repo, url)
-        broken = f"{repo}.broken-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        broken = f"{repo}.broken-{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%d-%H%M%S')}"
         with clone_exclusive(repo) as held:
             if not held:
                 shutil.rmtree(tmp, ignore_errors=True)
@@ -341,7 +342,7 @@ def clone_heal_tick(repo, store):
     sus = read_record(clone_side(repo, "suspect.json"))
     if not sus:
         return None
-    if time.time() - _clone_repair_at.get(os.path.realpath(repo), 0) < env_num("AGENTCTL_CLONE_REPAIR_RETRY",
+    if epoch_now() - _clone_repair_at.get(os.path.realpath(repo), 0) < env_num("AGENTCTL_CLONE_REPAIR_RETRY",
                                                                                CLONE_REPAIR_RETRY):
         return None
     r = run_probe("clone_health", {"repo": repo})

@@ -186,7 +186,7 @@ class GithubForgeTest(unittest.TestCase):
 
     def test_remote_poll_finds_and_decides_the_check_run(self):
         self.serve_runs([dict(id=101, number=12, sha="c" * 40, branch="check/7", done=True, ok=True)])
-        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, time.time())
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, A.epoch_now())
         self.assertEqual((rem["run"], rem["status"]), (101, "success"))
 
     # -- the verdict is the check jobs': a report job still queued holds nothing (batch #20, 2026-11-07)
@@ -215,7 +215,7 @@ class GithubForgeTest(unittest.TestCase):
 
     def test_remote_poll_is_green_once_every_verdict_job_is_while_a_report_still_queues(self):
         self.serve_check_run(self.CHECK_JOBS + [("timings / report (timings)", "queued", None)])
-        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, time.time())
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, A.epoch_now())
         self.assertEqual((rem["run"], rem["run_status"], rem["status"]), (101, "running", "success"))
         self.assertIn("not waited for: timings / report (timings)", rem["out"])
 
@@ -223,14 +223,14 @@ class GithubForgeTest(unittest.TestCase):
         jobs = self.CHECK_JOBS[:1] + [("check (rest)", "completed", "failure")] + [("timings / report (timings)", "queued", None)]
         self.serve_check_run(jobs)
         self.put("run-101-job-901.log", "check (rest)\tRun the hook\t2026-11-07T15:00:00.0Z ::error::shellcheck: SC2086\n")
-        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, time.time())
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, A.epoch_now())
         self.assertEqual(rem["status"], "failure")
         self.assertIn("-- check (rest)", rem["out"])
         self.assertIn("SC2086", rem["out"])
 
     def test_remote_poll_waits_for_a_verdict_job_still_running(self):
         self.serve_check_run(self.CHECK_JOBS + [("check (page)", "in_progress", None)])
-        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, time.time())
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, A.epoch_now())
         self.assertIsNone(rem.get("status"))
         self.assertEqual(rem["verdict_jobs"], ["plan", "check (*)", "heavy rows (*)"])
 
@@ -239,7 +239,7 @@ class GithubForgeTest(unittest.TestCase):
     # job had concluded, and the verdict was a success without the page checks.
     def test_remote_poll_waits_for_a_verdict_job_github_has_not_created_yet(self):
         self.serve_check_run(self.CHECK_JOBS[:-1])
-        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, time.time())
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, A.epoch_now())
         self.assertIsNone(rem.get("status"))
         self.assertIn("check (page)", rem["verdict_expect"])
 
@@ -258,7 +258,7 @@ class GithubForgeTest(unittest.TestCase):
 
     def test_remote_poll_without_a_declaration_waits_for_the_run(self):
         self.serve_check_run(self.CHECK_JOBS + [("timings / report (timings)", "queued", None)], declares=False)
-        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, time.time())
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7"}, A.epoch_now())
         self.assertIsNone(rem.get("status"))
         self.assertEqual(rem["verdict_jobs"], [])
 
@@ -279,19 +279,19 @@ class GithubForgeTest(unittest.TestCase):
     def test_a_queued_run_github_lists_nowhere_is_given_up_after_its_bound_and_one_it_lists_is_waited_for(self):
         import time
         self.serve_queued_check_run(listed=False)
-        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7", "run": 101, "job_bounds": {}, "verdict_jobs": [], "verdict_expect": []}, time.time())
+        rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7", "run": 101, "job_bounds": {}, "verdict_jobs": [], "verdict_expect": []}, A.epoch_now())
         self.assertIsNone(rem.get("status"), "unlisted only now: waited for (GitHub's listing may lag)")
         self.assertTrue(rem.get("unlisted_at"))
-        rem["unlisted_at"] = time.time() - A.REMOTE_GHOST - 1
-        rem = A.remote_poll(O_R, rem, time.time())
+        rem["unlisted_at"] = A.epoch_now() - A.REMOTE_GHOST - 1
+        rem = A.remote_poll(O_R, rem, A.epoch_now())
         self.assertEqual((rem["status"], rem.get("ghost")), ("abandoned", True))
         self.assertIn("listing omits it", rem["out"])
         self.serve_queued_check_run(listed=True)
         rem = A.remote_poll(O_R, {"tip": "c" * 40, "branch": "check/7", "run": 101, "job_bounds": {}, "verdict_jobs": [], "verdict_expect": [],
-                                  "unlisted_at": time.time() - 3600}, time.time())
+                                  "unlisted_at": A.epoch_now() - 3600}, A.epoch_now())
         self.assertIsNone(rem.get("status"), "a listed queued run waits for its runner")
         self.assertNotIn("unlisted_at", rem)
-        lines = A.remote_check_lines({**rem, "pushed_at": time.time() - 600}, time.time())
+        lines = A.remote_check_lines({**rem, "pushed_at": A.epoch_now() - 600}, A.epoch_now())
         self.assertIn("run 101", lines[0])
         self.assertIn("  check (rest): waiting for a runner slot", lines)
         self.assertIn("  plan: success", lines)
@@ -460,7 +460,7 @@ class ConditionalGetTest(GithubForgeTest):
     def test_every_gh_process_is_tallied_by_its_caller_and_the_tally_printed_on_schedule(self):
         # 2026-11-10: the lander installation spent ~1,500 requests an hour nobody could attribute (ci-runner hides
         # other users' processes, and no call was logged); each process now prints its own tally
-        A._gh_tally_state.update(since=A.time.time(), calls={}, free=0)
+        A._gh_tally_state.update(since=A.epoch_now(), calls={}, free=0)
         saved, A.GH_TALLY_SECONDS = A.GH_TALLY_SECONDS, 10 ** 9
         self.addCleanup(setattr, A, "GH_TALLY_SECONDS", saved)
         self.gh_api(f"repos/{O_R}/actions/runs/7", {"id": 7, "status": "completed"})

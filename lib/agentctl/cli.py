@@ -9,7 +9,7 @@ import sys
 import time
 from typing import Any, Callable
 from agentctl.procrunner import ProcessRunner, wire_runner
-from agentctl.clock import Clock
+from agentctl.clock import Clock, epoch_now, wire_clock
 from agentctl.ghapp import cmd_github_app
 from agentctl.config import cmd_config
 from agentctl.storetoken import wire_token_missing_note
@@ -78,6 +78,7 @@ def wire_collaborators(clock: Clock, store: Any) -> None:
     """What a registry calls with the process's clock and store -- the probes that read them (the watchdog's
     invariants, a change's source, a red's newer run), the inbox writer, the missing token's note -- wired with main's;
     at import, with the wall's clock and the process's store, for a use before any main."""
+    wire_clock(clock)
     wire_probes({"orphan_landed": lambda a: probe_orphan_landed(a, store), "invariant": lambda a: probe_invariant(a, clock, store),
                  "change_source": lambda a: probe_change_source(a, store),
                  "red_newer_verdict": lambda a: probe_red_newer_verdict(a, store)})
@@ -114,7 +115,7 @@ def main(argv: list[str] | None = None, clock: Clock | None = None, runner: Proc
 def selftest():
     """Fast smoke check of the code a service would re-exec onto: the parser builds, the failure parsers and the
     snapshot readers work on fixtures, a fixture gate reads green."""
-    snap = {"at": time.time(), "repo": "x/y", "outside_error": None, "outside": [],
+    snap = {"at": epoch_now(), "repo": "x/y", "outside_error": None, "outside": [],
             "gate": [{"name": "Main", "decided": {"databaseId": 1, "number": 1, "status": "completed",
                                                   "conclusion": "success"}, "newer": None, "since": None, "count": 0,
                       "runs": []}]}

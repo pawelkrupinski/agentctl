@@ -62,7 +62,7 @@ def run_gov(module, script):
             "gov_usage": lambda days: usage,
             "gov_measured_cores": lambda job, rows: None if job == "unmeasured" else 2.0,
             "gov_dir": lambda: gdir,
-            "time": FakeTime,
+            "time": FakeTime, "epoch_now": FakeTime.time,
         }
         for name, fake in patches.items():
             stack.enter_context(mock.patch.object(module, name, fake))

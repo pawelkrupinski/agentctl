@@ -1,9 +1,9 @@
 # agentctl, part `runsigs`: a run's failure signatures: each failed job's cause and signature, saved per run, read again only as far as its budget
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import glob
 import os
-import time
 from contextlib import suppress
 from typing import Any
 from agentctl.core import reds_dir
@@ -132,7 +132,7 @@ def _unread_not_due(unread: Any, t: Any) -> Any:
 def run_sigs(o_r, run, workflow, now_=None):
     """The signatures of a completed red run: [{job, kind, line, sig}] (cached; explain_run fills the cache). A run whose
     log went unread answers what it last read until its backoff is due (RUNSIG_UNREAD_FIRST)."""
-    t = time.time() if now_ is None else now_
+    t = epoch_now() if now_ is None else now_
     rid = run.get("databaseId")
     rec = read_record(reds_dir("runsig", f"{rid}.json"))
     if rec is not None and rec.get("classifier") == classifier_version():

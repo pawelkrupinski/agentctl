@@ -35,7 +35,7 @@ class BranchBase(RedBase):
         self.r.write("drift.txt", "y\n", at=self.wt)
         self.r.commit("later work", at=self.wt)
         self.branch = f"measure/pawel/{self.x[:9]}-0b04a4"
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 600))
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(A.epoch_now() - 600))
         self.put("runs.json", [brun(64, 2116, self.x, self.branch, created=now),
                                dict(run(40, 20, "Main", "main.yml", self.sha), event="push"),
                                dict(run(39, 19, CONV, CONV_FILE, self.sha), event="workflow_dispatch")])
@@ -144,7 +144,7 @@ class BranchRedTest(BranchBase):
         self.assertIsNone(A.newer_recording({"recording": "573"}, {"recording": ""}))
 
     def test_differing_inputs_are_a_plain_branch_red_naming_the_input_and_a_newer_recording_blocks_promoting(self):
-        A.write_json(A.pinned_path(), {"at": time.time(), "tag": "convergence-fixtures", "pins": {"pl": "573", "de": "573"}})
+        A.write_json(A.pinned_path(), {"at": A.epoch_now(), "tag": "convergence-fixtures", "pins": {"pl": "573", "de": "573"}})
         self.land_x()
         self.inputs(64, dict(MAIN_INPUTS, recording="3166"))
         snap = self.snap()
@@ -200,7 +200,7 @@ class BranchRedTest(BranchBase):
 
     def test_an_old_failure_is_recorded_not_routed(self):
         snap = self.snap()
-        self.assertEqual(A.route_branch_reds(MOVIES, snap, now_=time.time() + 2 * A.BRANCH_ROUTE_MAX_AGE), [])
+        self.assertEqual(A.route_branch_reds(MOVIES, snap, now_=A.epoch_now() + 2 * A.BRANCH_ROUTE_MAX_AGE), [])
         self.assertEqual([x for x in A.inbox_entries() if x["kind"] == "BRANCH_RED"], [])
 
     def test_inbox_wait_wakes_on_a_branch_red(self):
@@ -230,7 +230,7 @@ class OrphanBranchRedTest(BranchBase):
         sh(self.r.path, "git", "worktree", "remove", "--force", landed)
         self.b65 = f"measure/pawel/{self.off[:9]}-b148ea"
         self.b70, self.b71 = f"measure/pawel/{self.on[:9]}-d458ee", f"measure/pawel/{self.on[:9]}-f16735"
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 600))
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(A.epoch_now() - 600))
         self.put("runs.json", [brun(3548, 2365, self.off, self.b65, created=now, wf=IDRUN, wfile=IDRUN_FILE),
                                brun(3553, 2370, self.on, self.b70, created=now, wf=IDRUN, wfile=IDRUN_FILE),
                                brun(3554, 2371, self.on, self.b71, created=now, wf=IDRUN, wfile=IDRUN_FILE),
@@ -264,7 +264,7 @@ class OrphanBranchRedTest(BranchBase):
 
     def test_a_commit_on_main_whose_workflow_main_runs_keeps_today_s_behaviour(self):
         b = f"measure/pawel/{self.on[:9]}-0c0c0c"
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 600))
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(A.epoch_now() - 600))
         self.put("runs.json", [brun(3600, 2400, self.on, b, created=now),
                                dict(run(39, 19, CONV, CONV_FILE, self.sha), event="workflow_dispatch")])
         e = self.reds(self.snap())[2400]
@@ -276,7 +276,7 @@ class OrphanBranchRedTest(BranchBase):
         """2026-11-02: `branch reds: 5 → NOBODY (convergence #592); ... #558; #557` -- drift runs on commits now on
         main, long after main's own convergence #691 ran: they predict nothing any more."""
         b = f"measure/pawel/{self.on[:9]}-0c0c0c"
-        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 600))
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(A.epoch_now() - 600))
         self.put("runs.json", [dict(run(4000, 691, CONV, CONV_FILE, self.sha), event="workflow_dispatch"),
                                brun(3600, 592, self.on, b, created=now)])
         e = self.reds(self.snap())[592]
@@ -304,7 +304,7 @@ class OrphanBranchRedTest(BranchBase):
                          [f"branch red reopened: {IDRUN} #2365", f"branch red reopened: {IDRUN} #2370"])
         self.assertEqual(self.store.item("branch-red", A.branch_red_id(MOVIES, 3553))["state"], "open")
         self.assertEqual(self.store.item("branch-red", A.branch_red_id(MOVIES, 3554))["state"], "orphaned")
-        lines = A.route_branch_reds(MOVIES, snap, now_=time.time() + 2 * A.BRANCH_ROUTE_MAX_AGE)  # old, still routed
+        lines = A.route_branch_reds(MOVIES, snap, now_=A.epoch_now() + 2 * A.BRANCH_ROUTE_MAX_AGE)  # old, still routed
         self.assertEqual(len(lines), 2, lines)
         cwds = {os.path.realpath(x["cwd"]) for x in A.inbox_entries() if x["kind"] == "BRANCH_RED"}
         self.assertEqual(cwds, {os.path.realpath(back), os.path.realpath(self.wt)})

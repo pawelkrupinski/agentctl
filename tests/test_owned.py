@@ -60,8 +60,8 @@ class OwnedTest(unittest.TestCase):
         return p
 
     def until(self, cond, timeout=180):
-        t = time.time() + timeout
-        while time.time() < t:
+        t = A.epoch_now() + timeout
+        while A.epoch_now() < t:
             if cond():
                 return True
             time.sleep(0.05)

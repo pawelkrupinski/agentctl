@@ -13,7 +13,7 @@ class StatusModelTest(unittest.TestCase):
         os.environ["AGENTCTL_STATE_ROOT"] = tempfile.mkdtemp()
         self.addCleanup(lambda: os.environ.__setitem__("AGENTCTL_STATE_ROOT", self.saved) if self.saved
                         else os.environ.pop("AGENTCTL_STATE_ROOT", None))
-        self.t = time.time()
+        self.t = A.epoch_now()
 
     def out(self, argv):
         buf = io.StringIO()

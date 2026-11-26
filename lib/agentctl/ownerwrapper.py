@@ -1,6 +1,7 @@
 # agentctl, part `ownerwrapper`: a family owner's wrapper: its heartbeat, its turns, its reds' leases
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import signal
 import time
@@ -99,7 +100,7 @@ class OwnerWrapper:
         self.names: list[str] = []
         self.empty = 0
         self.beat = 0.0
-        self.idle_since = time.time()
+        self.idle_since = epoch_now()
         self.first = not rec.get("session")
         self.resumed = bool(rec.get("session"))
         self.missing = 0
@@ -137,7 +138,7 @@ class OwnerWrapper:
         return adopt
 
     def _adopt(self, adopt: Any) -> None:
-        t0 = time.time()
+        t0 = epoch_now()
         self.bid, self.names, self.first, self.resumed, self.turn_at = adopt["id"], list(owner_leases(self.fam)), False, False, t0
         self.progress = TurnProgress(self.stall, t0)
         self.turn = max(self.turn, 1)
@@ -163,9 +164,9 @@ class OwnerWrapper:
         try:
             stop = None
             while stop is None:
-                stop = self._step(time.time())
+                stop = self._step(epoch_now())
                 if stop is None:
-                    time.sleep(self.poll)
+                    time.sleep(self.poll)  # wall: waits on and times real processes and threads
             return stop
         except StoreAuthFailed as ex:
             return f"store auth failed: {str(ex)[:300]}"
@@ -236,9 +237,9 @@ class OwnerWrapper:
         self._release(self.names, outcome, "\n".join(tail[-8:]))
         if self.bid:  # THE TURN'S SESSION STOPPED (bg_spent): claude keeps its process on as a spare, and the next
             bg_stop(self.cli, self.bid)  # turn's `--resume` of a running session starts a COPY -- one more per turn
-        self.bid, self.missing, self.idle_since = None, 0, time.time()  # OWNER_IDLE counts from the turn's END: from
+        self.bid, self.missing, self.idle_since = None, 0, epoch_now()  # OWNER_IDLE counts from the turn's END: from
         # its start, a turn longer than OWNER_IDLE left the owner "idle" the moment it ended
-        self._turn_state(False, time.time())
+        self._turn_state(False, epoch_now())
         return f"ENDED: {self.empty} turns in a row with no verdict" if self.empty >= OWNER_EMPTY_TURNS else None
 
     def _step(self, now: Any) -> Any:

@@ -1,10 +1,10 @@
 # agentctl, part `recordingpins`: the pinned recording main's convergence replays: read from the release, kept in the store, its runs
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import json
 import os
 import re
-import time
 import urllib.parse
 from agentctl.core import err, fmt_age, git, host_role, reds_dir, remote
 from agentctl.statefile import read_record, write_json
@@ -90,7 +90,7 @@ def refresh_pinned_recording(o_r, repo, st, now_=None, force=False, role=None):
     never reads release assets itself. The laptop (local, or the sync in remote-store mode) re-reads them from the
     release at most every PIN_REFRESH s (PIN_RETRY s after a failure) with the token it holds, and writes them into the
     store; pins read but not yet stored (the store did not answer) are stored at the next call."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     rec = read_record(pinned_path()) or {}
     if (role or host_role()) == "server":
         got = stored_pins(st)
@@ -122,7 +122,7 @@ def pins_status(rec=None, now_=None):
     rec = read_record(pinned_path()) if rec is None else rec
     if not (rec or {}).get("pins"):
         return "pins: unread (the laptop's processor reads them from the release and stores them)"
-    age = (now_ if now_ is not None else time.time()) - float(rec.get("at") or 0)
+    age = (now_ if now_ is not None else epoch_now()) - float(rec.get("at") or 0)
     runs = "/".join(sorted(set(rec["pins"].values()), key=lambda x: int(x) if x.isdigit() else 0))
     line = f"pins: {runs} ({rec.get('tag')}), read {fmt_age(age)} ago"
     if age > PIN_STALE:

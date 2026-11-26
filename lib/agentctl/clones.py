@@ -1,10 +1,10 @@
 # agentctl, part `clones`: the clones agentctl works in: a repository's main clone, fetching its main, a clone suspected corrupt and its healing switch.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 from typing import Any
 import re
-import time
 from agentctl.core import git, git_ok, remote
 from agentctl.statefile import write_json
 from agentctl.repos import server_repo
@@ -64,7 +64,7 @@ def clone_side(repo: str, what: str) -> str:
 def note_clone_suspect(repo: str, error: str) -> Any:
     """A git error on the clone that looks like corruption: the clone health step looks at it next tick."""
     if heal_enabled(repo) and CORRUPT_GIT.search(error or ""):
-        write_json(clone_side(repo, "suspect.json"), {"at": time.time(), "error": (error or "").strip()[-2000:]})
+        write_json(clone_side(repo, "suspect.json"), {"at": epoch_now(), "error": (error or "").strip()[-2000:]})
         return True
     return False
 

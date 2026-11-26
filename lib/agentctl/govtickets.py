@@ -1,6 +1,7 @@
 # agentctl, part `govtickets`: the governor's ticket directory: its live tickets, its log, the change mark its waiters watch
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now, wall_epoch
 import glob
 import json
 import os
@@ -34,7 +35,7 @@ def gov_tickets() -> list[dict[str, Any]]:
         lock = p[:-5] + ".lock"
         if not lock_held(lock):
             with suppress(OSError):
-                if time.time() - os.path.getmtime(p) > 30:  # never one being written
+                if wall_epoch() - os.path.getmtime(p) > 30:  # never one being written
                     os.unlink(p)
                     os.unlink(lock)
                     gov_log_end(os.path.basename(lock))
@@ -51,7 +52,7 @@ def gov_log_end(ticket_id: str, at: Optional[float] = None) -> None:
     """A ticket's end, in admits.jsonl beside its admission (`gov replay` reads both): exact for a ticket released in
     process, the first look after it for one a shell held (the kernel freed it)."""
     with open(os.path.join(gov_dir(), "admits.jsonl"), "a") as af:
-        af.write(json.dumps({"end": round(at or time.time(), 1), "id": ticket_id}) + "\n")
+        af.write(json.dumps({"end": round(at or epoch_now(), 1), "id": ticket_id}) + "\n")
 
 
 def gov_bump() -> None:
@@ -73,9 +74,9 @@ def gov_change_mark() -> int:
 
 def gov_wait_change(mark: int, secs: float) -> None:
     """Sleep up to secs, returning early when the change mark moves past `mark`."""
-    end = time.monotonic() + secs
+    end = time.monotonic() + secs  # wall: waits on and times real processes and threads
     step = min(env_num("AGENTCTL_GOV_POLL", GOV_POLL), secs)
-    while time.monotonic() < end:
-        time.sleep(max(0.01, min(step, end - time.monotonic())))
+    while time.monotonic() < end:  # wall: waits on and times real processes and threads
+        time.sleep(max(0.01, min(step, end - time.monotonic())))  # wall: waits on and times real processes and threads
         if gov_change_mark() != mark:
             return

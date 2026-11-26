@@ -153,7 +153,7 @@ class FixerClaimsAnotherRedTest(RedsBase):
         self.assertEqual(rc, 0, out)
         self.assertIn("claimed Verify scrape recording #2493", out)
         row = self.st.get(A.red_lease(key))
-        self.assertTrue(A.lease_is_live(row, time.time()), row)
+        self.assertTrue(A.lease_is_live(row, A.epoch_now()), row)
         self.assertEqual(os.path.realpath(A.lease_meta(row)["worktree"]), os.path.realpath(wt))
         self.assertEqual(A.lease_meta(row)["fixer"], path, "a fixer's claim: its family's holder (red_family_holder)")
         self.assertIsNone(A.read_record(path).get("note"), "N's claim is no note on the fixer's own lease")
@@ -172,7 +172,7 @@ class FixerClaimsAnotherRedTest(RedsBase):
         off = self.st.offer_of(f"red:{key}") or A.red_put_offer(self.st, self.st.item("red", key))
         took = self.st.take(self.st.offer_of(f"red:{key}")["id"], primary["holder"], A.RED_FIXER_TTL, A.RED_FIXER_MAX,
                             meta={"kind": "sibling", "family": "convergence", "primary": primary["name"],
-                                  "joined_at": time.time()})
+                                  "joined_at": A.epoch_now()})
         self.assertIn("epoch", took, off)
         rc, out = self.tool("red", "claim", "2493", "--note", "sibling", "--repo", "movies", cwd=wt)
         self.assertEqual(rc, 0, out)

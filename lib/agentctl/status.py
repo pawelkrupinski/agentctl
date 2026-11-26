@@ -1,6 +1,7 @@
 # agentctl, part `status`: the status model: each source read under a bound, assembled and cached; the status line
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import argparse
 from typing import Any, Dict
 import json
@@ -77,7 +78,7 @@ def status_sources(sources, bound, keep=False):
     for the next refresh (one read per source at a time) -- a slow source never empties its section; else it is an
     error."""
     out, threads = {}, []
-    start = time.time()
+    start = epoch_now()
     for name, fn, factor in sources:
         th = _status_reading.get(name) if keep else None
         if not (th and th.is_alive()):
@@ -87,18 +88,18 @@ def status_sources(sources, bound, keep=False):
                 _status_reading[name] = th
         threads.append((name, th, bound * factor))
     for _name, th, b in threads:
-        th.join(max(0.0, start + b - time.time()))
+        th.join(max(0.0, start + b - epoch_now()))
     return status_answers(threads, out, keep)
 
 
 def status_read(name: Any, fn: Any, out: Any, keep: Any) -> Any:
     """One source read in its thread: its answer (or its error) and how long it took, into out (and, keep, the last)."""
-    t0 = time.time()
+    t0 = epoch_now()
     try:
         v = fn()
     except (Exception, SystemExit) as e:
         v = status_err(e)
-    out[name] = (time.time(), v, round(time.time() - t0, 2))
+    out[name] = (epoch_now(), v, round(epoch_now() - t0, 2))
     if keep:
         _status_last[name] = out[name]
 
@@ -175,7 +176,7 @@ def status_header(t, d=None, probes=True):
 
 def status_line(now_=None):
     """`status --line`: the header's line (no git, no GitHub; on the sync at most one GET /v1/state)."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     return status_header(t, probes=False)["line"]
 
 
@@ -251,14 +252,14 @@ def status_families(st, t):
 
 def status_store_probe(st, t):
     """Is the store answering, and the reconciler's own tick (the remote /v1/state's tick_at) when it is remote."""
-    t0 = time.time()
+    t0 = epoch_now()
     if isinstance(st, RemoteStore):
         snap = st.state() or {}
         tick = snap.get("tick_at")
-        return {"remote": st.url, "reachable": True, "ms": int((time.time() - t0) * 1000), "tick_at": tick,
+        return {"remote": st.url, "reachable": True, "ms": int((epoch_now() - t0) * 1000), "tick_at": tick,
                 "tick_age": t - float(tick) if tick else None, "code": snap.get("version")}
     st.meta_get("last_alive", 0)
-    return {"remote": None, "reachable": True, "ms": int((time.time() - t0) * 1000)}
+    return {"remote": None, "reachable": True, "ms": int((epoch_now() - t0) * 1000)}
 
 
 def status_pressure():
@@ -407,7 +408,7 @@ def status_section_sources(t: float, repo: str, need: Any) -> tuple[Any, ...]:
 def status_data(store=None, now_=None, bound=None, keep=False, only=None):
     """THE STATUS MODEL (/api/status): every section from its own bounded source; a failing one is {"error": ...} in
     its place. only: just these sections (a renderer's)."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     b = bound if bound is not None else env_num("AGENTCTL_STATUS_BOUND", STATUS_SOURCE_BOUND)
     d = state_read()
     repo = (d.get("ci") or {}).get("repo") or SHORT["movies"]
@@ -430,9 +431,9 @@ _status_cache_lock = threading.Lock()
 
 def status_cached():
     with _status_cache_lock:  # one assembly at a time: refreshing tabs share it
-        if _status_cache["data"] is None or time.time() - _status_cache["at"] >= STATUS_CACHE:
+        if _status_cache["data"] is None or epoch_now() - _status_cache["at"] >= STATUS_CACHE:
             _status_cache["data"] = status_data(keep=True)
-            _status_cache["at"] = time.time()
+            _status_cache["at"] = epoch_now()
         return _status_cache["data"]
 
 
@@ -443,7 +444,7 @@ def ci_why_cached(o_r: str, a: argparse.Namespace, target: Any) -> int:
     # NEVER LIVE WORK (2026-10-28: a stale file sent the status line's 15 s refresh into a 60 s live read): the
     # processor's published line, or -- stale or missing -- what it last said, marked with its age. Live reads
     # belong to the processor's publish step only.
-    text = status_gate_text(state_read(), time.time(), o_r)  # the status model's gate text, for this repo
+    text = status_gate_text(state_read(), epoch_now(), o_r)  # the status model's gate text, for this repo
     print(text)
     return 1 if text.startswith("gate RED") else 0 if GATE_LINE.match(text) else 2  # 2: UNREAD / ? / NETWORK
 

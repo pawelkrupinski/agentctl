@@ -1,10 +1,10 @@
 # agentctl, part `batchrun`: a batch's check: its tip assembled in a check tree, run remotely or here, bisected when it fails
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
 import subprocess
-import time
 from typing import Any
 from agentctl.statefile import read_text_or
 from agentctl.procrunner import process_runner
@@ -177,5 +177,5 @@ def unread_note(d, reds, entries, st):
     open_condition("UNKNOWN", f"UNKNOWN: the waiting processor cannot read the gate ({gate_unread_why[0]}); {len(entries)} "
                               "change(s) wait, taken as red. Hand it the token: `~/bin/agentctl land status` from a "
                               "session with the vault unlocked",
-                   run_probe("gate_read", {"since": time.time()}), [], key="gate-unread-waiting", command="waiting",
+                   run_probe("gate_read", {"since": epoch_now()}), [], key="gate-unread-waiting", command="waiting",
                    exit_code=2, cwd=entries[0].get("worktree") if entries else None, store=st)

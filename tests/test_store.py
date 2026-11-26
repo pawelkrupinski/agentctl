@@ -108,7 +108,7 @@ class LeaseHistoryTest(unittest.TestCase):
 
     def test_lease_list_shows_the_live_and_the_lately_freed_unless_all(self):
         import contextlib, io, types
-        now = A.time.time()
+        now = A.epoch_now()
         st = A.process_store()
         a = st.acquire("t/live", "me", 600, 900)
         b = st.acquire("t/recent", "me", 600, 900)

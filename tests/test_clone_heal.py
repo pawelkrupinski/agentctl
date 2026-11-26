@@ -245,7 +245,7 @@ class RequeueLoopTest(unittest.TestCase):
         A.wlog, A.open_condition = self.saved
 
     def again(self, why, **kw):
-        A.requeue_infra(self.st, self.d, self.e, why, time.time(), **kw)
+        A.requeue_infra(self.st, self.d, self.e, why, A.epoch_now(), **kw)
         self.st.transition("change", "e1", "checking", self.st.item("change", "e1")["version"])
         self.e["status"] = "checking"
 

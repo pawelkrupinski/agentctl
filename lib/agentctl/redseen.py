@@ -1,6 +1,7 @@
 # agentctl, part `redseen`: what is red now: one observation per key from the CI snapshot, stuck and unkicked runs.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import subprocess
 import time
@@ -232,7 +233,7 @@ def unkicked_unit(repo, snap, now_, name, paths_file, matcher, kicker):
     """unkicked_obs's red unit for one suite, or None."""
     runs = suite_runs(snap, name) if repo and snap else []
     pushed = unkicked_push(repo) if runs else None
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     if not pushed or not kick_overdue(runs[0], pushed[1], t):
         return None
     head, ct = pushed

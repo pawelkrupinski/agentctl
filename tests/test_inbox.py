@@ -343,7 +343,7 @@ class InboxTest(unittest.TestCase):
     def test_the_owners_watcher_wakes_on_any_alert_addressed_to_the_owner(self):
         """An issue's weekly escalation is kind OTHER, addressed to the owner by the event projector: the owner's
         default watcher wakes on it (an explicit --kinds still selects by kind alone)."""
-        rec = {"id": "20261119T121335006151-ev13287-issue-open", "time": "t", "at": time.time(), "command": "issue",
+        rec = {"id": "20261119T121335006151-ev13287-issue-open", "time": "t", "at": A.epoch_now(), "command": "issue",
                "final": True, "exit": 1, "verdict": "AGENTCTL ISSUE 20261104T044122-55799d open 15 d (filed by x): y",
                "kind": "OTHER", "verdicts": [], "tail": [], "item_type": "issue", "item_id": "20261104T044122-55799d",
                "audience": "owner"}

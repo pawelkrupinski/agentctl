@@ -98,7 +98,7 @@ class OwnerLeaseRenewTest(OwnerBase):
         self.assertTrue(self.wait(lambda: A.lease_meta(self.st.get(name)).get("worktree") == wt),
                         A.lease_meta(self.st.get(name)))
         self.tick()  # the reconciler reads the red leased
-        text, _short = A.red_view_state(self.st, self.only(), time.time())
+        text, _short = A.red_view_state(self.st, self.only(), A.epoch_now())
         self.assertIn(wt.replace(A.HOME, "~"), text)
         self.assertNotIn("(?,", text)
         self.assertNotIn("with ]", text)

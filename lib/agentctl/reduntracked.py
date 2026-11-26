@@ -1,6 +1,7 @@
 # agentctl, part `reduntracked`: a check never green is not tracked: the never-green record and untracking.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import json
 import time
 from typing import Any
@@ -93,7 +94,7 @@ def _completed_green(runs: Any) -> Any:
 
 def workflow_ever_green(store, o_r, workflow, runs=(), now_=None):
     """True when workflow has had a green run on main, False when GitHub says it never had, None when unread."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     if workflow in (ever_green_record(store).get(o_r) or {}).get("flows", {}):
         return True
     green = _completed_green(runs)
@@ -115,7 +116,7 @@ def workflow_ever_green(store, o_r, workflow, runs=(), now_=None):
 def job_ever_green(store, o_r, workflow, job, runs=(), now_=None):
     """True when job of (ever green) workflow concluded success in a run on main; False when it did in none of the runs
     read -- at least one green run among them, every green one read; None (unknown, tracked) otherwise."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     known = ((ever_green_record(store).get(o_r) or {}).get("jobs") or {}).get(workflow) or {}
     if any(job_matches(k, job) for k in known):
         return True

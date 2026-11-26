@@ -1,6 +1,7 @@
 # agentctl, part `storetoken`: the store token and the vault: where agentctl's credentials come from (the processor's socket, the vault, the GitHub App), and noting a missing one.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import contextlib
 import os
 import re
@@ -221,7 +222,7 @@ _token_missing = process_cache({})  # ns -> {"since", "reads", "said"}
 def token_missing(ns, why, now_=None):
     """A failed token read: said (and noted in the inbox) on the transition to missing, then a summary at most every
     TOKEN_MISSING_SUMMARY s ($AGENTCTL_TOKEN_SUMMARY). Returns the line said, or None."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     m = _token_missing.get(ns)
     if m is None:
         _token_missing[ns] = {"since": t, "reads": 1, "said": t}

@@ -1,7 +1,7 @@
 
+from agentctl.clock import epoch_now
 import os
 import sys
-import time
 from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.core import NO_SIGN, err, git, reds_dir, remote
@@ -125,7 +125,7 @@ def explorer_file(o_r, repo, rows, now_):
 
 def explorer_tick(o_r, repo, st, now_=None, force=False, fetch=None, filer=None):
     """At most hourly. Returns what it said (a list of strings); never raises."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     try:
         if not force and t - float(st.meta_get("explorer_at", 0) or 0) < EXPLORER_EVERY:
             return []

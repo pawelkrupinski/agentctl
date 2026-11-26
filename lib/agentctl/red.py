@@ -1,6 +1,7 @@
 # agentctl, part `red`: the red machine.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
 import time
@@ -214,7 +215,7 @@ VERIFY_RUNS_TTL = 5 * 60
 def workflow_main_runs(o_r, wfile):
     """The newest 30 runs on main of workflow file wfile (read at most every VERIFY_RUNS_TTL); [] when unread."""
     at, runs = _verify_runs.get((o_r, wfile), (0.0, None))
-    if runs is None or time.time() - at >= VERIFY_RUNS_TTL:
+    if runs is None or epoch_now() - at >= VERIFY_RUNS_TTL:
         try:
             # listing: a fix is verified by a run CONTAINING it, the newest 30 read; none there keeps it pending, never refuted
             runs = gh_json(o_r, "run", "list", "--workflow", wfile, "--branch", "main", "--limit", "30",
@@ -222,7 +223,7 @@ def workflow_main_runs(o_r, wfile):
         except (Exception, SystemExit) as e:
             err(f"red verify: could not list {wfile} ({str(e)[:120]})")
             runs = runs or []
-        _verify_runs[(o_r, wfile)] = (time.time(), runs)
+        _verify_runs[(o_r, wfile)] = (epoch_now(), runs)
     return runs
 
 
@@ -291,7 +292,7 @@ def decided_revert(d, t=None):
     m = DECIDED_REVERT.match(str(dec.get("answer") or ""))
     if not m or not d.get("gate") or d.get("reverted") or d.get("early"):  # an early red: no verdict to revert on
         return None
-    age = (time.time() if t is None else t) - float(dec.get("at") or 0)
+    age = (epoch_now() if t is None else t) - float(dec.get("at") or 0)
     return m.group(1) if age >= env_num("AGENTCTL_RED_DECIDED_REVERT_MAX", RED_DECIDED_REVERT_MAX) else None
 
 

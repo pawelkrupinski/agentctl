@@ -1,6 +1,7 @@
 # agentctl, part `issues`: the issues anyone files for the owner: opened, closed, escalated weekly; `agentctl issue`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import datetime as dt
 import os
 import time
@@ -18,7 +19,7 @@ ISSUE_TEXT_MAX = 4000
 
 def issue_open(st: Any, text: Any, by: str, cwd: Optional[str] = None, now_: Optional[float] = None) -> Any:
     """A new open issue; returns the item."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     text = str(text or "").strip()[:ISSUE_TEXT_MAX]
     iid = f"{dt.datetime.fromtimestamp(t, dt.timezone.utc):%Y%m%dT%H%M%S}-{hashlib_sha1(f'{by}|{text}|{t}')[:6]}"
     return st.put_item("issue", iid, "open", {"text": text, "by": by, "at": ts(), "cwd": cwd,

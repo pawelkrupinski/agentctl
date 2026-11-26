@@ -31,17 +31,6 @@ def run(module, script):
             return ret(*a, **k) if callable(ret) else ret
         return fake
 
-    class Day:
-        @staticmethod
-        def today():
-            return type("D", (), {"isoformat": staticmethod(lambda: "2026-11-25")})()
-
-    class Datetime:
-        @staticmethod
-        def now():
-            return type("N", (), {"hour": script.get("hour", 10)})()
-
-    fake_dt = type("DT", (), {"date": Day, "datetime": Datetime})
     with tempfile.TemporaryDirectory() as agents, contextlib.ExitStack() as stack:
         if script.get("plist"):
             open(os.path.join(agents, "net.bitcashier.agentctl-watchdog.plist"), "w").close()
@@ -52,7 +41,7 @@ def run(module, script):
             "spotlight_exclude": rec("spotlight_exclude", script.get("marked", [])),
             "ios_simulator_sweep": rec("ios_simulator_sweep", script.get("ios")),
             "state_root": lambda name: "/S/" + name, "read_record": lambda p: script.get("state"),
-            "write_json": rec("write_json"), "ts": lambda: "TS", "dt": fake_dt,
+            "write_json": rec("write_json"), "ts": lambda: "TS", "epoch_now": lambda: __import__("datetime").datetime(2026, 11, 25, script.get("hour", 10)).timestamp(),
             "cmd_sweep": rec("cmd_sweep", script.get("sweep_rc", 0)),
             "orphan_duty": rec("orphan_duty", script.get("orphans", [])),
             "expire_cache": rec("expire_cache", script.get("expired", [])),

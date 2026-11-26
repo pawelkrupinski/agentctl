@@ -11,7 +11,7 @@ DAY = 86400
 
 
 def runs(n, running, duration, waited=0, pressure=30, swap=(100, 100), at=None):
-    at = at or time.time()
+    at = at or A.epoch_now()
     return [{"at": at - i, "duration": duration, "waited": waited, "running": running, "cap": running,
              "pressure": pressure, "swap_mb_start": swap[0], "swap_mb": swap[1]} for i in range(n)]
 

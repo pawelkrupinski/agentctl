@@ -1,13 +1,13 @@
 # agentctl, part `recovery`: the recovery registry.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import argparse
 import json
 import os
 import re
 import subprocess
 import sys
-import time
 import urllib.error
 import urllib.request
 from typing import Any
@@ -200,7 +200,7 @@ def escalated_now(store):
     """[(item type, item, words)] of the items escalated and still in that state."""
     st = store
     out = []
-    t = time.time()
+    t = epoch_now()
     for it in st.items("red", ["offered", "fix-pending"]):  # only what is the OWNER's (THE ALERT MODEL, alerts.py)
         if it["level"] and alert_red_audience({"kind": "RED_UNCLAIMED"}, it, st, t) == "owner":
             out.append(("red", it, f"{red_what(it['data'])}: {red_view(st, it)[1]}"))

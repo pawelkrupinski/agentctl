@@ -1,6 +1,7 @@
 # agentctl, part `lander`: who landed what -- every `agentctl land` remembers its lander, in the store.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import datetime as dt
 import glob
 import json
@@ -139,7 +140,7 @@ def lander_transcript(sid, now_=None, worktree=None, ancestry=None):
     transcript; (None, None) when there is none."""
     if not sid:
         return None, None
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     root = claude_projects_root()
     main = glob.glob(os.path.join(root, "*", f"{sid}.jsonl"))
     subs = glob.glob(os.path.join(root, "*", sid, "subagents", "agent-*.jsonl"))
@@ -335,7 +336,7 @@ def lander_note_direct(store, repo, head, keys):
     """A direct land's record (`agentctl land` with no queue): a `lander` item, best effort -- a store that does not
     answer costs the record, never the landing."""
     try:
-        cid = f"direct-{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{head[:10]}"
+        cid = f"direct-{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{head[:10]}"
         with no_vault():
             lander_put(store, cid, lander_record(repo), keys or [], landed_sha=head)
         return cid

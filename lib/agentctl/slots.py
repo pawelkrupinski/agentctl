@@ -1,6 +1,7 @@
 # agentctl, part `slots`: `agentctl land`: the land in a worktree, its loop (dry run, proven push, join) and its stash
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import argparse
 import contextlib
 import datetime as dt
@@ -67,7 +68,7 @@ class Stash:
     position, and restored exactly once."""
 
     def __init__(self, repo):
-        self.repo, self.name, self.sha = repo, f"agentctl-land-{os.getpid()}-{int(time.time())}", None
+        self.repo, self.name, self.sha = repo, f"agentctl-land-{os.getpid()}-{int(epoch_now())}", None
 
     def save(self):
         git(self.repo, "stash", "push", "--include-untracked", "-m", self.name)
@@ -445,7 +446,7 @@ def join(st, repo, log_path, a, head):
     with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a seq of its own, beside a land queueing meanwhile
         fcntl.flock(seq_lock, fcntl.LOCK_EX)
         seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
-        eid = f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}"
+        eid = f"{dt.datetime.fromtimestamp(epoch_now()).strftime('%Y%m%d-%H%M%S')}-{os.path.basename(repo)}-{seq}"
         supersede_older_waiting(st, d, repo, branch, eid)
         e = {"id": eid, "seq": seq, "worktree": repo, "branch": branch, "head": head, "commits": commits,
              "fixes": sorted(fixes_of(repo, commits, st)), "status": "waiting", "created": ts(), "tip": head,

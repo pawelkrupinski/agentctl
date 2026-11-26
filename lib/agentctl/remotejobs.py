@@ -1,6 +1,7 @@
 # agentctl, part `remotejobs`: the remote check's workflow and its jobs: those that decide its verdict, and a running job's expected duration (its timeout-minutes, else a headroom over its recorded p90, else a cap)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import fnmatch
 import re
 import time
@@ -144,7 +145,7 @@ def remote_read_bounds(o_r, sha):
         timeouts = workflow_job_timeouts(base64.b64decode(r.get("content") or "").decode(errors="replace"))
     except Exception:
         timeouts = {}
-    return remote_job_bounds(timeouts, remote_job_p90s(time.time() - REMOTE_P90_WINDOW))
+    return remote_job_bounds(timeouts, remote_job_p90s(epoch_now() - REMOTE_P90_WINDOW))
 
 
 def _runs_in_time(j: Any, t: Any, bounds: Any) -> Any:

@@ -1,9 +1,9 @@
 # agentctl, part `govbudget`: the governor's memory budget, each class's share of it, and the check cap it holds (one sbt server's worth a check), the check runs log and the slot holders
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import json
-import time
 from agentctl.core import env_num, state_root
 from agentctl.statefile import read_record
 from agentctl.machine import ram_gb
@@ -58,7 +58,7 @@ def slot_holders(cap=None):
 
 
 def check_runs(days=7, now=None):
-    now = now or time.time()
+    now = now or epoch_now()
     out = []
     try:
         with open(os.path.join(checks_dir(), "runs.jsonl")) as f:

@@ -1,8 +1,8 @@
 # agentctl, part `redblock`: an unreadable gate, blocks on the owner's causes, owner blocks as leases.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import re
-import time
 from typing import Any
 from agentctl.core import attempt
 from agentctl.classify import QUOTA_LOG
@@ -35,7 +35,7 @@ def gate_unread_spell(o_r, why, store):
         return None
     line = (f"UNKNOWN: the red patrol cannot read the gate ({why[:200]}): nothing dispatched, pushes fail closed. "
             f"Infra check: {infra_check(o_r)}")
-    c = open_condition("UNKNOWN", line, run_probe("gate_read", {"repo": o_r, "since": time.time()}), [],
+    c = open_condition("UNKNOWN", line, run_probe("gate_read", {"repo": o_r, "since": epoch_now()}), [],
                        key="gate-unread", command="red", exit_code=2, store=store)
     return line if c else None
 

@@ -1,12 +1,12 @@
 # agentctl, part `owner`: long-lived red family owners: an owner spawned in its worktree, its turns and their prompts, its heartbeat
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import json
 import os
 import re
 import subprocess
 import sys
-import time
 from typing import Any
 from contextlib import suppress
 from agentctl.core import git, git_ok, remote, spawn_detached, tilde
@@ -103,7 +103,7 @@ def owner_spawn(store, o_r, repo, fam, off, took, extra=()):
     for x in [{"name": off["lease"], **took}] + [dict(x) for x in extra]:
         owner_hand(fam, x["name"], x)
     nb = os.path.join(wt, OWNER_NOTEBOOK)
-    hb = store.acquire(owner_lease(fam), owner_holder(fam), OWNER_TTL, OWNER_MAX, progress=f"beat {int(time.time())}",
+    hb = store.acquire(owner_lease(fam), owner_holder(fam), OWNER_TTL, OWNER_MAX, progress=f"beat {int(epoch_now())}",
                        meta=owner_meta(fam, wt, None, nb))
     if "held" in hb:  # another pass started it a moment ago: the red is the starting owner's next turn
         return True, f"RED OWNER {fam}: already starting ({hb['held']['holder']}): red {off['lease']} handed to it"
@@ -188,11 +188,11 @@ def owner_take_heartbeat(st, fam, holder, meta):
     hand), taken now -- {'held': ...} when another owner holds it."""
     handed = os.environ.pop(OWNER_HEARTBEAT_ENV, None)
     if not handed:
-        return st.acquire(owner_lease(fam), holder, OWNER_TTL, OWNER_MAX, progress=f"beat {int(time.time())}",
+        return st.acquire(owner_lease(fam), holder, OWNER_TTL, OWNER_MAX, progress=f"beat {int(epoch_now())}",
                           meta=meta)
     x = json.loads(handed)
     hl = HeldLease(owner_lease(fam), x["epoch"], x["secret"], holder, OWNER_TTL)
-    gone = hl.renew(st, f"beat {int(time.time())}")
+    gone = hl.renew(st, f"beat {int(epoch_now())}")
     if gone:
         return {"lost": gone[1]}
     st.set_meta(owner_lease(fam), hl.epoch, hl.secret, meta)

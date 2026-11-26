@@ -1,6 +1,7 @@
 # agentctl, part `livestream`: an agent's live stream: its transcript tailed, its secrets masked, served as server-sent events
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now, wall_epoch
 from typing import Any
 import json
 import os
@@ -243,11 +244,11 @@ def live_stream(e: Any, start: Any, write: Any, closed: Any = lambda: False, pol
     raises (a gone or slow client)."""
     poll = poll if poll is not None else env_num("AGENTCTL_LIVE_POLL", LIVE_POLL)
     stream = LiveStream(e, start, write, ping)
-    t0 = time.time()
+    t0 = wall_epoch()
     try:
-        while not closed() and time.time() - t0 < max_secs:
+        while not closed() and wall_epoch() - t0 < max_secs:
             if not stream.step():
-                time.sleep(poll)
+                time.sleep(poll)  # wall: waits on and times real processes and threads
     finally:
         stream.tail.close()
 
@@ -263,7 +264,7 @@ class LiveStream:
             self.info.update({k: v for k, v in live_tail_info(e["transcript"]).items() if k in ("stop", "last_ts", "api_error")})
         write(b"retry: 3000\n\n" + sse_frame("meta", {"id": e["id"], "kind": e.get("kind"), "label": e.get("label"),
                                                       "transcript": e["transcript"], "from": start}))
-        self.last_out = self.refreshed = time.time()
+        self.last_out = self.refreshed = epoch_now()
         self.synced, self.said = False, None
 
     def step(self) -> Any:
@@ -274,14 +275,14 @@ class LiveStream:
         if not more and not self.synced:
             self.synced = True
             frames.append(sse_frame("synced", {"offset": self.tail.offset}, self.tail.offset))
-        if self.synced and (frames or time.time() - self.refreshed >= 5 or self.said is None):
+        if self.synced and (frames or epoch_now() - self.refreshed >= 5 or self.said is None):
             frames += self._state()
         if frames:
             self.write(b"".join(frames))
-            self.last_out = time.time()
-        elif time.time() - self.last_out >= self.ping:
+            self.last_out = epoch_now()
+        elif epoch_now() - self.last_out >= self.ping:
             self.write(b": ping\n\n")
-            self.last_out = time.time()
+            self.last_out = epoch_now()
         return more
 
     def _entries(self, lines: Any, reset: Any) -> Any:
@@ -303,11 +304,11 @@ class LiveStream:
 
     def _state(self) -> Any:
         """The `state` frame when the agent's state changed since it was last said (the registry entry re-read every 5 s)."""
-        if time.time() - self.refreshed >= 5:
+        if epoch_now() - self.refreshed >= 5:
             with suppress(Exception, SystemExit):
                 self.e = live_registry().get(self.e["id"], self.e)
-        self.refreshed = time.time()
-        self.info["mtime"] = mtime(self.e["transcript"]) or time.time()
+        self.refreshed = epoch_now()
+        self.info["mtime"] = mtime(self.e["transcript"]) or wall_epoch()
         st = live_state(self.e, self.info)
         if st == self.said:
             return []

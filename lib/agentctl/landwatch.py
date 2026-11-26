@@ -1,8 +1,8 @@
 # agentctl, part `landwatch`: land's watch.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
-import time
 from typing import Any
 from agentctl.core import env_num, err, slug
 from agentctl.timefmt import parse_time
@@ -78,7 +78,7 @@ def start_watch(st, repo, sha, pushed_at, worktree=None, close=None, session=Non
     o_r = o_r or slug(repo)
     if not WATCH.get(o_r):
         return None
-    return st.put_item("watch", sha, "watching", {"repo": main_clone(repo), "o_r": o_r, "pushed_at": pushed_at or time.time(),
+    return st.put_item("watch", sha, "watching", {"repo": main_clone(repo), "o_r": o_r, "pushed_at": pushed_at or epoch_now(),
                                                        "worktree": worktree or repo, "close": close, "session": session,
                                                        "next_at": 0, **(follower or {})})
 

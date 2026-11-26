@@ -1,6 +1,7 @@
 # agentctl, part `redfixes`: a red's candidate fixes: queued and landed Fixes-Red changes, refuted and set-aside ones, a fix on main.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import re
 import time
 from contextlib import suppress
@@ -51,7 +52,7 @@ def entry_fixes(repo, e, store):
 
 def _recent_entry(e: Any) -> Any:
     """Queue entry e is open, or landed in the last 7 days (an unreadable stamp: not recent)."""
-    return attempt(lambda: e.get("status") in FIX_OPEN or (e.get("status") == "landed" and time.time() - parse_time(
+    return attempt(lambda: e.get("status") in FIX_OPEN or (e.get("status") == "landed" and epoch_now() - parse_time(
         e.get("landed_at") or e.get("updated") or e.get("created") or ts()).timestamp() < 7 * 86400), False,
         catch=(ValueError, TypeError))
 
@@ -310,9 +311,9 @@ def red_sha_on_main(repo, sha):
         return False
     if git_ok(repo, "merge-base", "--is-ancestor", sha, ref):
         return True
-    if time.time() - _landed_fetched.get((repo, sha), 0) < RED_MAIN_REFETCH:
+    if epoch_now() - _landed_fetched.get((repo, sha), 0) < RED_MAIN_REFETCH:
         return False
-    _landed_fetched[(repo, sha)] = time.time()
+    _landed_fetched[(repo, sha)] = epoch_now()
     return fetch_main(repo)[0] and git_ok(repo, "merge-base", "--is-ancestor", sha, ref)
 
 
@@ -328,14 +329,14 @@ def red_sha_on_main_api(o_r, sha):
     if not o_r or not sha:
         return False
     got = _api_on_main.get((o_r, sha))
-    if got and (got[0] or time.time() - got[1] < RED_MAIN_REFETCH):
+    if got and (got[0] or epoch_now() - got[1] < RED_MAIN_REFETCH):
         return got[0]
     try:
         c = gh_json(o_r, "api", f"repos/{o_r}/compare/{sha}...main") or {}
         on = c.get("status") in ("ahead", "identical")
     except (Exception, SystemExit):
         on = False
-    _api_on_main[(o_r, sha)] = (on, time.time())
+    _api_on_main[(o_r, sha)] = (on, epoch_now())
     return on
 
 

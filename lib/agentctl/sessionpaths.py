@@ -1,6 +1,7 @@
 # agentctl, part `sessionpaths`: the worktrees the live Claude sessions work in, read from their transcripts' tool calls
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import glob
 import json
 import os
@@ -69,7 +70,7 @@ def transcript_session_key(path: str) -> str:
 def session_transcripts(t=None, active=None):
     """{session key: [(path, mtime)]} of every LIVE session's transcripts (its own and its subagents'): a session is live
     while any of them was written within `active` s."""
-    t = time.time() if t is None else t
+    t = epoch_now() if t is None else t
     active = env_num("AGENTCTL_OWNER_ACTIVE", OWNER_ACTIVE) if active is None else active
     root = claude_projects_root()
     groups = {}

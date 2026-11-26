@@ -1,10 +1,10 @@
 # agentctl, part `pressure`: the laptop's memory pressure and busy cores: sysctl's level, swap growth, ps' busy cores, the pressure report
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
 import sys
-import time
 from typing import Any
 from agentctl.core import attempt, env_num, run_cmd
 from agentctl.statefile import read_record, write_json
@@ -104,7 +104,7 @@ def swap_growth(mb, now_):
 def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_=None):
     """{free_pct, level, load1, cores, swap_mb, swap_growth_mb, swap_span}: this machine now, None where unreadable.
     The readers are the tests' seams: sysctl_out (pressure_sysctl's text), meminfo (read_meminfo's dict)."""
-    now_ = time.time() if now_ is None else now_
+    now_ = epoch_now() if now_ is None else now_
     # its CPU is the cores processes use (gov_busy_cores), never the load average, which counts threads waiting (46 on
     # 18 cores while 5.2 were busy, 2026-11-19); `load1` passed in (the tests' seam) stands for it
     r = {"free_pct": None, "level": None, "swap_mb": None, "load1": gov_busy_cores() if load1 is None else load1,

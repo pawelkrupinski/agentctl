@@ -67,7 +67,7 @@ class TurnTest(unittest.TestCase):
         self.assertTrue(A.bg_turn_over(live, self.path), "the #579 row: a verdict said, its process alive")
         self.assertFalse(A.bg_turn_over({**live, "state": "working"}, self.path), "still working")
         self.write(text("user", "go"), bg_started("bw"), text("assistant", "waiting for my CI run"))
-        self.assertFalse(A.bg_turn_over(live, self.path, now=time.time() + 3600), "waiting on its own task: at work")
+        self.assertFalse(A.bg_turn_over(live, self.path, now=A.epoch_now() + 3600), "waiting on its own task: at work")
         self.assertTrue(A.bg_wait_mark(live, self.path, 100, 10))
         self.assertNotEqual(A.bg_wait_mark(live, self.path, 100, 10), A.bg_wait_mark(live, self.path, 110, 10),
                             "each renewal period of the wait is progress")
@@ -95,7 +95,7 @@ class TurnTest(unittest.TestCase):
                    notified("a9f"), text("assistant", "That's interim: still waiting on b1"), closed)
         turn = A.bg_turn(self.path)
         self.assertEqual(turn["pending"], ["b1"], "the meta entry before a notification starts no turn")
-        self.assertFalse(A.bg_turn_over(live, self.path, now=time.time() + 3600), "waiting on its own shell: at work")
+        self.assertFalse(A.bg_turn_over(live, self.path, now=A.epoch_now() + 3600), "waiting on its own shell: at work")
         self.write(text("user", "go"), text("assistant", "x\nGAVE UP: cannot reproduce"), meta, closed)
         self.assertEqual(A.fixer_verdict(A.bg_turn(self.path)["final"]), "GAVE UP: cannot reproduce",
                          "a meta entry after the answer never hides its verdict")
@@ -108,7 +108,7 @@ class TurnTest(unittest.TestCase):
         live = {"state": "blocked", "pid": os.getpid()}
         missing = os.path.join(self.tmp.name, "none.jsonl")
         for path in (None, missing):
-            self.assertFalse(A.bg_turn_over(live, path, now=time.time() + 3600), "starting: its stall budget judges it")
+            self.assertFalse(A.bg_turn_over(live, path, now=A.epoch_now() + 3600), "starting: its stall budget judges it")
         self.assertTrue(A.bg_turn_over({"state": "done"}, None), "a row that says it ended still ends it")
 
     def test_a_blocked_sessions_ending_carries_claudes_reason(self):
@@ -207,7 +207,7 @@ class SpentSessionTest(LingerMixin, OwnerBase):
         live = self.rec()["bg_id"]
         old = self.spare(f"red owner · {FAM}")        # an earlier turn's leftover
         mine = self.spare("probe · not agentctl's")   # someone else's session
-        acts = A.bg_reap_spent(time.time())
+        acts = A.bg_reap_spent(A.epoch_now())
         self.assertEqual([a.split()[3] for a in acts], [old], acts)
         rows = {s["id"]: s for s in self.sessions()}
         self.assertTrue(rows[old].get("stopped"))

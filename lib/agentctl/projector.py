@@ -1,6 +1,7 @@
 # agentctl, part `projector`: the store's projectors, run by the server's tick: change items from the queue, inbox entries and alerts from the events, one live notification per escalation, the lease archive.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import datetime as dt
 import json
 import os
@@ -296,9 +297,9 @@ def notify_escalations(store: Any) -> int:
 
 def maybe_archive_leases(d, st, every=3600):
     """Once an hour: the leases free for over a day go to the events (Store.archive_free_leases)."""
-    if time.time() - float(st.meta_get("lease_archive_at", 0) or 0) < every:
+    if epoch_now() - float(st.meta_get("lease_archive_at", 0) or 0) < every:
         return 0
-    st.meta_set("lease_archive_at", time.time())
+    st.meta_set("lease_archive_at", epoch_now())
     n = st.archive_free_leases()
     if n:
         wlog(d, f"tick: {n} lease(s) free for over {LEASE_ARCHIVE_AFTER // 3600} h archived into the events")

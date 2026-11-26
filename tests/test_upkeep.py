@@ -43,8 +43,8 @@ class UpkeepTest(unittest.TestCase):
         old, new, foreign = (os.path.join(utmp, n) for n in ("agentctl-state-test-old", "agentctl-t-new", "tmpkeep"))
         for p in (old, new, foreign):
             os.makedirs(p)
-        os.utime(old, (time.time() - 7200, time.time() - 7200))
-        os.utime(foreign, (time.time() - 7200, time.time() - 7200))
+        os.utime(old, (A.epoch_now() - 7200, A.epoch_now() - 7200))
+        os.utime(foreign, (A.epoch_now() - 7200, A.epoch_now() - 7200))
         lines = A.run_upkeep(A.CurrentStore(A.process_store))
         self.assertEqual(self.calls, [["cleanup", "--execute", "--no-remote", "--deadline", "1200"]])  # its own stop first
         self.assertLess(A.UPKEEP_CLEANUP_DEADLINE + A.CLEANUP_REMOVE_RESERVE, A.UPKEEP_CLEANUP_BOUND)

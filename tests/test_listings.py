@@ -61,7 +61,7 @@ class ListingTest(unittest.TestCase):
         A.verdict_jobs = lambda *a: ([], 0)
         A.remote_ghost = lambda o_r, rem, jobs, t: rem
         try:
-            rem = A.remote_poll("o/r", {"tip": "a" * 40, "branch": "check/x-1", "run": None}, time.time())
+            rem = A.remote_poll("o/r", {"tip": "a" * 40, "branch": "check/x-1", "run": None}, A.epoch_now())
         finally:
             A.remote_read_bounds, A.verdict_jobs, A.remote_ghost = saved
         self.assertEqual(rem.get("run"), 999)

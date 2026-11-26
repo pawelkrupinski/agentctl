@@ -240,7 +240,7 @@ class OrphanTest(RedBase):
         self.assertEqual(self.relands, [wt], "never submitted again while parked")
         self.assertEqual(A.parked_lines(), ["parked: 1", "  repo-wt-bare-borrow  until the owner decides: owner "
                                                          "deciding, see STATE.md"])
-        self.assertIn("parked: 1", A.render_status(A.status_header(time.time(), probes=False), time.time()))
+        self.assertIn("parked: 1", A.render_status(A.status_header(A.epoch_now(), probes=False), A.epoch_now()))
         rc, out = self.run_tool("unpark", wt)
         self.assertIn("UNPARKED", out)
         self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), ["orphan repo-wt-bare-borrow: submit (never landed)"])
@@ -275,7 +275,7 @@ class OrphanTest(RedBase):
         self.assertEqual(rc, 0, out)
         rc, out = self.run_tool("park", later, "--reason", "no condition")
         self.assertEqual(rc, 2, out)
-        t = time.time()
+        t = A.epoch_now()
         did = A.park_duty(self.r.path, A.CurrentStore(A.process_store), now_=t)
         self.assertEqual(did, ["parked repo-wt-later: released (its date 2026-01-01 passed); the orphan rules apply again"])
         self.assertEqual(A.park_duty(self.r.path, A.CurrentStore(A.process_store), now_=t + 13 * 86400), [], "younger than 14 days: no digest")
@@ -291,14 +291,14 @@ class OrphanTest(RedBase):
     def session(self, wt, minutes_ago=1, cmd=None):
         d = os.path.join(os.environ["AGENTCTL_CLAUDE_PROJECTS"], "-Users-x-elsewhere")
         os.makedirs(d, exist_ok=True)
-        at = A.dt.datetime.fromtimestamp(time.time() - minutes_ago * 60, A.dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        at = A.dt.datetime.fromtimestamp(A.epoch_now() - minutes_ago * 60, A.dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
         lines = [{"type": "user", "timestamp": at, "message": {"content": "go"}},
                  {"type": "assistant", "timestamp": at, "message": {"content": [
                      {"type": "tool_use", "name": "Bash", "input": {"command": cmd or f"git -C {wt} rebase origin/main"}}]}}]
         p = os.path.join(d, "abcdef123456789.jsonl")
         with open(p, "w") as f:
             f.write("\n".join(json.dumps(x) for x in lines) + "\n")
-        os.utime(p, (time.time() - minutes_ago * 60,) * 2)  # its last write: the session's last sign of life
+        os.utime(p, (A.epoch_now() - minutes_ago * 60,) * 2)  # its last write: the session's last sign of life
         return p
 
     def test_a_live_session_working_in_the_worktree_by_path_owns_it(self):
@@ -379,7 +379,7 @@ class OrphanTest(RedBase):
         return p
 
     def tool_call(self, minutes_ago, command):
-        at = A.dt.datetime.fromtimestamp(time.time() - minutes_ago * 60, A.dt.timezone.utc).strftime(
+        at = A.dt.datetime.fromtimestamp(A.epoch_now() - minutes_ago * 60, A.dt.timezone.utc).strftime(
             "%Y-%m-%dT%H:%M:%S.000Z")
         return {"type": "assistant", "timestamp": at, "message": {"content": [
             {"type": "tool_use", "name": "Bash", "input": {"command": command}}]}}
@@ -396,7 +396,7 @@ class OrphanTest(RedBase):
         self.assertEqual(A.session_worktrees([wt]), {os.path.realpath(wt): "session agent-aec188"})
         self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), [], "a live session's worktree is nobody's orphan")
         self.subagent_transcript([self.tool_call(300, f"cd {wt} && git cherry-pick debfb2915e")],
-                                 mtime=time.time() - 4 * 3600)  # the session ended hours ago
+                                 mtime=A.epoch_now() - 4 * 3600)  # the session ended hours ago
         self.assertEqual(A.session_worktrees([wt]), {})
         self.intend(wt)  # even had it run land once: a check/* branch is not for landing
         self.assertEqual(A.orphan_duty(A.CurrentStore(A.process_store), self.r.path), ["orphan es-gate-check: not submitted (branch "

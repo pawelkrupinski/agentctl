@@ -1,6 +1,7 @@
 # agentctl, part `alertroute`: an alert's kind and audience: which item an inbox entry is, whom it reaches (the owner, its author, a fixer), at what tier
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
 import time
@@ -218,7 +219,7 @@ def _condition_opened(rec: Any, condition: Any) -> Any:
 def alert_route(rec, st=None, t=None, red=None, condition=None):
     """(audience, item) of an inbox record. st: the store to judge reds by (None: judge by the record alone);
     condition: the open condition's data when the record is a condition's entry."""
-    t = time.time() if t is None else t
+    t = epoch_now() if t is None else t
     kind = alert_kind_of(rec)
     item = alert_item(rec)
     stated = _stated_audience(rec, kind)

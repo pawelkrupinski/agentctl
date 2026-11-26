@@ -86,7 +86,7 @@ class OwnerTest(OwnerBase):
         # the turn ends LANDED: that red's lease is released with the verdict; the owner lives on, heartbeating
         self.assertTrue(self.wait(lambda: str(A.lease_meta(self.st.get(row["name"])).get("outcome") or "")
                                   .startswith("LANDED")))
-        self.assertTrue(A.lease_is_live(self.st.get(A.owner_lease(FAM)), time.time()))
+        self.assertTrue(A.lease_is_live(self.st.get(A.owner_lease(FAM)), A.epoch_now()))
         self.assertIsNone(self.rec().get("ended"))
         self.assertEqual(A.owner_leases(FAM), {})
 
@@ -151,7 +151,7 @@ class OwnerTest(OwnerBase):
         self.assertTrue(outcome().startswith("LANDED"), outcome())
         self.assertTrue(self.wait(lambda: not self.rec().get("in_turn"), limit=5),
                         "the turn is over: the reaper reads `between turns`")
-        self.assertTrue(A.lease_is_live(self.st.get(A.owner_lease(FAM)), time.time()), "the owner lives on")
+        self.assertTrue(A.lease_is_live(self.st.get(A.owner_lease(FAM)), A.epoch_now()), "the owner lives on")
 
     def test_a_wrapper_whose_worktree_was_deleted_still_reads_its_session(self):
         """2026-11-22 04:27Z (outside-gate, wrapper pid 3227, session c07162d7): the owner's worktree -- the wrapper's
@@ -215,9 +215,9 @@ class OwnerTest(OwnerBase):
         os.makedirs(wt)
         self.st.acquire("red/kx", A.owner_holder(FAM), 600, 3600, meta={"kind": "owned", "worktree": wt})
         self.assertEqual(A.red_stop_holder(self.st, "kx", "cleared", "red cleared"), A.owner_holder(FAM))
-        self.assertFalse(A.lease_is_live(self.st.get("red/kx"), time.time()), "revoked: its next beat drops it")
+        self.assertFalse(A.lease_is_live(self.st.get("red/kx"), A.epoch_now()), "revoked: its next beat drops it")
         self.assertFalse(os.path.exists(os.path.join(wt, "RED-STOP.md")))
-        self.assertTrue(A.red_history(self.st.get("red/kx"), time.time())["dispatched"],
+        self.assertTrue(A.red_history(self.st.get("red/kx"), A.epoch_now())["dispatched"],
                         "an owner's turn counts for the crash-loop breaker as a fixer's does")
 
     def test_an_owner_that_died_is_restarted_in_its_worktree_with_its_notebook_and_session(self):
@@ -262,7 +262,7 @@ class OwnerTest(OwnerBase):
         self.tick(dispatch=True)
         name = A.red_lease(self.only()["data"]["key"])
         self.assertTrue(self.wait(lambda: str(A.lease_meta(self.st.get(name)).get("outcome") or "").startswith("LANDED")))
-        ended_turn = time.time()
+        ended_turn = A.epoch_now()
         time.sleep(1)
         self.assertIsNone(self.rec().get("ended"), "idle for 1 s of its 2: alive")
         self.assertTrue(self.wait(lambda: self.rec().get("ended")))
@@ -281,7 +281,7 @@ class OwnerTest(OwnerBase):
     def test_status_shows_each_owner(self):
         self.tick(dispatch=True)
         self.assertTrue(self.wait(lambda: self.rec().get("session")))
-        rows = {r["family"]: r for r in A.owners_status(self.st, time.time())}
+        rows = {r["family"]: r for r in A.owners_status(self.st, A.epoch_now())}
         self.assertTrue(rows[FAM]["alive"])
         self.assertFalse(rows["convergence"]["alive"])
 

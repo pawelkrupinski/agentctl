@@ -133,18 +133,18 @@ class TunnelTest(unittest.TestCase):
     def test_a_lossy_uplink_shows_the_gate_as_network_not_unread(self):
         # 2026-10-29: ~20% loss to 1.1.1.1 and the jump host kept the forward timing out; restarts only churned it
         down, lossy, clean = (lambda: "timeout"), (lambda: A.UPLINK_LOSS_MAX), (lambda: 0.0)  # AT the bound: lossy
-        A.publish_gate_summary("o/r", "gate green · no reds", epoch=A.time.time() - 3600)
+        A.publish_gate_summary("o/r", "gate green · no reds", epoch=A.epoch_now() - 3600)
         self.assertIn("gate UNREAD", A.status_line())
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.time.time(), down, uplink=lossy), "network")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.epoch_now(), down, uplink=lossy), "network")
         line = A.status_line()
         self.assertIn("gate NETWORK (lossy uplink: 10% loss", line)
         self.assertNotIn("UNREAD", line)
         self.assertEqual(self.kicks, [])  # no restart
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.time.time(), lambda: "ok"), "restored")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.epoch_now(), lambda: "ok"), "restored")
         self.assertIn("gate UNREAD", A.status_line())  # the NETWORK reading is gone with the outage
         # the uplink fine and the forward dead (05:27-05:50): the end-to-end probe kicks after two failures
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.time.time(), down, uplink=clean), "down")
-        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.time.time() + 10, down, uplink=clean), "kicked")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.epoch_now(), down, uplink=clean), "down")
+        self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.epoch_now() + 10, down, uplink=clean), "kicked")
 
     def test_network_change_kicks_the_tunnel_and_marks_the_gate(self):
         A._last_route[0] = "unseen"
@@ -190,7 +190,7 @@ class OutageWithoutStoreTest(unittest.TestCase):
             raise A.StoreUnavailable("POST /v1/store/items: Connection refused")
         A.open_condition, A.launchctl_kick = down, lambda: None
         try:
-            t = time.time()
+            t = A.epoch_now()
             self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), t, probe=lambda: "refused"), "down")
             self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), t + 1, probe=lambda: "refused"), "kicked")
             self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), t + 1 + A.TUNNEL_RESTORE_WAIT, probe=lambda: "refused"), "escalated")

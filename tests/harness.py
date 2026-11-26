@@ -116,7 +116,7 @@ def _stdlib_patched():
 TEST_CLOCK_LAG = float(os.environ.get("AGENTCTL_TEST_CLOCK_LAG") or 400)
 _REAL_TIME = {n: getattr(time, n) for n in ("time", "monotonic", "sleep")}
 DEFAULT_CLOCK = []  # [the current test's default FakeClock]
-WALL_READS = []  # every `time.time()` an agentctl module read straight off the wall: counted, per process
+WALL_READS = []  # every `clock.wall_epoch()` (the wall, for a file's mtime) an agentctl module read: counted, per process
 
 
 def default_clock():
@@ -125,8 +125,21 @@ def default_clock():
 
 
 class _TestTime(types.ModuleType):
-    """What an agentctl module's `time` is under test: the default test clock's time and monotonic, the stdlib's
-    everything else (a real sleep: a wait on a subprocess or thread must really wait)."""
+    """What an agentctl module's `time` is under test: the default test clock's time (so a test's `A.time.time()` is
+    what the code reads), the stdlib's everything else (a real sleep: a wait on a subprocess or thread must really wait)."""
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def time(self):
+        return default_clock().time()
+
+
+_TEST_TIME = _TestTime("time")
+
+
+class _WallTime(types.ModuleType):
+    """The `time` of agentctl.clock under test: `wall_epoch()`'s read is the wall, counted; the rest the stdlib's."""
 
     def __getattr__(self, name):
         return getattr(time, name)
@@ -135,11 +148,8 @@ class _TestTime(types.ModuleType):
         WALL_READS.append("time")
         return _REAL_TIME["time"]()
 
-    def monotonic(self):
-        return _REAL_TIME["monotonic"]()
 
-
-_TEST_TIME = _TestTime("time")
+_WALL_TIME = _WallTime("time")
 
 
 def _install_default_clock():
@@ -150,8 +160,8 @@ def _install_default_clock():
     Clock.monotonic = lambda self: default_clock().monotonic()
     Clock.sleep = lambda self, secs: default_clock().sleep(secs)
     for mod in _agentctl_modules():
-        if mod.__dict__.get("time") in (time, _TEST_TIME) and mod.__name__ != "agentctl.clock":
-            mod.time = _TEST_TIME
+        if mod.__dict__.get("time") in (time, _TEST_TIME, _WALL_TIME):
+            mod.time = _WALL_TIME if mod.__name__ == "agentctl.clock" else _TEST_TIME
 
 
 def _reset_process_state():

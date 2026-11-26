@@ -1,9 +1,9 @@
 # agentctl, part `gating`: the gate's workflows: the gating-checks registry (.github/gating-checks.tsv, else the API) and the workflow files it names.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
-import time
 from contextlib import suppress
 from agentctl.core import git, process_cache, remote, state_root
 from agentctl.timefmt import ts
@@ -71,7 +71,7 @@ def gating_checks(o_r):
         why = f"{GATING_CHECKS_FILE} unread at {remote()}/main {(main or '?')[:10]}"
     else:
         hit = _gating_rows.get(("api", o_r))
-        if hit and time.time() - hit[0] < GATING_API_TTL:
+        if hit and epoch_now() - hit[0] < GATING_API_TTL:
             return hit[1]
         try:
             import base64
@@ -81,7 +81,7 @@ def gating_checks(o_r):
         except (Exception, SystemExit) as e:  # SystemExit: NoToken
             why = f"no clone of it here, and {GATING_CHECKS_FILE} unread through the API ({str(e)[:120]})"
         if rows:
-            _gating_rows[("api", o_r)] = (time.time(), rows)
+            _gating_rows[("api", o_r)] = (epoch_now(), rows)
     if rows:
         with suppress(OSError):
             kept = read_record(gating_checks_path()) or {}
@@ -102,13 +102,13 @@ def gate_flow_names(o_r, files=()):
     names = {f: n for n, f in main_workflow_files(o_r).items()}
     if any(f not in names for f in files):
         hit = _gating_rows.get(("names", o_r))
-        if not (hit and time.time() - hit[0] < GATING_API_TTL):
+        if not (hit and epoch_now() - hit[0] < GATING_API_TTL):
             try:
                 flows = gh_json(o_r, "api", f"repos/{o_r}/actions/workflows").get("workflows") or []
                 api = {os.path.basename(str(w.get("path") or "")): w.get("name") for w in flows if w.get("name")}
             except (Exception, SystemExit):
                 api = {}
-            hit = (time.time(), api)
+            hit = (epoch_now(), api)
             if api:
                 _gating_rows[("names", o_r)] = hit
         names = {**hit[1], **names}

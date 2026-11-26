@@ -24,7 +24,7 @@ class LanderRecordTest(Base):
         with open(p, "w") as f:
             for x in lines:
                 f.write(json.dumps(x) + "\n")
-        t = time.time() - age
+        t = A.epoch_now() - age
         os.utime(p, (t, t))
         return p
 
@@ -32,7 +32,7 @@ class LanderRecordTest(Base):
         sid = "sess-1"
         main = self.transcript(f"{sid}.jsonl", [{"cwd": "/orchestrator", "type": "user"},
                                                 {"type": "assistant", "message": "agentctl land"}])  # older, below
-        os.utime(main, (time.time() - 30, time.time() - 30))
+        os.utime(main, (A.epoch_now() - 30, A.epoch_now() - 30))
         sub = self.transcript(f"{sid}/subagents/agent-abc123.jsonl",
                               [{"cwd": "/wt", "agentId": "abc123"},
                                {"type": "assistant", "message": {"content": [{"type": "tool_use", "input": {
@@ -157,7 +157,7 @@ class CommitKeysTest(Base):
         st.transition("change", "e-b", "pushing", st.item("change", "e-b")["version"])
         st.transition("change", "e-b", "landed", st.item("change", "e-b")["version"])
         self.r.push(at=wt)
-        acts = A.lander_note_landed(st, self.r.path, "pawelkrupinski/movies", time.time(), force=True)
+        acts = A.lander_note_landed(st, self.r.path, "pawelkrupinski/movies", A.epoch_now(), force=True)
         self.assertTrue(acts, acts)
         self.assertEqual(st.item("change", "e-b")["data"]["landed_commits"], {sha: fields["commit_keys"][0]["patch_id"]})
         recs = A.lander_records(st)

@@ -1,10 +1,10 @@
 # agentctl, part `superseded`: a worktree superseded by its successor: the marks, the successor's state, closing it, `agentctl supersede`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import argparse
 from typing import Any
 import os
-import time
 from agentctl.core import PROTECTED_BRANCHES, attempt, cherry_landed, git, remote, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -299,7 +299,7 @@ def _mark_superseded(marks: Any, wt: Any, by: Any, store: Any) -> Any:
     if succ and os.path.realpath(succ) == wt:
         print("supersede: a worktree cannot supersede itself")
         return 2
-    marks[wt] = {"by": name, "change": change, "worktree": succ, "head": head, "at": time.time(), "marked": ts(),
+    marks[wt] = {"by": name, "change": change, "worktree": succ, "head": head, "at": epoch_now(), "marked": ts(),
                  "state": "open", "repo": repo}
     write_json(superseded_path(), marks)
     print(f"SUPERSEDED BY {name}: {tilde(wt)} -- no orphan escalation; it closes itself once {name} lands")

@@ -156,7 +156,7 @@ def net_retry(what: str, call: Callable[[], _NetT], delays: Optional[Sequence[fl
     try, or once the next would start past `budget` s; any other failure at once."""
     delays = NET_RETRY_DELAYS if delays is None else delays
     limit = NET_RETRY_BUDGET if budget is None else budget
-    read_clock = clock or time.monotonic
+    read_clock = clock or time.monotonic  # wall: waits on and times real processes and threads
     t0 = read_clock()
     for n, delay in enumerate((*delays, None)):
         try:
@@ -165,7 +165,7 @@ def net_retry(what: str, call: Callable[[], _NetT], delays: Optional[Sequence[fl
             why = _network_why(e, transient)
             if why is None:
                 raise
-        _wait_or_give_up(what, n + 1, delay, why, read_clock() - t0, limit, sleep or time.sleep, len(delays) + 1)
+        _wait_or_give_up(what, n + 1, delay, why, read_clock() - t0, limit, sleep or time.sleep, len(delays) + 1)  # wall: waits on and times real processes and threads
     raise AssertionError("unreachable: the last try gives up")
 
 

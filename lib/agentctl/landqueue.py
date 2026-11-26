@@ -1,6 +1,7 @@
 # agentctl, part `landqueue`: the land queue's commands: land status | hold | release | cancel, and the processor's children (a checker, the service, await)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import argparse
 import os
 import signal
@@ -108,7 +109,7 @@ def land_release_command(repo: str, d: str, st: Any) -> int:
 def land_status_command(a: argparse.Namespace, repo: str, d: str, st: Any) -> int:
     """`land status [<id>]`: one change, open or decided (A VERDICT IS DURABLE), else the whole queue."""
     if getattr(a, "entry", None):
-        return land_status_entry(st, a.entry, time.time())
+        return land_status_entry(st, a.entry, epoch_now())
     # ONE QUEUE: the store's change items, on either host
     rows = change_rows(st)
     print(f"queue: {store_url() or 'this host'}")
@@ -124,7 +125,7 @@ def land_status_command(a: argparse.Namespace, repo: str, d: str, st: Any) -> in
     print(f"changes: {len(rows)}")
     in_batch = batch_row_ids(bt, rows)
     for r in rows:
-        print(land_status_line(r, bt, in_batch, time.time()))
+        print(land_status_line(r, bt, in_batch, epoch_now()))
     land_status_tail(d, rows)
     return 0
 
@@ -133,7 +134,7 @@ def batch_status_line(bt: dict[str, Any]) -> str:
     dd = bt["data"]
     return (f"batch {bt['id']}: {bt['state']}" + (f", {len(dd.get('members') or [])} change(s) at "
             f"{str(dd.get('tip'))[:10]} on {str(dd.get('base'))[:10]}" if dd.get("tip") else "")
-            + f", deadline in {int((bt['deadline'] - time.time()) // 60)} min")
+            + f", deadline in {int((bt['deadline'] - epoch_now()) // 60)} min")
 
 
 def gate_status_line(reds: set[str]) -> str:

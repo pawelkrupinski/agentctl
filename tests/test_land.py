@@ -253,7 +253,7 @@ class LandTest(LandBase):
 
     def lease_free(self, repo=None):
         r = A.process_store().get(A.land_lease_name(repo or self.r.path))
-        return not r or not r["holder"] or r["expires_at"] <= time.time()
+        return not r or not r["holder"] or r["expires_at"] <= A.epoch_now()
 
     def mine(self):
         self.r.write("f1.txt", "mine\n")

@@ -1,6 +1,7 @@
 # agentctl, part `dispatches`: every hand-dispatched CI run's owner record, who owns a branch, and the orphan branches whose owner is gone
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import glob
 import os
 import re
@@ -80,7 +81,7 @@ def record_dispatch(branch=None, run_id=None, workflow=None, purpose="", inputs=
                           "workflow": workflow, "purpose": purpose, "inputs": inputs, "worktree": wt, "sha": sha,
                           "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
                           "agent": agent or agent_name(), "pid": pid,
-                          "process_start": process_start(pid) if pid else None, "at": ts(), "epoch": time.time(),
+                          "process_start": process_start(pid) if pid else None, "at": ts(), "epoch": epoch_now(),
                           "source": source}, key)
 
 
@@ -172,7 +173,7 @@ def owner_of(repo, branch, run):
         if wt:  # another worktree, or the same one outliving its agent's process: the worktree owns it now
             new = {"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "worktree": wt, "sha": base,
                    "purpose": f"re-matched: its owner {owner_text(rec)} is gone", "source": "matched", "at": ts(),
-                   "epoch": time.time()}
+                   "epoch": epoch_now()}
             for key in ([dispatch_key(None, rid)] if rid else []) + [dispatch_key(branch)]:  # REPLACED, not merged:
                 if key == dispatch_key(branch) or os.path.exists(dispatches_dir(f"{key}.json")):  # no dead pid stays
                     write_json(dispatches_dir(f"{key}.json"), new)
@@ -182,7 +183,7 @@ def owner_of(repo, branch, run):
         return rec
     key = dispatch_key(branch)
     old = read_record(dispatches_dir(f"{key}.json")) or {}
-    if old.get("source") == "unmatched" and time.time() - float(old.get("epoch") or 0) < OWNER_REMATCH:
+    if old.get("source") == "unmatched" and epoch_now() - float(old.get("epoch") or 0) < OWNER_REMATCH:
         return None
     wt, how = None, None
     if branch.startswith("check/"):
@@ -195,11 +196,11 @@ def owner_of(repo, branch, run):
         wt, how = worktree_holding(repo, base), f"the worktree that holds {base[:9]}"
     if not wt:
         save_dispatch({"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "source": "unmatched",
-                       "at": ts(), "epoch": time.time()}, key)
+                       "at": ts(), "epoch": epoch_now()}, key)
         return None
     return save_dispatch({"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "worktree": wt,
                           "sha": base, "purpose": f"matched by branch name ({how})", "source": "matched",
-                          "at": ts(), "epoch": time.time()}, key)
+                          "at": ts(), "epoch": epoch_now()}, key)
 
 
 def owner_gone(rec):

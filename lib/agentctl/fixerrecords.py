@@ -4,7 +4,7 @@
 import glob
 import os
 import re
-import time
+from agentctl.clock import wall_epoch
 from typing import Any
 from agentctl.core import reds_dir
 from agentctl.statefile import read_record
@@ -40,7 +40,7 @@ def fixer_records(max_age: float | None = None, now_: float | None = None) -> li
     written in the last max_age s before now_ (an old record is never opened, nor its pid checked)."""
     out = []
     for p in glob.glob(reds_dir("*", "fixer*.json")):
-        if max_age is not None and (now_ if now_ is not None else time.time()) - mtime(p) > max_age:
+        if max_age is not None and (now_ if now_ is not None else wall_epoch()) - mtime(p) > max_age:
             continue
         r = read_record(p)
         if r:

@@ -1,8 +1,8 @@
 # agentctl, part `gatesummary`: the published gate line: written by the tick, read back while fresh
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import re
-import time
 from agentctl.cistate import state_read, state_update
 
 
@@ -19,7 +19,7 @@ def publish_gate_summary(o_r, line, epoch=None):
     """The snapshot's gate line: {at, repo, line}. Only a read gate line is ever published (never UNREAD)."""
     if not GATE_LINE.match(line):
         return
-    state_update(summary={"at": int(epoch or time.time()), "repo": o_r, "line": line})
+    state_update(summary={"at": int(epoch or epoch_now()), "repo": o_r, "line": line})
 
 
 def published_summary():
@@ -36,7 +36,7 @@ def cached_gate_summary(o_r, now=None):
     epoch, repo_, line = published_summary()
     if epoch is None:
         return None, None
-    age = (now or time.time()) - epoch
+    age = (now or epoch_now()) - epoch
     if repo_ != o_r or not GATE_LINE.match(line) or age < -5 or age > GATE_SUMMARY_MAX_AGE:
         return None, epoch
     return line, epoch

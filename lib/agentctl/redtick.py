@@ -1,10 +1,10 @@
 # agentctl, part `redtick`: the tick's red step (the processor; ci-why never acts).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import functools
 import os
 import threading
-import time
 from typing import Any
 from agentctl.statemachines import StaleVersion
 from agentctl.core import NoReadAccess, attempt, env_num, err, process_cache, run_bounded, slug
@@ -173,7 +173,7 @@ def red_tick_repo(repo, store, snap=None, dispatch=False):
     if not gated_repo(o_r):
         return []
     with _red_lock:
-        _last_red_tick[0] = time.time()
+        _last_red_tick[0] = epoch_now()
         recheck_local(repo, wait=False)
         acts = red_tick(store, o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch)
     for line in acts:
@@ -217,7 +217,7 @@ def red_gate_snap(o_r, store):
                 r = None
             if r:
                 latest[wf] = {k: r.get(k) for k in fields}
-        return {"at": time.time(), "repo": o_r, "outside": [], "outside_error": None,
+        return {"at": epoch_now(), "repo": o_r, "outside": [], "outside_error": None,
                 "gate": [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
                           "runs": _gate_lists.get(n, []), "no_verdict": _gate_no_verdict.get(n)} for n, d, nw, st in gate],
                 "latest": latest}
@@ -274,9 +274,9 @@ def red_tick_others(store, now_=None, dispatch=False, force=True):
     this machine's when there is one (Fixes-Red trailers, authors); without one (ci-runner) its reds open and clear
     by its gate runs alone."""
     acts = []
-    if not force and time.time() - _last_others_tick[0] < env_num("AGENTCTL_RED_OTHERS_EVERY", RED_OTHERS_EVERY):
+    if not force and epoch_now() - _last_others_tick[0] < env_num("AGENTCTL_RED_OTHERS_EVERY", RED_OTHERS_EVERY):
         return acts
-    _last_others_tick[0] = time.time()
+    _last_others_tick[0] = epoch_now()
     unread = []
     for c in red_repos():
         o_r = c["repo"]
@@ -301,7 +301,7 @@ RED_SKIP_SAY = 600  # s between the lines of another repo whose tick keeps faili
 
 def red_others_skipped(o_r, why, now_=None):
     """Another repo's tick failed: said on a new reason, else at most every RED_SKIP_SAY s (it was every tick)."""
-    t = now_ if now_ is not None else time.time()
+    t = now_ if now_ is not None else epoch_now()
     last = _others_said.get(o_r)
     if last and last[0] == why and t - last[1] < env_num("AGENTCTL_RED_SKIP_SAY", RED_SKIP_SAY):
         return None
@@ -335,7 +335,7 @@ def probe_red_read(a):
 
 def maybe_red_tick(repo, store):
     """At most every RED_TICK_INTERVAL s, from the processor's duties. Bounded; never fatal."""
-    if time.time() - _last_red_tick[0] < env_num("AGENTCTL_RED_TICK", RED_TICK_INTERVAL):
+    if epoch_now() - _last_red_tick[0] < env_num("AGENTCTL_RED_TICK", RED_TICK_INTERVAL):
         return
 
     def work():
@@ -406,9 +406,9 @@ def maybe_publish_gate(repo, store):
     summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
     # a push to main since the last publish (mark_gate_dirty): publish now, not at the 45 s mark
     marked = attempt(lambda: os.path.getmtime(gate_dirty_path()) > _last_gate_publish[0], False, catch=(OSError,))
-    if not marked and time.time() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
+    if not marked and epoch_now() - _last_gate_publish[0] < env_num("AGENTCTL_GATE_PUBLISH", 45):
         return
-    _last_gate_publish[0] = time.time()
+    _last_gate_publish[0] = epoch_now()
 
     if not run_bounded("gate-publish", lambda: gate_publish_cycle(repo, store), env_num("AGENTCTL_STEP_BOUND", 120)):
         err("gate summary: still reading from an earlier cycle (the loop goes on)")

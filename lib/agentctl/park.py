@@ -1,6 +1,7 @@
 # agentctl, part `park`: a parked worktree: the marks, their release, the digest, `agentctl park` / `unpark`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import argparse
 from typing import Any
 import datetime as dt
@@ -59,7 +60,7 @@ def park_until_text(m):
 
 def park_release_why(m, repo, store, t=None):
     """Why mark m's condition is met now, else None (unread: None -- the mark stands)."""
-    t = time.time() if t is None else t
+    t = epoch_now() if t is None else t
     u = m.get("until") or {}
     if u.get("kind") == "date":
         return f"its date {u['at']} passed" if t >= float(u.get("epoch") or 0) else None
@@ -88,7 +89,7 @@ def drop_orphan_records(wt):
 
 def park_duty(repo, store, dry_run=False, now_=None):
     """One maintain pass over the parks: a met condition releases its mark; the weekly digest of the old ones."""
-    t = time.time() if now_ is None else now_
+    t = epoch_now() if now_ is None else now_
     marks = parked_marks()
     did, changed, old = [], False, []
     for wt, m in sorted(marks.items()):
@@ -207,7 +208,7 @@ def cmd_park(a: argparse.Namespace, store: Any) -> int:
     until = _park_until(a, repo, store)
     if until is None:
         return 2
-    marks[wt] = {"reason": a.reason, "until": until, "at": time.time(), "parked": ts(), "state": "parked", "repo": repo}
+    marks[wt] = {"reason": a.reason, "until": until, "at": epoch_now(), "parked": ts(), "state": "parked", "repo": repo}
     write_json(parked_path(), marks)
     print(f"PARKED {tilde(wt)} {park_until_text(marks[wt])}: {a.reason} -- no orphan escalation")
     return 0

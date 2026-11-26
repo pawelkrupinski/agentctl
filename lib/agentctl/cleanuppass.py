@@ -26,7 +26,7 @@ class CleanupPass:
     def __init__(self, a: Any) -> None:
         self.a = a
         self.dry = a.dry_run or (sys.stdin.isatty() and not a.execute)
-        self.t_start = time.monotonic()
+        self.t_start = time.monotonic()  # wall: waits on and times real processes and threads
         self.until = self.t_start + a.deadline if getattr(a, "deadline", None) is not None else None
         self.reserve = env_num("AGENTCTL_CLEANUP_REMOVE_RESERVE", CLEANUP_REMOVE_RESERVE)
         self.cwds = process_cwds()
@@ -43,7 +43,7 @@ class CleanupPass:
         if self.stopped:
             print(f"cleanup: stopped at its {self.a.deadline:g} s deadline: {len(self.stopped)} left for the next pass "
                   f"({', '.join(self.stopped[:3])}{', ...' if len(self.stopped) > 3 else ''})")
-        print(f"cleanup: {time.monotonic() - self.t_start:.0f} s ({'; '.join(self.took) or 'no repo'})")
+        print(f"cleanup: {time.monotonic() - self.t_start:.0f} s ({'; '.join(self.took) or 'no repo'})")  # wall: waits on and times real processes and threads
         return self.rc
 
     def _repo(self, repo: str) -> None:
@@ -57,14 +57,14 @@ class CleanupPass:
             err(f"{name}: not fetched -- {self.net_down}; skipping repo")
             self.rc = 1
             return
-        t_repo = time.monotonic()
+        t_repo = time.monotonic()  # wall: waits on and times real processes and threads
         main = self._fetched_main(repo, name)
         if main is None:
             return
         print(f"\n== {name} ({remote()}/main {main[:10]})")
         for row in plan_worktrees(repo, main, self.a.min_age_hours, self.cwds, self.a.include_caches, self.until):
             self._worktree(repo, name, main, *row)
-        self.took.append(f"{name} {time.monotonic() - t_repo:.0f} s")
+        self.took.append(f"{name} {time.monotonic() - t_repo:.0f} s")  # wall: waits on and times real processes and threads
         if not self.a.no_remote:
             self._measure_branches(repo, name)
 

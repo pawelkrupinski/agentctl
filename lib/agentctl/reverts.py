@@ -1,6 +1,7 @@
 # agentctl, part `reverts`: a reverted change gets back to the agent that wrote it.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import os
 import re
 import time
@@ -350,7 +351,7 @@ def print_reverts(items: Any, t: Any, show_all: Any) -> None:
 
 def cmd_revert(a, st):
     """agentctl revert [list] [--all] | ack ID --rework|--drop [--note N]"""
-    t = time.time()
+    t = epoch_now()
     try:
         if a.rcmd == "ack":
             it, msg = revert_ack(st, a.id, "drop" if a.drop else "rework", a.note, claimant())

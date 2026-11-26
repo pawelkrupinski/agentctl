@@ -1,9 +1,9 @@
 # agentctl, part `ownerleases`: a family owner's leases: the families each holder owns, handed to it and dropped, told to its session, listed
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.clock import epoch_now
 import fcntl
 import os
-import time
 from agentctl.statefile import read_record, write_json
 from agentctl.redfamilies import red_families
 from agentctl.redrecord import lease_is_live
@@ -44,7 +44,7 @@ def owner_change_leases(fam, change):
 def owner_hand(fam, name, took):
     """The dispatcher hands a red lease it took for the owner to the owner's wrapper (its inbox of leases)."""
     owner_change_leases(fam, lambda leases: leases.update(
-        {name: {"epoch": took["epoch"], "secret": took["secret"], "at": time.time()}}))
+        {name: {"epoch": took["epoch"], "secret": took["secret"], "at": epoch_now()}}))
 
 
 def owner_drop(fam, names):
