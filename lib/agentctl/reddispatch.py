@@ -17,8 +17,8 @@ from agentctl.worktrees import WorktreeGuard
 from agentctl.fixerenv import fixer_env
 from agentctl.redrepos import red_owner_only, red_repo_note
 from agentctl.redfamilies import red_identity
-from agentctl.statemachines import StaleVersion, open_items
-from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_active, red_names, red_what
+from agentctl.statemachines import StaleVersion, open_items, is_terminal
+from agentctl.redrecord import lease_is_live, red_active, red_names, red_what
 from agentctl.leases import LeaseKinds, lease_meta
 from agentctl.land import spawn_land
 from agentctl.redreplay import agentctl_revert_fix_replay
@@ -96,7 +96,7 @@ def red_holder_idle(store: Any, row: dict[str, Any], t: float) -> str | None:
 
 def _joined_progress(it: Any, d: dict[str, Any], m: dict[str, Any]) -> str | None:
     """What shows a joined red worked on (a fix on it, or a commit naming it in the holder's worktree), else None."""
-    if it and (it["state"] in ("fix-pending",) + RED_TERMINAL or d.get("fix")):
+    if it and (it["state"] == "fix-pending" or is_terminal("red", it["state"]) or d.get("fix")):
         return f"fix {(d.get('fix') or {}).get('entry') or it['state']}"
     sha = red_fixes_red_commits(m.get("worktree"), red_names(d)) if it else None
     return f"commit {sha[:10]}" if sha else None

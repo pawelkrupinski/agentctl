@@ -17,10 +17,10 @@ import sqlite3
 from typing import Any, Optional
 
 from agentctl.statefile import json_object
+from agentctl.statemachines import is_terminal
 
 HOLDER = re.compile(r"waits for (?:batch )?(\S+?)'?(?: \(([a-z-]+)\))?(?:[:,;]|$| which| \()")
 IN_BATCH = re.compile(r"checking in (?:backlog|push) batch (\S+)")
-GATE_DONE = ("cleared", "verified")
 
 
 def item_moves(c: sqlite3.Connection) -> dict[tuple[str, str], list[tuple[float, str]]]:
@@ -33,7 +33,7 @@ def item_moves(c: sqlite3.Connection) -> dict[tuple[str, str], list[tuple[float,
 
 
 def _closed_at(mv: list[tuple[float, str]]) -> float:
-    return next((t for t, s in mv if s in GATE_DONE), float("inf"))
+    return next((t for t, s in mv if is_terminal("red", s)), float("inf"))
 
 
 class History:
@@ -57,9 +57,6 @@ class History:
         return next((iid for iid, a, b in self.windows if a <= at < b), None)
 
 
-TERMINAL = {"landed", "rejected", "cancelled", "superseded", "landed-already"}
-
-
 def _holder_proof(h: History, text: str, at: float) -> Optional[tuple[str, str]]:
     """(holder, proof) when the reminder's holder was open -- in the state it names -- at that moment."""
     m = HOLDER.search(text)
@@ -68,7 +65,7 @@ def _holder_proof(h: History, text: str, at: float) -> Optional[tuple[str, str]]
     holder, named = m.group(1), m.group(2)
     for typ in ("change", "batch"):
         was = h.state_at(typ, holder, at)
-        if was and was not in TERMINAL and (named is None or named == was):
+        if was and not is_terminal(typ, was) and (named is None or named == was):
             return holder, f"reminder text; {typ} {holder} was {was} then (its own events)"
     return None
 

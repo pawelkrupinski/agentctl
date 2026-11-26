@@ -6,6 +6,7 @@ import re
 import time
 from typing import Any, Iterable, Optional, cast
 from agentctl.timefmt import iso_at
+from agentctl.statemachines import terminal_states
 from agentctl.statsrecords import (
     Rec, Span, Wait, _iso, _num, _peak, _repo, _sum, _text, _total, item_span, mins_of, state_spans, stats_common)
 
@@ -17,14 +18,13 @@ RED_VERDICT_CLASS = {"test": "test-failure", "infra": "infra-shaped", "stuck-run
 HOLDER_RX = re.compile(r"leased by (\S+)")
 
 
-RED_CLOSED = ("verified", "cleared")
 
 
 def red_record(item: Rec, events: Iterable[Rec], waits: Iterable[Wait] = (), since: Optional[float] = None) -> Rec:
     """agentctl.red of a closed red item (an episode). waits: [(change id, waiting entered, left)] of every change, for
     how many waited on a gate red and how long (their waiting time inside the episode)."""
     d = item["data"] or {}
-    evs, opened, close_ev, closed = item_span(item, events, "red", "opened_at", RED_CLOSED)
+    evs, opened, close_ev, closed = item_span(item, events, "red", "opened_at", terminal_states("red"))
     spans = state_spans(evs, opened, "red")
     rec = {"record": "agentctl.red", "red_id": item["id"], **_red_what(d), **_red_runs(d),
            "opened_at": iso_at(opened), "closed_at": iso_at(closed), "duration_s": closed - opened,
@@ -103,7 +103,7 @@ def _escalation_counts(esc: list[Rec]) -> Rec:
 def owner_decision_record(item: Rec, events: Iterable[Rec], since: Optional[float] = None) -> Optional[Rec]:
     """agentctl.owner_decision of a closed red that asked the owner (its BLOCKED ON OWNER spell), else None."""
     d = item["data"] or {}
-    evs, _opened, _close_ev, closed = item_span(item, events, "red", "opened_at", RED_CLOSED)
+    evs, _opened, _close_ev, closed = item_span(item, events, "red", "opened_at", terminal_states("red"))
     ask, dec = d.get("ask") or {}, d.get("decision") or {}
     blocks, asked = owner_asked(evs, ask)
     if not asked:

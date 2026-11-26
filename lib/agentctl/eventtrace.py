@@ -4,19 +4,13 @@
 import re
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
-from agentctl.statemachines import MACHINES
-
-
-TERMINAL = {"landed", "rejected", "cancelled", "superseded", "verified", "cleared", "ok", "red", "unknown", "closed",
-            "released", "acked", "evicted", "owner"}  # the last four: file-held state (filelog.py; `owner`: an escalation
-# handed to the owner, escalations.py)
+from agentctl.statemachines import is_terminal
 
 
 def ends_item(item_type: str, state: str) -> bool:
-    """Whether `state` ends an item of item_type: its machine's say (MACHINES), else -- a file-held type, or a state its
-    machine does not list -- TERMINAL (review 2026-11-26: a red item's live `red` read as an end)."""
-    spec = MACHINES.get(item_type, {}).get(state)
-    return spec.terminal if spec is not None else state in TERMINAL
+    """Whether `state` ends an item of item_type: its machine's terminal states, or a file-held type's ends
+    (statemachines.terminal_states; review 2026-11-26: a type-blind set read a red item's live `red` as an end)."""
+    return is_terminal(item_type, state)
 
 
 SKIP_KINDS = re.compile(r"\.illegal$|^policy\.unapproved$")

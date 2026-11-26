@@ -95,7 +95,7 @@ class RedsBase(RedBase):
         return {it["data"]["key"]: it for it in self.st.items("red")}
 
     def only(self):
-        its = [it for it in self.st.items("red") if it["state"] not in A.RED_TERMINAL]
+        its = [it for it in self.st.items("red") if not A.is_terminal("red", it["state"])]
         self.assertEqual(len(its), 1, [(i["id"], i["state"]) for i in its])
         return its[0]
 
@@ -728,8 +728,8 @@ class FixTest(RedsBase):
         self.tick()
         self.st.put_item("red", other, other_state, {"key": other, "workflow": "Main", "runs": ["2521"],
                                                      **(other_data or {})})
-        it = self.only() if other_state in A.RED_TERMINAL else next(
-            i for i in self.st.items("red") if i["id"] != other and i["state"] not in A.RED_TERMINAL)
+        it = self.only() if A.is_terminal("red", other_state) else next(
+            i for i in self.st.items("red") if i["id"] != other and not A.is_terminal("red", i["state"]))
         self.st.transition("red", it["id"], "fix-pending", it["version"], data={"fix": {
             "entry": None, "status": "waits-on", "sha": sha, "red": other, "at": self.t[0]}}, event={"cause": "agent"})
         return it["id"]

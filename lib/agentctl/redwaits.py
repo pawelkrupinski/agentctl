@@ -2,8 +2,9 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
+from agentctl.statemachines import is_terminal
 from agentctl.timefmt import iso_at
-from agentctl.redrecord import RED_TERMINAL, red_of_key, red_what
+from agentctl.redrecord import red_of_key, red_what
 from agentctl.maincontain import MainContainment
 from agentctl.redmove import red_move
 from agentctl.redopen import red_offer
@@ -30,7 +31,7 @@ def _waits_on(store: Any, key: Any) -> Any:
     """The red key that red `key` waits on, None when it is gone, closed or waits on nothing."""
     o = red_of_key(store, key)
     f = ((o or {}).get("data") or {}).get("fix") or {}
-    if not o or o["state"] in RED_TERMINAL or f.get("status") != RED_WAITS_ON:
+    if not o or is_terminal("red", o["state"]) or f.get("status") != RED_WAITS_ON:
         return None
     return f.get("red")
 
@@ -82,7 +83,7 @@ def _waits_on_ended(store: Any, d: dict[str, Any], o: Any, other: Any, sha: str)
 
 
 def _waits_on_closed(o: dict[str, Any], other: Any, sha: str) -> str | None:
-    if o["state"] in RED_TERMINAL:
+    if is_terminal("red", o["state"]):
         return f"red {other} closed ({o['state']}) without the fix {sha[:10]} it waited on reaching main"
     return None
 

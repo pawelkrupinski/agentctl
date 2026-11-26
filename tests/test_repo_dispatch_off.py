@@ -37,7 +37,7 @@ class RepoDispatchOffTest(RedReposBase):
         for _ in range(3):
             self.others(advance=60)
         it = self.st.item("red", it["id"])
-        self.assertNotIn(it["state"], A.RED_TERMINAL, "recorded: still a red")
+        self.assertNotIn(it["state"], A.terminal_states("red"), "recorded: still a red")
         self.assertNotEqual(it["state"], "offered")
         self.assertIsNone(self.st.offer_of(f"red:{it['id']}"), "never offered")
         self.assertFalse(A.lease_is_live(self.st.get(A.red_lease(key)), self.t[0]), "its lease released")

@@ -7,7 +7,8 @@ import re
 import sys
 from typing import Any
 from agentctl.timefmt import iso_at
-from agentctl.statsrecords import CHANGE_EXITS, _num, landing_records, state_spans, watch_record
+from agentctl.statemachines import is_terminal
+from agentctl.statsrecords import _num, landing_records, state_spans, watch_record
 from agentctl.core import err, git, host_role
 from agentctl.waitingdir import waiting_entries, wlog
 from agentctl.gating import gate_flows
@@ -137,7 +138,7 @@ class StatsPass:
         st, t = self.st, self.t
         settle = knob_stats_settle()
         self.changes = st.items("change")
-        due = [("landing", it["id"], it) for it in self.changes if it["state"] in CHANGE_EXITS
+        due = [("landing", it["id"], it) for it in self.changes if is_terminal("change", it["state"])
                and it["entered_at"] <= t - settle and not stats_sent(st, "landing", it["id"])]
         for name, kind, states in (("landing_watch", "watch", ["ok", "red", "unknown"]),
                                    ("red", "red", ["verified", "cleared"]), ("condition", "condition", ["closed"])):

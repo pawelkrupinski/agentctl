@@ -6,13 +6,13 @@ from typing import Any
 from contextlib import contextmanager, suppress
 from collections.abc import Iterator
 from agentctl.core import fmt_age, process_cache
-from agentctl.redrecord import RED_TERMINAL, red_names
+from agentctl.redrecord import red_names
 from agentctl.redepisode import episode_unread, red_episode_names
 from agentctl.queueslots import checker_alive
 from agentctl.redland import may_land_on_red, red_kind_of
 from agentctl.issues import issue_open
 from agentctl.identitychange import identity_change
-from agentctl.statemachines import StaleVersion, machine_state, open_items
+from agentctl.statemachines import StaleVersion, machine_state, open_items, is_terminal
 
 
 # ---------------------------------------------------------------- ONE CLASSIFIER (the owner, 2026-11-19: "fix that structurally")
@@ -70,7 +70,7 @@ def queue_facts(gate: Any, st: Any) -> dict[str, Any]:
     except Exception:  # an unreadable store orders nothing: the gate's reds still do
         items = []
     for it in items:
-        if it["state"] in RED_TERMINAL:
+        if is_terminal("red", it["state"]):
             continue
         d = it.get("data") or {}
         for n in sorted(str(x) for x in red_names(d) | red_episode_names(d) if x):

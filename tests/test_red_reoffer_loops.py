@@ -163,7 +163,7 @@ class ReOfferLoopTest(RedsBase):
         runs = json.load(open(os.path.join(self.d, "runs.json")))
         self.put("runs.json", [{**r, "conclusion": "success"} if r["databaseId"] == 40 else r for r in runs])
         self.tick(advance=120)
-        live = [i for i in self.st.items("red") if i["state"] not in A.RED_TERMINAL]
+        live = [i for i in self.st.items("red") if not A.is_terminal("red", i["state"])]
         self.assertEqual([i["data"].get("red_kind") for i in live], ["flake"],
                          "the failing run's own rerun is green: the red is over, not offered again -- and, no commit "
                          "between, a flake of its own (never rerun to green)")

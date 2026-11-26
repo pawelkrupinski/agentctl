@@ -3,12 +3,13 @@
 
 import re
 from typing import Any
+from agentctl.statemachines import is_terminal
 from agentctl.timefmt import ts
 from agentctl.core import fmt_age
 from agentctl.repos import red_repo_of
 from agentctl.redretired import red_retired
 from agentctl.inboxentry import inbox_write
-from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_lease, red_what
+from agentctl.redrecord import lease_is_live, red_lease, red_what
 from agentctl.leases import block_lease, lease_meta, red_block_of
 from agentctl.redfixes import red_fix_of, red_run_on_way
 from agentctl.redask import red_decision
@@ -35,7 +36,7 @@ class RedStep:
     def __init__(self, store: Any, it: Any, obs: Any, snap: Any, facts: Any, repo: Any, o_r: Any, t: Any) -> None:
         self.store, self.obs, self.snap, self.facts, self.repo, self.o_r, self.t = store, obs, snap, facts, repo, o_r, t
         it = store.item("red", it["id"])
-        if it["state"] not in RED_TERMINAL:
+        if not is_terminal("red", it["state"]):
             it = red_workflow_named(store, it, o_r)
         self.d, self.st, self.key = it["data"], it["state"], it["data"]["key"]
         self.row = store.get(red_lease(self.key))
@@ -82,7 +83,7 @@ class RedStep:
         return handler() if handler else self.acts
 
     def retired(self) -> Any:
-        if self.st in RED_TERMINAL:
+        if is_terminal("red", self.st):
             return None
         why = red_retired(self.o_r, self.d, self.t)
         if not why:

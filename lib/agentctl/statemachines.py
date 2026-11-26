@@ -89,6 +89,29 @@ MACHINES = {
 }
 
 
+# FILE-HELD STATE'S ENDS (filelog.py: the governor's tickets, the inbox, an idle sbt server, an escalation, a waiting
+# entry): items no store machine holds, whose last state ends them all the same. With MACHINES, the one source of
+# which states end an item (review 2026-11-26, C 1.1: six hand-kept lists disagreed -- `landed-already` in one only,
+# `owner` and `closed` in another, and a type-blind set that ended a red item at its live state `red`).
+FILE_HELD_ENDS = {"gov-ticket": ("released",), "inbox": ("acked",), "sbt-server": ("evicted",),
+                  "escalation": ("cleared", "owner"),  # `owner`: handed to the owner (escalations.py)
+                  "entry": tuple(n for n, spec in MACHINES["change"].items() if spec.terminal)}  # a change's statuses
+
+
+def terminal_states(typ: str) -> tuple[str, ...]:
+    """The states that end an item of type typ, in its machine's order: its machine's terminal states (MACHINES, read
+    at the call: a module registers its machine when imported), else its file-held ends; () for a type with neither."""
+    machine = MACHINES.get(typ)
+    if machine is not None:
+        return tuple(n for n, spec in machine.items() if spec.terminal)
+    return FILE_HELD_ENDS.get(typ, ())
+
+
+def is_terminal(typ: str, state: Any) -> bool:
+    """Whether `state` ends an item of type typ (terminal_states)."""
+    return state in terminal_states(typ)
+
+
 def open_states(typ: Any) -> list[str]:
     """The states of machine typ that are not terminal: what an item still open can be in."""
     return [name for name, spec in MACHINES[typ].items() if not spec.terminal]

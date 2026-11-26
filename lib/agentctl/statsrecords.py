@@ -4,6 +4,7 @@
 import re
 from typing import Any, Iterable, Optional, Sequence, cast
 from agentctl.timefmt import iso_at
+from agentctl.statemachines import is_terminal, terminal_states
 
 Rec = dict[str, Any]  # an item, an event, a record: JSON-shaped
 Span = tuple[str, float, Optional[float], Optional[Rec]]  # (state, entered, left or None, the event that left it)
@@ -30,9 +31,6 @@ Wait = tuple[str, float, Optional[float]]  # (change id, waiting entered, left o
 # also printed on the reconciler's stdout (its journal), one `agentctl.<name> {json}` line. Field names are stable and
 # documented in AGENTCTL.md, "stats"; `schema` says which version of them a record has.
 STATS_SCHEMA = 1
-
-
-CHANGE_EXITS = ("landed", "rejected", "superseded", "cancelled")
 
 
 RECHECK_CLASSES = (  # (class, pattern) of the text after "since its checks, " / of a re-queue's reason, first match wins
@@ -166,7 +164,7 @@ def landing_records(item: Rec, events: Iterable[Rec], entry: Optional[Rec] = Non
     in order; entry: its queue entry (or None); runs: its precommit-check runs as {run_id, kind run row, jobs: [rows]}
     (from source:ci); paths: its changed files (None: unknown); since: the first stats pass (older exits: backfill)."""
     d, entry = item["data"] or {}, entry or {}
-    evs, start, exit_ev, end = item_span(item, events, "change", "submitted_at", CHANGE_EXITS)
+    evs, start, exit_ev, end = item_span(item, events, "change", "submitted_at", terminal_states("change"))
     spans = state_spans(evs, start)
     ordered = sorted(runs, key=lambda r: r.get("start") or 0)
     rounds = check_rounds(spans, evs, ordered)
@@ -240,7 +238,7 @@ def round_mode(text: str, result: str, reason: str) -> str:
 
 def change_exit(item: Rec, d: Rec, exit_ev: Optional[Rec]) -> tuple[Optional[str], str]:
     """(how the change exited, the words saying why)."""
-    outcome = item["state"] if item["state"] in CHANGE_EXITS else (exit_ev or {}).get("to_state")
+    outcome = item["state"] if is_terminal("change", item["state"]) else (exit_ev or {}).get("to_state")
     return outcome, str(d.get("why") or (exit_ev or {}).get("text") or "")
 
 

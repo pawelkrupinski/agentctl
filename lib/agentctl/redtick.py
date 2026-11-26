@@ -6,7 +6,7 @@ import functools
 import os
 import threading
 from typing import Any
-from agentctl.statemachines import StaleVersion, open_items
+from agentctl.statemachines import StaleVersion, open_items, is_terminal
 from agentctl.core import NoReadAccess, attempt, err, process_cache, run_bounded, slug
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
@@ -20,7 +20,7 @@ from agentctl.ciwhy import (
     ci_state_load, ci_state_write, gate_from_snap, gate_runs, gate_snap_rows, main_runs_of)
 from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
 from agentctl.fixerblockers import in_fixer
-from agentctl.redrecord import RED_TERMINAL, red_what
+from agentctl.redrecord import red_what
 from agentctl.lander import lander_note_landed
 from agentctl.redfixread import red_main_current
 from agentctl.conditions import open_condition, run_probe
@@ -193,7 +193,7 @@ def red_open_flows(o_r, store):
     except (Exception, SystemExit):
         return []
     gate = {n for n, _f in red_gate_flows(o_r)}
-    return sorted({it["data"].get("workflow") for it in its if it["state"] not in RED_TERMINAL
+    return sorted({it["data"].get("workflow") for it in its if not is_terminal("red", it["state"])
                    and it["data"].get("repo") == o_r and it["data"].get("workflow")} - gate)
 
 

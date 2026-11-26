@@ -70,7 +70,7 @@ class RedReposBase(RedsBase):
     def by_repo(self):
         out = {}
         for it in self.st.items("red"):
-            if it["state"] not in A.RED_TERMINAL:
+            if not A.is_terminal("red", it["state"]):
                 out.setdefault(A.red_repo_of(it["data"]), []).append(it)
         return out
 
@@ -167,7 +167,7 @@ class TickTest(RedReposBase):
         it = self.st.put_item("red", data["key"], "red", data)
         runs = json.load(open(os.path.join(self.d, "runs-bitcashier_infra.json")))
         self.others()
-        self.assertNotIn(self.st.item("red", it["id"])["state"], A.RED_TERMINAL, "no newer run yet: it stays")
+        self.assertNotIn(self.st.item("red", it["id"])["state"], A.terminal_states("red"), "no newer run yet: it stays")
         self.put("runs-bitcashier_infra.json", [run(8100, 156, dep, "dynamic/dependabot/dependabot-updates", self.sha)] + runs)
         self.assertIn(dep, A.red_gate_snap(INFRA, self.st)["latest"])
         self.others(advance=60)

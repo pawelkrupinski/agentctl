@@ -5,13 +5,14 @@ import os
 import re
 import subprocess
 from typing import Any, Iterator
+from agentctl.statemachines import is_terminal
 from agentctl.procrunner import process_runner
 from agentctl.core import err, git, remote, state_root
 from agentctl.repos import red_repo_conf, red_repo_of
 from agentctl.trailers import commit_trailers, trailer_values
 from agentctl.land import tool_env
 from agentctl.storetoken import no_vault
-from agentctl.redrecord import RED_TERMINAL, red_names, red_what
+from agentctl.redrecord import red_names, red_what
 from agentctl.fixerenv import BRIEF
 from agentctl.redworkflows import RED_WORKFLOWS_FILE, red_workflow_policy, red_workflows_on_main
 from agentctl.redknobs import knob_fix_replay_timeout
@@ -210,7 +211,7 @@ def _open_reds(store: Any) -> list[dict[str, Any]] | None:
     THE LAPTOP'S LAND NEEDS NO VAULT: never `secrets` for this read (no token: no refusal)."""
     try:
         with no_vault():
-            return [it for it in store.items("red") if it["data"].get("key") and it["state"] not in RED_TERMINAL]
+            return [it for it in store.items("red") if it["data"].get("key") and not is_terminal("red", it["state"])]
     except (Exception, SystemExit):
         return None
 

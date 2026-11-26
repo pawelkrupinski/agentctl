@@ -1,13 +1,13 @@
 # agentctl, part `reduntracked`: a check never green is not tracked: the never-green record and untracking.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.statemachines import is_terminal
 from agentctl.clock import epoch_now
 import json
 import time
 from typing import Any
 from agentctl.core import attempt, err, process_cache
 from agentctl.forge import RUN_FIELDS, gh_json
-from agentctl.redrecord import RED_TERMINAL
 from agentctl.gating import main_workflow_files
 from agentctl.redrepos import red_is_other
 from agentctl.red import canon_job, red_obs_for
@@ -249,7 +249,7 @@ def red_untracked_runs(store, o_r, units):
 def red_active_untracked(store, o_r, it, untracked, obs, now_=None):
     """Why an open red is untracked now (its observation is, or its workflow/jobs were never green on main), else None.
     Only on a read observation (obs not None): an unknown never closes a red."""
-    if obs is None or it["state"] in RED_TERMINAL:
+    if obs is None or is_terminal("red", it["state"]):
         return None
     d = it["data"]
     if d["key"] in untracked:

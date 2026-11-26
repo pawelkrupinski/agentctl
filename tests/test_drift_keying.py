@@ -72,7 +72,7 @@ class DriftKeyBase(RedsBase):
         return A.red_key("Main", job, line), line
 
     def open_reds(self):
-        return [it for it in self.st.items("red") if it["state"] not in A.RED_TERMINAL]
+        return [it for it in self.st.items("red") if not A.is_terminal("red", it["state"])]
 
     def listed(self, word):
         return [it for it in self.st.items("red") if word in str(it["data"].get("line"))]

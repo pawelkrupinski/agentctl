@@ -1,6 +1,7 @@
 # agentctl, part `redseen`: what is red now: one observation per key from the CI snapshot, stuck and unkicked runs.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.statemachines import is_terminal
 from agentctl.clock import wall_epoch
 import os
 import subprocess
@@ -16,7 +17,7 @@ from agentctl.workflows import LOCAL_FLOW
 from agentctl.ciwhy import gate_report_only, gate_runs, main_runs_of
 from agentctl.runsigs import classifier_version, run_names
 from agentctl.redepisode import RedEpisode, streak_budget
-from agentctl.redrecord import RED_TERMINAL, red_what
+from agentctl.redrecord import red_what
 from agentctl.red import STUCK_FACTOR, red_key
 from agentctl.redmove import red_close
 from agentctl.waiting import UnreadGate
@@ -261,7 +262,7 @@ def red_merge_rekeyed(store, active, obs):
     cv = classifier_version()
     for key, it in list(active.items()) if obs else ():
         d = it["data"]
-        if key in obs or it["state"] in RED_TERMINAL or d.get("red_kind") in ("local", "stuck-run", "predicts") \
+        if key in obs or is_terminal("red", it["state"]) or d.get("red_kind") in ("local", "stuck-run", "predicts") \
                 or d.get("classifier") == cv:
             continue  # keyed by THIS classifier: a re-read of its run under other keys clears nothing (cf. red_gone)
         into = rekey_target(active, obs, key, d)

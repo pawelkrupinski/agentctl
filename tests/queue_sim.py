@@ -1660,7 +1660,7 @@ class Sim:
                 recs.setdefault(r["change_id"], []).append(r)
         for it in st.items("change"):
             n = len(recs.get(it["id"], []))
-            if A.machine_state("change", it["state"]).terminal and it["state"] in A.CHANGE_EXITS and n != 1:
+            if A.is_terminal("change", it["state"]) and n != 1:
                 self.violate("I7", f"change {it['id']} ({it['state']}): {n} landing records, not one")
             if it["state"] == "landed" and n == 1 and recs[it["id"]][0].get("outcome") != "landed":
                 self.violate("I7", f"change {it['id']} landed, its record says {recs[it['id']][0].get('outcome')}")

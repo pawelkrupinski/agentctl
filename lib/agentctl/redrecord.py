@@ -1,14 +1,11 @@
-# agentctl, part `redrecord`: a red's record: its lease's name and liveness, its terminal states, the names it answers to and what it is.
+# agentctl, part `redrecord`: a red's record: its lease's name and liveness, the names it answers to and what it is.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import re
 from typing import Any
 from agentctl.repos import RED_PRIMARY, red_repo_of, red_repo_short
 from agentctl.workflows import LOCAL_FLOW
-from agentctl.statemachines import machine_state, open_items
-
-
-RED_TERMINAL = ("verified", "cleared")
+from agentctl.statemachines import machine_state, open_items, is_terminal
 
 
 def red_lease(key: str) -> str:
@@ -45,7 +42,7 @@ def red_of_key(store, key):
     """The red item of key now: its open spell, else its newest closed one. A store that does not answer raises
     (review 2026-11-26: it read as "no such red", and a wait on that red was ended as if the red were gone)."""
     for it in store.items("red"):
-        if it["data"].get("key") == key and it["state"] not in RED_TERMINAL:
+        if it["data"].get("key") == key and not is_terminal("red", it["state"]):
             return it
     return red_closed_of(store, key)
 

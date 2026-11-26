@@ -257,7 +257,7 @@ fanout	lib/agentctl/redreplay.py	10
 fanout	lib/agentctl/redseen.py	17
 fanout	lib/agentctl/redstep.py	21
 fanout	lib/agentctl/redtick.py	43
-fanout	lib/agentctl/reduntracked.py	11
+fanout	lib/agentctl/reduntracked.py	10
 fanout	lib/agentctl/redvault.py	19
 fanout	lib/agentctl/redverify.py	14
 fanout	lib/agentctl/redview.py	19

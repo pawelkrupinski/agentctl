@@ -5,7 +5,7 @@ import re
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.statemachines import StaleVersion, open_items
+from agentctl.statemachines import StaleVersion, open_items, is_terminal
 from agentctl.timefmt import parse_time
 from agentctl.watchknobs import knob_wr_max
 from agentctl.redknobs import RED_FIX_REQUEUE_GRACE, knob_red_fix_requeue_grace, knob_red_liveness_max
@@ -14,7 +14,7 @@ from agentctl.repos import red_repo_of
 from agentctl.cistate import snapshot_gate_reds
 from agentctl.ciwhy import ci_state_load
 from agentctl.policy import HOLDS
-from agentctl.redrecord import RED_TERMINAL, lease_is_live, red_active, red_lease, red_what
+from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.leases import red_block_of
 from agentctl.redfixread import FIX_OPEN
 from agentctl.red import red_fix_giveup
@@ -323,7 +323,7 @@ def red_enforce(store, facts, t):
     acts: list[str] = []
     for it in red_unheld(store, t, facts):
         it = store.item("red", it["id"])
-        if not it or it["state"] in RED_TERMINAL:
+        if not it or is_terminal("red", it["state"]):
             continue
         with suppress(StaleVersion):
             _enforce_unheld(store, it, t, acts)

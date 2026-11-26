@@ -51,7 +51,7 @@ class EarlyBase(RedsBase):
             return [l for l in f if f"actions/runs/{RID}/jobs" in l]
 
     def open_reds(self):
-        return [it for it in self.st.items("red") if it["state"] not in A.RED_TERMINAL]
+        return [it for it in self.st.items("red") if not A.is_terminal("red", it["state"])]
 
 
 class EarlyFailureTest(EarlyBase):

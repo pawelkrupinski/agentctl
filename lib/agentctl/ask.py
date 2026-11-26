@@ -7,7 +7,7 @@ from typing import Any
 from contextlib import suppress
 from agentctl.core import slug
 from agentctl.timefmt import hhmmz
-from agentctl.redrecord import RED_TERMINAL, red_closed_of, red_what
+from agentctl.redrecord import red_closed_of, red_what
 from agentctl.leases import red_block_of
 from agentctl.owned import default_repo
 from agentctl.redask import ask_held_until, ask_interval, ask_refusal, ask_split, red_ask, red_decision
@@ -16,7 +16,7 @@ from agentctl.redmove import red_move
 from agentctl.redclaim import red_targets
 from agentctl.reddecision import RED_DECIDE, red_ask_route, red_decision_block
 from agentctl.redvault import VAULT_TARGET, red_vault_decide
-from agentctl.statemachines import StaleVersion
+from agentctl.statemachines import StaleVersion, is_terminal
 
 
 DECISION_FAILED = re.compile(r"\W*(NOT LANDED|GAVE UP|DIAGNOSED)\b")
@@ -241,7 +241,7 @@ def store_decision(store: Any, it: Any, d: Any, ask: Any, answer: str, t: float)
                 "category": (ask or {}).get("category") or (d.get("ask") or {}).get("category")}
     for _try in range(10):
         cur = store.item("red", it["id"])
-        if cur["state"] in RED_TERMINAL:
+        if is_terminal("red", cur["state"]):
             return f"NOT DECIDED: {red_what(d)} is already {cur['state']}"
         with suppress(StaleVersion):
             store.update_item("red", cur["id"], cur["version"], {"decision": decision, "dispatch_after": 0, "ask": None})

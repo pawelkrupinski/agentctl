@@ -8,7 +8,7 @@ from agentctl.core import HOME, PROTECTED_BRANCHES, _tokens, err, git, remote
 from agentctl.timefmt import ts
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import fixes_red_in_message
-from agentctl.redrecord import RED_TERMINAL, red_what
+from agentctl.redrecord import red_what
 from agentctl.lander import blame_change_key, blame_change_name
 from agentctl.procs import process_cwds
 from agentctl.inboxentry import inbox_write
@@ -20,7 +20,7 @@ from agentctl.redmove import red_stop_holder
 from agentctl.waiting import cancel_submitted
 from agentctl.redopen import red_offer
 from agentctl.culpritfix import blame_culprit
-from agentctl.statemachines import machine_state
+from agentctl.statemachines import machine_state, is_terminal
 
 
 # -- a withdrawn or refuted revert never lands again (2026-11-01: blame's wrong revert of ...-retained-input for #629 was
@@ -28,7 +28,7 @@ from agentctl.statemachines import machine_state
 # movies-wt-revert-629, "author gone", and submitted it: re-queued at 22:33Z, landing on red through its Fixes-Red: 629.)
 # A blame stops calling a change the culprit in two ways: WITHDRAWN (the decision itself was wrong, before its revert
 # landed: blame_withdraw, `agentctl red unblame`) and REFUTED (its revert landed and did not clear the red). And a
-# confirmed blame's revert is OBSOLETE once its red is over (RED_TERMINAL) by anything else -- the lander's fix forward
+# confirmed blame's revert is OBSOLETE once its red is over (terminal: is_terminal("red", ...)) by anything else -- the lander's fix forward
 # under the same Fixes-Red (Main #2409, 2026-11-12: the revert sat refused, then escalated as an orphan, while the
 # change it would take out was fixed and green on main). Whichever it is,
 # its revert -- the commit carrying `Reverts-Change: <change>` and `Fixes-Red: <run>` -- and the worktree blame made for
@@ -75,7 +75,7 @@ class BlameLedger:
         if b.get("state") == "refuted":
             self.bury(ch, _dead_entry(run, f"refuted: {str(b.get('why') or '?')[:160]}", f"NOT THE CULPRIT of #{run}", rv))
         elif b.get("state") == "confirmed" and not w:
-            if it.get("state") in RED_TERMINAL:
+            if is_terminal("red", it.get("state")):
                 self.obsolete(it, ch, run, rv)
             else:
                 self.standing(ch, run, rv)
