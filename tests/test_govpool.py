@@ -156,6 +156,7 @@ GOVERNED = re.compile(r"\bgoverned\(")
 ALLOWED = {
     "lib/agentctl/govpool.py": "the governed fan-out itself",
     "tests/test_govpool.py": "this guard: its patterns and seeded cases",
+    "tests/test_seq_atomic.py": "four threads racing one store counter: a race under test, no CPU fan-out",
     "tests/test_state_files.py": "four threads racing one state file's write: a race under test, no CPU fan-out",
 }
 

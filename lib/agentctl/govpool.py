@@ -94,6 +94,13 @@ def admit_args(gov: str, fd: int, ticket: str, cls: str, want: int, job: str, la
             str(want), "--job", job, "--label", label, "--pid", str(os.getpid())]
 
 
+def gov_dir_path(env: Mapping[str, str] = os.environ) -> str:
+    """THE governor's directory (not created here): $AGENTCTL_GOV_DIR, else `gov` under the state root
+    ($AGENTCTL_STATE_ROOT, else ~/.cache/agentctl). govtickets.gov_dir, cpu.py and `governed` all read it here."""
+    root = env.get("AGENTCTL_STATE_ROOT") or os.path.expanduser("~/.cache/agentctl")
+    return env.get("AGENTCTL_GOV_DIR") or os.path.join(root, "gov")
+
+
 def take_ticket(gov: str, gov_dir: str, cls: str, want: int, job: str, label: str, wait: float,
                 run: Callable[..., "subprocess.CompletedProcess[bytes]"], env: Mapping[str, str]) -> Optional[tuple[int, str]]:
     """(descriptor, ticket path) once the governor admits the pool, or None (refused or failed); GovernorBusy past `wait`."""
@@ -137,8 +144,7 @@ def governed(job: str, want: int, label: str, cls: str = "suite", env: Optional[
     if gov == "-" or not os.access(gov, os.X_OK):
         yield Fanout(want, None, "no governor here")
         return
-    gov_dir = env.get("AGENTCTL_GOV_DIR") or os.path.expanduser("~/.cache/agentctl/gov")
-    held = take_ticket(gov, gov_dir, cls, want, job, label, gov_wait(env) if wait is None else wait, run, env)
+    held = take_ticket(gov, gov_dir_path(env), cls, want, job, label, gov_wait(env) if wait is None else wait, run, env)
     if held is None:
         say(f"{job}: the governor refused or failed: no ticket for {want} cores, running one wide\n")
     try:

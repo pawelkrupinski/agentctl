@@ -8,7 +8,8 @@ import os
 import time
 from typing import Any, Optional
 from contextlib import suppress
-from agentctl.core import env_num, state_root
+from agentctl.core import env_num
+from agentctl.govpool import gov_dir_path
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record
 from agentctl.owned import lock_held
@@ -18,7 +19,7 @@ GOV_POLL = 2.0
 
 
 def gov_dir() -> str:
-    d = os.environ.get("AGENTCTL_GOV_DIR") or state_root("gov")
+    d = gov_dir_path()
     os.makedirs(d, exist_ok=True)
     return d
 

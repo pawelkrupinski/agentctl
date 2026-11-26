@@ -4,7 +4,8 @@ from agentctl.clock import epoch_now
 import os
 import time
 from typing import Any, Callable, Optional
-from agentctl.core import env_num, state_root
+from agentctl.core import env_num
+from agentctl.govpool import gov_dir_path
 from agentctl.statefile import read_record, write_json
 
 
@@ -41,9 +42,8 @@ CPU_SAMPLE_KEEP = 120  # s a kept sample serves as the delta's start
 
 
 def cpu_sample_path() -> str:
-    """The kept tick sample: in the governor's directory (gov.py's gov_dir, $AGENTCTL_GOV_DIR), read here as it reads
-    it -- cpu.py comes before the governor that uses it."""
-    d = os.environ.get("AGENTCTL_GOV_DIR") or state_root("gov")
+    """The kept tick sample: in the governor's directory (govpool.gov_dir_path)."""
+    d = gov_dir_path()
     os.makedirs(d, exist_ok=True)
     return os.path.join(d, "cpu-ticks.json")
 
