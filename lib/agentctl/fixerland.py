@@ -13,7 +13,7 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.landstate import landed_state
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import attempt, git, on_ci_runner, reds_dir, remote, spawn_detached, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json

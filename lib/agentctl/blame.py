@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from typing import Any
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import fmt_age, git, reds_dir, spawn_detached
 from agentctl.statefile import read_record
 from agentctl.procs import process_start, record_alive
@@ -20,9 +20,9 @@ from agentctl.redrecord import red_what
 from agentctl.redrepos import red_repo_tag
 from agentctl.fixerland import red_dispatch_log
 from agentctl.blameopen import CONVERGENCE_FLOWS, PATHISH, TEST_TOKEN
-from agentctl.configfile import BLAME_MAX
+from agentctl.knobs import BLAME_MAX
 from agentctl.redopen import red_offer
-from agentctl.configfile import knob_blame_max, knob_blame_probe_wall
+from agentctl.knobs import knob_blame_max, knob_blame_probe_wall
 
 
 # ---------------------------------------------------------------- blame (the owner, 2026-11-01)

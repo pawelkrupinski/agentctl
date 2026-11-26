@@ -6,7 +6,7 @@ import re
 import subprocess
 from typing import Any, Iterator
 from agentctl.procrunner import process_runner
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import err, git, remote, state_root
 from agentctl.repos import red_repo_conf, red_repo_of
 from agentctl.trailers import commit_trailers, trailer_values

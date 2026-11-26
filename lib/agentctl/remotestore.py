@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.request
 from typing import Any
 from agentctl.statefile import read_text_or
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import SHORT, attempt, host_role
 from agentctl.store import StoreAuthFailed, StoreUnavailable, store_errors
 from agentctl.storetoken import token

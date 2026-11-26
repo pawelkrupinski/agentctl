@@ -11,7 +11,7 @@ from agentctl.repos import movies_repo_path, red_repo_clone
 from agentctl.clones import main_clone
 from agentctl.ancestry import contains
 from agentctl.ciwhy import main_runs, run_no_verdict
-from agentctl.configfile import knob_watch_conv_start
+from agentctl.knobs import knob_watch_conv_start
 
 
 # ---------------------------------------------------------------- land: the watch after LANDED

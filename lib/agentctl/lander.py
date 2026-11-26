@@ -12,7 +12,7 @@ from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.procs import ps_rows
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import branch_of, err, git, git_ok, process_cache, remote, slug, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime
@@ -20,7 +20,7 @@ from agentctl.repos import RED_PRIMARY
 from agentctl.storetoken import no_vault
 from agentctl.claudefiles import claude_projects_root
 from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec
-from agentctl.configfile import knob_red_fixer
+from agentctl.textknobs import knob_red_fixer
 
 
 # ---------------------------------------------------------------- the lander (the owner, 2026-11-01: "remember which

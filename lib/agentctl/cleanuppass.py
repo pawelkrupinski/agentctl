@@ -5,7 +5,7 @@ import os
 import sys
 from typing import Any
 from agentctl.clock import stopwatch
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import PROTECTED_BRANCHES, REPOS, err, git, remote, scratch, slug
 from agentctl.forge import forge_branch_sha, forge_delete_branch, gh_json
 from agentctl.procs import process_cwds

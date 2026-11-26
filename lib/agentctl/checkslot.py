@@ -7,7 +7,7 @@ import json
 import os
 import time
 from typing import Any
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import err, pct
 from agentctl.timefmt import ts
 from agentctl.statefile import write_json

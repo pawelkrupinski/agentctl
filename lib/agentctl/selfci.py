@@ -14,7 +14,7 @@ import os
 import re
 import time
 from typing import Any, Callable
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import fmt_age, git, host_role, run_cmd, state_root
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record, write_json
@@ -22,7 +22,7 @@ from agentctl.cistate import state_read
 from agentctl.forge import gh_json
 from agentctl.redrepos import diagnosis, read_failure
 from agentctl.fixerland import bin_repo
-from agentctl.configfile import knob_wa_red_max
+from agentctl.knobs import knob_wa_red_max
 
 SELF_REPO = "pawelkrupinski/agentctl"
 WA_UNPINNED_MAX = 15 * 60  # s the newest green run may stay unpinned ($AGENTCTL_WA_UNPINNED_MAX)

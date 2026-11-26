@@ -3,7 +3,7 @@
 
 import os
 from typing import Any
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import SHORT, attempt, err, fmt_age, git, remote, tilde
 from agentctl.timefmt import iso_at, parse_time, ts
 from agentctl.statefile import read_record
@@ -23,11 +23,11 @@ from agentctl.red import RED_OFFER, decided_revert, red_obs_for, red_tier
 from agentctl.redmove import red_keep_holder, red_move, red_offer_class, red_put_offer, tail_lines
 from agentctl.rundispatch import red_verify_dispatch
 from agentctl.blameopen import blame_open, culprit_of
-from agentctl.configfile import BLAME_MAX
+from agentctl.knobs import BLAME_MAX
 from agentctl.redseen import red_obs_of_units, red_units, sigs_no_verdict
 from agentctl.redauthors import red_authors
 from agentctl.outsideflows import main_flow_meta
-from agentctl.configfile import knob_blame_max
+from agentctl.knobs import knob_blame_max
 
 
 def _offer_deadline(store: Any, d: dict[str, Any], tier: str) -> Any:

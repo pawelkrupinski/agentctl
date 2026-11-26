@@ -18,8 +18,8 @@ from agentctl.patches import ALLOW_EMPTY_TRAILER, deliberate_empty, is_empty_com
 from agentctl.tunnel import tunnel_ports
 from agentctl.storestate import port_open
 from agentctl.netwatch import TUNNEL_LABEL
-from agentctl.configfile import knob_max_foreign
-from agentctl.configfile import knob_red_fixer, knob_store_token
+from agentctl.knobs import knob_max_foreign
+from agentctl.textknobs import knob_red_fixer, knob_store_token
 
 
 # ---------------------------------------------------------------- queue (retired)

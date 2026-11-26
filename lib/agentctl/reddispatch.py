@@ -6,7 +6,7 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import NO_SIGN, fmt_age, git, git_ok, reds_dir, remote
 from agentctl.timefmt import parse_time, ts
 from agentctl.trailers import trailer_values

@@ -15,7 +15,7 @@ import signal
 import subprocess
 import time
 from agentctl.procrunner import process_runner
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import (
     GIT_NET_SSH, HOME, PROTECTED_BRANCHES, err, git, git_ok, remote, run_cmd, slug,
     state_root)
@@ -26,8 +26,8 @@ from agentctl.worktrees import CACHE_TREES, gitdir_activity, merged_reason, work
 from agentctl.maint import cmd_orphans
 from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
 from agentctl.dispatches import orphan_branches
-from agentctl.configfile import SBT_STALL_MIN
-from agentctl.configfile import knob_sbt_reap
+from agentctl.knobs import SBT_STALL_MIN
+from agentctl.textknobs import knob_sbt_reap
 
 
 # A CLEANUP IS BOUNDED PER TREE AND AS A WHOLE (2026-11-22: the upkeep's `cleanup --execute --no-remote` ran past its

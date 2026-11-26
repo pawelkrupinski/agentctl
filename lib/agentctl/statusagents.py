@@ -21,7 +21,7 @@ from agentctl.live import live_annotate, live_transcript_ok
 from agentctl.redrecord import lease_is_live
 from agentctl.leases import lease_meta
 from agentctl.livestream import live_mask_text
-from agentctl.configfile import knob_status_agent_bound
+from agentctl.knobs import knob_status_agent_bound
 
 
 STATUS_LOG_TAIL = 40            # lines of each log shown in the page

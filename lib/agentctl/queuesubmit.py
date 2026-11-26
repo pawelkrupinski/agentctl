@@ -9,7 +9,7 @@ import subprocess
 import sys
 import time
 from typing import Any, Optional
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import err, fmt_age, git, git_ok, remote, scratch, spawn_detached
 from agentctl.classify import (
     TransientNetwork, credential_failure, is_transient_network, net_retry, redact_credentials)

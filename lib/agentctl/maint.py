@@ -18,7 +18,7 @@ from agentctl.procs import process_cwds, ps, ps_rows
 from agentctl.jvmreap import (
     awake_now, is_sbt, jvm_candidates, jvm_reap, jvm_scan, reap_log, sbt_serving, sbt_stuck_reasons, swap_free_mb,
     thread_dump, tree_cpu)
-from agentctl.configfile import knob_jvm_ps, knob_sbt_reap
+from agentctl.textknobs import knob_jvm_ps, knob_sbt_reap
 
 
 def loop_body(cmd):

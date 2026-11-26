@@ -5,7 +5,7 @@ import argparse
 import os
 import re
 from typing import Any
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import attempt, git, remote
 from agentctl.landstate import landed_state
 from agentctl.waitingdir import waiting_entries, waiting_state

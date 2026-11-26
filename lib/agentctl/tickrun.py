@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, Callable
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import NoToken, _bounded, err, process_cache, run_bounded
 
 

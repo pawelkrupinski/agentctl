@@ -8,7 +8,7 @@ from typing import Any, Optional
 from agentctl.timefmt import ts
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.clock import Clock
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import err, git, git_ok, slug, state_root
 from agentctl.classify import INFRA_LOG, _test_line
 from agentctl.forge import forge_env
@@ -24,7 +24,7 @@ from agentctl.batchitem import batch_fail, batch_members
 from agentctl.batchrun import batch_check, bisect
 from agentctl.queuepush import DEEP_BATCHES
 from agentctl.queuefailure import CHECK_TIMEOUT, judge_failure
-from agentctl.configfile import knob_check_lease_ttl
+from agentctl.knobs import knob_check_lease_ttl
 
 
 BATCH_LEASE_MAX = 6 * 3600  # the batch executor's leases: its check (2 h) and its bisect (4 h), its machine's bounds

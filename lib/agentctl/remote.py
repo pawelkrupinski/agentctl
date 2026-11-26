@@ -4,7 +4,7 @@
 import os
 import re
 from typing import Any
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import err, fmt_age, git, host_role, remote, slug
 from agentctl.timefmt import parse_time
 from agentctl.classify import check_push_failure, credential_failure

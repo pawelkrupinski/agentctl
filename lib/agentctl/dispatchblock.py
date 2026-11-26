@@ -11,7 +11,7 @@ from agentctl.statefile import read_record
 from agentctl.procs import lsof_cwds, ps
 from agentctl.fixerrecords import own_fixer_record_path
 from agentctl.worktrees import worktree_of
-from agentctl.configfile import knob_claude, knob_claude_settings, knob_red_fixer
+from agentctl.textknobs import knob_claude, knob_claude_settings, knob_red_fixer
 
 
 def in_fixer():

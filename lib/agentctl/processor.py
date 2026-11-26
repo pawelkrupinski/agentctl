@@ -29,7 +29,7 @@ from agentctl.statuspage import status_page_start
 from agentctl.syncsteps import sync_steps
 from agentctl.serversteps import server_steps
 from agentctl.processorlink import TokenDrop, processor_owned
-from agentctl.configfile import knob_tick
+from agentctl.knobs import knob_tick
 
 
 WAITING_RENAMED = {"status": "land status", "pause": "land hold", "resume": "land release", "cancel": "land cancel <id>",

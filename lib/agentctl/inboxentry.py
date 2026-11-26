@@ -16,7 +16,7 @@ from agentctl.timefmt import iso_at
 from agentctl.statefile import read_record, write_json
 from agentctl.procs import safe_cwd
 from agentctl.fixerrecords import agent_name
-from agentctl.configfile import knob_inbox_dir, knob_owners_dir
+from agentctl.textknobs import knob_inbox_dir, knob_owners_dir
 
 
 # ---------------------------------------------------------------- inbox

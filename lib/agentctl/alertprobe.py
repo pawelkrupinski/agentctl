@@ -4,7 +4,7 @@
 from typing import Any, Callable
 import os
 import re
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import remote
 from agentctl.landstate import landed_state
 from agentctl.timefmt import iso_epoch

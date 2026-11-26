@@ -18,7 +18,7 @@ from agentctl.govfits import gov_capacity, gov_charged, gov_committed, gov_ramp
 from agentctl.pressure import pressure_report
 from agentctl.govusage import GOV_USAGE_MIN_WALL, gov_job_cores, gov_measured_cores, gov_record_usage, gov_usage
 from agentctl.govroute import gov_replay, gov_route
-from agentctl.configfile import knob_gov_cpu_factor
+from agentctl.knobs import knob_gov_cpu_factor
 
 
 # THE GOVERNOR'S FEATURES, for a caller in another repository (movies' scripts/jvm-gate.sh governor_bin, bitcashier's

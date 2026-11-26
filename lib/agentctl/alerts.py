@@ -7,7 +7,7 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import attempt, err, hashlib_sha1
 from agentctl.statefile import read_record, write_json
 from agentctl.inboxentry import inbox_dir, inbox_entries, inbox_kind
@@ -15,7 +15,7 @@ from agentctl.inbox import WAIT_KINDS_DEFAULT, entry_line
 from agentctl.alertroute import (
     ALERT_AUTHOR_VERDICT_KINDS, alert_audience, alert_kind_of, alert_norm, alert_route, alert_tier)
 from agentctl.alertprobe import alert_probe
-from agentctl.configfile import knob_alert_quiet_max
+from agentctl.knobs import knob_alert_quiet_max
 
 
 # ---------------------------------------------------------------- the alert model (the owner, 2026-11-04)

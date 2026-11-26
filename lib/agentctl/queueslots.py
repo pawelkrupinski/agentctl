@@ -6,7 +6,7 @@ import subprocess
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import err, git
 from agentctl.timefmt import parse_time, ts
 from agentctl.waitingdir import QUEUE_POOL, save_entry, waiting_entries, waiting_state, wlog
@@ -17,7 +17,7 @@ from agentctl.owned import Owned
 from agentctl.worktrees import mark_internal
 from agentctl.statemachines import (
     ENTRY_STATE, StaleVersion, TerminalState, change_event, joined_verdict, machine_state)
-from agentctl.configfile import knob_check_lease_ttl
+from agentctl.knobs import knob_check_lease_ttl
 
 
 CHECK_LEASE_MAX = 3 * 3600

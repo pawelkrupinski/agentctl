@@ -12,7 +12,7 @@ from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.procs import proc_alive
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import HOME, SHORT, _tokens, git, state_root, tilde
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.repos import red_repo_clone, red_repos

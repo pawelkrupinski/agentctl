@@ -22,7 +22,7 @@ from agentctl.queueslots import change_item_fields
 from agentctl.redask import ask_interval
 from agentctl.alerts import alert_write
 from agentctl.alertroute import event_audience
-from agentctl.configfile import knob_ask_remind_max
+from agentctl.knobs import knob_ask_remind_max
 
 
 def _entry_change_state(e, every):

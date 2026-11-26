@@ -7,7 +7,7 @@ from agentctl.timefmt import hhmmz, parse_time
 from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import change_exits_unannounced
 from agentctl.clock import Clock
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import SHORT, fmt_age, git, host_role, run_cmd, state_root
 from agentctl.repos import movies_repo_path
 from agentctl.procs import process_cwds, ps
@@ -25,7 +25,7 @@ from agentctl.queueclose import change_rows, close_landed_changes
 from agentctl.selfci import inv_wa
 from agentctl.redhold import W1_HARD_FACTOR, change_progress, inv_wr, red_unheld
 from agentctl.queuehold import hold_recovers_itself
-from agentctl.configfile import knob_w5_max
+from agentctl.knobs import knob_w5_max
 
 
 # ---------------------------------------------------------------- the invariant watchdog (design §10, phase 1 step 2)

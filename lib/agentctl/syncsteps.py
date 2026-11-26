@@ -7,7 +7,7 @@ import subprocess
 import sys
 from typing import Any, Callable, Sequence
 from contextlib import suppress
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import (
     NoToken, err, git, git_ok, process_cache, reap_children, reds_dir, remote, run_bounded,
     spawn_detached, state_root)
@@ -36,7 +36,7 @@ from agentctl.reddispatch import red_renew_holders
 from agentctl.netwatch import network_watch, tunnel_watch
 from agentctl.redstatus import write_red_status_snapshot
 from agentctl.offerdispatch import red_dispatcher
-from agentctl.configfile import knob_step_bound
+from agentctl.knobs import knob_step_bound
 
 
 SYNC_MIRROR_EVERY = 10   # s between the laptop's copies of /v1/state into state.json

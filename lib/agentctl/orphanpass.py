@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from agentctl.timefmt import parse_time, ts
 from agentctl.statefile import read_record, write_json
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import branch_of, git, reds_dir, remote, slug, tilde
 from agentctl.classify import NETWORK_CHECK_FAILURE
 from agentctl.repos import movies_repo_path
@@ -24,7 +24,7 @@ from agentctl.superseded import superseded_duty, worktree_change_items
 from agentctl.park import park_duty
 from agentctl.orphans import land_entries_once, orphan_candidates, orphan_covered_by, orphan_land_entry
 from agentctl.fixerland import spawn_fixer
-from agentctl.configfile import knob_orphan_idle
+from agentctl.knobs import knob_orphan_idle
 
 
 ORPHAN_PER_PASS = 3

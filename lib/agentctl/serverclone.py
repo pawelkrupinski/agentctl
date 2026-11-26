@@ -13,14 +13,14 @@ import threading
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import err, git, git_ok, pid_alive, process_cache, remote
 from agentctl.statefile import read_record
 from agentctl.repos import server_repo
 from agentctl.clones import CORRUPT_GIT, clone_gated, clone_shared, clone_side, heal_enabled
 from agentctl.conditions import open_condition, recovery_recheck, run_probe
 from agentctl.sdnotify import SD_READY, sd_notify
-from agentctl.configfile import knob_clone_keepalive
+from agentctl.knobs import knob_clone_keepalive
 
 
 # THE SERVER CLONE IS ATOMIC (2026-10-29: the reconciler crash-looped at 11:33 mid-clone; the half clone's .git -- an

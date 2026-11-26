@@ -7,7 +7,7 @@ import os
 import threading
 from typing import Any
 from agentctl.statemachines import StaleVersion
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import NoReadAccess, attempt, err, process_cache, run_bounded, slug
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
@@ -51,7 +51,7 @@ from agentctl.redcommands import (
     red_cmd_auto, red_cmd_block, red_cmd_dispatch, red_cmd_lease, red_cmd_owner_push, red_cmd_status,
     red_cmd_unblame, red_cmd_unblock)
 from agentctl.redquota import red_quota_waits
-from agentctl.configfile import knob_step_bound
+from agentctl.knobs import knob_step_bound
 
 
 # -- the tick's red step (the processor; ci-why never acts)

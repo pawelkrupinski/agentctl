@@ -9,7 +9,7 @@ import subprocess
 from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.claudefiles import claude_limit
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import SHORT, fmt_age, remote, spawn_detached, tilde
 from agentctl.timefmt import iso_epoch, parse_time, ts
 from agentctl.statefile import read_record
@@ -26,9 +26,8 @@ from agentctl.ciwhy import ci_state_load
 from agentctl.redblock import BLOCK_TTL
 from agentctl.rundispatch import red_verify_dispatch
 from agentctl.redopen import red_offer
-from agentctl.configfile import (
-    RED_CRASH_BLOCK_MAX, knob_red_crash_block_max, knob_red_decision_block_max, knob_red_old_run, knob_sleep_min)
-from agentctl.configfile import knob_awake_pid, knob_caffeinate, knob_sleep_log
+from agentctl.knobs import RED_CRASH_BLOCK_MAX, knob_red_crash_block_max, knob_red_decision_block_max, knob_red_old_run, knob_sleep_min
+from agentctl.textknobs import knob_awake_pid, knob_caffeinate, knob_sleep_log
 
 
 RED_CRASH_OUTCOME = re.compile(r"(NOT STARTED|ended with no|exit -?\d+ with no|TIMED OUT|lease expired|"

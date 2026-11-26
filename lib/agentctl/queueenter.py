@@ -9,7 +9,7 @@ import subprocess
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import (
     NO_SIGN, branch_of, err, fmt_age, git, git_ok, host_role, process_cache, remote, scratch)
 from agentctl.policy import policy_blocks
@@ -39,7 +39,7 @@ from agentctl.syncsteps import submit_remote
 from agentctl.processorlink import offer_token, spawn_waiting_processor
 from agentctl.landqueue import queue_command
 from agentctl.statemachines import machine_state
-from agentctl.configfile import knob_max_foreign
+from agentctl.knobs import knob_max_foreign
 
 
 def change_fields(repo, main_ref, head, a, store):

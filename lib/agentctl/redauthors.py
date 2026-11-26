@@ -5,7 +5,7 @@ from agentctl.clock import wall_epoch
 import os
 import re
 from typing import Any
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import attempt, git, git_ok
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.allowedpaths import allowed_path

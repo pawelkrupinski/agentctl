@@ -12,7 +12,7 @@ import json
 from typing import Any, Iterator
 from agentctl.procrunner import process_runner
 from agentctl.clock import Clock
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import HOME, err, process_cache
 from agentctl.store import LeaseLost, StoreUnavailable
 from agentctl.procs import ps_rows
@@ -23,7 +23,7 @@ from agentctl.core import SHORT, reds_dir
 from agentctl.forge import forge_env
 from agentctl.core import git, slug
 from agentctl.leases import LeaseHold, _landing
-from agentctl.configfile import knob_land_stall_min, knob_stall_cpu_seconds
+from agentctl.knobs import knob_land_stall_min, knob_stall_cpu_seconds
 
 
 # ---------------------------------------------------------------- land / env

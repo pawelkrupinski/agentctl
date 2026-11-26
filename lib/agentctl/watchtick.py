@@ -3,7 +3,7 @@
 
 import os
 from typing import Any, Optional, Sequence
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import NoToken, err, slug
 from agentctl.timefmt import iso_at
 from agentctl.procs import safe_cwd
@@ -13,12 +13,12 @@ from agentctl.cleanup import close_worktree
 from agentctl.redfixes import fixes_of
 from agentctl.ciwhy import red_for
 from agentctl.landwatch import WATCH, WATCH_FOLLOW_LEASE, WATCH_STALL_MIN, start_watch, watch_clone, watch_eval, watch_event, watch_look, watch_outcome, watch_verdict
-from agentctl.configfile import WATCH_TIMEOUT
+from agentctl.knobs import WATCH_TIMEOUT
 from agentctl.redopen import red_attach
 from agentctl.cireport import ci_why
 from agentctl.statemachines import StaleVersion, TerminalState
 from agentctl.clock import Clock
-from agentctl.configfile import knob_watch_conv_start, knob_watch_poll, knob_watch_timeout
+from agentctl.knobs import knob_watch_conv_start, knob_watch_poll, knob_watch_timeout
 
 
 def landed_fixes(repo: str, sha: str, fixes: Sequence[str], store: Any) -> list[str]:

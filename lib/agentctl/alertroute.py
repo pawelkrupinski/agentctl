@@ -7,7 +7,7 @@ import re
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import attempt
 from agentctl.inboxentry import CONDITION_KINDS, INBOX_COMMANDS, inbox_kind
 from agentctl.redfamilies import red_family

@@ -7,7 +7,7 @@ import os
 import re
 import time
 from typing import Any, Dict
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import attempt, fmt_age, pid_alive, state_root
 from agentctl.statefile import write_json
 from agentctl.repos import movies_repo_path
@@ -19,9 +19,9 @@ from agentctl.beats import beat_age, beat_path, write_beat
 from agentctl.conditions import close_condition, open_condition, open_conditions, run_probe
 from agentctl.changekind import file_unheld_change, unheld_changes
 from agentctl.invariants import INVARIANTS, watchdog_state
-from agentctl.configfile import W5_MAX
+from agentctl.knobs import W5_MAX
 from agentctl.alertroute import ALERT_SELF_HEALING_INVARIANTS
-from agentctl.configfile import knob_w5_max
+from agentctl.knobs import knob_w5_max
 
 
 WATCHDOG_KICK_GAP = 600

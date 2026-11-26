@@ -4,7 +4,7 @@
 from typing import Any
 import glob
 import os
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import fmt_age, on_ci_runner, pid_alive, reds_dir
 from agentctl.clock import wall_epoch
 from agentctl.statefile import mtime, read_record
@@ -17,7 +17,7 @@ from agentctl.redrecord import lease_is_live
 from agentctl.leases import lease_meta
 from agentctl.owners import owner_record_path
 from agentctl.redmove import tail_lines
-from agentctl.configfile import knob_red_orphan_grace, knob_red_stall
+from agentctl.knobs import knob_red_orphan_grace, knob_red_stall
 
 
 def _wrapper_verdict(rec: Any, pid: Any, holder_pid: Any) -> Any:

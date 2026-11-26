@@ -9,7 +9,7 @@ import sqlite3
 from agentctl.clock import epoch_now
 import time
 from typing import Any, Callable
-from agentctl.configfile import env_num
+from agentctl.knobs import knob_contact_gap, knob_contact_pause_max
 from agentctl.core import state_root
 from agentctl.statefile import json_object
 from agentctl.offers import OfferTable
@@ -24,17 +24,6 @@ class LeaseLost(RuntimeError):
     """A lease this process held is gone (expired and taken, past its max hold, or released): stop its work."""
 
 
-# A SILENT MACHINE'S LEASE CLOCKS PAUSE (2026-11-03: the family owners restarted 22 / 11 / 3 times, ended "STOPPED: the
-# owner's heartbeat lease was lost" -- the laptop asleep on battery, or the tunnel to this store down (Errno 61 every
-# ~30 min that day), past OWNER_TTL: every laptop lease lapsed at once and the reconciler re-offered their reds). The
-# store records each machine's last contact (contact(): every store RPC the laptop's agentctl makes says which machine
-# it is). A lease whose holder's machine (its holder's prefix, `laptop:`) has been silent past CONTACT_GAP has its clock
-# paused from then on: read (get, list, renew, acquire, take) as extended by the silence beyond CONTACT_GAP, and on the
-# machine's next contact extended by that for real -- so a lease live when its machine went quiet is still live when it
-# comes back, and nobody takes it meanwhile. A machine still talking (its sync loop beats every minute) pauses nothing:
-# a dead wrapper's leases on a laptop that is awake lapse as before. Bounded: CONTACT_PAUSE_MAX, then they lapse.
-CONTACT_GAP = 120               # s of a machine's silence before its leases' clocks pause ($AGENTCTL_CONTACT_GAP)
-CONTACT_PAUSE_MAX = 12 * 3600   # s a silent machine's leases are paused at most ($AGENTCTL_CONTACT_PAUSE_MAX)
 CONTACT_WRITE_EVERY = 10       # s: a machine's contact is written at most this often
 CONTACT_MACHINE = re.compile(r"[a-z][a-z0-9-]{0,31}")
 
@@ -96,10 +85,10 @@ class Store(OfferTable):
         r = c.execute("SELECT v FROM meta WHERE k=?", (f"contact:{machine}",)).fetchone()
         if not r:
             return 0.0, None
-        since = float(r["v"]) + env_num("AGENTCTL_CONTACT_GAP", CONTACT_GAP)
+        since = float(r["v"]) + knob_contact_gap()
         if now_ <= since:
             return 0.0, None
-        return min(now_ - since, env_num("AGENTCTL_CONTACT_PAUSE_MAX", CONTACT_PAUSE_MAX)), since
+        return min(now_ - since, knob_contact_pause_max()), since
 
     def _paused(self, c, row, now_=None):
         """The row as its paused clock reads it (A SILENT MACHINE'S LEASE CLOCKS PAUSE): a lease live when its

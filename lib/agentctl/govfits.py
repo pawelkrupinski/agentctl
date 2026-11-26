@@ -6,13 +6,13 @@ from contextlib import suppress
 from typing import Any
 from agentctl.statefile import read_record, write_json
 from agentctl.clock import wall_epoch
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.cpu import GOV_SATURATED
 from agentctl.machine import machine_cores
 from agentctl.govtickets import gov_dir, gov_log, gov_tickets
 from agentctl.govbudget import checks_cap, gov_budget
 from agentctl.pressure import gov_busy_cores
-from agentctl.configfile import GOV_CPU_FACTOR, knob_gov_cpu_factor
+from agentctl.knobs import GOV_CPU_FACTOR, knob_gov_cpu_factor
 
 
 SUITE_CAP = 1  # agentctl's own test-suite runs at once ($AGENTCTL_SUITE_CAP): parallel agents queue, never pile up

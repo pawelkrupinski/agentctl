@@ -14,7 +14,7 @@ from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
 from agentctl.owned import backoff
 from agentctl.remote import delete_check_branch, remote_poll
 from agentctl.remotejobs import REMOTE_WORKFLOW
-from agentctl.configfile import knob_blame_probe_wall
+from agentctl.knobs import knob_blame_probe_wall
 
 
 def drift_ci_path(repo):

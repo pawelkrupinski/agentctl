@@ -12,7 +12,7 @@ import sys
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import attempt, err, pid_alive, process_cache, run_cmd
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -20,7 +20,7 @@ from agentctl.procs import proc_alive, process_start
 from agentctl.owned import lock_held
 from agentctl.machine import free_gb, machine_cores, machine_sample
 from agentctl.govtickets import gov_bump, gov_change_mark, gov_dir, gov_log, gov_log_end, gov_tickets, gov_wait_change
-from agentctl.configfile import GOV_POLL
+from agentctl.knobs import GOV_POLL
 from agentctl.jvmreap import sbt_warm_state
 from agentctl.govbudget import GOV_MEM_GB, gov_budget
 from agentctl.store import LeaseLost
@@ -30,8 +30,8 @@ from agentctl.changekind import classify_change, queue_facts
 from agentctl.pressure import laptop_pressure, pressure_reading
 from agentctl.govusage import gov_job_cores
 from agentctl.govfits import gov_charged, gov_committed, gov_fits
-from agentctl.configfile import knob_gov_poll
-from agentctl.configfile import knob_laptop_pressure
+from agentctl.knobs import knob_gov_poll
+from agentctl.textknobs import knob_laptop_pressure
 
 
 # ---------------------------------------------------------------- the governor: ONE admission control for memory and CPU

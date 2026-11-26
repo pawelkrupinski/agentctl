@@ -1,4 +1,4 @@
-# module	AGENTCTL_ name	reason: the reads of the environment outside configfile (tests/test_knobs.py). Only falls.
+# module	AGENTCTL_ name	reason: the reads of the environment outside knobs (tests/test_knobs.py). Only falls.
 alertprobe	AGENTCTL_ALERT_NETWORK_GRACE	batch 2: not yet behind a configfile accessor
 alertprobe	AGENTCTL_ALERT_ORPHAN_PROBE	batch 2: not yet behind a configfile accessor
 alertroute	AGENTCTL_ALERT_*	batch 2: not yet behind a configfile accessor
@@ -28,6 +28,8 @@ clones	AGENTCTL_MOVIES_REMOTE	batch 2: not yet behind a configfile accessor
 conditions	AGENTCTL_CONDITION_PENDING_LAPSE	batch 2: not yet behind a configfile accessor
 conditions	AGENTCTL_RECOVER_MAX	batch 2: not yet behind a configfile accessor
 conditions	AGENTCTL_UNKNOWN_GRACE	batch 2: not yet behind a configfile accessor
+configfile	AGENTCTL_CONFIG	batch 2: not yet behind a knobs accessor
+configfile	AGENTCTL_CONFIG_SET	batch 2: not yet behind a knobs accessor
 cpu	AGENTCTL_LAPTOP_LOAD	batch 2: not yet behind a configfile accessor
 fixer	AGENTCTL_BRIEF_SRC	batch 2: not yet behind a configfile accessor
 fixerland	AGENTCTL_BIN_REPO	batch 2: not yet behind a configfile accessor
@@ -185,8 +187,6 @@ status	AGENTCTL_STATUS_BOUND	batch 2: not yet behind a configfile accessor
 statuspage	AGENTCTL_OPEN	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 statuspage	AGENTCTL_STATUS_PAGE	batch 2: not yet behind a configfile accessor
 statuspage	AGENTCTL_STATUS_PORT	batch 2: not yet behind a configfile accessor
-store	AGENTCTL_CONTACT_GAP	batch 2: not yet behind a configfile accessor
-store	AGENTCTL_CONTACT_PAUSE_MAX	batch 2: not yet behind a configfile accessor
 storeauth	AGENTCTL_STORE_SECRET	batch 2: not yet behind a configfile accessor
 syncsteps	AGENTCTL_SYNC_MIRROR	batch 2: not yet behind a configfile accessor
 tickrun	AGENTCTL_STEP_JOIN	batch 2: not yet behind a configfile accessor

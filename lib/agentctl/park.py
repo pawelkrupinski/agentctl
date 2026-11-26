@@ -8,7 +8,7 @@ import datetime as dt
 import os
 import re
 import time
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import attempt, git, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json

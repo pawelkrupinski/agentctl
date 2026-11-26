@@ -7,7 +7,7 @@ import shlex
 import subprocess
 import sys
 from agentctl.procrunner import process_runner
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import HOME
 
 

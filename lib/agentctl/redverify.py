@@ -5,7 +5,7 @@ import glob
 from typing import Any
 from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.statefile import read_record
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import git, reds_dir, remote
 from agentctl.trailers import trailer_values
 from agentctl.inboxentry import inbox_write

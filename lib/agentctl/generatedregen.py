@@ -7,7 +7,7 @@ import subprocess
 import sys
 from typing import Any, Callable, Dict, List, Optional
 from agentctl.procrunner import process_runner
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import git
 from agentctl.land import tool_env
 from agentctl.generated import (

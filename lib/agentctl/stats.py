@@ -8,7 +8,7 @@ import sys
 from typing import Any
 from agentctl.timefmt import iso_at
 from agentctl.statsrecords import CHANGE_EXITS, _num, landing_records, state_spans, watch_record
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import err, git, host_role
 from agentctl.waitingdir import waiting_entries, wlog
 from agentctl.gating import gate_flows

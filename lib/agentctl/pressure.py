@@ -6,7 +6,7 @@ import os
 import re
 import sys
 from typing import Any
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import attempt, run_cmd
 from agentctl.procs import ps_rows
 from agentctl.psparse import PsRow, parse_ps
@@ -14,10 +14,8 @@ from agentctl.statefile import read_record, write_json
 from agentctl.cpu import cpu_pressure, machine_busy_cores
 from agentctl.machine import machine_cores, machine_fixed, read_meminfo, run_queue
 from agentctl.govtickets import gov_dir
-from agentctl.configfile import (
-    LAPTOP_SWAP_WINDOW, knob_laptop_free_pct, knob_laptop_pressure_level, knob_laptop_swap_growth_mb,
-    knob_laptop_swap_window)
-from agentctl.configfile import knob_gov_busy_probe, knob_gov_load_probe, knob_gov_ps_probe, knob_laptop_pressure
+from agentctl.knobs import LAPTOP_SWAP_WINDOW, knob_laptop_free_pct, knob_laptop_pressure_level, knob_laptop_swap_growth_mb, knob_laptop_swap_window
+from agentctl.textknobs import knob_gov_busy_probe, knob_gov_load_probe, knob_gov_ps_probe, knob_laptop_pressure
 
 
 GOV_IDLE_CLAUDE = 10.0  # %CPU under which a Claude session is idle (not work)

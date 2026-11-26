@@ -1,7 +1,7 @@
-"""THE KNOBS (configfile): each has ONE typed accessor with its default and doc beside it; the code reads the accessor,
+"""THE KNOBS (knobs and textknobs): each has ONE typed accessor with its default and doc beside it; the code reads the accessor,
 never the environment. Per knob: its default, the environment overriding it, a config-file value, and a malformed
 value. The lint: lib/agentctl/ reads an AGENTCTL_* name from os.environ (or through env_num / env_text) only in
-configfile, except the sites of tests/knob-env-allowlist.tsv -- each with its reason -- which only ever shrink
+knobs / textknobs, except the sites of tests/knob-env-allowlist.tsv -- each with its reason -- which only ever shrink
 (`python3 tests/test_knobs.py --write` rewrites the file from the code: a fall is recorded, a new row needs a reason).
 HOME, PATH and the other names that are not AGENTCTL_* are the process's own and are not examined."""
 import ast, contextlib, glob, os, re, sys, unittest
@@ -13,7 +13,8 @@ from test_agentctl import A, TOOL  # noqa: E402
 LIB = os.path.join(os.path.dirname(TOOL), "lib", "agentctl")
 ALLOWLIST = os.path.join(HERE, "knob-env-allowlist.tsv")
 READERS = {"env_num", "env_text"}
-NOT_YET = "batch 2: not yet behind a configfile accessor"
+ACCESSOR_MODULES = ("knobs", "textknobs")  # the numeric and the text / path / fixture accessors: the only readers
+NOT_YET = "batch 2: not yet behind a knobs accessor"
 
 
 def _name(node):
@@ -53,7 +54,7 @@ def code_reads():
     reads = set()
     for p in sorted(glob.glob(os.path.join(LIB, "*.py"))):
         mod = os.path.basename(p)[:-3]
-        if mod == "configfile":
+        if mod in ACCESSOR_MODULES:
             continue
         with open(p) as f:
             reads |= {(mod, n) for n in env_reads(f.read())}
@@ -72,7 +73,7 @@ def allowlist():
 
 def write_allowlist():
     old = allowlist() if os.path.exists(ALLOWLIST) else {}
-    lines = ["# module\tAGENTCTL_ name\treason: the reads of the environment outside configfile (tests/test_knobs.py). Only falls."]
+    lines = ["# module\tAGENTCTL_ name\treason: the reads of the environment outside knobs (tests/test_knobs.py). Only falls."]
     for mod, name in sorted(code_reads()):
         lines.append(f"{mod}\t{name}\t{old.get((mod, name), NOT_YET)}")
     with open(ALLOWLIST, "w") as f:
@@ -97,10 +98,13 @@ def env(**kv):
                 os.environ[k] = v
 
 
-with open(os.path.join(LIB, "configfile.py")) as _f:
-    _SRC = _f.read()
-NUMERIC = re.findall(r'def (knob_\w+)\(\) -> float:\n    return env_num\("(AGENTCTL_\w+)", (\w+)\)', _SRC)
-TEXT = re.findall(r'def (knob_\w+)\(\) -> str:\n    return env_text\("(AGENTCTL_\w+)"(?:, ([^)\n]+))?\)(?:  #.*)?\n', _SRC)
+def _source(module):
+    with open(os.path.join(LIB, module + ".py")) as f:
+        return f.read()
+
+
+NUMERIC = re.findall(r'def (knob_\w+)\(\) -> float:\n    return env_num\("(AGENTCTL_\w+)", (\w+)\)', _source("knobs"))
+TEXT = re.findall(r'def (knob_\w+)\(\) -> str:\n    return env_text\("(AGENTCTL_\w+)"(?:, ([^)\n]+))?\)(?:  #.*)?\n', _source("textknobs"))
 SKIP_TEXT = {"AGENTCTL_STORE_TOKEN"}  # a token variable: the harness refuses any test touching one
 
 
@@ -175,9 +179,9 @@ class KnobTest(unittest.TestCase):
         with env(AGENTCTL_RED_STALL="123"):
             self.assertEqual(A.knob_red_stall(), 123.0)
 
-    def test_the_environment_is_read_outside_configfile_only_where_the_allowlist_says(self):
+    def test_the_environment_is_read_outside_knobs_only_where_the_allowlist_says(self):
         reads, allowed = code_reads(), allowlist()
-        self.assertEqual(sorted(reads - set(allowed)), [], "a new read of the environment: add an accessor in configfile")
+        self.assertEqual(sorted(reads - set(allowed)), [], "a new read of the environment: add an accessor in knobs")
         self.assertEqual(sorted(set(allowed) - reads), [], "a site gone: strike its row (python3 tests/test_knobs.py --write)")
         for key, reason in allowed.items():
             self.assertGreater(len(reason), 10, key)

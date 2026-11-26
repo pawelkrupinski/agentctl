@@ -10,13 +10,13 @@ from agentctl.timefmt import ts
 from agentctl.statefile import read_json_file, write_json_file
 from agentctl.selfcode import TOOL_PATH
 from agentctl.statemachines import StaleVersion, machine_state
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import err, fmt_age, git, remote, spawn_detached
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, wlog
 from agentctl.storetoken import detached_env
 from agentctl.queueslots import check_tree, check_tree_slot, set_change
-from agentctl.configfile import CHECK_LEASE_TTL
+from agentctl.knobs import CHECK_LEASE_TTL
 from agentctl.conditions import open_condition, run_probe
 from agentctl.queue import VERIFY_MODE, forces_full_recheck, range_paths, verify_supported
 from agentctl.generated import without_generated
@@ -26,7 +26,7 @@ from agentctl.waiting import batch_order, must_wait, must_wait_why
 from agentctl.batchrun import assemble
 from agentctl.recovery import batch_key, batch_move
 from agentctl.queuebatchsel import BACKLOG_BATCH_MAX, drift_serialize
-from agentctl.configfile import knob_waiting_green_ticks
+from agentctl.knobs import knob_waiting_green_ticks
 
 
 # EVERY CHANGE IS A MEMBER (2026-11-20, the owner: "batching waiting changes ... structurally"): an identity change joins

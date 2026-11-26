@@ -9,7 +9,7 @@ from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.statefile import read_record, write_json
 from agentctl.timefmt import day_hhmmz
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import err, process_cache, state_root
 from agentctl.procs import socket_host
 from agentctl.inboxentry import inbox_write

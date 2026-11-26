@@ -61,9 +61,9 @@ import time
 from typing import Any, Callable, Sequence, TypeVar
 from agentctl.procrunner import process_runner
 from agentctl.psparse import parse_ps
-from agentctl.configfile import config_load, env_num  # env_num: re-exported for the gate-rules lane (waiting, queueclose, queuebatchsel, redpending, redseen), which imports it from here
-from agentctl.configfile import (
-    knob_dispatch_dir, knob_host, knob_reds_dir, knob_remote, knob_role, knob_scratch, knob_state_root)
+from agentctl.configfile import config_load
+from agentctl.knobs import env_num  # re-exported for the gate-rules lane (waiting, queueclose, queuebatchsel, redpending, redseen), which imports it from here
+from agentctl.textknobs import knob_dispatch_dir, knob_host, knob_reds_dir, knob_remote, knob_role, knob_scratch, knob_state_root
 
 # THE PROCESS-WIDE CACHES, IN ONE REGISTRY (simplification-2026-10-31 item 10): every module-level dict, list or set a
 # part keeps between calls is made with `process_cache(...)`, so the test harness clears them all between tests

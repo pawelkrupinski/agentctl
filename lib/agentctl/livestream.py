@@ -9,7 +9,7 @@ import re
 import threading
 import time
 from contextlib import suppress
-from agentctl.configfile import env_num
+from agentctl.knobs import env_num
 from agentctl.core import attempt
 from agentctl.statefile import mtime
 from agentctl.live import live_registry, live_state, live_tail_info, live_track

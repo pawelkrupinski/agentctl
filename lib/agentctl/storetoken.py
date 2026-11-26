@@ -13,8 +13,8 @@ from agentctl.core import (
 from agentctl.ghapp import ghapp_config, ghapp_enabled, ghapp_token
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import waiting_state
-from agentctl.configfile import TOKEN_MISSING_SUMMARY, knob_token_summary
-from agentctl.configfile import knob_detached, knob_interactive, knob_no_secrets, knob_sock_dir
+from agentctl.knobs import TOKEN_MISSING_SUMMARY, knob_token_summary
+from agentctl.textknobs import knob_detached, knob_interactive, knob_no_secrets, knob_sock_dir
 
 
 def token_ns(o_r):
