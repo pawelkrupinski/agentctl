@@ -83,6 +83,26 @@ class LandHoldRaceTest(unittest.TestCase):
         self.assertEqual([e["kind"] for e in moves].count("hold.held"), 2,
                          "the second holder extended it")
 
+    def test_the_other_holder_extending_before_the_maker_gives_its_expiry_kills_neither(self):
+        """THE RACE BEHIND #289 / #292 (2026-11-26): the maker of a hold with its own --for gives it that expiry in a
+        second move; the other holder, finding the hold, may extend it first. The maker's move then read a stale
+        version, raised StaleVersion in its thread, and its move (and event) was lost: one hold.held, not two. The
+        barrier test above hit it on whichever thread order the scheduler picked; this one forces that order."""
+        real = self.st.open_singleton
+
+        def made_then_the_other_extends(*a, **k):
+            got = real(*a, **k)
+            if got[1]:  # this holder made it: the other extends before its expiry is written
+                self.st.open_singleton = real
+                A.land_hold_set(self.st, 3600, "other", "h1")
+            return got
+        self.st.open_singleton = made_then_the_other_extends
+        mine = A.land_hold_set(self.st, 1800, "mine", "h0")
+        held = A.land_holds(self.st)
+        self.assertEqual([h["id"] for h in held], [mine["id"]])
+        moves = [e["kind"] for e in self.st.item_events("hold", mine["id"]) if e["from_state"] is not None]
+        self.assertEqual(moves, ["hold.held", "hold.held"])
+
     def test_a_holder_whose_read_went_stale_extends_the_hold_in_force(self):
         """The other holder's own move (the hold's expiry) lands between this holder's read and its write: the version
         it read is stale, so it reads again and extends -- it did not die on StaleVersion."""

@@ -19,4 +19,4 @@ Id	8	4685982cfc23	0	executors start in the documented priority order within a ti
 IX	9	b5ccbd46acb7	0	no executor for a decided change
 IW	4	b02900d73284	0	a red fix of an open gate red the store names never waits for green past N ticks
 IR	3	d85d1b49855b	0	the queue never lands on a red gate a production commit naming no run of the open red
-IH	1	bccab4e7188b	2	two holders reading no hold at once make exactly one hold, both report it and both moves are said
+IH	1	bccab4e7188b	0	two holders reading no hold at once make exactly one hold, both report it and both moves are said

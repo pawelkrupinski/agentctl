@@ -314,6 +314,19 @@ class RedEpisodeTest(unittest.TestCase):
             self.assertGreater(sim.done_at[fix.cid], 20, "it names a run no item holds: it waits while the gate is red")
 
 
+class TwoHoldersTest(unittest.TestCase):
+    """TWO LAND HOLDERS AT ONCE (queue_sim.TWO_HOLDERS_*; tests #289 / #292): at every interleaving of the store's seams
+    -- above all the other extending before the maker gives its hold its expiry -- exactly one hold, both holders
+    return it, neither raises, both moves are said (IH), and the queue lands its changes once the short holds expire."""
+
+    def test_every_interleaving_makes_one_hold_both_report(self):
+        for script in (queue_sim.TWO_HOLDERS_APART, queue_sim.TWO_HOLDERS_EXTEND_FIRST, queue_sim.TWO_HOLDERS_MOVE_BETWEEN):
+            for seed in range(2):
+                sim = queue_sim.Sim(seed, calm=True, trees=2, script=list(script)).run()
+                self.assertEqual(failures([sim]), [], script[0][1]["order"])
+                self.assertEqual(set(queue_sim.landing_waits(sim)), {"a", "late"})
+
+
 class Timeline08010cTest(unittest.TestCase):
     """THE 08010c TIMELINE (queue_sim.TIMELINE_08010C; 2026-11-19): a fix of a red OUTSIDE the gate, checked while two
     ordinary changes owed combined-tree verifications and made a push batch, sat ~2 h. Replayed over 8 seeds: it is
