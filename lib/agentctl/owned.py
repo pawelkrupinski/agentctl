@@ -20,7 +20,7 @@ from agentctl.forge import forge_argv, forge_env
 from agentctl.procs import Terminated, process_start, safe_cwd
 from agentctl.selfcode import TOOL_PATH, code_files, code_version
 from agentctl.inboxentry import caller_owner, inbox_write
-from agentctl.wait import file_verdict, foreign_loops_on, run_verdict
+from agentctl.runverdict import file_verdict, foreign_loops_on, run_verdict
 
 
 # ---------------------------------------------------------------- owned: every long-running mode

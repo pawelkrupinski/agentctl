@@ -36,7 +36,7 @@ GH_CLI = os.environ.get("AGENTCTL_GH_CLI", "gh")  # the GitHub CLI
 GITHUB_WEB = "https://github.com"
 
 
-def forge_env(o_r, env=None):
+def forge_env(o_r: Any, env: Any = None) -> dict[str, str]:
     """The CLI's environment: gh's own auth ($GH_TOKEN as set, else `gh auth login`'s; on ci-runner the repo's App
     installation token), and never a prompt or an update check. Every call is one gh process (or, with `env`, a token
     handed to a child process), tallied against its caller (gh_tally)."""
@@ -48,7 +48,7 @@ def forge_env(o_r, env=None):
     return env
 
 
-def forge_argv(o_r, *args):
+def forge_argv(o_r: Any, *args: Any) -> list[str]:
     """[gh, *args, -R o_r]: `gh api` takes no -R (its path names the repo), every other gh command does."""
     if args and args[0] == "api":
         return [GH_CLI, *args]

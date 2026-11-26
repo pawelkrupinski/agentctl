@@ -6,7 +6,7 @@ mypy-errors	alertroute	29
 mypy-errors	alerts	59
 mypy-errors	ask	29
 mypy-errors	batch	34
-mypy-errors	batchcheck	37
+mypy-errors	batchcheck	36
 mypy-errors	batchitem	7
 mypy-errors	batchpush	24
 mypy-errors	batchrun	26
@@ -15,7 +15,7 @@ mypy-errors	beats	4
 mypy-errors	blame	43
 mypy-errors	blameopen	11
 mypy-errors	blamerecords	18
-mypy-errors	branches	69
+mypy-errors	branches	67
 mypy-errors	buildview	14
 mypy-errors	changekind	21
 mypy-errors	checkslot	24
@@ -39,7 +39,7 @@ mypy-errors	fixerenv	3
 mypy-errors	fixerland	24
 mypy-errors	fixerlife	56
 mypy-errors	fixersession	38
-mypy-errors	forge	51
+mypy-errors	forge	46
 mypy-errors	gatesummary	4
 mypy-errors	gating	28
 mypy-errors	generated	21
@@ -55,7 +55,7 @@ mypy-errors	inbox	14
 mypy-errors	invariants	32
 mypy-errors	issues	6
 mypy-errors	jvmreap	8
-mypy-errors	land	22
+mypy-errors	land	21
 mypy-errors	landdryrun	43
 mypy-errors	lander	33
 mypy-errors	landhold	4
@@ -77,7 +77,7 @@ mypy-errors	orphanpass	7
 mypy-errors	orphanreap	30
 mypy-errors	orphans	17
 mypy-errors	outsideflows	20
-mypy-errors	owned	44
+mypy-errors	owned	39
 mypy-errors	owner	24
 mypy-errors	ownerleases	24
 mypy-errors	owners	3
@@ -124,7 +124,7 @@ mypy-errors	redmove	12
 mypy-errors	redobserve	20
 mypy-errors	redopen	35
 mypy-errors	redpending	36
-mypy-errors	redprobe	23
+mypy-errors	redprobe	21
 mypy-errors	redquota	9
 mypy-errors	redrecord	3
 mypy-errors	redreplay	16
@@ -173,7 +173,7 @@ mypy-errors	tools	56
 mypy-errors	trailers	2
 mypy-errors	tunnel	4
 mypy-errors	upkeep	13
-mypy-errors	wait	64
+mypy-errors	wait	46
 mypy-errors	waiting	28
 mypy-errors	watchdog	19
 mypy-errors	watchtick	52

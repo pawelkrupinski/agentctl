@@ -19,7 +19,6 @@ cognitive	cmd_recover	15
 cognitive	config_knobs	25
 cognitive	conflict_resolve	17
 cognitive	explorer_tick	19
-cognitive	failed_jobs_log	23
 cognitive	fix_between	21
 cognitive	fix_replay_refusal	25
 cognitive	fix_replay_trailers	30
@@ -54,7 +53,6 @@ cognitive	red_unheld	19
 cognitive	refresh_pinned_recording	16
 cognitive	regen_hold_overdue	22
 cognitive	run_local_recheck	14
-cognitive	run_verdict	20
 cognitive	session_worktrees	25
 cognitive	set_change	16
 cognitive	spotlight_exclude	19
@@ -88,7 +86,6 @@ cyclomatic	cmd_recover	16
 cyclomatic	config_knobs	14
 cyclomatic	conflict_resolve	21
 cyclomatic	explorer_tick	19
-cyclomatic	failed_jobs_log	22
 cyclomatic	fix_between	22
 cyclomatic	fix_replay_refusal	23
 cyclomatic	fix_replay_trailers	16
@@ -127,7 +124,6 @@ cyclomatic	red_unheld	15
 cyclomatic	refresh_pinned_recording	18
 cyclomatic	regen_hold_overdue	21
 cyclomatic	run_local_recheck	18
-cyclomatic	run_verdict	26
 cyclomatic	session_worktrees	18
 cyclomatic	set_change	18
 cyclomatic	spotlight_exclude	15

@@ -48,8 +48,8 @@ def red_repo_key(o_r, key):
 def read_failure(o_r: str, run_id: Any) -> str | None:
     """The failing steps' log of a run of repo o_r, as `gh run view --log-failed` prints it; None when it cannot say."""
     try:
-        argv = forge_argv(o_r, "run", "view", str(run_id), "--log-failed")  # type: ignore[no-untyped-call]
-        r = run_cmd(argv, timeout=90, env=forge_env(o_r))  # type: ignore[no-untyped-call]
+        argv = forge_argv(o_r, "run", "view", str(run_id), "--log-failed")
+        r = run_cmd(argv, timeout=90, env=forge_env(o_r))
     except OSError:  # no gh
         return None
     return r.stdout if r.returncode == 0 and r.stdout.strip() else None

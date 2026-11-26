@@ -1,21 +1,16 @@
 # agentctl, part `wait`: wait.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-import datetime as dt
-import os
 import re
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import scratch
 from agentctl.timefmt import iso_epoch
-from agentctl.forge import forge_argv, forge_env, gh_json
+from agentctl.forge import forge_argv, forge_env
 from agentctl.classify import NOISE, NOT_A_FAILURE, STRONG, WEAK
-from agentctl.procs import ps
-from agentctl.workflows import STEP_TIMED_OUT, job_inner
+from agentctl.workflows import STEP_TIMED_OUT
 from agentctl.classify import ANSI, LOG_TS
 
 
-MEASURE_WORKFLOWS = {"Identity takes", "Identity model convergence"}  # takes rows: Identity takes (2026-11-08); a --full measure starts it from convergence
 # A STEP'S SCRIPT IS NO OUTPUT (2026-11-04): the runner echoes each `run:` step's script (cyan bold, `36;1m`) inside a
 # `##[group]Run <first line>` ... `##[endgroup]` header, with its shell and env, before running it. precommit-check.yml's
 # hook step holds `[ "$rc" != 124 ] || echo "::error::the pre-push checks ran past 80 minutes and were stopped"`, so
@@ -259,65 +254,65 @@ def job_failed_slice(o_r, job):
     return [f"{job['name']}\t{st}\t{l}" for st, l in picked], note
 
 
-def failed_jobs_log(o_r, run_id, jobs, attempt=None, notes=None):
-    """The --log-failed text of a run's failed `jobs`, every job gh could not map (its lines all UNKNOWN STEP, or
-    none) read through REST instead (above). notes, a list: each job's shortfall is appended."""
+def _failed_log_by_job(o_r: Any, run_id: Any, attempt: Any) -> tuple[dict[str, list[str]], Exception | None]:
+    """({job name: its lines} of the run's --log-failed text, None), or ({}, the error) when gh could not read it."""
     try:
         text = fetch_failed_log(o_r, run_id, attempt)
     except Exception as e:
-        text, gh_err = "", e
-    else:
-        gh_err = None
-    by_job = {}
+        return {}, e
+    by_job: dict[str, list[str]] = {}
     for raw in text.splitlines():
         parts = raw.split("\t", 2)
         by_job.setdefault(parts[0] if len(parts) == 3 else "?", []).append(raw)
-    out, read_any, rest_reads = [], gh_err is None, 0
-    for j in jobs:
-        mine = by_job.pop(j.get("name"), [])
-        mapped = any(r.split("\t", 2)[1] != UNMAPPED_STEP for r in mine if r.count("\t") >= 2)
-        failed_ = j.get("conclusion") in ("failure", "timed_out") or failed_steps(j)  # never a cancelled sibling's
-        if mapped or not j.get("databaseId") or not failed_ or rest_reads >= MAX_JOB_LOG_FETCHES:
-            out += mine
-            continue
-        rest_reads += 1
+    return by_job, None
+
+
+def _gh_left_unmapped(j: Any, mine: Any) -> bool:
+    """Whether a job that failed (never a cancelled sibling) has no line gh mapped to one of its steps."""
+    mapped = any(r.split("\t", 2)[1] != UNMAPPED_STEP for r in mine if r.count("\t") >= 2)
+    failed_ = j.get("conclusion") in ("failure", "timed_out") or failed_steps(j)
+    return bool(j.get("databaseId")) and bool(failed_) and not mapped
+
+
+class _FailedLog:
+    """A run's failed log, job by job: gh's own lines of a job it mapped, else the job's log through REST (at most
+    MAX_JOB_LOG_FETCHES a run); notes, a list: each job's shortfall is appended."""
+
+    def __init__(self, o_r: Any, notes: Any, read_any: bool) -> None:
+        self.o_r, self.notes, self.read_any = o_r, notes, read_any
+        self.out: list[str] = []
+        self.rest_reads = 0
+
+    def add(self, j: Any, mine: Any) -> None:
+        if self.rest_reads >= MAX_JOB_LOG_FETCHES or not _gh_left_unmapped(j, mine):
+            self.out += mine
+            return
+        self.rest_reads += 1
         try:
-            lines, note = job_failed_slice(o_r, j)
-            out += lines
-            read_any = True
-            if note and notes is not None:
-                notes.append(note)
+            lines, note = job_failed_slice(self.o_r, j)
         except Exception as e:
-            out += mine
-            if notes is not None and not mine:
-                notes.append(f"LOG UNREADABLE: {j.get('name')}: {str(e)[:160]}")
+            self.out += mine
+            if self.notes is not None and not mine:
+                self.notes.append(f"LOG UNREADABLE: {j.get('name')}: {str(e)[:160]}")
+            return
+        self.out += lines
+        self.read_any = True
+        if note and self.notes is not None:
+            self.notes.append(note)
+
+
+def failed_jobs_log(o_r, run_id, jobs, attempt=None, notes=None):
+    """The --log-failed text of a run's failed `jobs`, every job gh could not map (its lines all UNKNOWN STEP, or
+    none) read through REST instead (above). notes, a list: each job's shortfall is appended."""
+    by_job, gh_err = _failed_log_by_job(o_r, run_id, attempt)
+    log = _FailedLog(o_r, notes, gh_err is None)
+    for j in jobs:
+        log.add(j, by_job.pop(j.get("name"), []))
     for rest in by_job.values():
-        out += rest
-    if not read_any and gh_err is not None:
+        log.out += rest
+    if not log.read_any and gh_err is not None:
         raise gh_err
-    return "\n".join(out) + ("\n" if out else "")
-
-
-def fetch_takes_verdicts(o_r, run_id):
-    """{artifact: verdict.txt text} of a measure run's identity-takes-<cc> artifacts (the takes rows' verdict files)."""
-    env = forge_env(o_r)
-    arts = gh_json(o_r, "api", f"repos/{o_r}/actions/runs/{run_id}/artifacts").get("artifacts", [])
-    out = {}
-    for a in arts:
-        name = a.get("name", "")
-        if not name.startswith("identity-takes-"):
-            continue
-        d = os.path.join(scratch(), "agentctl-wait", f"art-{run_id}-{name}")
-        os.makedirs(d, exist_ok=True)
-        process_runner().run(forge_argv(o_r, "run", "download", str(run_id), "-n", name, "-D", d), capture_output=True, env=env,
-                       timeout=300)
-        p = os.path.join(d, "verdict.txt")
-        out[name] = open(p, errors="replace").read().strip() if os.path.exists(p) else "(no verdict.txt in the artifact)"
-    return out
-
-
-def is_measure_run(d):
-    return d.get("workflowName") in MEASURE_WORKFLOWS and (d.get("headBranch") or "").startswith("measure/")
+    return "\n".join(log.out) + ("\n" if log.out else "")
 
 
 def fetch_job_log(o_r, run_id, job_id):
@@ -415,7 +410,7 @@ def _failure_head(job: Any, lines: Any) -> Any:
     return f"  -- {job}: last {len(lines)} relevant line(s)"
 
 
-def failure_detail(o_r, run_id, failed, tail):
+def failure_detail(o_r: Any, run_id: Any, failed: Any, tail: Any) -> list[str]:
     """failed: job dicts (name, databaseId) or names."""
     if not failed or tail <= 0:
         return []
@@ -432,60 +427,3 @@ def failure_detail(o_r, run_id, failed, tail):
     return out
 
 
-def run_verdict(o_r, run_id, until="done", tail=0):
-    """(done, ok, text) for a CI run. until=landable: a measure run is done once its takes rows ended."""
-    d = gh_json(o_r, "run", "view", str(run_id), "--json", "status,conclusion,jobs,workflowName,headBranch")
-    jobs = d.get("jobs") or []
-    head = f"run {o_r}#{run_id}"
-    if until == "landable" and is_measure_run(d):
-        # Identity takes names its rows `leg (<cc>) / takes (<cc>)`: the job's own name (job_inner) after the caller's
-        takes = [j for j in jobs if job_inner(j.get("name", "")).startswith("takes")]
-        if d.get("status") == "completed" or (takes and all(j.get("status") == "completed" for j in takes)):
-            badj = [j for j in takes if j.get("conclusion") not in ("success", "skipped")]
-            bad = [j["name"] for j in badj]
-            lines = [f"{head}: takes rows ended ({len(takes)}): " + ("all green" if not bad else "failed: " + ", ".join(bad))]
-            try:
-                for name, text in sorted(fetch_takes_verdicts(o_r, run_id).items()):
-                    lines += [f"  [{name}] {l}" for l in text.splitlines()]
-            except Exception as e:
-                lines.append(f"  (could not read the verdict files: {e})")
-            lines.append(f"  collect the LANDABLE verdict: scripts/identity-measure --run {run_id}")
-            lines += failure_detail(o_r, run_id, badj, tail)
-            return True, not bad and bool(takes), "\n".join(lines)
-        n_done = sum(1 for j in takes if j.get("status") == "completed")
-        return False, None, f"{head}: {d.get('status')} (takes rows {n_done}/{len(takes)} ended)"
-    if d.get("status") != "completed":
-        return False, None, f"{head}: {d.get('status')}"
-    concl = d.get("conclusion") or "unknown"
-    failedj = [j for j in jobs if j.get("conclusion") in ("failure", "cancelled", "timed_out")]
-    failed = [j["name"] for j in failedj]
-    line = f"{head}: {concl}" + (f"; failed: {', '.join(failed)}" if failed else "")
-    lines = [line] + failure_detail(o_r, run_id, failedj, tail)
-    return True, concl in ("success", "skipped", "neutral"), "\n".join(lines)
-
-
-def file_verdict(path, contains):
-    if not os.path.exists(path):
-        return False, None, f"file {path}: absent"
-    if contains:
-        try:
-            with open(path, errors="replace") as f:
-                if not re.search(contains, f.read(), re.M):
-                    return False, None, f"file {path}: present, no match for {contains!r}"
-        except OSError as e:
-            return False, None, f"file {path}: unreadable ({e})"
-    st = os.stat(path)
-    when = dt.datetime.fromtimestamp(st.st_mtime, dt.timezone.utc).strftime("%H:%M:%SZ")
-    return True, True, f"file {path}: present ({st.st_size} bytes, mtime {when})"
-
-
-def foreign_loops_on(run_id):
-    """Other (non-agentctl) processes already polling this run id."""
-    me = os.getpid()
-    out = []
-    for pid, ppid, etime, cmd in ps():
-        if pid in (me, os.getppid()) or "agentctl" in cmd:
-            continue
-        if re.search(rf"run view {run_id}\b|runs/{run_id}\b", cmd) and "sleep" in cmd:
-            out.append(pid)
-    return out
