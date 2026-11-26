@@ -18,7 +18,7 @@ from typing import Any, Callable, Iterable, Optional
 
 from agentctl.checkrows import check_run_record
 from agentctl.backfillexact import upgrade_inferred
-from agentctl.causes import HOLD_CAUSE, red_move_cause, reject_cause
+from agentctl.causes import HOLD_CAUSE, OPENED_CAUSE, PROJECTED_CAUSE, red_move_cause, reject_cause
 from agentctl.statefile import json_object
 
 BACKFILL_SCHEMA = (
@@ -33,8 +33,9 @@ BACKFILL_SCHEMA = (
 
 Derived = Optional[tuple[str, str, str]]  # (cause, source, confidence)
 
-# a change's moves by state alone (exact: the state is structured), and by its text (inferred), first match wins
-CHANGE_STATE_CAUSE = {"pushing": "pushing", "landed": "landed", "superseded": "superseded", "checked": "check-passed"}
+# a change's moves by state alone (exact: these states' causes, as the projector writes them, need no text), and by its
+# text (inferred), first match wins
+CHANGE_STATE_CAUSE = {s: PROJECTED_CAUSE[s] for s in ("pushing", "landed", "superseded", "checked")}
 CHANGE_TEXT_CAUSE = (
     (re.compile(r"QUEUED AGAIN.*infra|stalled|fetch of main failed|could not reach"), "check-failed-infra"),
     (re.compile(r"REGEN NEEDED|regenerat"), "regen-hold"),
@@ -109,8 +110,8 @@ def derive_actor(ev: dict[str, Any], cause: Optional[str]) -> Optional[str]:
     return "reconciler" if ev.get("item_type") in ("change", "batch", "watch", "condition", "red") else None
 
 
+# the item field that recorded its opening, and its first state; its cause is the one its opening event writes now
 OPENED_AT = {"change": ("submitted_at", "queued"), "condition": ("opened_at", "open"), "watch": ("pushed_at", "watching")}
-OPENED_CAUSE_OF = {"change": "submitted", "condition": "probe", "watch": "landed"}
 
 
 def derived_openings(items: Iterable[tuple[str, dict[str, Any]]], opened: set[tuple[str, str]],
@@ -127,7 +128,7 @@ def derived_openings(items: Iterable[tuple[str, dict[str, Any]]], opened: set[tu
             continue
         out.append({"dedupe": f"{typ}:{it['id']}:opened", "at": at, "kind": f"{typ}.{state}", "item_type": typ,
                     "item_id": it["id"], "from_state": None, "to_state": state, "actor": None,
-                    "cause": OPENED_CAUSE_OF[typ], "detail": None, "source": f"items.data.{key}", "confidence": "exact"})
+                    "cause": OPENED_CAUSE[typ], "detail": None, "source": f"items.data.{key}", "confidence": "exact"})
     return out
 
 

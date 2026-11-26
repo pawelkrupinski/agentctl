@@ -81,6 +81,16 @@ class StoreCauseTest(unittest.TestCase):
         self.assertEqual((args[3]["cause"], args[5]), ("unattributed", {"d": 1}))
 
 
+class OneOpeningCauseTest(unittest.TestCase):
+    def test_a_derived_opening_says_the_cause_its_type_opens_with_now(self):
+        """Review 2026-11-26 (C 1.2): the backfill kept its own opening-cause table beside eventrows'."""
+        for typ, (key, state) in A.OPENED_AT.items():
+            [row] = A.derived_openings([(typ, {"id": "i1", "data": {key: 5.0}})], set(), {(typ, "i1"): 9.0})
+            self.assertEqual(row["cause"], A.opened_event(typ, "i1", state, 5.0)["cause"], typ)
+        for state, cause in A.CHANGE_STATE_CAUSE.items():
+            self.assertEqual(cause, A.PROJECTED_CAUSE[state], "the cause the projector writes for the state")
+
+
 class ProcessActorTest(unittest.TestCase):
     def test_actors(self):
         self.assertEqual(A.process_actor(["tick"], {}), "reconciler")

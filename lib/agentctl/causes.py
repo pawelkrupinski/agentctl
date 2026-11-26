@@ -139,3 +139,8 @@ def entry_cause(status: str, why: str = "") -> str:
 def governor_cause(waited_on: object) -> str:
     """A governor wait's cause: a class's cap (the suite or check cap) is a slot; memory, cores, pressure the governor."""
     return "check-slot" if waited_on and " cap)" in str(waited_on) else "governor"
+
+
+# the cause of an item's opening event (opened_event), by its type; a type not listed opens without one
+OPENED_CAUSE = {"change": "submitted", "condition": "probe", "watch": "landed", "red": "ci-verdict",
+                "branch-red": "ci-verdict", "batch": "batch", "hold": "owner"}

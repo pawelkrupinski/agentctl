@@ -12,12 +12,9 @@ import json
 import sqlite3
 from typing import Any, Callable
 
-from agentctl.causes import checked_cause
+from agentctl.causes import OPENED_CAUSE, checked_cause
 
 ATTRIBUTION_COLUMNS = ("actor", "cause", "detail")
-# the cause of an item's opening event (opened_event), by its type; a type not listed opens without one
-OPENED_CAUSE = {"change": "submitted", "condition": "probe", "watch": "landed", "red": "ci-verdict",
-                "branch-red": "ci-verdict", "batch": "batch", "hold": "owner"}
 
 
 def migrate_events(c: sqlite3.Connection) -> None:
