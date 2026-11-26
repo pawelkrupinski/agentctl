@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import glob
+from typing import Any
 from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.statefile import read_record
 from agentctl.core import env_num, git, reds_dir, remote
@@ -83,22 +84,38 @@ RED_MAIN_VERIFY_EVERY = 3 * 3600
 RED_MAIN_VERIFY_STATES = ("offered", "leased", "fix-pending", "blocked-external")
 
 
-def red_main_verify(store, it, repo, o_r, t):
+def _main_verify_due(it: Any, repo: Any, t: Any) -> bool:
+    """Is it an open red that no gate, landed fix or recent verify of its own covers (a main verify every
+    RED_MAIN_VERIFY_EVERY at most)?"""
     d = it["data"]
     if d.get("gate") or it["state"] not in RED_MAIN_VERIFY_STATES or not repo:
-        return []
+        return False
     if (d.get("fix") or {}).get("status") == "landed":
-        return []  # its own landed fix's verify (red_fix_pending) is on its way
+        return False  # its own landed fix's verify (red_fix_pending) is on its way
     mv = d.get("main_verify") or {}
-    if t - float(mv.get("at") or 0) < env_num("AGENTCTL_RED_MAIN_VERIFY_EVERY", RED_MAIN_VERIFY_EVERY):
-        return []
+    return t - float(mv.get("at") or 0) >= env_num("AGENTCTL_RED_MAIN_VERIFY_EVERY", RED_MAIN_VERIFY_EVERY)
+
+
+def _main_moved(repo: Any, d: Any) -> Any:
+    """(main's head, the commits between the red run's head and it) when main moved since the red run and was not
+    verified at that head already; None otherwise."""
     head = (d.get("last_run") or {}).get("headSha")
     r = git(repo, "rev-parse", f"{remote()}/main", check=False)
     main = r.stdout.strip() if r.returncode == 0 else ""
-    if not head or not main or main == head or mv.get("main") == main:
-        return []
+    if not head or not main or main == head or (d.get("main_verify") or {}).get("main") == main:
+        return None
     r = git(repo, "rev-list", "--no-merges", f"{head}..{main}", check=False)
-    shas = r.stdout.split() if r.returncode == 0 else []
+    return main, (r.stdout.split() if r.returncode == 0 else [])
+
+
+def red_main_verify(store: Any, it: Any, repo: Any, o_r: Any, t: Any) -> Any:
+    d = it["data"]
+    if not _main_verify_due(it, repo, t):
+        return []
+    moved = _main_moved(repo, d)
+    if not moved:
+        return []
+    main, shas = moved
     reach = next((x for x in shas if fix_reaches_red(repo, x, d)), None)
     if not reach:
         return []
@@ -110,20 +127,29 @@ def red_main_verify(store, it, repo, o_r, t):
     return [out]
 
 
-def red_flake_check(store, it, snap, repo, facts):
-    """A test red that cleared with no commit between that can have fixed it: a FLAKE, its own red (determinism tier,
-    lowest priority), open until a fix for it lands and a run proves it."""
-    d = it["data"]
+def _flake_pass(d: Any, snap: Any) -> Any:
+    """The workflow's latest run when a test red of a gate or outside workflow passed on it, else None."""
     if d.get("kind") != "test" or d.get("red_kind") not in ("gate", "outside"):
-        return []
+        return None
     last = ((snap or {}).get("latest") or {}).get(d.get("workflow")) or {}
-    if last.get("conclusion") != "success":
-        return []
+    return last if last.get("conclusion") == "success" else None
+
+
+def _unfixed_pass(repo: Any, d: Any, last: Any, facts: Any) -> bool:
+    """Passed with no commit between that can have fixed it (and the commits between were readable)."""
     rec = {"runs": d.get("runs"), "job": d.get("job"), "line": d.get("line"), "workflow": d.get("workflow")}
     vals = sorted(set().union(*[v for _s, _c, v, _t in facts.get("landed") or []])) if facts.get("landed") else []
     fixed_by, known = fix_between(repo, rec, (d.get("last_run") or {}).get("headSha"), last.get("headSha"),
                                   name_causes(None, vals), run_workflows())
-    if fixed_by or not known:
+    return known and not fixed_by
+
+
+def red_flake_check(store: Any, it: Any, snap: Any, repo: Any, facts: Any) -> Any:
+    """A test red that cleared with no commit between that can have fixed it: a FLAKE, its own red (determinism tier,
+    lowest priority), open until a fix for it lands and a run proves it."""
+    d = it["data"]
+    last = _flake_pass(d, snap)
+    if not last or not _unfixed_pass(repo, d, last, facts):
         return []
     ob = {"key": d["key"], "workflow": d["workflow"], "jobs": d.get("jobs"), "job": d.get("job"), "kind": "test",
           "line": d.get("line"), "red_kind": "flake", "gate": False, "names": set(d.get("runs") or []),
@@ -154,26 +180,49 @@ def fix_between(repo, rec, red_head, green_head, causes, workflows):
     same cause (any workflow) or a run of the same workflow, or a change to a file its failure names, or to CI's own
     workflows and actions -- a `Fixes-Red:` beside `Red-Unrelated:` names the red only to pass the gate, and fixes
     nothing (`landed_fix_commits`). (sha or None, known): known False when the commits between cannot be read here."""
-    if not repo or not red_head or not green_head:
+    if not (repo and red_head and green_head):
         return None, False
     if red_head == green_head:
         return None, True
+    chunks = _commits_between(repo, red_head, green_head)
+    if chunks is None:
+        return None, False
+    named = _named_paths(rec)
+    for chunk in chunks:
+        sha, vals, files = _log_chunk(chunk)
+        if _names_this_red(vals, rec, causes, workflows) or _touches_failure_or_ci(files, named):
+            return sha, True
+    return None, True
+
+
+def _named_paths(rec: Any) -> set[str]:
+    """The paths the red's failure line names."""
+    return {m.group(1) for m in PATHISH.finditer(rec.get("line") or "")}
+
+
+def _commits_between(repo: Any, red_head: Any, green_head: Any) -> Any:
+    """The log of red_head..green_head as one chunk per commit (sha, trailers, files), or None when it cannot be read."""
     r = git(repo, "log", f"{red_head}..{green_head}", "--format=%x00%H%x09%(trailers:key=Red-Unrelated,valueonly,separator=%x2C)"
             "%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", "--name-only", check=False)
-    if r.returncode != 0:
-        return None, False
-    names = set(map(str, rec.get("runs") or []))
+    return r.stdout.split("\0")[1:] if r.returncode == 0 else None
+
+
+def _log_chunk(chunk: str) -> tuple[str, set[str], list[str]]:
+    """One commit of fix_between's log: (sha, the Fixes-Red values it counts -- none beside Red-Unrelated --, files)."""
+    head, _, files = chunk.partition("\n")
+    sha, _, rest = head.partition("\t")
+    unrelated, _, vals = rest.partition("\t")
+    return sha, (set() if unrelated.strip() else trailer_values(vals)), files.split()
+
+
+def _names_this_red(vals: set[str], rec: Any, causes: Any, workflows: Any) -> bool:
+    """Do the Fixes-Red values name one of the red's runs, a run with its cause, or a run of its workflow?"""
     cause = cause_of(rec.get("job"), rec.get("line"))
-    named = {m.group(1) for m in PATHISH.finditer(rec.get("line") or "")}
-    for chunk in r.stdout.split("\0")[1:]:
-        head, _, files = chunk.partition("\n")
-        sha, _, rest = head.partition("\t")
-        unrelated, _, vals = rest.partition("\t")
-        vals = set() if unrelated.strip() else trailer_values(vals)
-        if vals & names or (cause and any(cause in causes.get(v, ()) for v in vals)) \
-                or any(workflows.get(v) == rec.get("workflow") for v in vals):
-            return sha, True
-        for f in files.split():
-            if f.startswith((".github/workflows/", ".github/actions/")) or any(f.endswith(n) or n.endswith(f) for n in named):
-                return sha, True
-    return None, True
+    return bool(vals & set(map(str, rec.get("runs") or [])) or (cause and any(cause in causes.get(v, ()) for v in vals))
+                or any(workflows.get(v) == rec.get("workflow") for v in vals))
+
+
+def _touches_failure_or_ci(files: list[str], named: set[str]) -> bool:
+    """Is one of the files CI's own workflows or actions, or one the failure names?"""
+    return any(f.startswith((".github/workflows/", ".github/actions/")) or any(f.endswith(n) or n.endswith(f) for n in named)
+               for f in files)

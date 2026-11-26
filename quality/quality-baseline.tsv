@@ -16,7 +16,6 @@ cognitive	cmd_lease	17
 cognitive	cmd_recover	15
 cognitive	conflict_resolve	17
 cognitive	explorer_tick	19
-cognitive	fix_between	21
 cognitive	forge_run_list	22
 cognitive	gov_fits	20
 cognitive	lap_change_deadline	15
@@ -32,8 +31,6 @@ cognitive	recovery_tick	26
 cognitive	red_attach_obs	17
 cognitive	red_callable_evidence	15
 cognitive	red_failed_steps	14
-cognitive	red_flake_check	15
-cognitive	red_main_verify	14
 cognitive	red_offer	17
 cognitive	red_unheld	19
 cognitive	refresh_pinned_recording	16
@@ -66,7 +63,6 @@ cyclomatic	cmd_lease	20
 cyclomatic	cmd_recover	16
 cyclomatic	conflict_resolve	21
 cyclomatic	explorer_tick	19
-cyclomatic	fix_between	22
 cyclomatic	forge_run_list	15
 cyclomatic	gate_flow_names	14
 cyclomatic	gov_fits	21
@@ -86,8 +82,6 @@ cyclomatic	red_callable_evidence	20
 cyclomatic	red_claim	13
 cyclomatic	red_diagnosis_step	14
 cyclomatic	red_failed_steps	22
-cyclomatic	red_flake_check	17
-cyclomatic	red_main_verify	20
 cyclomatic	red_offer	19
 cyclomatic	red_unheld	15
 cyclomatic	refresh_pinned_recording	18

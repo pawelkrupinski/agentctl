@@ -132,11 +132,11 @@ mypy-errors	redrepos	8
 mypy-errors	redretired	49
 mypy-errors	redseen	50
 mypy-errors	redstatus	5
-mypy-errors	redstep	37
+mypy-errors	redstep	35
 mypy-errors	redtick	80
 mypy-errors	reduntracked	42
 mypy-errors	redvault	23
-mypy-errors	redverify	19
+mypy-errors	redverify	18
 mypy-errors	redview	25
 mypy-errors	redwaits	8
 mypy-errors	redworkflow	4
