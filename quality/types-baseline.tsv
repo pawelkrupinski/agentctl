@@ -30,7 +30,7 @@ mypy-errors	config	19
 mypy-errors	configfile	8
 mypy-errors	conflicts	27
 mypy-errors	core	24
-mypy-errors	culpritfix	32
+mypy-errors	culpritfix	29
 mypy-errors	dispatchblock	13
 mypy-errors	dispatches	47
 mypy-errors	explorer	16

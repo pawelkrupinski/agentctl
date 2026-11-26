@@ -219,52 +219,97 @@ def lander_ci_why(rid, limit=25):
         return ""
 
 
+class LanderRevival:
+    """THE LANDER REVIVED, one stage a method: its session and transcript, a worktree to work in, the brief, the
+    launch (red_dispatch), the red's record and the inbox line. A stage that cannot go on hands the red to a fresh
+    fixer (lander_fallback), saying why."""
+
+    def __init__(self, store: Any, o_r: Any, repo: Any, off: Any, took: Any, u: Any, b: Any) -> None:
+        self.store, self.o_r, self.repo, self.off, self.took, self.u, self.b = store, o_r, repo, off, took, u, b
+        self.g = blame_culprit(b)
+        self.lander = self.g.get("lander") or {}
+
+    def fall_back(self, failed: Any, why: str) -> Any:
+        return lander_fallback(self.store, self.o_r, self.repo, self.off, self.took, self.u,
+                               dict(self.b, revive_failed=failed), why)
+
+    def transcript(self, sid: Any) -> Any:
+        """The session's transcript: the lander's recorded one when it is there, else (not a subagent's) the background
+        session's; None when there is none."""
+        l = self.lander
+        if l.get("transcript") and os.path.exists(l["transcript"]):
+            return l["transcript"]
+        return None if l.get("agent") else bg_transcript(sid) if sid else None
+
+    def worktree(self) -> tuple[Any, Any, Any]:
+        """(worktree, the one it moved from, why none): the lander's own when it is there and allowed, else a fresh one."""
+        wt = self.lander.get("worktree")
+        if wt and os.path.isdir(wt) and allowed_path(wt):
+            return wt, None, None
+        fresh, why = fresh_worktree(self.repo, "lander", self.u["run"].get("number"))
+        return fresh, wt, why
+
+    def brief(self, sid: Any, tr: Any, wt: Any, moved: Any) -> dict[str, Any]:
+        l, g, b = self.lander, self.g, self.b
+        rv = b.get("revert") or {}
+        rid = self.u["run"].get("databaseId")
+        return {"mode": "transcript" if l.get("agent") else "resume", "session": sid, "agent": l.get("agent"),
+                "transcript": tr, "change": blame_change_key(g), "shas": [c[:10] for c in g["commits"]],
+                "subject": g.get("subject"), "revert": rv.get("msg"), "reverted": bool(rv.get("ok")), "worktree": wt,
+                "moved_from": moved, "evidence": b.get("evidence"), "ci_why": lander_ci_why(rid) if rid else ""}
+
+    def launch_cwd(self, wt: Any) -> Any:
+        """Where the session is resumed: its own cwd, when it is there (a subagent has none), else the worktree."""
+        l = self.lander
+        return l.get("session_cwd") if not l.get("agent") and l.get("session_cwd") and os.path.isdir(l["session_cwd"]) else wt
+
+    def dispatch(self, brief: dict[str, Any], wt: Any, cwd: Any) -> tuple[bool, str]:
+        resume = {"worktree": wt, "note": None, "launch_cwd": cwd}
+        if not self.lander.get("agent"):
+            resume["session"] = brief["session"]
+        return red_dispatch(self.o_r, self.repo, dict(self.u, lander=brief, blame_note=None),
+                            why=f"tier lander: {lander_name(self.lander)} revived", resume=resume,
+                            lease=self.off["lease"], took=self.took)
+
+    def record(self, brief: dict[str, Any], wt: Any) -> None:
+        it = self.store.item("red", self.off["item"].split(":", 1)[1])
+        if it:
+            self.store.update_item("red", it["id"], it["version"], {"blame": dict(
+                self.b, revived={"at": ts(), "how": brief["mode"], "worktree": wt})})
+
+    def announce(self, brief: dict[str, Any], wt: Any, cwd: Any) -> str:
+        """The inbox line saying the lander was revived (written under the worktree), returned as the verdict."""
+        reverted = "was reverted" if brief["reverted"] else "could not be reverted (it fixes forward)"
+        line = (f"LANDER REVIVED: {red_what(self.u)}: {lander_name(self.lander)} -- its change {brief['change']} {reverted} -- "
+                f"{'resumed' if brief['mode'] == 'resume' else 'continued from its transcript'} in {tilde(wt)} "
+                "to fix it and land it again (`claude agents`)")
+        inbox_write("red", line, [line], [], 0, cwd=wt)
+        return line
+
+    def revive(self) -> Any:
+        sid = self.lander.get("session")
+        tr = self.transcript(sid)
+        if not sid:
+            return self.fall_back("no session recorded", "no lander session")
+        if not tr:
+            why = f"its transcript is gone ({self.lander.get('transcript') or 'session ' + sid[:8]})"
+            return self.fall_back(why, why)
+        wt, moved, why = self.worktree()
+        if not wt:
+            return self.fall_back(why, why)
+        brief = self.brief(sid, tr, wt, moved)
+        cwd = self.launch_cwd(wt)
+        ok, msg = self.dispatch(brief, wt, cwd)
+        if not ok:
+            return self.fall_back(msg, f"revival failed ({msg[:120]})")
+        self.record(brief, wt)
+        return True, self.announce(brief, wt, cwd)
+
+
 def lander_revive(store, o_r, repo, off, took, u, b):
     """THE LANDER REVIVED, under the red's lease (tier `lander`): its own Claude session resumed in its worktree
     (`claude --bg --resume <session>`, launched in the session's own cwd); a SUBAGENT -- which has no session of its own
     to resume -- as a session in its worktree that reads its transcript first. Told the red run, the failing step and
     lines (ci-why), that its change was reverted, and to fix it, rebase, re-apply it with the fix and land again. No
     session, its transcript gone, no worktree to work in, or the launch refused: a fresh fixer (lander_fallback)."""
-    g = blame_culprit(b)
-    l = g.get("lander") or {}
-    num, rid = u["run"].get("number"), u["run"].get("databaseId")
-    sid = l.get("session")
-    tr = l.get("transcript") if l.get("transcript") and os.path.exists(l["transcript"]) else \
-        (None if l.get("agent") else bg_transcript(sid) if sid else None)
-    if not sid:
-        return lander_fallback(store, o_r, repo, off, took, u, dict(b, revive_failed="no session recorded"),
-                               "no lander session")
-    if not tr:
-        why = f"its transcript is gone ({l.get('transcript') or 'session ' + sid[:8]})"
-        return lander_fallback(store, o_r, repo, off, took, u, dict(b, revive_failed=why), why)
-    wt, moved = l.get("worktree"), None
-    if not wt or not os.path.isdir(wt) or not allowed_path(wt):
-        moved = wt
-        wt, why = fresh_worktree(repo, "lander", num)
-        if not wt:
-            return lander_fallback(store, o_r, repo, off, took, u, dict(b, revive_failed=why), why)
-    rv = b.get("revert") or {}
-    name = blame_change_key(g)
-    brief = {"mode": "transcript" if l.get("agent") else "resume", "session": sid, "agent": l.get("agent"),
-             "transcript": tr, "change": name, "shas": [c[:10] for c in g["commits"]], "subject": g.get("subject"),
-             "revert": rv.get("msg"), "reverted": bool(rv.get("ok")), "worktree": wt, "moved_from": moved,
-             "evidence": b.get("evidence"),
-             "ci_why": lander_ci_why(rid) if rid else ""}
-    cwd = l.get("session_cwd") if not l.get("agent") and l.get("session_cwd") and os.path.isdir(l["session_cwd"]) else wt
-    resume = {"worktree": wt, "note": None, "launch_cwd": cwd}
-    if not l.get("agent"):
-        resume["session"] = sid
-    ok, msg = red_dispatch(o_r, repo, dict(u, lander=brief, blame_note=None),
-                           why=f"tier lander: {lander_name(l)} revived", resume=resume, lease=off["lease"], took=took)
-    if not ok:
-        return lander_fallback(store, o_r, repo, off, took, u, dict(b, revive_failed=msg), f"revival failed ({msg[:120]})")
-    it = store.item("red", off["item"].split(":", 1)[1])
-    if it:
-        store.update_item("red", it["id"], it["version"], {"blame": dict(b, revived={"at": ts(), "how": brief["mode"],
-                                                                                    "worktree": wt})})
-    line = (f"LANDER REVIVED: {red_what(u)}: {lander_name(l)} -- its change {name} "
-            f"{'was reverted' if rv.get('ok') else 'could not be reverted (it fixes forward)'} -- "
-            f"{'resumed' if brief['mode'] == 'resume' else 'continued from its transcript'} in {tilde(wt)} "
-            "to fix it and land it again (`claude agents`)")
-    inbox_write("red", line, [line], [], 0, cwd=wt)
-    return True, line
+    return LanderRevival(store, o_r, repo, off, took, u, b).revive()
