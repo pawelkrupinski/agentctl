@@ -48,6 +48,7 @@ INVARIANT_KINDS = {
     "IW": "a red fix of an open gate red the store names never waits for green past N ticks",
     "IR": "the queue never lands on a red gate a production commit naming no run of the open red",
     "IH": "two holders reading no hold at once make exactly one hold, both report it and both moves are said",
+    "IT": "no overlap hold outlives its TTL while its holder is not in flight",
 }
 VIOLATIONS_MAX = 50  # lines one scenario keeps in the gate's count mode
 ROOT = "0" * 40
@@ -1312,6 +1313,12 @@ class Sim:
                             self.profile.get("before_tiers") and set(hold["files"]) <= set(SNAPSHOTS)):
                     self.violate("I10", f"change {it['id']} held behind {hold.get('blocker')} for generated files alone: "
                                  f"{', '.join(hold['files'])}")
+                # T. AN IDLE HOLDER'S HOLD EXPIRES (queuehold.py): an overlap hold on a change not in flight lasts at
+                # most HOLD_IDLE_TTL (a tick of slack for the tick that lets go of it)
+                if hold.get("kind") == "overlap" and blocker.get("status") not in A.HOLDER_IN_FLIGHT \
+                        and self.clock[0] - float(hold.get("since") or self.clock[0]) > A.knob_hold_idle_ttl() + 2 * TICK:
+                    self.violate("IT", f"change {it['id']} held {int((self.clock[0] - float(hold['since'])) // TICK)} "
+                                 f"ticks behind {hold.get('blocker')} ({blocker.get('status')}), which is not in flight")
         self.check_invariants(before, reds)
         self.tick += 1
         self.clock[0] += TICK
@@ -1711,6 +1718,15 @@ def two_holders_script(order):
 TWO_HOLDERS_APART = two_holders_script("apart")
 TWO_HOLDERS_EXTEND_FIRST = two_holders_script("extend-first")
 TWO_HOLDERS_MOVE_BETWEEN = two_holders_script("move-between")
+# A HOLD ON A PARKED CHANGE (2026-11-23..25, py-reuse-git behind py-under-bar): the gate red, `a` checked and parked on
+# `waiting`; `b`, conflicting with it, queued behind it. The red stays open past HOLD_IDLE_TTL: b's hold on the parked
+# change expires (IT), and b is checked meanwhile.
+HOLD_ON_PARKED = [
+    (0, {"kind": "open-red"}),
+    (0, {"label": "a", "worktree": "under-bar", "paths": ["web/src/main/A.scala"]}),
+    (1, {"label": "b", "worktree": "reuse-git", "paths": ["web/src/main/B.scala"], "conflicts_with": "a"}),
+    (100, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]}),
+]
 FIX_08010C_BOUND = 8  # ticks from its arrival to LANDED (a check is 2-4 ticks; nothing may hold it)
 
 

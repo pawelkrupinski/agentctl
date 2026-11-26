@@ -74,6 +74,9 @@ def scenarios():
     # v6 (2026-11-26): two land holders at once, at each interleaving of the store's seams (IH; tests #289 / #292)
     out += [(f"two-holders-{o}-{s}", {"seed": s, "calm": True, "trees": 2, "script": f"TWO_HOLDERS_{o.upper()}"})
             for o in ("apart", "extend_first", "move_between") for s in range(2)]
+    # v7 (2026-11-26): a hold on a change parked on `waiting` past HOLD_IDLE_TTL (IT)
+    out += [(f"hold-on-parked-{s}", {"seed": s, "calm": True, "trees": 2, "script": "HOLD_ON_PARKED",
+                                         "profile": "PARKED"}) for s in range(4)]
     return out
 
 
@@ -87,7 +90,7 @@ def run_one(spec):
     import queue_sim
     import test_queue_sim as T
     profiles = {"LOAD": T.LOAD, "CHAOS": T.CHAOS, "CHAOS_OUTSIDE": {**T.CHAOS, "outside_red": 0.08},
-                "LOADLONE": dict(T.LOAD, nobatch=0.4)}
+                "LOADLONE": dict(T.LOAD, nobatch=0.4), "PARKED": {"land_bound": 200}}
     kw = dict(spec)
     if "profile" in kw:
         kw["profile"] = profiles[kw["profile"]]
