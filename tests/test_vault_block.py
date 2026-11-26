@@ -80,6 +80,18 @@ class VaultAskTest(VaultBase):
         self.assertIn('decide vault-movies "here"', ask["how"])
         self.assertIn("WAITING ON YOU", self.view(it)[1])
 
+    def test_a_vault_ask_on_a_red_whose_fix_is_pending_keeps_it_pending(self):
+        """2026-11-22: five vault asks on reds whose fix had landed were REFUSED (`fix-pending -> blocked-external is no
+        move of its machine`): red.illegal records, the ask lost. A pending fix waits on no vault."""
+        it = self.st.put_item("red", "fp1", "fix-pending", {"key": "fp1", "workflow": "Main", "job": "test",
+                                                          "last_run": {"number": 7}, "fix": {"sha": "abc"}})
+        lines = A.red_vault_block(self.st, it, {}, "movies", "BLOCKED ON OWNER [vault]", self.t[0])
+        it = self.st.item("red", "fp1")
+        self.assertEqual(it["state"], "fix-pending", lines)
+        self.assertEqual(it["data"].get("vault_ask"), "movies")
+        self.assertFalse([e for e in self.st.item_events("red", "fp1") if e["kind"] == "red.illegal"])
+        self.assertIsNone(self.st.get(A.block_lease(cause="vault-movies")), "no owner ask for a fix in flight")
+
     def test_a_blocked_on_owner_vault_verdict_waits_too_never_re_offered_every_turn(self):
         it, _acts = self.launch(self.ios_red(), outcome=BLOCKED)
         self.assertEqual(it["state"], "blocked-external", "#77 was offered back to its owner 4 times in 4 minutes")

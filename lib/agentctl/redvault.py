@@ -141,6 +141,14 @@ def red_vault_block(store, it, upd, ns, why, t):
     """The red waits on vault ns: it joins the vault's ONE lease (opened when none is live). Moved quietly: the tick's
     red_owner_reminders tells the owner once, with `decide vault-<ns>`."""
     d = {**it["data"], **upd}
+    # A PENDING FIX WAITS ON NO VAULT (2026-11-22: five vault asks on reds whose fix had landed -- 9a333c1f0ccc.4,
+    # ec12a4564dbc.9, 2da9f366a0b5, 5254bffda9d2.4, 90683fa5cb3b -- each REFUSED as fix-pending -> blocked-external, no
+    # move of the red machine, so neither the ask nor the fixer's verdict was kept). Its fix decides it (verified, or
+    # refuted and offered again); nobody needs the vault meanwhile: the red stays fix-pending, the ask noted on it.
+    if it["state"] == "fix-pending":
+        red_move(store, it, "fix-pending", f"{red_what(d)}: its fix is pending: the {ns} vault ask waits for its "
+                 "verdict (asked again only if the fix is refuted)", data={**upd, "vault_ask": ns})
+        return [f"{red_what(d)}: fix pending, the {ns} vault ask kept"]
     key = d["key"]
     lname = block_lease(cause=f"vault-{ns}")
     row = store.get(lname)
