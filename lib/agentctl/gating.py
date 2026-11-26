@@ -5,7 +5,7 @@ from agentctl.clock import epoch_now
 import os
 import re
 from contextlib import suppress
-from typing import NamedTuple
+from typing import Any, NamedTuple
 from agentctl.core import git, process_cache, remote, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
@@ -55,32 +55,32 @@ def gating_checks_path():
 GATING_API_TTL = 300  # s a registry (or workflow names) read through GitHub's API, with no clone here, is kept
 
 
-class RegistryRead(NamedTuple):
+class GatingRegistryRead(NamedTuple):
     """One read of the registry: its rows (none when unread), the main it was read at, why it was not read, and whether
     the process's own cache answered it (nothing to keep then)."""
-    rows: list
+    rows: list[Any]
     main: str | None
     why: str
     cached: bool = False
 
 
-def read_registry_clone(repo):
+def read_registry_clone(repo: Any) -> GatingRegistryRead:
     """The registry at origin/main of the clone `repo` (cached per main sha)."""
     main = git(repo, "rev-parse", f"refs/remotes/{remote()}/main", check=False).stdout.strip()
     if main and (repo, main) in _gating_rows:
-        return RegistryRead(_gating_rows[(repo, main)], main, "", True)
+        return GatingRegistryRead(_gating_rows[(repo, main)], main, "", True)
     r = git(repo, "show", f"{main}:{GATING_CHECKS_FILE}", check=False) if main else None
     rows = gating_checks_parse(r.stdout) if r is not None and r.returncode == 0 else []
     if rows:
         _gating_rows[(repo, main)] = rows
-    return RegistryRead(rows, main, f"{GATING_CHECKS_FILE} unread at {remote()}/main {(main or '?')[:10]}")
+    return GatingRegistryRead(rows, main, f"{GATING_CHECKS_FILE} unread at {remote()}/main {(main or '?')[:10]}")
 
 
-def read_registry_api(o_r):
+def read_registry_api(o_r: Any) -> GatingRegistryRead:
     """The registry through GitHub's contents API (kept GATING_API_TTL), for a repo with no clone here."""
     hit = _gating_rows.get(("api", o_r))
     if hit and epoch_now() - hit[0] < GATING_API_TTL:
-        return RegistryRead(hit[1], None, "", True)
+        return GatingRegistryRead(hit[1], None, "", True)
     rows, main, why = [], None, "no clone of it here"
     try:
         import base64
@@ -91,10 +91,10 @@ def read_registry_api(o_r):
         why = f"no clone of it here, and {GATING_CHECKS_FILE} unread through the API ({str(e)[:120]})"
     if rows:
         _gating_rows[("api", o_r)] = (epoch_now(), rows)
-    return RegistryRead(rows, main, why)
+    return GatingRegistryRead(rows, main, why)
 
 
-def keep_registry(o_r, rows, main):
+def keep_registry(o_r: Any, rows: Any, main: Any) -> None:
     """The rows last read, kept in the state root (when they changed): a stale registry is an earlier main's, never none."""
     with suppress(OSError):
         kept = read_record(gating_checks_path()) or {}
@@ -120,7 +120,7 @@ def gating_checks(o_r):
     raise GateRegistryUnread(f"{o_r}'s gating checks registry: {read.why}")
 
 
-def api_workflow_names(o_r):
+def api_workflow_names(o_r: Any) -> Any:
     """{workflow file: name} of GitHub's workflows list (kept GATING_API_TTL; {} when unreadable)."""
     hit = _gating_rows.get(("names", o_r))
     if not (hit and epoch_now() - hit[0] < GATING_API_TTL):
@@ -168,7 +168,7 @@ _flow_files = process_cache({})   # main sha -> {workflow name: file}
 _flow_meta = process_cache({})    # main sha -> {"callable": {name whose only trigger is workflow_call}, "paths": {name: path},
 
 
-def note_workflow_file(txt, path, out, meta):
+def note_workflow_file(txt: Any, path: Any, out: Any, meta: Any) -> None:
     """One workflow file's name -> file, path, whether only workflow_call starts it, and the workflows it calls."""
     m = re.search(r"^name:\s*[\"']?(.+?)[\"']?\s*$", txt, re.M)
     name = m.group(1) if m else os.path.basename(path)

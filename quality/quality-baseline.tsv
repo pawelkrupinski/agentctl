@@ -5,7 +5,7 @@
 # (copies), Coupling: (fan-out, cycle). CLAUDE.md, "The ratchets".
 cognitive	RemoteStore._call_once	18
 cognitive	_gh_api_once	19
-cognitive	_watch_group	28
+cognitive	_watch_group	12
 cognitive	assemble	24
 cognitive	batch_check	19
 cognitive	bg_spent	16
@@ -24,9 +24,7 @@ cognitive	fix_between	21
 cognitive	fix_replay_refusal	25
 cognitive	fix_replay_trailers	30
 cognitive	forge_run_list	22
-cognitive	gate_flow_names	17
 cognitive	gate_runs_pass	17
-cognitive	gating_checks	29
 cognitive	gov_fits	20
 cognitive	job_ever_green	21
 cognitive	land_status_entry	25
@@ -35,17 +33,11 @@ cognitive	lap_change_deadline	15
 cognitive	laptop_role	15
 cognitive	laptop_role_refusal	23
 cognitive	live_state	12
-cognitive	main_workflow_files	28
 cognitive	migrate_local_queue	19
-cognitive	name_causes	26
 cognitive	open_condition	20
-cognitive	orphan_branches	27
 cognitive	outside_gate	22
-cognitive	owner_of	25
 cognitive	owner_orphans	22
 cognitive	owner_work	21
-cognitive	park_duty	28
-cognitive	park_release_why	18
 cognitive	pressure_reading	23
 cognitive	project_changes	14
 cognitive	reconcile_alerts	26
@@ -69,7 +61,6 @@ cognitive	spotlight_exclude	19
 cognitive	status_page_start	15
 cognitive	sweep_land_refs	20
 cognitive	sync_steps	11
-cognitive	token	34
 cognitive	transcript_paths	26
 cognitive	workflow_jobs	26
 cognitive	workflow_timeout_bound	22
@@ -84,7 +75,6 @@ copies	redpending	2
 copies	store	2
 cyclomatic	RemoteStore._call_once	16
 cyclomatic	_gh_api_once	18
-cyclomatic	_watch_group	21
 cyclomatic	apply_entry	12
 cyclomatic	assemble	15
 cyclomatic	batch_check	17
@@ -105,9 +95,8 @@ cyclomatic	fix_between	22
 cyclomatic	fix_replay_refusal	23
 cyclomatic	fix_replay_trailers	16
 cyclomatic	forge_run_list	15
-cyclomatic	gate_flow_names	22
+cyclomatic	gate_flow_names	14
 cyclomatic	gate_runs_pass	21
-cyclomatic	gating_checks	21
 cyclomatic	gov_fits	21
 cyclomatic	job_ever_green	20
 cyclomatic	jobs_verdict	23
@@ -117,17 +106,11 @@ cyclomatic	lap_change_deadline	17
 cyclomatic	laptop_role	17
 cyclomatic	laptop_role_refusal	16
 cyclomatic	live_state	12
-cyclomatic	main_workflow_files	11
 cyclomatic	migrate_local_queue	13
-cyclomatic	name_causes	20
 cyclomatic	open_condition	22
-cyclomatic	orphan_branches	20
 cyclomatic	outside_gate	18
-cyclomatic	owner_of	21
 cyclomatic	owner_orphans	13
 cyclomatic	owner_work	19
-cyclomatic	park_duty	20
-cyclomatic	park_release_why	14
 cyclomatic	pressure_reading	18
 cyclomatic	project_changes	11
 cyclomatic	reconcile_alerts	22
@@ -152,7 +135,6 @@ cyclomatic	set_change	18
 cyclomatic	spotlight_exclude	15
 cyclomatic	status_page_start	11
 cyclomatic	sweep_land_refs	17
-cyclomatic	token	16
 cyclomatic	transcript_paths	19
 cyclomatic	workflow_jobs	19
 cyclomatic	workflow_timeout_bound	21

@@ -41,7 +41,7 @@ mypy-errors	fixerlife	56
 mypy-errors	fixersession	38
 mypy-errors	forge	51
 mypy-errors	gatesummary	4
-mypy-errors	gating	31
+mypy-errors	gating	28
 mypy-errors	generated	21
 mypy-errors	generatedregen	14
 mypy-errors	ghapp	34
@@ -147,7 +147,7 @@ mypy-errors	repos	26
 mypy-errors	reverts	46
 mypy-errors	rundispatch	10
 mypy-errors	runexplain	15
-mypy-errors	runsigs	14
+mypy-errors	runsigs	13
 mypy-errors	server	56
 mypy-errors	serverclone	36
 mypy-errors	serversteps	26

@@ -58,17 +58,23 @@ def park_until_text(m):
     return "until the owner decides"
 
 
-def landed_release_why(u, repo, store):
-    """Why a `until landed` condition u is met now (its change landed, or its commit is on main), else None."""
-    if u.get("change"):
-        end = attempt(lambda: change_chain_end(store, u["change"]), None, catch=(Exception, SystemExit))
-        if end and end["state"] == "landed":
-            return f"its blocker {end['id']} landed"
-    if u.get("commit"):
-        done, via = change_landed(repo, u["commit"])
-        if done:
-            return f"its blocker {u['commit'][:11]} is on main" + (f" ({via[:10]})" if via and via != u["commit"] else "")
-    return None
+def landed_change_why(store: Any, change: Any) -> Any:
+    """Why the change a parked mark waits on is met: it (or its re-submission) landed, else None."""
+    end = attempt(lambda: change_chain_end(store, change), None, catch=(Exception, SystemExit))
+    return f"its blocker {end['id']} landed" if end and end["state"] == "landed" else None
+
+
+def landed_commit_why(repo: Any, commit: Any) -> Any:
+    """Why the commit a parked mark waits on is met: it is on main (by content), else None."""
+    done, via = change_landed(repo, commit)
+    if not done:
+        return None
+    return f"its blocker {commit[:11]} is on main" + (f" ({via[:10]})" if via and via != commit else "")
+
+
+def landed_release_why(u: Any, repo: Any, store: Any) -> Any:
+    """Why an `until landed` condition u is met now (its change landed, or its commit is on main), else None."""
+    return (u.get("change") and landed_change_why(store, u["change"])) or (u.get("commit") and landed_commit_why(repo, u["commit"])) or None
 
 
 def park_release_why(m, repo, store, t=None):
@@ -90,7 +96,7 @@ def drop_orphan_records(wt):
         write_json(path, keep)
 
 
-def release_parked(wt, m, repo, store, t, dry_run):
+def release_parked(wt: Any, m: Any, repo: Any, store: Any, t: Any, dry_run: Any) -> Any:
     """The line saying parked mark m is released -- its worktree gone, or its condition met -- else None. Unless dry_run
     the mark is released, its orphan records dropped and the inbox told."""
     name = os.path.basename(wt)
@@ -109,7 +115,7 @@ def release_parked(wt, m, repo, store, t, dry_run):
     return f"parked {name}: released ({why}); the orphan rules apply again"
 
 
-def park_digest(old, t, dry_run):
+def park_digest(old: Any, t: Any, dry_run: Any) -> Any:
     """The weekly digest line of the old parks (once PARK_DIGEST_EVERY has passed since the last), else None. Unless
     dry_run it is told in the inbox and stamped on the marks."""
     last = max([float(m.get("digest_at") or 0) for _w, m in old] or [0])
@@ -124,9 +130,9 @@ def park_digest(old, t, dry_run):
     return line
 
 
-def parked_long(m, t):
+def parked_long(m: Any, t: Any) -> bool:
     """Whether mark m has stood PARK_DIGEST_DAYS (the weekly digest names it)."""
-    return t - float(m.get("at") or t) >= env_num("AGENTCTL_PARK_DIGEST_DAYS", PARK_DIGEST_DAYS) * 86400
+    return bool(t - float(m.get("at") or t) >= env_num("AGENTCTL_PARK_DIGEST_DAYS", PARK_DIGEST_DAYS) * 86400)
 
 
 def park_duty(repo, store, dry_run=False, now_=None):

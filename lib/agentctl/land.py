@@ -199,7 +199,7 @@ def beat_mark(step, size, cpu, polls=0, quiet_ok=False):
     return f"{step}:{size}:{int(cpu or 0)}" + (f":{polls}" if quiet_ok else "")
 
 
-def lease_loss(step, size, cpu, polls, quiet_ok):
+def watch_lease_loss(step: Any, size: Any, cpu: Any, polls: Any, quiet_ok: Any) -> Any:
     """Why the landing lease was lost at this poll (it renews on real progress only: output bytes, whole CPU seconds),
     else None. A store that did not answer is no verdict: renewed at the next poll (a lease lapsed meanwhile is lost)."""
     try:
@@ -214,10 +214,10 @@ def lease_loss(step, size, cpu, polls, quiet_ok):
 class GroupProgress:
     """What a watched group last did: its output size and CPU, and when either last moved."""
 
-    def __init__(self, started):
+    def __init__(self, started: Any) -> None:
         self.size, self.cpu, self.changed = -1, None, started
 
-    def stalled(self, size, cpu, now, need, hook_toggled, bound):
+    def stalled(self, size: Any, cpu: Any, now: Any, need: Any, hook_toggled: Any, bound: Any) -> bool:
         """Progress: output grew, or the group used a real second of CPU since the last progress (the hook idle in `wait`
         with only its watchdog polling used ~0.08 s in 50 min, 2026-10-27: that is not progress); a hook ending is
         progress too (the transport's bound starts there). Else whether it has gone `bound` s without."""
@@ -227,7 +227,7 @@ class GroupProgress:
         return now - self.changed > bound
 
 
-def poll_verdict(lease_why, stalled, bound, in_hook, waited, wall):
+def poll_verdict(lease_why: Any, stalled: Any, bound: Any, in_hook: Any, waited: Any, wall: Any) -> Any:
     """The first reason to end the group at this poll: its lease lost, no progress within `bound`, past its wall bound."""
     if lease_why:
         return lease_why
@@ -254,7 +254,7 @@ def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_o
         size, cpu = os.path.getsize(out_path), cpu_of(p.pid)
         was_hook, in_hook = in_hook, hook_stall is not None and hooks(p.pid)
         polls += 1
-        why = lease_loss(step, size, cpu, polls, quiet_ok or in_hook)
+        why = watch_lease_loss(step, size, cpu, polls, quiet_ok or in_hook)
         now = clock()
         bound = hook_stall if in_hook else stall
         stalled = seen.stalled(size, cpu, now, need, was_hook != in_hook, bound)

@@ -33,12 +33,12 @@ def cause_of(job, line):
     return signature("*", job, line) if norm_line(line) else None
 
 
-def causes_of(sigs):
+def causes_of(sigs: Any) -> Any:
     """The distinct causes of a run's signatures."""
     return {cause_of(x["job"], x["line"]) for x in sigs} - {None}
 
 
-def known_run_causes():
+def known_run_causes() -> Any:
     """{run number or id: {causes}} of every run whose signatures are cached (reds/runsig), and `wf:<number>`: its workflow."""
     out = {}
     for p in glob.glob(reds_dir("runsig", "*.json")):
@@ -53,7 +53,7 @@ def known_run_causes():
     return out
 
 
-def learn_run_causes(o_r, missing, out):
+def learn_run_causes(o_r: Any, missing: Any, out: Any) -> None:
     """Look up the runs `missing` once (those not looked up before and still red) and add their causes to `out`; a run that
     gave none is remembered as tried."""
     tried = read_record(reds_dir("unknown-runs.json")) or {}

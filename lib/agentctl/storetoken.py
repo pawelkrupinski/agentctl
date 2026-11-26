@@ -7,7 +7,7 @@ import os
 import re
 import sys
 import time
-from typing import Callable
+from typing import Any, Callable
 from agentctl.core import (
     HOME, NoReadAccess, NoToken, _tokens, env_num, err, fmt_age, on_ci_runner, process_cache, run_cmd, slug)
 from agentctl.ghapp import ghapp_config, ghapp_enabled, ghapp_token
@@ -152,7 +152,7 @@ def token_vault_key(o_r):
     return ("bitcashier", "AGENTCTL_STORE_TOKEN")
 
 
-def vault_token(o_r, why):
+def vault_token(o_r: Any, why: Any) -> Any:
     """(the store token `secrets get` answers, else "") and `why` with what went wrong appended: not an interactive
     foreground run (it would prompt), no `secrets` command, a keychain prompt nobody answered, a locked vault. A token
     read re-seeds the processor (it held none: asked just before)."""
@@ -174,7 +174,7 @@ def vault_token(o_r, why):
     return tok, why
 
 
-def fetch_token(o_r, ns):
+def fetch_token(o_r: Any, ns: Any) -> Any:
     """The token of namespace ns from the processor's socket, else the vault; none: said missing, and NoToken."""
     tok = token_from_processor(o_r)
     why = "the waiting processor holds none"

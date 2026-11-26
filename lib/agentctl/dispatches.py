@@ -163,7 +163,7 @@ def branch_base(branch, run):
     return m.group(1) if m else run.get("headSha")
 
 
-def rematch_gone_owner(repo, branch, run, rec):
+def rematch_gone_owner(repo: Any, branch: Any, run: Any, rec: Any) -> Any:
     """The record of a worktree that took over a branch run whose owner `rec` is gone (its worktree removed / pid dead):
     a live worktree holding its commit, recorded in place of the dead one; None when nobody holds it."""
     rid = run.get("databaseId")
@@ -181,7 +181,7 @@ def rematch_gone_owner(repo, branch, run, rec):
     return new
 
 
-def holder_of_branch(repo, branch, base):
+def holder_of_branch(repo: Any, branch: Any, base: Any) -> Any:
     """(worktree, how) that holds a branch run nobody recorded: a check/ branch's queue entry, else the worktree holding
     its commit; (None, None) when nobody does."""
     wt, how = None, None
@@ -195,7 +195,7 @@ def holder_of_branch(repo, branch, base):
     return wt, how
 
 
-def match_unrecorded(repo, branch, run):
+def match_unrecorded(repo: Any, branch: Any, run: Any) -> Any:
     """The owner record of a branch run nobody recorded: matched after the fact and recorded, else an `unmatched` mark
     (None; not tried again for OWNER_REMATCH)."""
     rid = run.get("databaseId")
@@ -307,7 +307,7 @@ def orphaned_red(store, o_r, runs):
     return None
 
 
-def finished_runs(runs_for, b, out):
+def finished_runs(runs_for: Any, b: Any, out: Any) -> Any:
     """The runs of branch b when every one finished, else None (the branch is not swept); runs that could not be listed
     are said in `out`."""
     try:
@@ -318,7 +318,7 @@ def finished_runs(runs_for, b, out):
     return None if any(r.get("status") != "completed" for r in runs) else runs
 
 
-def gone_owner_what(repo, o_r, store, b, sha, runs):
+def gone_owner_what(repo: Any, o_r: Any, store: Any, b: Any, sha: Any, runs: Any) -> Any:
     """What says branch b (head sha, its finished runs) has no owner left -- the owner gone, or its red closed as an
     orphan -- else None."""
     rec = owner_of(repo, b, (runs or [{}])[0] | {"headSha": sha}) if runs else dispatch_for(b)
@@ -330,7 +330,7 @@ def gone_owner_what(repo, o_r, store, b, sha, runs):
         + f", {len(runs)} run(s) finished"
 
 
-def sweep_gone_branch(repo, o_r, b, sha, what, dry, out):
+def sweep_gone_branch(repo: Any, o_r: Any, b: Any, sha: Any, what: Any, dry: Any, out: Any) -> None:
     """Say what happens to a branch whose owner is gone: measure/* ones are deleted (the standing OK: a finished
     measure/* branch), the rest are listed."""
     if not b.startswith("measure/"):
