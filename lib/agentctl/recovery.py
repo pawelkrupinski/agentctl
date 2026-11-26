@@ -1,9 +1,6 @@
-# agentctl, part `recovery`: the recovery registry.
+# agentctl, part `recovery`: the recovery registry: the conditions' probes and their recoveries
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.filelog import file_event, note_events
-from agentctl.clock import epoch_now
-import argparse
 import json
 import os
 import re
@@ -13,27 +10,19 @@ import urllib.error
 import urllib.request
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, SHORT, _tokens, err, git, remote, run_cmd, spawn_detached, tilde
+from agentctl.core import SHORT, _tokens, err, git, remote, spawn_detached, tilde
 from agentctl.timefmt import iso_at, ts
 from agentctl.statefile import read_json_file, read_record, write_json_file, unlink_file
 from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import held_commit
 from agentctl.storetoken import token_env_name, token_from_processor, token_vault_key
-from agentctl.procs import safe_cwd
-from agentctl.fixerrecords import agent_name
-from agentctl.inboxentry import inbox_dir, inbox_entries
 from agentctl.worktrees import mark_internal
-from agentctl.inbox import entry_line
 from agentctl.cistate import ci_state_load
-from agentctl.statemachines import machine_state
-from agentctl.redrecord import red_what
 from agentctl.conditions import open_condition, recovery_dir, run_probe
-from agentctl.alerts import inbox_wait
 from agentctl.tunnel import default_route, tunnel_ports, tunnel_probe, tunnel_state_path
 from agentctl.blamerecords import blame_land_refusal
-from agentctl.redview import red_view
-from agentctl.alertroute import alert_audience, alert_condition_audience, alert_red_audience
+from agentctl.batchitem import batch_move, current_batch
 
 
 # -- the probes: (ok, detail) for their args. Background-safe: no `secrets`, bounded, never raising (run_probe catches).
@@ -190,143 +179,6 @@ def recover_clear_hold(cond: dict[str, Any] | None, a: dict[str, Any], st: Any) 
     return "the batch hold is lifted"
 
 
-# THE ESCALATION THAT WAKES SOMEBODY is an event (severity escalate) the notifier delivers once (notified_at). What is
-# escalated NOW is level-triggered: every red or condition item whose state escalated and that still sits in it (a red
-# offered with nobody taking it, a fix unverified, a condition still open). Taking the red, verifying the fix, the probe
-# passing: the item leaves that state and the escalation is gone -- nobody acks a solved problem.
-def escalated_now(store):
-    """[(item type, item, words)] of the items escalated and still in that state."""
-    st = store
-    out = []
-    t = epoch_now()
-    for it in st.items("red", ["offered", "fix-pending"]):  # only what is the OWNER's (THE ALERT MODEL, alerts.py)
-        if it["level"] and alert_red_audience({"kind": "RED_UNCLAIMED"}, it, st, t) == "owner":
-            out.append(("red", it, f"{red_what(it['data'])}: {red_view(st, it)[1]}"))
-    for it in st.items("condition", ["open"]):
-        d = it["data"]
-        if it["level"] and alert_condition_audience(d.get("kind"), {"verdict": d.get("text")}, d.get("opened_at"), t) == "owner":
-            out.append(("condition", it, str(it["data"].get("text") or it["data"].get("kind"))))
-    return out
-
-
-def escalation_line(es):
-    if not es:
-        return ""
-    first = re.sub(r"\s+--\s+`.*$", "", es[0][2])[:90]
-    return f"ESCALATED: {len(es)} ({first}{'; …' if len(es) > 1 else ''})"
-
-
-def entry_ids(e):
-    """The change ids an inbox entry carries: its own, and those of the verdicts merged into it (alert_write)."""
-    return [x for x in [e.get("entry")] + list(e.get("entries") or []) if x]
-
-
-def cmd_inbox(a: argparse.Namespace, store: Any) -> int:
-    if a.ids[:1] == ["escalated"]:  # the status line's: what is escalated now (the notifier already told) -- bold
-        line = escalation_line(escalated_now(store))
-        if line:
-            print(line)
-        return 0
-    if a.ids[:1] == ["wait"]:
-        return inbox_wait_command(a)
-    entries = inbox_matches(a)
-    if getattr(a, "count", False):  # every match: a count capped by the listing's --limit read "30 unread" for 44
-        print(len(entries))
-        return 0
-    entries = entries[-a.limit:] if a.limit else entries
-    inbox_print(a, entries)
-    if a.ack and entries:
-        inbox_acknowledge(a, entries)
-    return 0
-
-
-def inbox_wait_command(a: argparse.Namespace) -> int:
-    """`agentctl inbox wait [--kinds K,...] [--audience A,...] [--since-ack] [--timeout S] [--forever]`."""
-    if a.ids[1:]:
-        print("usage: agentctl inbox wait [--kinds K,...] [--audience A,...] [--since-ack] [--timeout S] [--forever]")
-        return 2
-    return inbox_wait(a.kinds, a.since_ack, a.timeout, a.verbose, getattr(a, "forever", False),
-                      audience=getattr(a, "audience", None) or "owner")
-
-
-def inbox_matches(a: argparse.Namespace) -> list[dict[str, Any]]:
-    """The inbox entries the audience, the ids and `--unread` of the command line select, oldest first."""
-    entries = entries_of_audience(inbox_entries(), getattr(a, "audience", None))
-    if a.ids:
-        entries = [e for e in entries if entry_named_by(e, a.ids)]
-    return [e for e in entries if not e["read"]] if a.unread else entries
-
-
-def entries_of_audience(entries: list[dict[str, Any]], audience: str | None) -> list[dict[str, Any]]:
-    """The entries addressed to one of the comma-separated audiences (`all` or none: every entry)."""
-    if not audience or audience == "all":
-        return entries
-    want = {x.strip() for x in audience.split(",") if x.strip()}
-    return [e for e in entries if alert_audience(e) in want]
-
-
-def entry_named_by(e: dict[str, Any], ids: list[str]) -> bool:
-    """Whether inbox entry e is the one any of `ids` names: by the start of its id, or the end of one of its ids."""
-    return any(e["id"].startswith(i) or any(x.endswith(i) for x in entry_ids(e)) for i in ids)
-
-
-def inbox_print(a: argparse.Namespace, entries: list[dict[str, Any]]) -> None:
-    """The entries as JSON, as lines (with their tails under --verbose), or the one line saying there are none."""
-    if a.json:
-        print(json.dumps(entries, indent=1))
-    elif not entries:
-        print("inbox: no " + ("unread " if a.unread else "") + f"entries ({inbox_dir()})")
-    else:
-        for e in entries:
-            inbox_print_entry(e, a.verbose)
-
-
-def inbox_print_entry(e: dict[str, Any], verbose: bool) -> None:
-    print(entry_line(e))
-    for line in (e.get("tail") or []) if verbose else []:
-        print(f"    {line}")
-
-
-def inbox_acknowledge(a: argparse.Namespace, entries: list[dict[str, Any]]) -> None:
-    mine = entries if getattr(a, "all", False) else [e for e in entries if e["id"] in (a.ids or ()) or own_inbox_entry(e)]
-    os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)
-    for e in mine:
-        open(os.path.join(inbox_dir(), "acked", e["id"]), "a").close()
-    note_events([file_event("inbox", e["id"], "unread", "acked", "agent", key="acked") for e in mine])
-    left = len(entries) - len(mine)
-    print(f"inbox: acknowledged {len(mine)} entr{'y' if len(mine) == 1 else 'ies'}"
-          + (f"; {left} left unread for the agents they belong to (`--all` acks them: the owner's)" if left else ""))
-
-
-def caller_identity():
-    """(session, worktree, agent name) of the process running agentctl: its Claude session, the git worktree of its cwd
-    (None outside one, or at $HOME), its agent name (agent_name)."""
-    here = safe_cwd()
-    r = run_cmd(["git", "-C", here, "rev-parse", "--show-toplevel"]) \
-        if os.path.isdir(here) else None
-    top = os.path.realpath(r.stdout.strip()) if r is not None and r.returncode == 0 and r.stdout.strip() else None
-    if top in (os.path.realpath(HOME), "/"):
-        top = None
-    return os.environ.get("CLAUDE_CODE_SESSION_ID") or None, top, agent_name()
-
-
-def _inside_worktree(e: Any, top: str) -> bool:
-    """Inbox entry e names a path (its cwd, its owner's `@<path>`) inside the worktree `top`."""
-    for p in (e.get("cwd"), str(e.get("owner") or "").partition("@")[2]):
-        if p and os.path.isabs(p):
-            p = os.path.realpath(p)
-            if p == top or p.startswith(top.rstrip("/") + "/"):
-                return True
-    return False
-
-
-def own_inbox_entry(e, who=None):
-    """Whether inbox entry e is the caller's: its session's, from inside its worktree, or its agent name's."""
-    session, top, name = who or caller_identity()
-    return bool(session and e.get("owner") == session) or bool(name and e.get("agent") == name) \
-        or bool(top and _inside_worktree(e, top))
-
-
 def token_unavailable_note(ns: str, why: str, store: Any) -> None:
     """No source had the token: ONE condition per spell (UNKNOWN in the inbox), cleared by the token probe -- the
     processor holds one again -- with its entry acked."""
@@ -347,24 +199,3 @@ def token_unavailable_note(ns: str, why: str, store: Any) -> None:
 _noting_token = [False]  # token_unavailable_note is running: the remote store's own token read must not recurse
 
 
-def batch_key(d):
-    return os.path.basename(d.rstrip("/"))
-
-
-def current_batch(st, d, any_key=False):
-    """The repository's open batch item, or None. any_key: whichever host's key it carries -- the laptop's `land
-    status` reads ci-runner's store, whose batch is keyed by ci-runner's waiting dir (var_lib_agentctl_movies_.git),
-    never the laptop's (2026-10-30: batch #4 checked for an hour while `land status` showed no batch at all)."""
-    key = batch_key(d)
-    open_ = [it for it in st.items("batch") if (any_key or it["id"].startswith(key + "#"))
-             and not machine_state("batch", it["state"]).terminal]
-    return max(open_, key=lambda it: int(it["id"].rsplit("#", 1)[1])) if open_ else None
-
-
-def batch_move(st, it, to, data=None, text=None, severity=None, cause="batch"):
-    """Batch item `it` moved to `to`; cause: why (the batch's own step unless said: a red gate, a deadline)."""
-    ev = {"text": text or f"batch {it['id']}: {it['state']} -> {to}", "cause": cause}
-    if severity:
-        ev["severity"] = severity
-    st.transition("batch", it["id"], to, it["version"], data=data, event=ev)
-    return st.item("batch", it["id"])

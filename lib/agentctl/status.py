@@ -39,7 +39,7 @@ from agentctl.reddispatch import red_cap, red_family_holder, red_fixers_alive, r
 from agentctl.park import parked_lines
 from agentctl.redview import red_view
 from agentctl.cireport import ci_why
-from agentctl.recovery import escalated_now
+from agentctl.inboxcli import escalated_now
 from agentctl.ownerleases import owners_status
 from agentctl.statusline import render_status_line, status_gate_text
 from agentctl.watchknobs import knob_status_bound

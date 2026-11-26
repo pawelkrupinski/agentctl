@@ -3,22 +3,21 @@
 
 import os
 from typing import Any, Optional
-from agentctl.core import git, git_ok, remote
 from agentctl.timefmt import ts
+from agentctl.core import git, git_ok, remote
 from agentctl.repos import precheck_hook
-from agentctl.waitingdir import waiting_state, wlog
-from agentctl.gating import mark_gate_dirty
-from agentctl.leases import lock_note
 from agentctl.landstate import landed_state
-from agentctl.land import RACE, REDGATE, land_lock_if_free, push_argv, push_bounds, run_watched, tool_env
+from agentctl.leases import lock_note
+from agentctl.gating import mark_gate_dirty
+from agentctl.waitingdir import waiting_state, wlog
+from agentctl.landwatch import start_watch
 from agentctl.owned import Owned, lock_held
+from agentctl.land import RACE, REDGATE, land_lock_if_free, push_argv, push_bounds, run_watched, tool_env
 from agentctl.queueslots import queue_verdict, set_change, tree_slot
 from agentctl.queue import hook_query, range_paths
 from agentctl.waiting import tail_of
-from agentctl.landwatch import start_watch
-from agentctl.recovery import batch_move
+from agentctl.batchitem import batch_fail, batch_members, batch_move
 from agentctl.queuepush import DEEP_BATCHES
-from agentctl.batchitem import batch_fail, batch_members
 
 
 def push_batch_item(repo, d, st, it):

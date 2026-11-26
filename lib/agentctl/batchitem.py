@@ -2,12 +2,13 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
+import os
+from agentctl.statemachines import machine_state
+from agentctl.queueknobs import knob_batch_retry_max
 from agentctl.core import remote
 from agentctl.repos import repo_of_waiting
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, wlog
 from agentctl.conditions import open_condition, run_probe
-from agentctl.recovery import batch_key, batch_move, current_batch
-from agentctl.queueknobs import knob_batch_retry_max
 
 
 def status_batch(st: Any, d: str) -> Any:
@@ -48,3 +49,26 @@ def batch_members(d, it):
     if gone:
         wlog(d, f"the batch {it['id']}: member(s) {', '.join(gone)} have no entry: left out")
     return [es[i] for i in ids if i in es]
+
+
+def batch_key(d):
+    return os.path.basename(d.rstrip("/"))
+
+
+def current_batch(st, d, any_key=False):
+    """The repository's open batch item, or None. any_key: whichever host's key it carries -- the laptop's `land
+    status` reads ci-runner's store, whose batch is keyed by ci-runner's waiting dir (var_lib_agentctl_movies_.git),
+    never the laptop's (2026-10-30: batch #4 checked for an hour while `land status` showed no batch at all)."""
+    key = batch_key(d)
+    open_ = [it for it in st.items("batch") if (any_key or it["id"].startswith(key + "#"))
+             and not machine_state("batch", it["state"]).terminal]
+    return max(open_, key=lambda it: int(it["id"].rsplit("#", 1)[1])) if open_ else None
+
+
+def batch_move(st, it, to, data=None, text=None, severity=None, cause="batch"):
+    """Batch item `it` moved to `to`; cause: why (the batch's own step unless said: a red gate, a deadline)."""
+    ev = {"text": text or f"batch {it['id']}: {it['state']} -> {to}", "cause": cause}
+    if severity:
+        ev["severity"] = severity
+    st.transition("batch", it["id"], to, it["version"], data=data, event=ev)
+    return st.item("batch", it["id"])

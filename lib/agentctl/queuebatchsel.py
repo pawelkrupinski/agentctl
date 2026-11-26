@@ -3,14 +3,14 @@
 
 from typing import Any
 from agentctl.holdgraph import push_due
+from agentctl.queueknobs import knob_backlog_batch_max, knob_backlog_batch_min, knob_push_batch_min
 from agentctl.core import git, remote
 from agentctl.queueslots import checker_alive
 from agentctl.queuerecheck import verdict_kept
 from agentctl.identitychange import identity_model_commits
 from agentctl.changekind import classify_change
 from agentctl.queuebatch import batch_queued, batch_round, kind_of
-from agentctl.recovery import current_batch
-from agentctl.queueknobs import knob_backlog_batch_max, knob_backlog_batch_min, knob_push_batch_min
+from agentctl.batchitem import current_batch
 
 
 def backlog_min():

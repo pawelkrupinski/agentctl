@@ -5,25 +5,26 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.timefmt import day_hhmmz, hhmmz
 from agentctl.statemachines import ENTRY_STATE
+from agentctl.timefmt import day_hhmmz, hhmmz
 from agentctl.holdgraph import OPEN_PARENT_STATES, stack_map, waiting_on_changes
 from agentctl.core import attempt, host_role, remote
-from agentctl.waitingdir import waiting_entries
 from agentctl.policy import policy_blocks
+from agentctl.waitingdir import waiting_entries
+from agentctl.queuehold import break_hold_cycles, expire_idle_hold, idle_hold_expired, note_hold
+from agentctl.conflicts import conflict_cause, conflict_paths
 from agentctl.queueslots import change_item_fields, check_tree_slot, checker_alive, queue_verdict, set_change
 from agentctl.queue import requeue_infra
-from agentctl.conflicts import conflict_cause, conflict_paths
 from agentctl.queuerecheck import queued_entries, same_change_source
-from agentctl.changekind import classify_change, classify_queue, kind_order, facts_for, facts_tick, record_change_kind
+from agentctl.changekind import classify_change, classify_queue, facts_for, facts_tick, kind_order, record_change_kind
 from agentctl.waiting import supersede
 from agentctl.redseen import gate_reds
-from agentctl.queuebatch import OverlapHold, _behind_said, hold_for_overlap, main_conflict, overlap_hold, spawn_executor
+from agentctl.queuebatch import (
+    OverlapHold, _behind_said, hold_for_overlap, main_conflict, overlap_hold, spawn_executor)
 from agentctl.queuediff import push_change
 from agentctl.queueclose import lap_change_deadline, regen_hold_overdue
-from agentctl.recovery import current_batch
+from agentctl.batchitem import current_batch
 from agentctl.queuebatchsel import backlog_held, push_held
-from agentctl.queuehold import break_hold_cycles, expire_idle_hold, idle_hold_expired, note_hold
 
 
 # THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16, workermem: fully checked by 09:15, then its combined tree verified

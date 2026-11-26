@@ -41,9 +41,9 @@ from agentctl.alerts import alert_write
 from agentctl.ask import cmd_decide
 from agentctl.watchtick import cmd_watch
 from agentctl.recovery import (
-    cmd_inbox, probe_gate_read, probe_git_fetch, probe_http, probe_route, probe_tcp, probe_token, probe_tunnel,
-    probe_waiting_ok, probe_workflow_green, recover_clear_flag, recover_clear_hold, recover_tunnel_reset,
-    token_unavailable_note)
+    probe_gate_read, probe_git_fetch, probe_http, probe_route, probe_tcp, probe_token, probe_tunnel, probe_waiting_ok,
+    probe_workflow_green, recover_clear_flag, recover_clear_hold, recover_tunnel_reset, token_unavailable_note)
+from agentctl.inboxcli import cmd_inbox
 from agentctl.tools import cmd_env, cmd_prepush, cmd_queue_retired, cmd_state
 from agentctl.queueclose import probe_change_source
 from agentctl.superseded import cmd_supersede
