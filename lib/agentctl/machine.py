@@ -95,7 +95,9 @@ def mem_stats() -> dict[str, Any]:
 
 
 def ram_gb() -> float:
-    return mem_stats()["ram_gb"] or 36.0
+    """GB of RAM: mem_stats', else the C library's page count (review 2026-11-26: a hard-coded 36 GB, a silently wrong
+    budget on any other machine)."""
+    return mem_stats()["ram_gb"] or os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 2 ** 30
 
 
 def free_gb() -> Optional[float]:

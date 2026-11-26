@@ -164,6 +164,15 @@ class GovernorTest(unittest.TestCase):
             for k, v in saved.items():
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
 
+    def test_ram_unread_is_the_machines_own_not_a_fixed_36_gb(self):
+        """Review 2026-11-26 (D I3): ram_gb fell back to a hard-coded 36 GB when its probes read nothing."""
+        saved = os.environ.get("AGENTCTL_MACHINE")
+        os.environ["AGENTCTL_MACHINE"] = json.dumps({"free_gb": 10})
+        try:
+            self.assertAlmostEqual(A.ram_gb(), os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 2 ** 30)
+        finally:
+            os.environ.pop("AGENTCTL_MACHINE") if saved is None else os.environ.__setitem__("AGENTCTL_MACHINE", saved)
+
     def test_capacity_prints_one_line(self):
         self.set_busy(A.machine_cores() * 0.2)
         with contextlib.redirect_stdout(io.StringIO()) as out:
