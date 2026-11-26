@@ -1,6 +1,6 @@
 # THE TYPES BASELINE (quality/ratchet.py update writes it; hooks/pre-push holds every push to it).
-# mypy --strict errors per part (quality/typecheck.py), frozen. A row may only fall; a rise lands only in a
-# commit carrying `Types: <why>`. CLAUDE.md, "The ratchets".
+# mypy --strict errors per part (quality/typecheck.py), frozen at its value. A row may only fall (update records it); a row added or raised
+# lands only in a commit carrying the kind's trailer (`Typing:`). CLAUDE.md, "The ratchets".
 limit	mypy-errors	0
 mypy-errors	alertprobe	21
 mypy-errors	alertroute	29
