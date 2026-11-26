@@ -99,29 +99,47 @@ def named_reds(names: set[str], gate: set[str], open_: dict[str, list[Any]]) -> 
     return reds
 
 
+def _batch_barrier(e: dict[str, Any], red_fix: bool) -> str | None:
+    """What keeps a change out of any batch: a red fix, the entry's own `no_batch`, or its `batch_alone`; else None."""
+    return ("red-fix" if red_fix else "no-batch" if e.get("no_batch")
+            else f"batch-alone: {e['batch_alone']}" if e.get("batch_alone") else None)
+
+
+def _backlog_barrier(e: dict[str, Any], red_fix: bool, repo: Any) -> tuple[str | None, Any]:
+    """(what keeps the change out of a backlog batch, its identity answer): when nothing else does and repo is given,
+    a queued change is asked whether it is an identity change (batch.identity_change, cached per entry and head)."""
+    why = _batch_barrier(e, red_fix)
+    if why is not None or repo is None or not e.get("id") or e.get("status") != "queued":
+        return why, None
+    identity = identity_change(repo, e)
+    # EVERY CHANGE IS A MEMBER (2026-11-20, batch.py): an identity change joins a backlog batch, its identity area
+    # in the batch's union; only one whose kind cannot be told stays out
+    return ("identity-unknown" if identity is None else None), identity
+
+
+def _push_barrier(e: dict[str, Any], red_fix: bool) -> str | None:
+    """What keeps a change out of a push batch: the batch barriers, its `push_alone`, or a known red."""
+    return _batch_barrier(e, red_fix) or (f"push-alone: {e['push_alone']}" if e.get("push_alone")
+                                          else "known-red" if e.get("known_red") else None)
+
+
+def _verify_due(e: dict[str, Any], t: float) -> bool:
+    """Whether the entry asks for a verification, is in a state to take one and is not waiting out a retry."""
+    return bool(e.get("verify")) and e.get("status") in ("queued", "checking") and not float(e.get("retry_after") or 0) > t
+
+
 def classify_change(e, facts, t=None, repo=None):
     """THE KIND of change entry e (or an item's data) under facts (queue_facts). repo: also ask whether a queued change
     is an identity change (batch.identity_change, cached per entry and head) when nothing else already keeps it out of
     a backlog batch; otherwise `identity` is None (unasked)."""
     t = t if t is not None else time.time()
     names = fixes_named(e)
-    gate, open_ = facts.get("gate") or set(), facts.get("open") or {}
-    reds = named_reds(names, gate, open_)
+    reds = named_reds(names, facts.get("gate") or set(), facts.get("open") or {})
     red_fix = bool(reds)
     gate_fix = "gate" in map(itemgetter("kind"), reds)
-    backlog_why = ("red-fix" if red_fix else "no-batch" if e.get("no_batch")
-                   else f"batch-alone: {e['batch_alone']}" if e.get("batch_alone") else None)
-    identity = None
-    if backlog_why is None and repo is not None and e.get("id") and e.get("status") == "queued":
-        identity = identity_change(repo, e)
-        # EVERY CHANGE IS A MEMBER (2026-11-20, batch.py): an identity change joins a backlog batch, its identity area
-        # in the batch's union; only one whose kind cannot be told stays out
-        backlog_why = "identity-unknown" if identity is None else None
-    push_why = ("red-fix" if red_fix else "no-batch" if e.get("no_batch")
-                else f"batch-alone: {e['batch_alone']}" if e.get("batch_alone")
-                else f"push-alone: {e['push_alone']}" if e.get("push_alone")
-                else "known-red" if e.get("known_red") else None)
-    verify = bool(e.get("verify")) and e.get("status") in ("queued", "checking") and not float(e.get("retry_after") or 0) > t
+    backlog_why, identity = _backlog_barrier(e, red_fix, repo)
+    push_why = _push_barrier(e, red_fix)
+    verify = _verify_due(e, t)
     priority = "red-fix" if red_fix else "verify" if verify else "ordinary"
     return {"v": CHANGE_KIND_VERSION, "fixes": sorted(names), "reds": reds, "red_fix": red_fix, "gate_fix": gate_fix,
             "identity": identity, "backlog_batch": backlog_why, "push_batch": push_why, "verify": verify,
