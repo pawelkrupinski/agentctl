@@ -22,6 +22,14 @@ def proc(rng, out="", rc=0, err=""):
     return NS(returncode=rc, stdout=out, stderr=err)
 
 
+class Scope(contextlib.AbstractContextManager):
+    def __exit__(self, *exc):
+        return None
+
+    def __repr__(self):
+        return "<scope>"
+
+
 def raising(rng, p, value, exc=RuntimeError):
     if rng.random() < p:
         raise exc("down")
@@ -34,6 +42,7 @@ class ExplorerTickTest(unittest.TestCase):
         r = case.rng
         rows = [{"country": r.choice("ab"), "venue": r.choice("vw"), "rawTitle": f"t{r.randint(0, 3)}", "seed": str(r.randint(0, 3))}
                 for _ in range(r.randint(0, 5))]
+        case.fake("epoch_now", lambda rng: NOW)
         case.fake("remote", lambda rng: "origin")
         case.fake("git", lambda rng, *a, **k: proc(rng))
         case.fake("explorer_parse", lambda rng, raw: raising(rng, 0.15, rows, ValueError))
@@ -89,6 +98,7 @@ class SweepLandRefsTest(unittest.TestCase):
         r = case.rng
         ids = [f"2026110{r.randint(1, 5)}-120000-{k}" for k in range(4)]
         refs = [f"abc\trefs/heads/land/{r.choice(ids)}" for _ in range(r.randint(0, 5))]
+        case.fake("epoch_now", lambda rng: NOW)
         case.fake("remote", lambda rng: "origin")
         case.fake("env_num", lambda rng, name, default: rng.choice([default, 5, 100000]))
         case.fake("entry_id_age", lambda rng, eid, t: rng.choice([None, 10, 10 ** 6]))
@@ -144,7 +154,7 @@ class GhApiOnceTest(unittest.TestCase):
         case.fake("read_record", lambda rng, p: etag_rec)
         case.fake("forge_env", lambda rng, o_r: {"E": "1"})
         case.fake("gh_tally_shape", lambda rng, path: path.split("/")[0])
-        case.fake("gh_tally_as", lambda rng, label: __import__("contextlib").nullcontext())
+        case.fake("gh_tally_as", lambda rng, label: Scope())
         case.fake("gh_tally", lambda rng, **k: None)
         case.fake("write_json", lambda rng, p, d: raising(rng, 0.2, None, OSError))
         body = r.choice(['{"a": 1}', "", "  ", "null", "[1, 2]", "not json"])
