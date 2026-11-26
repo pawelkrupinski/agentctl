@@ -222,14 +222,29 @@ def previous_fixer_tree(u: Any) -> Any:
     return {"worktree": wt, "note": _continue_note((u.get("run") or {}).get("number"), wt, found)}
 
 
-_last_land_watch = [0.0]
+class LandWatchPace:
+    """When the fixers' landing look last ran: one per sync loop, made where the loop's steps are wired (syncsteps.py),
+    so no module holds it between loops."""
+
+    def __init__(self, last: float = 0.0) -> None:
+        self.last = last
+
+    def __repr__(self) -> str:
+        return f"LandWatchPace(last={self.last})"
+
+    def due(self, t: float, interval: float) -> bool:
+        """True, and the look is stamped, when `interval` seconds have passed since the last one."""
+        if t - self.last < interval:
+            return False
+        self.last = t
+        return True
 
 
-def fixers_land_watch(now_: Any = None, force: Any = False) -> Any:
+def fixers_land_watch(now_: Any = None, force: Any = False, *, pace: LandWatchPace) -> Any:
     t = now_ if now_ is not None else wall_epoch()  # against git author times
-    if not force and t - _last_land_watch[0] < knob_fixer_land_watch():
+    if not force and not pace.due(t, knob_fixer_land_watch()):
         return []
-    _last_land_watch[0] = t
+    pace.last = t
     out = []
     for r in fixer_records():
         out += FixerLandWatch(r, t).step()

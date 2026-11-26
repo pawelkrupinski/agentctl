@@ -158,7 +158,7 @@ class FixersLandWatchTest(unittest.TestCase):
         trees_exist(case)
         fake_open(case)
         fixed_time(case)
-        A._last_land_watch[0] = r.choice([0.0, NOW - 10, NOW - 100])
+        self.pace = A.LandWatchPace(r.choice([0.0, NOW - 10, NOW - 100]))
         recs = [{"path": f"/r/f{i}.json", "worktree": r.choice(TREES), "alive": r.random() < 0.8, "run": r.choice([None, 3])}
                 for i in range(r.randint(0, 3))]
         times = [NOW - 60 * m for m in (0, 10, 44, 45, 46, 89, 90, 91, 300)]
@@ -178,7 +178,7 @@ class FixersLandWatchTest(unittest.TestCase):
         return args[:r.choice([0, 1, 2, 2, 2])]  # none: both defaults
 
     def test_fixers_land_watch(self):
-        check(self, "fixers_land_watch", self.build, lambda A: A.fixers_land_watch, 4000)
+        check(self, "fixers_land_watch", self.build, lambda A: lambda *a: A.fixers_land_watch(*a, pace=self.pace), 4000)
 
 
 # ------------------------------------------------------------------------------------------------ classify

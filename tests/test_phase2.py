@@ -867,17 +867,17 @@ class LandAsYouGoTest(Phase2Base):
         commit(wt, "a step", at=t - 30 * 60)
         A.write_json(A.reds_dir("2473", "fixer-7.json"), {"workflow": "W", "run": 2473, "worktree": wt, "job": "leg",
                                                          "pid": os.getpid(), "process_start": A.process_start(os.getpid())})
-        self.assertEqual(A.fixers_land_watch(t, force=True), [])  # 30 min: nothing yet
-        self.assertIn("nudged", A.fixers_land_watch(t + 20 * 60, force=True)[0])
+        self.assertEqual(A.fixers_land_watch(t, force=True, pace=A.LandWatchPace()), [])  # 30 min: nothing yet
+        self.assertIn("nudged", A.fixers_land_watch(t + 20 * 60, force=True, pace=A.LandWatchPace())[0])
         self.assertTrue(os.path.exists(os.path.join(wt, "RED-NUDGE.md")))
-        self.assertEqual(A.fixers_land_watch(t + 30 * 60, force=True), [])  # once
-        esc = A.fixers_land_watch(t + 65 * 60, force=True)
+        self.assertEqual(A.fixers_land_watch(t + 30 * 60, force=True, pace=A.LandWatchPace()), [])  # once
+        esc = A.fixers_land_watch(t + 65 * 60, force=True, pace=A.LandWatchPace())
         self.assertTrue(esc[0].startswith("RED ESCALATE: "), esc)
-        self.assertEqual(A.fixers_land_watch(t + 70 * 60, force=True), [])
+        self.assertEqual(A.fixers_land_watch(t + 70 * 60, force=True, pace=A.LandWatchPace()), [])
         subprocess.run(["git", "-C", clone, "update-ref", "refs/remotes/origin/main",
                         subprocess.run(["git", "-C", wt, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()],
                        check=True)  # landed
-        self.assertIn("everything landed", A.fixers_land_watch(t + 75 * 60, force=True)[0])
+        self.assertIn("everything landed", A.fixers_land_watch(t + 75 * 60, force=True, pace=A.LandWatchPace())[0])
         self.assertFalse(os.path.exists(os.path.join(wt, "RED-NUDGE.md")))
         kinds = []
         for f in os.listdir(os.path.join(self.tmp, "inbox")):

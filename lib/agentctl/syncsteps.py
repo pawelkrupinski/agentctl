@@ -25,7 +25,7 @@ from agentctl.cleanup import close_worktree
 from agentctl.conditions import maybe_recovery_tick
 from agentctl.upkeep import maybe_upkeep
 from agentctl.laptoprole import laptop_role_step
-from agentctl.fixerland import fixers_land_watch
+from agentctl.fixerland import LandWatchPace, fixers_land_watch
 from agentctl.storestate import mirror_state
 from agentctl.recordingpins import refresh_pinned_recording
 from agentctl.alerts import reconcile_alerts
@@ -134,6 +134,7 @@ def file_events_refused(e: BaseException) -> None:
 def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequence[tuple[str, Callable[[], Any]]]:
     """The laptop's loop once the store is remote: it never ticks. clock and store: the process's (cli's)."""
     s = _SyncDuties(repo, o_r, clock, store)
+    land_pace = LandWatchPace()  # the fixers' landing look is paced per loop, not per process
     duty = s.duty
     return (("laptop role", s.claim_role),
             ("outbox", lambda: flush_outbox(store)), ("file events", lambda: drain_event_log(store, refused=file_events_refused)), ("state mirror", s.mirror), ("children", reap_children),
@@ -149,7 +150,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequenc
             ("escalation dispatcher", duty(s.escalations)),
             ("pins", duty(s.pins)), ("drift explorer", duty(s.explorer)),
             ("revert notes", duty(lambda: [err(x) for x in revert_notes(store)])),
-            ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),
+            ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch(pace=land_pace)]),
             ("network watch", lambda: network_watch(store)), ("tunnel probe", lambda: tunnel_watch(store)),
             ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store), 1)),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep(store)]),
