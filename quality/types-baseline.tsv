@@ -1,14 +1,14 @@
 # THE TYPES BASELINE (quality/ratchet.py update writes it; hooks/pre-push holds every push to it).
 # mypy --strict errors per part (quality/typecheck.py), frozen. A row may only fall; a rise lands only in a
 # commit carrying `Types: <why>`. CLAUDE.md, "The ratchets".
-mypy-errors	alertprobe	22
+mypy-errors	alertprobe	21
 mypy-errors	alertroute	29
 mypy-errors	alerts	59
 mypy-errors	ask	29
 mypy-errors	batch	32
 mypy-errors	batchcheck	29
 mypy-errors	batchitem	7
-mypy-errors	batchpush	19
+mypy-errors	batchpush	18
 mypy-errors	batchrun	26
 mypy-errors	batchtick	41
 mypy-errors	beats	4
@@ -21,22 +21,22 @@ mypy-errors	changekind	21
 mypy-errors	checkslot	24
 mypy-errors	cireport	39
 mypy-errors	ciwhy	48
-mypy-errors	cleanup	13
+mypy-errors	cleanup	12
 mypy-errors	cleanuppass	3
 mypy-errors	cli	15
 mypy-errors	clones	1
 mypy-errors	conditions	10
 mypy-errors	config	17
 mypy-errors	configfile	8
-mypy-errors	conflicts	27
-mypy-errors	core	24
+mypy-errors	conflicts	25
+mypy-errors	core	21
 mypy-errors	culpritfix	29
 mypy-errors	dispatchblock	13
 mypy-errors	dispatches	47
 mypy-errors	explorer	15
 mypy-errors	fixer	15
 mypy-errors	fixerenv	3
-mypy-errors	fixerland	26
+mypy-errors	fixerland	25
 mypy-errors	fixerlife	56
 mypy-errors	fixersession	37
 mypy-errors	forge	43
@@ -56,7 +56,7 @@ mypy-errors	inbox	14
 mypy-errors	invariants	30
 mypy-errors	issues	12
 mypy-errors	jvmreap	8
-mypy-errors	land	26
+mypy-errors	land	24
 mypy-errors	landdryrun	36
 mypy-errors	lander	33
 mypy-errors	landhold	4
@@ -76,7 +76,7 @@ mypy-errors	notifyurl	13
 mypy-errors	offerdispatch	19
 mypy-errors	orphanpass	7
 mypy-errors	orphanreap	32
-mypy-errors	orphans	17
+mypy-errors	orphans	15
 mypy-errors	outsideflows	14
 mypy-errors	owned	39
 mypy-errors	owner	24
@@ -84,7 +84,7 @@ mypy-errors	ownerleases	24
 mypy-errors	owners	3
 mypy-errors	ownerwrapper	46
 mypy-errors	park	34
-mypy-errors	patches	4
+mypy-errors	patches	3
 mypy-errors	policy	43
 mypy-errors	pressure	16
 mypy-errors	processorlink	16
@@ -94,15 +94,15 @@ mypy-errors	queue	27
 mypy-errors	queuebatch	41
 mypy-errors	queuebatchsel	19
 mypy-errors	queuecheck	28
-mypy-errors	queueclose	23
-mypy-errors	queuediff	32
-mypy-errors	queueenter	75
+mypy-errors	queueclose	21
+mypy-errors	queuediff	31
+mypy-errors	queueenter	72
 mypy-errors	queuefailure	5
 mypy-errors	queuepush	48
 mypy-errors	queuerecheck	43
 mypy-errors	queueslots	23
 mypy-errors	queuesubmit	31
-mypy-errors	queueuntil	11
+mypy-errors	queueuntil	10
 mypy-errors	recordingpins	30
 mypy-errors	recovery	51
 mypy-errors	red	48
@@ -116,11 +116,11 @@ mypy-errors	reddispatch	31
 mypy-errors	redearly	8
 mypy-errors	redfamilies	9
 mypy-errors	redfixcheck	18
-mypy-errors	redfixes	40
+mypy-errors	redfixes	38
 mypy-errors	redfixread	8
-mypy-errors	redfollow	5
+mypy-errors	redfollow	4
 mypy-errors	redhold	29
-mypy-errors	redlease	27
+mypy-errors	redlease	26
 mypy-errors	redmove	12
 mypy-errors	redobserve	20
 mypy-errors	redopen	34
@@ -153,7 +153,7 @@ mypy-errors	server	53
 mypy-errors	serverclone	36
 mypy-errors	serversteps	24
 mypy-errors	sessionpaths	9
-mypy-errors	slots	52
+mypy-errors	slots	51
 mypy-errors	snapshot	3
 mypy-errors	statemachines	29
 mypy-errors	stats	33
@@ -166,7 +166,7 @@ mypy-errors	storeauth	22
 mypy-errors	storestate	7
 mypy-errors	storetoken	46
 mypy-errors	stuckruns	4
-mypy-errors	superseded	22
+mypy-errors	superseded	21
 mypy-errors	syncsteps	30
 mypy-errors	tickrun	6
 mypy-errors	tickservice	8
@@ -178,4 +178,4 @@ mypy-errors	wait	46
 mypy-errors	waiting	28
 mypy-errors	watchdog	17
 mypy-errors	watchtick	52
-mypy-errors	worktrees	8
+mypy-errors	worktrees	7

@@ -20,7 +20,8 @@ from agentctl.statemachines import (
 # items, events and offers as the later steps move into it. Its clock is the only clock leases use.
 def _meta(row: Any) -> dict[str, Any]:
     """A lease row's meta object: NULL, '' and '{}' all read as {}."""
-    return json.loads(row["meta"] or "{}")
+    meta: dict[str, Any] = json.loads(row["meta"] or "{}")
+    return meta
 
 
 class LeaseLost(RuntimeError):

@@ -36,7 +36,7 @@ def patch_id(repo: str, c: str) -> Optional[str]:
     return (r.stdout.split() or [None])[0]
 
 
-def equivalent_on(repo, c, upstream, limit=400):
+def equivalent_on(repo: str, c: str, upstream: str, limit: int = 400) -> Optional[str]:
     """The commit of `upstream` (since its merge-base with c) that carries c's patch, or None (`git cherry`'s test,
     naming the commit), else its content twin (content_twin: same subject, author, date and changed lines)."""
     pid = patch_id(repo, c)

@@ -265,7 +265,7 @@ def _main_index(repo, main, since):
     return _main_index_cache[key]
 
 
-def content_twin(repo, c, main):
+def content_twin(repo: str, c: str, main: str) -> str | None:
     """main's commit (since its merge-base with c) with c's subject, author and author date and identical changed
     lines, or None."""
     meta = git(repo, "log", "-1", "--format=%an%x00%ae%x00%at%x00%s", c, check=False)
@@ -289,7 +289,7 @@ def inked_lines(changed):
     return {f: [l for l in lines if not (l[:1] in "+-" and not l[1:].strip())] for f, lines in changed.items()}
 
 
-def cherry_landed(repo, main, head="HEAD", *limit):
+def cherry_landed(repo: str, main: str, head: str = "HEAD", *limit: str) -> tuple[list[str], list[str]] | tuple[None, None]:
     """(commits, left): head's commits not in main's history (git cherry's list, oldest first) and those of them NOT
     landed -- neither patch-equivalent on main nor with a content twin there. (None, None) when git cannot tell."""
     ch = git(repo, "cherry", main, head, *limit, check=False)

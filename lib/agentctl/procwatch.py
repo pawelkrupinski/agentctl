@@ -73,7 +73,7 @@ def proc_rows(ps_out: Optional[str] = None) -> list[ProcRow]:
     if ps_out is None and fixed is None:
         found = ps_rows(cols)
     else:
-        found = parse_ps(ps_out if ps_out is not None else str(fixed.get("ps") or ""), cols)
+        found = parse_ps(ps_out if ps_out is not None else str((fixed or {}).get("ps") or ""), cols)
     return [(r.pid, r.ppid, r.rss, r.pcpu, os.path.basename(r.comm)) for r in found]
 
 

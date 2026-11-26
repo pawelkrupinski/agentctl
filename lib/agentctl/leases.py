@@ -94,8 +94,9 @@ class LeaseKinds:
     JOINED = (CLAIM, SIBLING)  # a red joined to its family holder's lease: released when it shows no progress
 
     @staticmethod
-    def of(row: Optional[dict[str, Any]]) -> Any:
-        return lease_meta(row).get("kind")
+    def of(row: Optional[dict[str, Any]]) -> Optional[str]:
+        kind: Optional[str] = lease_meta(row).get("kind")
+        return kind
 
     @classmethod
     def is_session(cls, row: Optional[dict[str, Any]]) -> bool:
