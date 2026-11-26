@@ -50,35 +50,63 @@ def red_repos_path():
     return os.environ.get("AGENTCTL_RED_REPOS") or os.path.join(os.path.dirname(TOOL_PATH), "red-repos.json")
 
 
+def red_repo_name(x: Dict[str, Any]) -> str:
+    """An entry's `repo`, <owner>/<name>. Raises ValueError."""
+    repo = x.get("repo")
+    if not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+        raise ValueError(f"a repo entry needs `repo: <owner>/<name>`: {x!r}")
+    return repo
+
+
+def gate_pair_ok(g: Any) -> bool:
+    return isinstance(g, list) and len(g) == 2 and all(isinstance(v, str) and v for v in g)
+
+
+def red_repo_gate(repo: str, x: Dict[str, Any]) -> List[Any]:
+    """An entry's `gate`, [[<workflow name>, <workflow file>], ...]: the primary may have none (its gate is its gating
+    checks registry, gate_flows, never a list here). Raises ValueError."""
+    gate = x.get("gate") or []
+    if repo == RED_PRIMARY and not gate:
+        return gate
+    if not gate or not all(gate_pair_ok(g) for g in gate):
+        raise ValueError(f"{repo}: `gate` must be [[<workflow name>, <workflow file>], ...]")
+    return gate
+
+
+def red_repo_push(repo: str, x: Dict[str, Any]) -> str:
+    push = x.get("push") or "land"
+    if push not in RED_PUSH_POLICIES:
+        raise ValueError(f"{repo}: `push` must be one of {', '.join(RED_PUSH_POLICIES)}, not {push!r}")
+    return push
+
+
+def red_repo_flag(repo: str, x: Dict[str, Any], key: str, default: bool) -> bool:
+    """An entry's true-or-false `key`. Raises ValueError."""
+    flag = x.get(key, default)
+    if not isinstance(flag, bool):
+        raise ValueError(f"{repo}: `{key}` is true or false, not {flag!r}")
+    return flag
+
+
+def red_repo_entry(x: Dict[str, Any]) -> Dict[str, Any]:
+    """One watched repo's parsed entry (red_repos_parse). Raises ValueError."""
+    repo = red_repo_name(x)
+    gate = red_repo_gate(repo, x)
+    push = red_repo_push(repo, x)
+    clone = x.get("clone")
+    keeps = red_repo_flag(repo, x, "red_workflows", False)
+    signed = red_repo_flag(repo, x, "signed", True)
+    return {"repo": repo, "gate": [tuple(g) for g in gate], "family": x.get("family"), "push": push,
+            "clone": os.path.expanduser(clone) if clone else None,
+            "generated": generated_parse(repo, x.get("generated")), "red_workflows": keeps,
+            "signed": signed, "note": x.get("note")}
+
+
 def red_repos_parse(raw):
     """The watched repos from red-repos.json's parsed JSON: [{repo, gate: [(name, file)], family, push, clone}], the
     primary first (added when the file lacks it). Raises ValueError on a malformed entry: a typo must not quietly
     stop a repo being watched."""
-    out = []
-    for x in (raw or {}).get("repos") or []:
-        repo = x.get("repo")
-        if not isinstance(repo, str) or not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
-            raise ValueError(f"a repo entry needs `repo: <owner>/<name>`: {x!r}")
-        gate = x.get("gate") or []
-        if repo == RED_PRIMARY and not gate:
-            pass  # the primary's gate is its gating checks registry (gate_flows), never a list here
-        elif not gate or not all(isinstance(g, list) and len(g) == 2 and all(isinstance(v, str) and v for v in g)
-                               for g in gate):
-            raise ValueError(f"{repo}: `gate` must be [[<workflow name>, <workflow file>], ...]")
-        push = x.get("push") or "land"
-        if push not in RED_PUSH_POLICIES:
-            raise ValueError(f"{repo}: `push` must be one of {', '.join(RED_PUSH_POLICIES)}, not {push!r}")
-        clone = x.get("clone")
-        keeps = x.get("red_workflows", False)
-        if not isinstance(keeps, bool):
-            raise ValueError(f"{repo}: `red_workflows` is true or false, not {keeps!r}")
-        signed = x.get("signed", True)
-        if not isinstance(signed, bool):
-            raise ValueError(f"{repo}: `signed` is true or false, not {signed!r}")
-        out.append({"repo": repo, "gate": [tuple(g) for g in gate], "family": x.get("family"), "push": push,
-                    "clone": os.path.expanduser(clone) if clone else None,
-                    "generated": generated_parse(repo, x.get("generated")), "red_workflows": keeps,
-                    "signed": signed, "note": x.get("note")})
+    out = [red_repo_entry(x) for x in (raw or {}).get("repos") or []]
     if len({c["repo"] for c in out}) != len(out):
         raise ValueError("a repo is listed twice")
     if not any(c["repo"] == RED_PRIMARY for c in out):
@@ -96,19 +124,27 @@ def generated_parse(repo, raw):
     explaining by the sides, and `block` a file only part of which is generated: generated.py A DERIVED FILE IS THE
     COMBINED TREE'S; `order_sensitive: true`: its files hold a change behind a check in flight, generated.py ONLY A
     VOIDED CHECK HOLDS). Raises ValueError."""
-    out = []
-    for g in raw or []:
-        paths, regen = (g or {}).get("paths"), (g or {}).get("regen")
-        if not paths or not all(isinstance(p, str) and p and not p.startswith("/") for p in paths) \
-                or (regen is not None and (not isinstance(regen, str) or not regen.strip())):
-            raise ValueError(f"{repo}: a `generated` entry needs `paths: [<repo path or glob>, ...]` and, when it has "
-                             f"one, `regen: <command>`: {g!r}")
-        timeout = g.get("timeout")
-        if timeout is not None and not (isinstance(timeout, (int, float)) and timeout > 0):
-            raise ValueError(f"{repo}: a `generated` entry's `timeout` is seconds > 0: {g!r}")
-        out.append({"paths": list(paths), "regen": shlex.split(regen) if regen is not None else None, "timeout": timeout,
-                    **generated_merge(repo, g, regen)})
-    return out
+    return [generated_spec(repo, g) for g in raw or []]
+
+
+def generated_command_ok(paths: Any, regen: Any) -> bool:
+    """A `generated` entry's `paths` (repo paths or globs, never absolute) and, when it has one, its `regen` command."""
+    return bool(paths) and all(isinstance(p, str) and p and not p.startswith("/") for p in paths) \
+        and (regen is None or (isinstance(regen, str) and bool(regen.strip())))
+
+
+def generated_spec(repo: str, g: Dict[str, Any]) -> Dict[str, Any]:
+    """One `generated` entry's parsed form (generated_parse). Raises ValueError."""
+    paths: Any = (g or {}).get("paths")
+    regen = (g or {}).get("regen")
+    if not generated_command_ok(paths, regen):
+        raise ValueError(f"{repo}: a `generated` entry needs `paths: [<repo path or glob>, ...]` and, when it has "
+                         f"one, `regen: <command>`: {g!r}")
+    timeout = g.get("timeout")
+    if timeout is not None and not (isinstance(timeout, (int, float)) and timeout > 0):
+        raise ValueError(f"{repo}: a `generated` entry's `timeout` is seconds > 0: {g!r}")
+    return {"paths": list(paths), "regen": shlex.split(regen) if regen is not None else None, "timeout": timeout,
+            **generated_merge(repo, g, regen)}
 
 
 def generated_merge(repo: str, g: Dict[str, Any], regen: Optional[str]) -> Dict[str, Any]:
