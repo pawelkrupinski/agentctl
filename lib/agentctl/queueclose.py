@@ -440,25 +440,24 @@ def lap_change_deadline(st: Any, e: Any, state: Any, t: Any, note: Any = None) -
         _rederive_stuck_hold(st, e, state, it, hold, stuck, t)
         return
     issue = None if hold else file_unheld_change(st, it, t, "agentctl (the change tick)")  # agentctl's bug: an issue,
-    event, deadline_s = _lap_event(e, state, it, hold, stuck, note, issue, t)
     # never an owner page (changekind.py, A CHANGE PAST ITS DEADLINE WITH NO RECORDED HOLD); a stale version: the next
     # tick says it
+    quiet = bool(hold) and not stuck
     with suppress(StaleVersion):
         it = st.item("change", e["id"]) or it
-        st.transition("change", e["id"], state, it["version"], event=event, deadline_s=deadline_s)
+        st.transition("change", e["id"], state, it["version"],
+                      event={"text": _lap_text(e, state, it, hold, stuck, note, issue, t),
+                             **hold_attribution(hold),  # its "cause": the hold's kind, else its deadline
+                             **_lap_reach(e, quiet, stuck, issue)},
+                      deadline_s=quiet_lap_after(state, it, t) if quiet else None)
 
 
-def _lap_event(e: dict[str, Any], state: str, it: dict[str, Any], hold: dict[str, Any] | None, stuck: str | None,
-               note: str | None, issue: str | None, t: float) -> tuple[dict[str, Any], float | None]:
-    """(the lap's event, its next deadline or None for the state's own): quiet while its hold is live, else to its
-    author."""
+def _lap_reach(e: dict[str, Any], quiet: bool, stuck: str | None, issue: str | None) -> dict[str, Any]:
+    """Who a lap's event reaches and how loud: a quiet one (its hold live) no audience, else its author; info unless
+    it is stuck with no issue filed."""
     # A HELD LAP IS NO INBOX ENTRY (2026-11-19 08:39Z, 08:55Z: movies-fix-replay's "queued for 15 min / 30 min, held:
     # ..." reached the inbox every 15 min -- 93 of the day's 442 entries -- because the lap's event named the worktree
     # as its audience, and the projector writes every event with one). A live hold's lap is an event with no audience:
     # `land status` and the change's events say it; only a stuck or unheld lap goes to its author.
-    quiet = bool(hold) and not stuck
-    event = {"text": _lap_text(e, state, it, hold, stuck, note, issue, t),
-             **hold_attribution(hold),  # its "cause": the hold's kind, else its deadline
-             **({} if quiet else {"audience": {"worktree": e.get("worktree")}}),
-             **({} if stuck and not issue else {"severity": "info"})}
-    return event, quiet_lap_after(state, it, t) if quiet else None
+    return {**({} if quiet else {"audience": {"worktree": e.get("worktree")}}),
+            **({} if stuck and not issue else {"severity": "info"})}
