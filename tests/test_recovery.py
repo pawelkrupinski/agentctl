@@ -1,7 +1,7 @@
 """The recovery registry (the owner, 2026-10-28: "make this self-recover", "the way it got red / blocked i want it to go
 green as well", "structural"): every non-green condition is opened by a failing probe and closed by the SAME probe
 passing; nothing writes a condition-kind inbox entry or a block around open_condition."""
-import ast, json, os, re, sys, tempfile, time, unittest
+import ast, json, os, re, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -295,6 +295,20 @@ class NoBypassTest(RegistryBase):
 
 
 class DetectorsTest(RegistryBase):
+    def test_the_tunnel_kick_runs_the_launchctl_the_tests_name(self):
+        """Review 2026-11-26 (D I5): launchctl_kick ran `launchctl` itself, past $AGENTCTL_LAUNCHCTL, so a test of the
+        tunnel watch kickstarted the laptop's real tunnel. It goes through launchd.launchctl now."""
+        ran, saved = [], (A.run_cmd, A.has_tunnel, os.environ.get("AGENTCTL_LAUNCHCTL"))
+        A.run_cmd = lambda argv, **kw: ran.append(list(argv)) or subprocess.CompletedProcess(argv, 0, "", "")
+        A.has_tunnel = lambda: True
+        os.environ["AGENTCTL_LAUNCHCTL"] = "/fake/launchctl"
+        try:
+            A.launchctl_kick()
+        finally:
+            A.run_cmd, A.has_tunnel = saved[:2]
+            os.environ.pop("AGENTCTL_LAUNCHCTL") if saved[2] is None else os.environ.__setitem__("AGENTCTL_LAUNCHCTL", saved[2])
+        self.assertEqual([a[:3] for a in ran], [["/fake/launchctl", "kickstart", "-k"]])
+
     def test_tunnel_network_and_stall_open_on_the_tunnel_probe_and_clear_on_it(self):
         A.PROBES["tunnel"] = Recorder(fails=10 ** 6)
         saved = A.uplink_loss, A.launchctl_kick

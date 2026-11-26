@@ -7,7 +7,8 @@ import re
 import subprocess
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import err, host_role, run_cmd
+from agentctl.core import err, host_role
+from agentctl.launchd import launchctl
 from agentctl.statefile import read_json_file, write_json_file
 from agentctl.store import StoreUnavailable
 from agentctl.gating import mark_gate_dirty
@@ -36,7 +37,7 @@ def launchctl_kick():
     the real error, after a pointless 15 s wait)."""
     if not has_tunnel():
         return
-    r = run_cmd(["launchctl", "kickstart", "-k", f"gui/{os.getuid()}/{TUNNEL_LABEL}"], timeout=30)
+    r = launchctl("kickstart", "-k", f"gui/{os.getuid()}/{TUNNEL_LABEL}", timeout=30)  # $AGENTCTL_LAUNCHCTL: the tests'
     if r.returncode == 124:
         err(f"launchctl kickstart {TUNNEL_LABEL}: no answer in 30 s")
 

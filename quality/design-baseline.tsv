@@ -218,7 +218,7 @@ fanout	lib/agentctl/lander.py	12
 fanout	lib/agentctl/landqueue.py	27
 fanout	lib/agentctl/localrecheck.py	15
 fanout	lib/agentctl/maintain.py	16
-fanout	lib/agentctl/netwatch.py	11
+fanout	lib/agentctl/netwatch.py	12
 fanout	lib/agentctl/offerdispatch.py	15
 fanout	lib/agentctl/orphanpass.py	17
 fanout	lib/agentctl/orphanreap.py	14
