@@ -138,13 +138,13 @@ def red_fix_liveness(st: Any, t: float, snap: Any = None) -> str | None:
     rows = [g for g in snapshot_gate_reds(snap) if g.get("since")] if snap else []
     if not rows:
         return None
-    red_for = t - min(parse_time(g["since"]).timestamp() for g in rows)
-    if red_for <= knob_red_liveness_max():
+    age_since = t - min(parse_time(g["since"]).timestamp() for g in rows)
+    if age_since <= knob_red_liveness_max():
         return None
     stalls = red_fix_stalls(st, t, facts_for(snap_reds(snap), st))
     if not stalls:
         return None
-    return (f"RED FIX STALLED: the gate has been red {fmt_age(red_for)}; {stalls[0]}"
+    return (f"RED FIX STALLED: the gate has been red {fmt_age(age_since)}; {stalls[0]}"
             + (f" (and {len(stalls) - 1} more)" if len(stalls) > 1 else ""))
 
 

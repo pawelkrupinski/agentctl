@@ -19,7 +19,8 @@ from agentctl.inboxentry import wire_inbox_writer
 from agentctl.owned import cmd_wait, restart_gate
 from agentctl.inbox import inbox_command, with_inbox
 from agentctl.maint import cmd_orphans
-from agentctl.ciwhy import gate_from_snap, outside_from_snap, red_for
+from agentctl.ciwhy import gate_from_snap, outside_from_snap
+from agentctl.timefmt import age_since
 from agentctl.actors import process_actor
 from agentctl.queuestall import probe_queue_moving
 from agentctl.timelinecmd import cmd_analyze, cmd_history
@@ -139,7 +140,7 @@ def selftest():
                       "runs": []}]}
     assert gate_from_snap(snap)[0][0] == "Main" and outside_from_snap(snap) == []
     assert set(check_failures("! pre-push sbt FAILED (3s)\n")) == {"sbt"}
-    assert red_for("2026-01-01T00:00:00Z", dt.datetime(2026, 1, 1, 1, 5, tzinfo=dt.timezone.utc)) == "1h 5m"
+    assert age_since("2026-01-01T00:00:00Z", dt.datetime(2026, 1, 1, 1, 5, tzinfo=dt.timezone.utc)) == "1h 5m"
     assert callable(recheck_local) and callable(restart_gate)
     try:
         with contextlib.redirect_stdout(io.StringIO()):

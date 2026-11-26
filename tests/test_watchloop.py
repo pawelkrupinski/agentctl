@@ -71,7 +71,7 @@ def run_watch(module, script):
             "err": lambda text: log.append(f"err {text}"),
             "ci_why": lambda o_r, n, repo=None, store=None: log.append(f"ci_why {o_r} {n}") or (0, "THE WHY"),
             "restart_if_changed": lambda owners: log.append(f"restart {owners}"),
-            "iso_at": lambda t: t - 1000.0, "red_for": lambda t: f"{t:g}s after the start",
+            "iso_at": lambda t: t - 1000.0, "age_since": lambda t: f"{t:g}s after the start",
         }.items():
             stack.enter_context(mock.patch.object(module, name, fake))
         stack.enter_context(mock.patch.dict(os.environ, env))

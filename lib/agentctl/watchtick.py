@@ -4,22 +4,21 @@
 import os
 from typing import Any, Optional, Sequence
 from agentctl.core import NoToken, err, slug
-from agentctl.timefmt import iso_at
+from agentctl.timefmt import iso_at, age_since
 from agentctl.procs import safe_cwd
 from agentctl.owned import Owned, backoff, restart_if_changed
 from agentctl.clones import main_clone
 from agentctl.cleanup import close_worktree
 from agentctl.redfixes import fixes_of
-from agentctl.ciwhy import red_for
 from agentctl.landwatch import (
     WATCH, start_watch, watch_clone, watch_eval, watch_event, watch_look, watch_outcome, watch_verdict)
-from agentctl.watchknobs import WATCH_TIMEOUT
+from agentctl.watchknobs import (
+    knob_watch_conv_start, knob_watch_error_poll, knob_watch_follow_lease, knob_watch_poll, knob_watch_stall_min,
+    knob_watch_timeout, WATCH_TIMEOUT)
 from agentctl.redopen import red_attach
 from agentctl.cireport import ci_why
 from agentctl.statemachines import StaleVersion, TerminalState
 from agentctl.clock import Clock
-from agentctl.watchknobs import knob_watch_conv_start, knob_watch_poll, knob_watch_timeout
-from agentctl.watchknobs import knob_watch_error_poll, knob_watch_follow_lease, knob_watch_stall_min
 
 
 def landed_fixes(repo: str, sha: str, fixes: Sequence[str], store: Any) -> list[str]:
@@ -228,7 +227,7 @@ class WatchLoop:
             self.seen = watch_look(self.repo, self.sha, self.o_r, self.flows, self.done, self.pushed_at, self.t0,
                                    self.clock.time(), self.on_run)
             if self.unreachable is not None:
-                err(f"watch: GitHub answers again after {red_for(iso_at(self.unreachable))} ({self.failures} failed reads)")
+                err(f"watch: GitHub answers again after {age_since(iso_at(self.unreachable))} ({self.failures} failed reads)")
             self.unreachable, self.failures, self.err_delays = None, 0, None
         except NoToken as e:  # no vault for this process: retrying cannot help
             return self.verdict(2, f"WATCH UNKNOWN: no token ({str(e).replace('agentctl: ', '')}); "
@@ -240,7 +239,7 @@ class WatchLoop:
                 self.unreachable = self.clock.time()
                 self.err_delays = backoff(knob_watch_error_poll(), 300)
             err(f"watch: could not read the runs ({self.last_error}) [{self.failures} failed, unreachable for "
-                f"{red_for(iso_at(self.unreachable))}]")
+                f"{age_since(iso_at(self.unreachable))}]")
         return None
 
     def decided(self) -> Optional[int]:
@@ -260,7 +259,7 @@ class WatchLoop:
         left = ", ".join(self.flows[k][0] for k in self.flows if k not in self.done)
         minutes = int(self.timeout // 60)
         if self.unreachable is not None:
-            return self.verdict(2, f"WATCH UNKNOWN: GitHub's runs could not be read for {red_for(iso_at(self.unreachable))} "
+            return self.verdict(2, f"WATCH UNKNOWN: GitHub's runs could not be read for {age_since(iso_at(self.unreachable))} "
                                    f"({self.failures} failed reads, the last: {self.last_error}); {left} undecided after "
                                    f"{minutes} min; check `agentctl ci-why` later")
         return self.verdict(2, f"WATCH UNKNOWN: {left} undecided after {minutes} min; check `agentctl ci-why` later")

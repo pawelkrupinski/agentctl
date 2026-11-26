@@ -10,7 +10,8 @@ from agentctl.workflows import LOCAL_FLOW
 from agentctl.redretired import red_run_retired
 from agentctl.gating import GATING_CHECKS_FILE
 from agentctl.cistate import ci_state_load, ci_state_write, state_read
-from agentctl.ciwhy import NO_VERDICT_FLOWS, gate_from_snap, gate_snap_rows, gate_report_only, gate_runs, outside_from_snap, red_for, run_no_verdict, run_target
+from agentctl.ciwhy import NO_VERDICT_FLOWS, gate_from_snap, gate_snap_rows, gate_report_only, gate_runs, outside_from_snap, run_no_verdict, run_target
+from agentctl.timefmt import age_since
 from agentctl.ciruns import main_runs_of
 from agentctl.runsigs import run_sigs, save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
@@ -205,7 +206,7 @@ class GateReport:
     def _red_row(self, name: str, decided: Any, newer: Any, since: Any, count: Any) -> None:
         self.red = True
         pending = f"; newer run {newer['databaseId']} (#{newer.get('number')}) {newer.get('status')} may clear it" if newer else ""
-        streak = f"; red for {red_for(since)} ({count} failed run{'s' if count != 1 else ''})" if count else ""
+        streak = f"; red for {age_since(since)} ({count} failed run{'s' if count != 1 else ''})" if count else ""
         self.out.append(f"{name}: RED (run {decided['databaseId']} #{decided.get('number')}, {decided['conclusion']}"
                         f"{streak}){pending}")
         self.out += self.holder_lines(name, decided)
@@ -249,7 +250,7 @@ class GateReport:
         if self.others:
             self.out.append("Outside the gate (red, not blocking a push; oldest first):")
         for name, r, since, count in self.others:
-            self.out.append(f"  {name}: RED for {red_for(since)} since {since} ({count} failed run"
+            self.out.append(f"  {name}: RED for {age_since(since)} since {since} ({count} failed run"
                             f"{'s' if count != 1 else ''}; newest run {r['databaseId']} #{r.get('number')}) -- "
                             f"`agentctl ci-why {r['databaseId']}`")
             self.out += self.holder_lines(name, r, "    ")

@@ -164,7 +164,7 @@ class FixReplayTest(unittest.TestCase):
         reason = "the runner's disk filled mid-job (infra); nothing in the code replays it"
         self.assertIsNone(A.fix_replay_refusal(self.r.path, self.fix(f"Fixes-Red: 2600\nFix-Replay: none — {reason}"),
                                                self.st))
-        self.assertEqual(set(A.fix_replay_none_reasons(self.r.path, self.fix(f"Fixes-Red: 2600\nFix-Replay: none -- {reason}"))),
+        self.assertEqual(set(A.fix_replay_trailers(self.r.path, self.fix(f"Fixes-Red: 2600\nFix-Replay: none -- {reason}"))[3]),
                          {reason}, "an ASCII dash too")
 
     def test_fix_replay_none_outside_the_final_trailer_block_is_no_escape(self):
@@ -201,7 +201,7 @@ class FixReplayTest(unittest.TestCase):
         self.addCleanup(A.git, self.r.path, "worktree", "remove", "--force", wt, check=False)
         commits = A.waiting_commits(wt, "origin/main", "HEAD")
         self.assertIsNone(A.fix_replay_refusal(wt, commits, self.st))
-        [reason] = A.fix_replay_none_reasons(wt, commits)
+        [reason] = A.fix_replay_trailers(wt, commits)[3]
         self.assertIsNone(A.fix_replay_none_lint(reason), reason)
         self.assertIn(culprit[:10], reason)
 

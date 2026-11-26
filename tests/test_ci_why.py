@@ -150,12 +150,12 @@ class CiWhyTest(FakeForge):
         self.assertNotIn("Nightly stress", out)  # green again
 
     def test_the_red_age_reads_the_process_clock_never_an_environment_variable(self):
-        """Review 2026-11-26 (B 4): red_for read $AGENTCTL_NOW in production code, a test seam beside the wired clock."""
+        """Review 2026-11-26 (B 4): age_since read $AGENTCTL_NOW in production code, a test seam beside the wired clock."""
         import datetime as dt
         os.environ["AGENTCTL_NOW"] = "2030-01-01T00:00:00Z"
         try:
             since = A.iso_at(A.epoch_now() - 7 * 60)
-            self.assertEqual(A.red_for(since), A.red_for(since, dt.datetime.fromtimestamp(A.epoch_now(), dt.timezone.utc)))
+            self.assertEqual(A.age_since(since), A.age_since(since, dt.datetime.fromtimestamp(A.epoch_now(), dt.timezone.utc)))
         finally:
             del os.environ["AGENTCTL_NOW"]
 

@@ -293,11 +293,6 @@ def fix_replay_trailers(repo, commits):
     return found.named, found.claimed, found.bare, found.nones
 
 
-def fix_replay_none_reasons(repo, commits):
-    """The reasons of commits' `Fix-Replay: none — <why>` trailers."""
-    return fix_replay_trailers(repo, commits)[3]
-
-
 def fix_replay_none_lint(reason):
     """Why a `Fix-Replay: none` reason is no reason (too short, or vague), or None."""
     if len(reason or "") < FIX_REPLAY_NONE_MIN:

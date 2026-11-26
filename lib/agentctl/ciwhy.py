@@ -1,8 +1,6 @@
 # agentctl, part `ciwhy`: the gate's runs read: main's runs per workflow, decided or not, the red streak, a run resolved by id or number
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
-import datetime as dt
 import itertools
 import json
 import re
@@ -241,19 +239,6 @@ def red_streak(runs: list[Run] | None, skip: Callable[[Run], bool] | None = None
         return None, 0
     oldest = streak[-1]
     return oldest.get("updatedAt") or oldest.get("createdAt"), len(streak)
-
-
-def red_for(since, now=None):
-    """'3d 4h' / '5h 12m' / '7m' since an ISO time, or '?' when it cannot be read."""
-    try:
-        t = dt.datetime.fromisoformat(str(since).replace("Z", "+00:00"))
-    except ValueError:
-        return "?"
-    if now is None:  # the process's clock (the tests wire theirs; review 2026-11-26: $AGENTCTL_NOW was a second one)
-        now = dt.datetime.fromtimestamp(epoch_now(), dt.timezone.utc)
-    mins = max(0, int((now - t).total_seconds() // 60))
-    d, h, m = mins // 1440, mins % 1440 // 60, mins % 60
-    return f"{d}d {h}h" if d else f"{h}h {m}m" if h else f"{m}m"
 
 
 # A RUN NUMBER IS WHAT EVERY RED PRINTS (issue 20261031T085600-c1cbf8: `ci-why 2939` for red Main #2939 explained run

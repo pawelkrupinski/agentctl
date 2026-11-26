@@ -416,7 +416,7 @@ class RevertTest(BlameBase):
         self.assertTrue(self.only()["data"].get("gate"), "Main's red is a gate red: FIX REPLAY is enforced for it")
         commits = A.waiting_commits(wt, "origin/main", "HEAD")
         self.assertIsNone(A.fix_replay_refusal(wt, commits, self.st))
-        [reason] = A.fix_replay_none_reasons(wt, commits)
+        [reason] = A.fix_replay_trailers(wt, commits)[3]
         self.assertIsNone(A.fix_replay_none_lint(reason), reason)
         self.assertIn("ch-a", reason)  # specific: the owner's weekly list names the change it reverted
 
