@@ -102,29 +102,43 @@ def red_holder_idle(store: Any, row: dict[str, Any], t: float) -> str | None:
     return red_owned_idle(store, row, t) if kind == "owned" else None
 
 
+def _joined_progress(it: Any, d: dict[str, Any], m: dict[str, Any]) -> str | None:
+    """What shows a joined red worked on (a fix on it, or a commit naming it in the holder's worktree), else None."""
+    if it and (it["state"] in ("fix-pending",) + RED_TERMINAL or d.get("fix")):
+        return f"fix {(d.get('fix') or {}).get('entry') or it['state']}"
+    sha = red_fixes_red_commits(m.get("worktree"), red_names(d)) if it else None
+    return f"commit {sha[:10]}" if sha else None
+
+
+def _joined_item(store: Any, row: dict[str, Any]) -> Any:
+    """The red item a joined lease row names, or None."""
+    return store.item("red", str(row.get("item") or "").split(":", 1)[-1]) if row.get("item") else None
+
+
+def _release_joined(store: Any, it: Any, d: dict[str, Any], row: dict[str, Any]) -> bool:
+    """Mark the joined red's holder as released from it; False when another writer moved the red (the next pass)."""
+    try:
+        store.update_item("red", it["id"], it["version"],
+                          {"family_released": sorted(set(d.get("family_released") or []) | {row["holder"]})})
+    except StaleVersion:
+        return False
+    return True
+
+
 def red_joined_idle(store, row, t):
     """None while a joined red is within its window or worked on (marked so), else the release outcome."""
     m = lease_meta(row)
     if not m.get("joined_at") or m.get("progressed"):
         return None
-    it = store.item("red", str(row.get("item") or "").split(":", 1)[-1]) if row.get("item") else None
+    it = _joined_item(store, row)
     d = (it or {}).get("data") or {}
-    if it and (it["state"] in ("fix-pending",) + RED_TERMINAL or d.get("fix")):
-        red_joined_progress(store, row, f"fix {(d.get('fix') or {}).get('entry') or it['state']}")
-        return None
-    sha = red_fixes_red_commits(m.get("worktree"), red_names(d)) if it else None
-    if sha:
-        red_joined_progress(store, row, f"commit {sha[:10]}")
+    note = _joined_progress(it, d, m)
+    if note:
+        red_joined_progress(store, row, note)
         return None
     idle = env_num("AGENTCTL_RED_JOIN_IDLE", RED_JOIN_IDLE)
-    if t - float(m["joined_at"]) < idle:
+    if t - float(m["joined_at"]) < idle or (it and not _release_joined(store, it, d, row)):
         return None
-    if it:
-        try:
-            store.update_item("red", it["id"], it["version"],
-                              {"family_released": sorted(set(d.get("family_released") or []) | {row["holder"]})})
-        except StaleVersion:
-            return None  # another writer moved the red: the next pass
     return (f"RELEASED: no progress on it {fmt_age(t - float(m['joined_at']))} after it joined {row['holder']}'s lease "
             f"(no commit, land or note for it within {fmt_age(idle)}): offered to a fixer of its own")
 
@@ -273,10 +287,8 @@ def red_dispatch_meta(pic, fam, owned, off, num):
             "tier": off["tier"], "run": num, "workflow": pic.get("workflow"), "host": socket_host()}
 
 
-def red_spawn(store, o_r, repo, off, took, extra=()):
-    """Start what the tier says, under the taken lease: the revert fallback, or a headless fixer (fresh worktree; the
-    same session and worktree for `resume`)."""
-    pic, tier = off["picture"], off["tier"]
+def _spawn_facts(o_r: str, pic: dict[str, Any], extra: Any) -> dict[str, Any]:
+    """The red's facts a fixer or the revert fallback is started with, the run's other reds' jobs under the same fixer."""
     u = {"workflow": pic["workflow"], "job": pic.get("job"), "jobs": pic.get("jobs"), "kind": pic.get("kind") or "test",
          "line": pic.get("line"), "run": pic.get("run") or {}, "refuted": pic.get("refuted"), "predicts": pic.get("predicts"),
          "flake": pic.get("red_kind") == "flake", "diagnosis": pic.get("diagnosis"), "key": pic["key"],
@@ -285,34 +297,46 @@ def red_spawn(store, o_r, repo, off, took, extra=()):
     u["repo_note"] = red_repo_note(o_r, u["run"])
     for x in extra:  # the run's other reds, under the same fixer
         u["jobs"] = sorted(set(u.get("jobs") or [u["job"]]) | set(x["picture"].get("jobs") or []))
-    if tier == "lander":  # THE DECISION RULE's determined culprit: reverted, its lander revived (blame.py)
-        return lander_spawn(store, o_r, repo, off, took, u)
+    return u
+
+
+def _reland_before_fixer(store: Any, o_r: str, repo: str, off: dict[str, Any], u: dict[str, Any]) -> dict[str, Any]:
+    """The red's blame; when its revert was refuted, the change relanded first (recorded on the red and in the inbox)."""
+    pic = off["picture"]
     b = pic.get("blame") or {}
-    if b.get("reland_due") and not b.get("reland"):  # its revert was refuted: the change relanded before a fixer starts
-        rl = blame_reland(o_r, repo, u, b)
-        it_ = store.item("red", off["item"].split(":", 1)[1])
-        if it_:
-            store.update_item("red", it_["id"], it_["version"], {"blame": dict(b, reland=rl)})
-        inbox_write("red", f"RED RELAND: {red_what(pic)}: {rl['msg']}", [], [], 0 if rl.get("ok") else 1)
-        b = dict(b, reland=rl)
-    if b.get("culprit") is not None:
-        u["blame_note"] = blame_note(b)
-    if tier == "revert":
-        dec = pic.get("decision") or {}
-        if DECIDED_REVERT.match(str(dec.get("answer") or "")):
-            u["revert_why"] = (f"the owner decided {u['workflow']} #{u['run'].get('number')} is fixed by this revert "
-                               f"({str(dec.get('answer'))[:120]!r}) and no fixer landed it within "
-                               f"{fmt_age(env_num('AGENTCTL_RED_DECIDED_REVERT_MAX', RED_DECIDED_REVERT_MAX))} "
-                               "(decided_revert).")
-        ok, msg = red_revert(o_r, repo, u, pic.get("culprit"))
-        store.note(off["lease"], took["epoch"], took["secret"], msg)
-        it_id = off["item"].split(":", 1)[1]
-        it = store.item("red", it_id)
-        if it:
-            store.update_item("red", it_id, it["version"], {"reverted": {"at": ts(), "culprit": pic.get("culprit"), "ok": ok}})
-        return ok, f"RED REVERT: {pic['workflow']} #{u['run'].get('number')}: {msg}"
+    if not (b.get("reland_due") and not b.get("reland")):
+        return b
+    rl = blame_reland(o_r, repo, u, b)
+    it_ = store.item("red", off["item"].split(":", 1)[1])
+    if it_:
+        store.update_item("red", it_["id"], it_["version"], {"blame": dict(b, reland=rl)})
+    inbox_write("red", f"RED RELAND: {red_what(pic)}: {rl['msg']}", [], [], 0 if rl.get("ok") else 1)
+    return dict(b, reland=rl)
+
+
+def _spawn_revert(store: Any, o_r: str, repo: str, off: dict[str, Any], took: dict[str, Any], u: dict[str, Any]) -> tuple[bool, str]:
+    """The revert tier: the culprit reverted, noted on the lease and on the red (the owner's decided revert says why)."""
+    pic = off["picture"]
+    dec = pic.get("decision") or {}
+    if DECIDED_REVERT.match(str(dec.get("answer") or "")):
+        u["revert_why"] = (f"the owner decided {u['workflow']} #{u['run'].get('number')} is fixed by this revert "
+                           f"({str(dec.get('answer'))[:120]!r}) and no fixer landed it within "
+                           f"{fmt_age(env_num('AGENTCTL_RED_DECIDED_REVERT_MAX', RED_DECIDED_REVERT_MAX))} "
+                           "(decided_revert).")
+    ok, msg = red_revert(o_r, repo, u, pic.get("culprit"))
+    store.note(off["lease"], took["epoch"], took["secret"], msg)
+    it_id = off["item"].split(":", 1)[1]
+    it = store.item("red", it_id)
+    if it:
+        store.update_item("red", it_id, it["version"], {"reverted": {"at": ts(), "culprit": pic.get("culprit"), "ok": ok}})
+    return ok, f"RED REVERT: {pic['workflow']} #{u['run'].get('number')}: {msg}"
+
+
+def _spawn_fixer(store: Any, o_r: str, repo: str, off: dict[str, Any], took: dict[str, Any], u: dict[str, Any], extra: Any) -> Any:
+    """A headless fixer of the tier: `resume` continues the last attempt's session and worktree, `deep` investigates."""
+    pic, tier = off["picture"], off["tier"]
     last = (pic.get("history") or [{}])[-1]
-    resume = last if tier == "resume" else None
+    resume = None
     if tier == "resume":
         resume = dict(last, note=(f"YOUR FIX DID NOT FIX IT ({last.get('outcome')}): find out why, and fix it properly "
                                   f"(same rules; Fixes-Red: {u['run'].get('number')})."))
@@ -321,6 +345,20 @@ def red_spawn(store, o_r, repo, off, took, extra=()):
         u["diagnosis"] = red_investigation_brief(pic)
     return red_dispatch(o_r, repo, u, why=f"tier {tier}", resume=resume, effort=effort, lease=off["lease"], took=took,
                         extra=extra, store=store)
+
+
+def red_spawn(store, o_r, repo, off, took, extra=()):
+    """Start what the tier says, under the taken lease: the revert fallback, or a headless fixer (fresh worktree; the
+    same session and worktree for `resume`)."""
+    u = _spawn_facts(o_r, off["picture"], extra)
+    if off["tier"] == "lander":  # THE DECISION RULE's determined culprit: reverted, its lander revived (blame.py)
+        return lander_spawn(store, o_r, repo, off, took, u)
+    b = _reland_before_fixer(store, o_r, repo, off, u)
+    if b.get("culprit") is not None:
+        u["blame_note"] = blame_note(b)
+    if off["tier"] == "revert":
+        return _spawn_revert(store, o_r, repo, off, took, u)
+    return _spawn_fixer(store, o_r, repo, off, took, u, extra)
 
 
 def red_investigation_brief(pic):
