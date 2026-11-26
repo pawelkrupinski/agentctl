@@ -129,9 +129,10 @@ def red_wait(facts: dict[str, Any], names: set[str], gnames: set[str], bare: tup
     gate = set(facts.get("gate") or ())
     if not gate:
         return None
-    if bare:
-        return wait_words(bare[0], bare[1], gate, gnames - gate)
-    return f"it names {', '.join(sorted(names)) or 'no red'}, no run of the open gate red"
+    why = wait_words(bare[0], bare[1], gate, gnames - gate) if bare \
+        else f"it names {', '.join(sorted(names)) or 'no red'}, no run of the open gate red"
+    unread = facts.get("episode_unread") or {}
+    return why + "".join(f"; the episode of {w} is unread ({u}): only its newest run counts" for w, u in sorted(unread.items()))
 
 
 def wait_words(c: str, fixes: set[str], reds: set[str], open_names: set[str]) -> str:

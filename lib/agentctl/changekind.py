@@ -6,7 +6,7 @@ from typing import Any
 from contextlib import suppress
 from agentctl.core import fmt_age
 from agentctl.redrecord import RED_TERMINAL, red_names
-from agentctl.redepisode import red_episode_names
+from agentctl.redepisode import episode_unread, red_episode_names
 from agentctl.queueslots import checker_alive
 from agentctl.redland import may_land_on_red, red_kind_of
 from agentctl.issues import issue_open
@@ -60,7 +60,8 @@ def priority_table_markdown():
 
 def queue_facts(gate, st):
     """THE FACTS a change is classified against: {"gate": the gate's current red names (gate_reds), "open": {name: [red
-    id, red kind]} for every red the store has open: the item's names and, for a gate red, the runs of its EPISODE (redepisode.py).
+    id, red kind]} for every red the store has open: the item's names and, for a gate red, the runs of its EPISODE (redepisode.py);
+    "episode_unread": {workflow: why} of the gate's episodes that could not be read (only their newest run counts).
     An unreadable store gives no open reds: the gate's still count."""
     open_ = {}
     try:
@@ -73,7 +74,7 @@ def queue_facts(gate, st):
         d = it.get("data") or {}
         for n in sorted(str(x) for x in red_names(d) | red_episode_names(d) if x):
             open_.setdefault(n.lstrip("#"), [it["id"], red_kind_of(d)])
-    return {"gate": {str(x) for x in gate or ()}, "open": open_}
+    return {"gate": {str(x) for x in gate or ()}, "open": open_, "episode_unread": dict(episode_unread)}
 
 
 def gate_facts(gate):

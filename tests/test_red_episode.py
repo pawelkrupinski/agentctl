@@ -118,7 +118,18 @@ MATRIX = {
     ('stale-A', 'stale-oldline', 'cur-A', '0'): ((6, 8), (6,)),
 }
 
-RESOLVED = {}
+# THE DISAGREEMENT, resolved (redepisode.py's header): ONE FALLBACK ORDER for a streak run's signatures -- this
+# classifier's record, a read again within the budget, the stale record -- so the queue facts count a stale record that
+# names the red's job and line, as the gate did (their budget is 0: they never read the forge, so a stale record whose
+# LINE moved still counts for the gate only once a tick re-reads it). The facts' episode, by that order:
+MATCHES_A = ("cur-A", "stale-A")
+
+
+def facts_episode(decided, s7, s6):
+    return tuple(n for n, state in ((6, s6), (7, s7), (8, decided)) if state in MATCHES_A)
+
+
+RESOLVED = {k: (v[0], facts_episode(*k[:3])) for k, v in MATRIX.items() if v[1] != facts_episode(*k[:3])}
 
 
 class RedEpisodeMatrixTest(unittest.TestCase):
@@ -137,6 +148,35 @@ class RedEpisodeMatrixTest(unittest.TestCase):
         want = {k: RESOLVED.get(k, v) for k, v in MATRIX.items()}
         diff = {k: (want.get(k), v) for k, v in got.items() if want.get(k) != v}
         self.assertEqual(diff, {}, "\n" + "\n".join(f"    {k!r}: {v!r}," for k, v in sorted(got.items())))
+
+    def test_the_queue_facts_count_a_stale_record_naming_the_red_s_job_and_line(self):
+        """Before: the facts counted only a record of THIS classifier; the gate counted the stale one too."""
+        w = World(self, "cur-A", "stale-A", "stale-oldline", "0")
+        self.assertEqual(numbers(A.red_episode_names(w.item(), w.snap())), (7, 8))
+
+    def test_an_unreadable_episode_is_surfaced_never_silently_no_episode(self):
+        """Before: the newest run's failures unreadable, episode_names said one line and returned nothing -- a fix naming
+        an older run waited and nothing said why. Now the facts carry why, and a waiting fix's words say it; a later
+        read clears it."""
+        w = World(self, "raises", "cur-A", "cur-A", "0")
+        ep = A.RedEpisode("o/r", "Main", w.runs, [0]).of_run(w.runs[0])
+        self.assertEqual(numbers(ep.names), (8,))
+        self.assertIn("could not be read", ep.unread)
+        st = A.Store(path=os.path.join(self.tmp.name, "store.db"))
+        facts = A.queue_facts({"8"}, st)
+        self.assertIn("Main", facts["episode_unread"])
+        v = A.may_land_on_red(facts, {"fixes": ["7"]})
+        self.assertIn("the episode of Main is unread", v.wait)
+        w.states[8] = "cur-A"
+        A.RedEpisode("o/r", "Main", w.runs, [0]).of_run(w.runs[0])
+        self.assertNotIn("Main", A.queue_facts({"8"}, st)["episode_unread"], "read again: no longer unread")
+
+    def test_the_newest_run_unreadable_falls_back_to_its_stale_record(self):
+        """THE FALLBACK ORDER for the reference: run_sigs, else the run's stale record, else unread."""
+        w = World(self, "raises", "cur-A", "none", "0")
+        w.record(8, "stale-A")
+        ep = A.RedEpisode("o/r", "Main", w.runs, [0]).of_run(w.runs[0])
+        self.assertEqual((numbers(ep.names), ep.unread), ((7, 8), None))
 
 
 if __name__ == "__main__":

@@ -7,15 +7,15 @@ import subprocess
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import attempt, env_num, err, fmt_age, git, git_ok, reds_dir, remote, slug
+from agentctl.core import attempt, env_num, err, fmt_age, git, git_ok, remote, slug
 from agentctl.timefmt import parse_time
-from agentctl.statefile import read_record
 from agentctl.classify import norm_line
 from agentctl.forge import RED_CONCLUSIONS
 from agentctl.repos import gated_repo
 from agentctl.workflows import LOCAL_FLOW
-from agentctl.ciwhy import _gate_lists, gate_report_only, gate_runs, streak_runs
-from agentctl.runsigs import classifier_version, run_names, run_sigs
+from agentctl.ciwhy import _gate_lists, gate_report_only, gate_runs
+from agentctl.runsigs import classifier_version, run_names
+from agentctl.redepisode import RedEpisode, streak_budget
 from agentctl.redrecord import RED_TERMINAL, red_what
 from agentctl.red import STUCK_FACTOR, red_key
 from agentctl.redmove import red_close
@@ -24,51 +24,14 @@ from agentctl.branches import branch_reds, entry_predicts
 
 
 # -- what is red now: one observation per key, from the CI-state snapshot
-STREAK_REREADS = 3  # stale or missing streak run signatures read again per tick ($AGENTCTL_STREAK_REREADS)
-
-
-def streak_sigs(o_r, name, r, budget):
-    """A streak run's signatures: its cached record when the classifier that wrote it is this one; else read again
-    through run_sigs while `budget` (a one-element list, the tick's) lasts; else the stale record's (the next tick reads
-    it). A raw stale record keyed #2406 by its old WARN line while #2493 was keyed by its annotation: the streak never
-    named #2406, so the waiting `Fixes-Red: 2406` fix never held #2493's red."""
-    rec = read_record(reds_dir("runsig", f"{r.get('databaseId')}.json"))
-    if rec is not None and rec.get("classifier") == classifier_version():
-        return rec.get("sigs") or []
-    if budget[0] > 0 and r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS:
-        budget[0] -= 1
-        try:
-            return run_sigs(o_r, r, name)
-        except (Exception, SystemExit) as e:
-            err(f"red: could not read the failed jobs of run {r.get('databaseId')} ({str(e)[:120]})")
-    return (rec or {}).get("sigs") or []
-
-
-def streak_run_names(o_r: Any, name: str, decided: Any, sruns: list[Any], sig: dict[str, Any], streak: dict[Any, Any], budget: list[int]) -> set[str]:
-    """The names of `decided` and of the streak's runs that failed THIS way (signature `sig`; their signatures, by this
-    classifier, read once into `streak`: run id -> signatures)."""
-    names = set(run_names(decided))
-    for r in sruns:
-        rid = r.get("databaseId")
-        if rid == decided.get("databaseId"):
-            continue
-        if rid not in streak:
-            streak[rid] = streak_sigs(o_r, name, r, budget)
-        if any(x.get("job") == sig["job"] and norm_line(x.get("line")) == norm_line(sig["line"]) for x in streak[rid]):
-            names |= run_names(r)
-    return names
-
-
 def red_units(o_r, name, decided, runs, sigs, gate, budget=None):
     """The failing jobs of one red run as units: [{workflow, job, kind, line, run, runs, names, gate}]. budget: the
     tick's re-reads of stale streak signatures (a one-element list; default STREAK_REREADS)."""
-    sruns = streak_runs(runs) if runs else []
-    budget = budget if budget is not None else [int(env_num("AGENTCTL_STREAK_REREADS", STREAK_REREADS))]
-    streak = {}
+    episode = RedEpisode(o_r, name, runs, budget if budget is not None else streak_budget())
     sigs = [s for s in sigs if s.get("kind") != "incomplete"]  # a `verdict complete` beside a real failure is no red
     # (job_is_verdict_report: reporting only)
     units = [{"workflow": name, "job": s["job"], "kind": s["kind"], "line": s["line"], "run": decided, "runs": runs,
-              "names": streak_run_names(o_r, name, decided, sruns, s, streak, budget), "gate": gate} for s in sigs]
+              "names": episode.failing(s["job"], s["line"], decided), "gate": gate} for s in sigs]
     if not units:  # no failed job listed (or none readable): the run itself is the red
         units.append({"workflow": name, "job": "?", "kind": "unclear", "line": "", "run": decided, "runs": runs,
                       "names": set(run_names(decided)), "gate": gate})
@@ -84,15 +47,11 @@ def gate_red_units(o_r, rows, others=(), rereads=None):
     """The red units of ci-why's rows: [(name, decided, runs, gate)] -> units (signatures read, cached; at most
     `rereads` (STREAK_REREADS) stale streak runs read again per call -- the tick's; the status line's summary none)."""
     units = []
-    budget = [int(env_num("AGENTCTL_STREAK_REREADS", STREAK_REREADS)) if rereads is None else rereads]
+    budget = streak_budget() if rereads is None else [rereads]
     for name, decided, runs, gate in list(rows) + list(others):
         if not decided or decided.get("conclusion") not in RED_CONCLUSIONS:
             continue
-        try:
-            sigs = run_sigs(o_r, decided, name)
-        except (Exception, SystemExit) as e:
-            err(f"red: could not read the failed jobs of run {decided.get('databaseId')} ({str(e)[:120]})")
-            sigs = []
+        sigs, _unread = RedEpisode(o_r, name, runs, budget).reference_sigs(decided)  # unread: said and kept there
         if sigs_no_verdict(sigs):
             continue  # an incomplete run (only `verdict complete` failed): no verdict, no red, no fixer
         units += red_units(o_r, name, decided, runs, sigs, gate, budget)
@@ -417,14 +376,8 @@ def gate_reds(repo: str) -> set[str]:
 # failed job names (episode_reds there).
 def episode_names(o_r, name, decided):
     """The names (numbers and ids) of workflow `name`'s red streak runs on main that fail the way its newest decided red
-    run does (red_units' names); empty when its signatures cannot be read -- then only the newest run counts."""
-    try:
-        sigs = run_sigs(o_r, decided, name)
-        units = red_units(o_r, name, decided, _gate_lists.get(name) or [], sigs, True)
-    except (Exception, SystemExit) as e:  # SystemExit: NoToken
-        err(f"could not read {name} #{decided.get('number')}'s failures ({str(e)[:120]}): only that run counts as its red")
-        return set()
-    return set().union(*(set(u.get("names") or ()) for u in units))
+    run does: RedEpisode.of_run (its signatures unread: only that run, and `episode_unread` says why)."""
+    return set(RedEpisode(o_r, name, _gate_lists.get(name) or [], streak_budget()).of_run(decided).names)
 
 
 def predict_units(o_r, snap):
