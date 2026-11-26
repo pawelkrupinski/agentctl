@@ -40,6 +40,41 @@ class NextSeqTest(unittest.TestCase):
         self.assertEqual(self.st.next_seq("hold_seq"), 2)
 
 
+class LandHoldRaceTest(unittest.TestCase):
+    """THE land_hold_set RACE (review 2026-11-26; 4d043e6 only mitigated it): two holders that both read "no hold in
+    force" each made one -- two holds. "Make it unless one is in force" is now one store transaction (open_singleton)."""
+
+    def setUp(self):
+        self.st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"))
+
+    def test_two_holders_reading_no_hold_at_once_make_one_hold(self):
+        both_read = threading.Barrier(2, timeout=10)
+        real = A.land_hold
+
+        def read_then_wait(st, *a, **k):
+            got = real(st, *a, **k)
+            both_read.wait()  # each has read "no hold" before either writes
+            return got
+        A.land_hold = read_then_wait
+        self.addCleanup(setattr, A, "land_hold", real)
+        ts = [threading.Thread(target=A.land_hold_set, args=(self.st, 3600, f"why {i}", f"h{i}")) for i in range(2)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        held = A.land_holds(self.st)
+        self.assertEqual(len(held), 1, [h["id"] for h in held])
+        self.assertEqual([e["kind"] for e in self.st.item_events("hold", held[0]["id"])].count("hold.held"), 2,
+                         "the second holder extended it")
+
+    def test_an_expired_hold_is_no_hold_in_force(self):
+        it = A.land_hold_set(self.st, 60, "short", "me")
+        self.st.update_item("hold", it["id"], it["version"], {})
+        with self.st.db() as c:
+            c.execute("UPDATE items SET deadline=0 WHERE id=?", (it["id"],))
+        again = A.land_hold_set(self.st, 3600, "again", "me")
+        self.assertNotEqual(again["id"], it["id"])
+        self.assertEqual(self.st.item("hold", it["id"])["state"], "expired")
+
+
 class BatchRetryLineTest(unittest.TestCase):
     def test_the_retry_line_names_the_limit_in_force(self):
         st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"))

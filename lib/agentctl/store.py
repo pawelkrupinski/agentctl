@@ -277,6 +277,27 @@ class Store(OfferTable):
         finally:
             c.close()
 
+    def open_singleton(self, typ: str, state: str, data: dict[str, Any], seq_key: str, prefix: str,
+                       deadline_s: float | None = None) -> tuple[dict[str, Any], bool]:
+        """INSERT-IF-ABSENT for an item there is at most one of in force (the land hold): in ONE transaction, the item
+        of typ in `state` whose deadline is still ahead (the latest), else a new one `<prefix><n>`, n minted from seq_key
+        in that transaction, its deadline deadline_s (default: the state's). Returns (the item, whether it is new)."""
+        c = self.db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            now_ = self.clock()
+            row = c.execute("SELECT id FROM items WHERE type=? AND state=? AND deadline>? ORDER BY deadline DESC LIMIT 1",
+                            (typ, state, now_)).fetchone()
+            if row is None:
+                n = c.execute("INSERT INTO meta VALUES (?,'1') ON CONFLICT(k) DO UPDATE SET v=v+1 RETURNING v", (seq_key,)).fetchone()[0]
+                secs = machine_state(typ, state).deadline if deadline_s is None else deadline_s
+                c.execute("INSERT INTO items VALUES (?,?,?,?,?,?,?,?)",
+                          (typ, f"{prefix}{n}", state, 1, now_, now_ + secs, 0, json.dumps(data)))
+            c.execute("COMMIT")
+            return self._item(c, typ, row["id"] if row else f"{prefix}{n}"), row is None
+        finally:
+            c.close()
+
     def transition(self, typ, iid, to, expect_version, data=None, event=None, deadline_s=None, level=None):
         """THE way an item changes state: compare-and-set on its version (StaleVersion on a miss), never out of a
         terminal state (TerminalState), its deadline from MACHINES, its data merged, and its event written in the same

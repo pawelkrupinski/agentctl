@@ -35,22 +35,23 @@ def hold_by() -> str:
 
 
 def land_hold_set(st: Any, secs: int, why: str | None, by: str) -> Any:
-    """Hold, or extend the hold in force to now + secs. Returns the hold item."""
+    """Hold, or extend the hold in force to now + secs. Returns the hold item. ONE HOLD (2026-11-26): "make it unless
+    one is in force" is one store transaction (Store.open_singleton), so two holders at once -- the laptop and
+    ci-runner -- never make two holds; the one that finds a hold extends it."""
     secs = max(60, min(int(secs), LAND_HOLD_MAX))
-    cur = land_hold(st)
     data = {"by": by, "why": why or "", "at": epoch_now()}
-    if cur:
-        st.transition("hold", cur["id"], "held", cur["version"], data=data, deadline_s=secs,
-                      event={"text": f"land hold {cur['id']} extended by {by}: {why or 'no reason given'}",
-                             "dedupe": f"hold:{cur['id']}:extend:{cur['version'] + 1}"})
-        return st.item("hold", cur["id"])
-    n = st.next_seq("hold_seq")
-    it = st.put_item("hold", f"land#{n}", "held", data)
-    if secs != LAND_HOLD_DEFAULT:  # its own expiry: a self-transition re-deadlines it
+    land_hold(st)  # a hold past its deadline expires first (its event says so)
+    it, new = st.open_singleton("hold", "held", data, "hold_seq", "land#", deadline_s=secs)
+    if new and secs == LAND_HOLD_DEFAULT:
+        return it
+    if new:  # its own expiry, said
         st.transition("hold", it["id"], "held", it["version"], deadline_s=secs,
                       event={"text": f"land hold {it['id']} by {by} for {secs // 60} min: {why or 'no reason given'}"})
-        it = st.item("hold", it["id"])
-    return it
+    else:
+        st.transition("hold", it["id"], "held", it["version"], data=data, deadline_s=secs,
+                      event={"text": f"land hold {it['id']} extended by {by}: {why or 'no reason given'}",
+                             "dedupe": f"hold:{it['id']}:extend:{it['version'] + 1}"})
+    return st.item("hold", it["id"])
 
 
 def land_hold_release(st: Any, by: str) -> list[str]:

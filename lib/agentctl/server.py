@@ -55,7 +55,7 @@ from agentctl.knobs import knob_tick
 # 24 hourly copies on ci-runner.
 STORE_RPC = ("acquire", "renew", "note", "release", "revoke", "set_meta", "offer", "offers", "offer_of", "offer_reason",
              "close_offer", "take", "get", "item", "items", "put_item", "transition", "update_item", "mark_notified",
-             "meta_get", "meta_set", "next_seq", "events", "item_events", "archive_free_leases", "list")
+             "meta_get", "meta_set", "next_seq", "open_singleton", "events", "item_events", "archive_free_leases", "list")
 STORE_BODY_MAX = 4 << 20     # bytes: a larger request body is refused unread (413)
 
 
