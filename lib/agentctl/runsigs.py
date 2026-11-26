@@ -33,36 +33,53 @@ def cause_of(job, line):
     return signature("*", job, line) if norm_line(line) else None
 
 
-def name_causes(o_r=None, values=()):
-    """{run number or id: {causes}} from every run whose signatures are known (reds/runsig), plus, with o_r, the runs
-    `values` name that are not known yet (looked up once, then cached like any run)."""
+def causes_of(sigs):
+    """The distinct causes of a run's signatures."""
+    return {cause_of(x["job"], x["line"]) for x in sigs} - {None}
+
+
+def known_run_causes():
+    """{run number or id: {causes}} of every run whose signatures are cached (reds/runsig), and `wf:<number>`: its workflow."""
     out = {}
     for p in glob.glob(reds_dir("runsig", "*.json")):
         rec = read_record(p)
         if not rec:
             continue
-        cs = {cause_of(x["job"], x["line"]) for x in rec.get("sigs") or []} - {None}
+        cs = causes_of(rec.get("sigs") or [])
         for n in (rec.get("run"), rec.get("number")):
             if n is not None:
                 out.setdefault(str(n), set()).update(cs)
         out.setdefault(f"wf:{rec.get('number')}", set()).add(rec.get("workflow"))
+    return out
+
+
+def learn_run_causes(o_r, missing, out):
+    """Look up the runs `missing` once (those not looked up before and still red) and add their causes to `out`; a run that
+    gave none is remembered as tried."""
+    tried = read_record(reds_dir("unknown-runs.json")) or {}
+    for v in missing:
+        if v in tried:
+            continue
+        name, r = resolve_run(o_r, v)
+        if r is not None and r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS:
+            with suppress(Exception, SystemExit):
+                sigs = run_sigs(o_r, r, name)
+                cs = causes_of(sigs)
+                for n in run_names(r):
+                    out.setdefault(n, set()).update(cs)
+                continue
+        tried[v] = ts()
+    with suppress(OSError):
+        write_json(reds_dir("unknown-runs.json"), tried)
+
+
+def name_causes(o_r=None, values=()):
+    """{run number or id: {causes}} from every run whose signatures are known (reds/runsig), plus, with o_r, the runs
+    `values` name that are not known yet (looked up once, then cached like any run)."""
+    out = known_run_causes()
     missing = [v for v in values if v not in out and v.isdigit()]
     if o_r and missing:
-        tried = read_record(reds_dir("unknown-runs.json")) or {}
-        for v in missing:
-            if v in tried:
-                continue
-            name, r = resolve_run(o_r, v)
-            if r is not None and r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS:
-                with suppress(Exception, SystemExit):
-                    sigs = run_sigs(o_r, r, name)
-                    cs = {cause_of(x["job"], x["line"]) for x in sigs} - {None}
-                    for n in run_names(r):
-                        out.setdefault(n, set()).update(cs)
-                    continue
-            tried[v] = ts()
-        with suppress(OSError):
-            write_json(reds_dir("unknown-runs.json"), tried)
+        learn_run_causes(o_r, missing, out)
     return out
 
 
