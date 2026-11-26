@@ -79,6 +79,11 @@ def process_cache(empty: T) -> T:
 HOME = os.path.expanduser("~")
 
 
+def tilde(path: str) -> str:
+    """path with the home directory written as `~` (for a line a person reads)."""
+    return path.replace(HOME, "~")
+
+
 config_load()
 REPOS = [f"{HOME}/bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")] + [
     f"{HOME}/projects/movies"

@@ -11,7 +11,7 @@ import sys
 import time
 from typing import Any
 from contextlib import suppress
-from agentctl.core import HOME, attempt, cherry_landed, env_num, err, git, on_ci_runner, reds_dir, remote, spawn_detached
+from agentctl.core import attempt, cherry_landed, env_num, git, on_ci_runner, reds_dir, remote, spawn_detached, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.store import StoreUnavailable
@@ -47,65 +47,101 @@ def bin_repo() -> str | None:
     return None if r == "-" or not os.path.isdir(os.path.join(r, ".git")) else r
 
 
-def red_dispatch(o_r, repo, u, why="by hand", resume=None, effort=None, lease=None, took=None, extra=(), store=None):
+def red_dispatch(o_r: Any, repo: Any, u: Any, why: Any = "by hand", resume: Any = None, effort: Any = None, lease: Any = None,
+                 took: Any = None, extra: Any = (), store: Any = None) -> Any:
     """Start a headless fixer for red u under its taken lease: a fresh worktree <clone>-wt-red-<run> off origin/main
     (resume: the same worktree and session), then a detached `agentctl red fixer` that runs `claude -p` there, renews
     the lease by its progress, and releases it with its verdict. (ok, message)."""
     standby = None if on_ci_runner() else laptop_role_standby(store)
     if standby:  # ONE MACHINE HOLDS THE LAPTOP ROLE (server.py): a standby machine starts no fixer
         return False, f"NOT DISPATCHED: {standby}"
-    num = u["run"].get("number")
-    o_r = u.get("repo") or o_r
-    d = reds_dir(red_repo_tag(o_r, num))
-    os.makedirs(d, exist_ok=True)
-    k = 1 + len(glob.glob(os.path.join(d, "fixer*.json")))
-    rec_path = os.path.join(d, "fixer.json" if k == 1 else f"fixer-{k}.json")
-    cont = None if resume else previous_fixer_tree(u)
-    if resume and resume.get("worktree") and os.path.isdir(resume["worktree"]):
-        wt = resume["worktree"]
-    elif cont:  # FIXER CONTINUITY: the previous fixer's worktree and its unlanded commits, never a fresh start
-        wt = cont["worktree"]
-        resume = {"note": cont["note"]}
-    else:
-        wt, why_not = fresh_worktree(repo, "red", num)
+    return RedDispatch(o_r, repo, u, why, resume, effort, lease, took, extra, store).run()
+
+
+class RedDispatch:
+    """One dispatch of a fixer for a red (red_dispatch): its directory and record, the worktree it works in (the
+    resumed one, the previous fixer's, or a fresh one), the lease it carries and the wrapper that is told of it."""
+
+    def __init__(self, o_r: Any, repo: Any, u: Any, why: Any, resume: Any, effort: Any, lease: Any, took: Any, extra: Any,
+                 store: Any) -> None:
+        self.o_r, self.repo, self.u, self.why, self.resume = u.get("repo") or o_r, repo, u, why, resume
+        self.effort, self.lease, self.took, self.extra, self.store = effort, lease, took or {}, extra, store
+        self.num, self.cont, self.refusal = u["run"].get("number"), None, ""
+
+    def run(self) -> Any:
+        d = reds_dir(red_repo_tag(self.o_r, self.num))
+        os.makedirs(d, exist_ok=True)
+        k = 1 + len(glob.glob(os.path.join(d, "fixer*.json")))
+        rec_path = os.path.join(d, "fixer.json" if k == 1 else f"fixer-{k}.json")
+        wt = self._worktree()
         if wt is None:
-            return False, dispatch_log(u, f"NOT DISPATCHED: {why_not}")
-    rec = {"key": u.get("key"), "lease": lease, "epoch": (took or {}).get("epoch"),
-           "jobs": u.get("jobs") or [u.get("job")],
-           "run": num, "run_id": u["run"].get("databaseId"), "workflow": u["workflow"], "job": u.get("job"),
-           "kind": u.get("kind"), "line": u.get("line"), "flake": bool(u.get("flake")), "worktree": wt, "started": ts(),
-           "why": why, "log": os.path.join(d, f"claude-{k}.log"), "session": None,
-           # A RESUME IS A NEW SESSION (issues 20261119T025305-21375d, 20261103T232907-ca63b2): `claude --bg --resume
-           # <old>` reports its own id, so the record names the session it resumes apart; `session` is the new one's,
-           # written by the wrapper's first poll or bound by the fixer's own first `red claim --fixer`
-           "resumed_from": resume.get("session") if resume else None,
-           "resume": bool(resume and resume.get("session")), "resume_note": resume.get("note") if resume else None,
-           "continued_from": (cont or {}).get("worktree"), "diagnosis": u.get("diagnosis"),
-           "effort": effort, "refuted": u.get("refuted") or [], "predicts": u.get("predicts"), "orphan": u.get("orphan"),
-           "extra_leases": [{"name": x["name"], "epoch": x["epoch"]} for x in extra], "prior_work": u.get("prior_work"),
-           "blame_note": u.get("blame_note"), "lander": u.get("lander"), "decision": u.get("decision"),
-           "launch_cwd": (resume or {}).get("launch_cwd")}
-    if red_is_other(o_r):
-        rec["repo"] = o_r
-    env = fixer_env(o_r, num)
-    if took:
-        env["AGENTCTL_LEASE_SECRET"] = took["secret"]
-    if extra:
-        env["AGENTCTL_LEASE_SECRETS"] = json.dumps({x["name"]: x["secret"] for x in extra})
-    p = spawn_fixer(repo, d, rec_path, rec, wt, env)
-    if store is not None and lease and took and "epoch" in took:
-        # its wrapper, named in the lease from the start: one that dies before its first word is judged at once
-        # (red_reap_orphans), its stderr (fixer.log) the why -- never a silent 15-min lapse
-        # (the wrapper sends its own meta at its first poll)
-        attempt(lambda: store.set_meta(lease, took["epoch"], took["secret"],
-                                       {"pid": p.pid, "host": socket_host(), "worktree": wt,
-                                        "wrapper_log": os.path.join(d, "fixer.log")}),
-                None, catch=(Exception,), what="red dispatch: the lease's meta was not written")
-    line = dispatch_log(u, f"DISPATCHED{' (resumed)' if rec['resume'] else ' (continuing)' if cont else ''} pid {p.pid} "
-                           f"in {wt} ({why}); log {rec['log']}")
-    inbox_write("red", f"RED DISPATCHED: {u['workflow']} #{num} [{u.get('job')}] -> fixer session "
-                       f"'{fixer_label({**rec, 'run': num})}' (`claude agents`) in {wt.replace(HOME, '~')} ({why})", [], [], 0, cwd=wt)
-    return True, line
+            return False, self.refusal
+        rec = self._record(d, k, wt)
+        if red_is_other(self.o_r):
+            rec["repo"] = self.o_r
+        p = spawn_fixer(self.repo, d, rec_path, rec, wt, self._env())
+        self._name_wrapper(p, d, wt)
+        return True, self._announce(rec, p, wt)
+
+    def _worktree(self) -> Any:
+        """The worktree the fixer works in, or None (self.refusal says why): a resumed one, else the previous fixer's
+        with its unlanded commits (FIXER CONTINUITY, never a fresh start), else a fresh one."""
+        resume = self.resume
+        self.cont = None if resume else previous_fixer_tree(self.u)
+        if resume and resume.get("worktree") and os.path.isdir(resume["worktree"]):
+            return resume["worktree"]
+        if self.cont:
+            self.resume = {"note": self.cont["note"]}
+            return self.cont["worktree"]
+        wt, why_not = fresh_worktree(self.repo, "red", self.num)
+        if wt is None:
+            self.refusal = dispatch_log(self.u, f"NOT DISPATCHED: {why_not}")
+        return wt
+
+    def _record(self, d: Any, k: Any, wt: Any) -> Any:
+        u, resume, took = self.u, self.resume or {}, self.took
+        return {"key": u.get("key"), "lease": self.lease, "epoch": took.get("epoch"),
+                "jobs": u.get("jobs") or [u.get("job")],
+                "run": self.num, "run_id": u["run"].get("databaseId"), "workflow": u["workflow"], "job": u.get("job"),
+                "kind": u.get("kind"), "line": u.get("line"), "flake": bool(u.get("flake")), "worktree": wt, "started": ts(),
+                "why": self.why, "log": os.path.join(d, f"claude-{k}.log"), "session": None,
+                # A RESUME IS A NEW SESSION (issues 20261119T025305-21375d, 20261103T232907-ca63b2): `claude --bg --resume
+                # <old>` reports its own id, so the record names the session it resumes apart; `session` is the new one's,
+                # written by the wrapper's first poll or bound by the fixer's own first `red claim --fixer`
+                "resumed_from": resume.get("session"), "resume": bool(resume.get("session")), "resume_note": resume.get("note"),
+                "continued_from": (self.cont or {}).get("worktree"), "diagnosis": u.get("diagnosis"),
+                "effort": self.effort, "refuted": u.get("refuted") or [], "predicts": u.get("predicts"), "orphan": u.get("orphan"),
+                "extra_leases": [{"name": x["name"], "epoch": x["epoch"]} for x in self.extra], "prior_work": u.get("prior_work"),
+                "blame_note": u.get("blame_note"), "lander": u.get("lander"), "decision": u.get("decision"),
+                "launch_cwd": resume.get("launch_cwd")}
+
+    def _env(self) -> Any:
+        env = fixer_env(self.o_r, self.num)
+        if self.took:
+            env["AGENTCTL_LEASE_SECRET"] = self.took["secret"]
+        if self.extra:
+            env["AGENTCTL_LEASE_SECRETS"] = json.dumps({x["name"]: x["secret"] for x in self.extra})
+        return env
+
+    def _name_wrapper(self, p: Any, d: Any, wt: Any) -> Any:
+        """Its wrapper, named in the lease from the start: one that dies before its first word is judged at once
+        (red_reap_orphans), its stderr (fixer.log) the why -- never a silent 15-min lapse (the wrapper sends its own
+        meta at its first poll)."""
+        took = self.took
+        if self.store is not None and self.lease and took and "epoch" in took:
+            attempt(lambda: self.store.set_meta(self.lease, took["epoch"], took["secret"],
+                                                {"pid": p.pid, "host": socket_host(), "worktree": wt,
+                                                 "wrapper_log": os.path.join(d, "fixer.log")}),
+                    None, catch=(Exception,), what="red dispatch: the lease's meta was not written")
+
+    def _announce(self, rec: Any, p: Any, wt: Any) -> Any:
+        u, num = self.u, self.num
+        how = " (resumed)" if rec["resume"] else " (continuing)" if self.cont else ""
+        line = dispatch_log(u, f"DISPATCHED{how} pid {p.pid} in {wt} ({self.why}); log {rec['log']}")
+        inbox_write("red", f"RED DISPATCHED: {u['workflow']} #{num} [{u.get('job')}] -> fixer session "
+                           f"'{fixer_label({**rec, 'run': num})}' (`claude agents`) in {tilde(wt)} ({self.why})",
+                    [], [], 0, cwd=wt)
+        return line
 
 
 def spawn_fixer(repo: str, d: str, rec_path: str, rec: dict[str, Any], wt: str, env: dict[str, str]) -> Any:
@@ -139,36 +175,50 @@ def fixers_of(key, run, fam=None):
             or (fam and red_family(r) == fam)]
 
 
-def previous_fixer_tree(u):
+def _fixer_trees(u: Any) -> Any:
+    """The worktrees a new fixer of red u might go on in, best first: the previous fixers' (newest started first), then
+    the red's history and its prior work."""
+    run = (u.get("workflow"), str((u.get("run") or {}).get("number")))
+    trees = [r.get("worktree") for r in sorted(fixers_of(u.get("key"), run, red_family(u)),
+                                                key=lambda r: str(r.get("started") or ""), reverse=True)]
+    return trees + [h.get("worktree") for h in u.get("history") or []] + [(u.get("prior_work") or {}).get("worktree")]
+
+
+def _continuable(wt: Any, found: Any) -> Any:
+    """A worktree not yet found that is there, allowed and not stopped (RED-STOP.md)."""
+    return bool(wt) and wt not in found and os.path.isdir(wt) and allowed_path(wt) and not os.path.exists(os.path.join(wt, "RED-STOP.md"))
+
+
+def _continue_note(num: Any, wt: Any, found: Any) -> Any:
+    """What a fixer going on in wt is told: read the unlanded commits, rebase, carry on, cherry-pick the others'."""
+    note = (f"CONTINUE, NEVER START OVER: {wt} is the previous fixer's worktree of this red, with {len(found[wt])} "
+            f"commit(s) not on {remote()}/main ({', '.join(s[:10] for s, _ in found[wt][:10])}). Read them first (`git log -p "
+            f"{remote()}/main..HEAD`), `git fetch {remote()} && git rebase {remote()}/main` (never squash), carry the fix on from "
+            f"there (add `Fixes-Red: {num}` to what you commit) and land each verified step with `~/bin/agentctl land`.")
+    others = {w: c for w, c in found.items() if w != wt}
+    if others:
+        note += " Other earlier fixers of it left unlanded commits too: " + "; ".join(
+            f"{w} ({', '.join(s[:10] for s, _ in c[:10])})" for w, c in others.items()) + \
+            " -- cherry-pick what belongs to the fix (never squash), say why you leave the rest."
+    return note
+
+
+def previous_fixer_tree(u: Any) -> Any:
     """FIXER CONTINUITY (the owner, 2026-10-29: fixer -8 of #2473's red started fresh in movies-wt-red-2517 while -7's
     five commits sat unlanded in movies-wt-red-2473-5): a new fixer of the same red -- its key, any run of it -- goes on
     in the previous fixer's worktree when that holds commits not on origin/main (the most recently committed one),
     and is told to cherry-pick any other's. {worktree, note} or None. Read on the laptop at dispatch: the worktrees are
     here, never on ci-runner."""
-    run = (u.get("workflow"), str((u.get("run") or {}).get("number")))
-    trees = [r.get("worktree") for r in sorted(fixers_of(u.get("key"), run, red_family(u)),
-                                                key=lambda r: str(r.get("started") or ""), reverse=True)]
-    trees += [h.get("worktree") for h in u.get("history") or []] + [(u.get("prior_work") or {}).get("worktree")]
     found = {}
-    for wt in trees:
-        if wt and wt not in found and os.path.isdir(wt) and allowed_path(wt) and not os.path.exists(os.path.join(wt, "RED-STOP.md")):
+    for wt in _fixer_trees(u):
+        if _continuable(wt, found):
             left = unlanded_commits(wt)
             if left:
                 found[wt] = left
     if not found:
         return None
     wt = max(found, key=lambda w: max(at for _s, at in found[w]))
-    others = {w: c for w, c in found.items() if w != wt}
-    num = (u.get("run") or {}).get("number")
-    note = (f"CONTINUE, NEVER START OVER: {wt} is the previous fixer's worktree of this red, with {len(found[wt])} "
-            f"commit(s) not on {remote()}/main ({', '.join(s[:10] for s, _ in found[wt][:10])}). Read them first (`git log -p "
-            f"{remote()}/main..HEAD`), `git fetch {remote()} && git rebase {remote()}/main` (never squash), carry the fix on from "
-            f"there (add `Fixes-Red: {num}` to what you commit) and land each verified step with `~/bin/agentctl land`.")
-    if others:
-        note += " Other earlier fixers of it left unlanded commits too: " + "; ".join(
-            f"{w} ({', '.join(s[:10] for s, _ in c[:10])})" for w, c in others.items()) + \
-            " -- cherry-pick what belongs to the fix (never squash), say why you leave the rest."
-    return {"worktree": wt, "note": note}
+    return {"worktree": wt, "note": _continue_note((u.get("run") or {}).get("number"), wt, found)}
 
 
 # LAND AS YOU GO (the owner, 2026-10-29: fixer -7 of #2473 sat on five unlanded commits for hours, and the import that
@@ -182,52 +232,81 @@ FIXER_LAND_WATCH_EVERY = 60
 _last_land_watch = [0.0]
 
 
-def fixers_land_watch(now_=None, force=False):
+def fixers_land_watch(now_: Any = None, force: Any = False) -> Any:
     t = now_ if now_ is not None else time.time()
     if not force and t - _last_land_watch[0] < env_num("AGENTCTL_FIXER_LAND_WATCH", FIXER_LAND_WATCH_EVERY):
         return []
     _last_land_watch[0] = t
     out = []
     for r in fixer_records():
-        wt = r.get("worktree")
-        if not r.get("alive") or not wt or not os.path.isdir(wt):
-            continue
-        if red_owner_only(red_repo_of(r)):  # its commits are never landed by it: filed with `red owner-push`
-            continue
-        sp, nudge = r["path"] + ".land.json", os.path.join(wt, "RED-NUDGE.md")
-        st = read_record(sp) or {}
-        left = unlanded_commits(wt)
-        label = fixer_label(r)
-        if not left:
-            if st:
-                for x in (sp, nudge):
-                    with suppress(OSError):
-                        os.unlink(x)
-                if st.get("escalated_at"):
-                    inbox_write("red fixer", f"RECOVERED: {label}: its commits are on main ({wt.replace(HOME, '~')})",
-                                [], [], 0, cwd=wt)
-                out.append(f"{label}: everything landed")
-            continue
-        oldest = min((at for _s, at in left if at), default=t)
-        mins = int((t - oldest) // 60)
-        shas = ", ".join(s_[:10] for s_, _ in left[:8])
-        if t - oldest >= env_num("AGENTCTL_FIXER_UNLANDED_NUDGE", FIXER_UNLANDED_NUDGE) and not st.get("nudged_at"):
-            with open(nudge, "w") as f:
-                f.write(f"LAND NOW (agentctl, {ts()}): {len(left)} commit(s) here are not on {remote()}/main, the oldest "
-                        f"{mins} min old ({shas}). Land each verified step with `~/bin/agentctl land` (Fixes-Red lands on "
-                        f"red); if one is not ready, say why in `agentctl red claim {r.get('run')} --note`. Delete this "
-                        "file once they are queued.\n")
-            st["nudged_at"] = t
-            out.append(f"{label}: nudged ({len(left)} commit(s) unlanded for {mins} min)")
-        elif st.get("nudged_at") and not st.get("escalated_at") and \
-                t - oldest >= env_num("AGENTCTL_FIXER_UNLANDED_ESCALATE", FIXER_UNLANDED_ESCALATE):
-            line = (f"RED ESCALATE: {label}: {len(left)} commit(s) unlanded for {mins} min in {wt.replace(HOME, '~')} "
-                    f"({shas}), nudged at {time.strftime('%H:%M', time.localtime(st['nudged_at']))}: land them or stop it")
-            inbox_write("red fixer", line, [line], [], 1, cwd=wt)
-            st["escalated_at"] = t
-            out.append(line)
-        write_json(sp, st)
+        out += FixerLandWatch(r, t).step()
     return out
+
+
+class FixerLandWatch:
+    """One fixer's worktree under LAND AS YOU GO: its unlanded commits, the RED-NUDGE.md at FIXER_UNLANDED_NUDGE, the
+    escalation at FIXER_UNLANDED_ESCALATE, the state (`<record>.land.json`) both clear once the commits are on main."""
+
+    def __init__(self, rec: Any, t: Any) -> None:
+        self.rec, self.t, self.wt = rec, t, rec.get("worktree")
+        self.state_path, self.state, self.label = rec["path"] + ".land.json", {}, ""
+
+    def step(self) -> Any:
+        """What this look at the fixer did, as report lines."""
+        if not self._watched():
+            return []
+        self.state = read_record(self.state_path) or {}
+        left = unlanded_commits(self.wt)
+        self.label = fixer_label(self.rec)
+        if not left:
+            return self._landed()
+        oldest = min((at for _s, at in left if at), default=self.t)
+        out = self._due(len(left), int((self.t - oldest) // 60), ", ".join(s_[:10] for s_, _ in left[:8]), self.t - oldest)
+        write_json(self.state_path, self.state)
+        return out
+
+    def _watched(self) -> Any:
+        if not self.rec.get("alive") or not self.wt or not os.path.isdir(self.wt):
+            return False
+        return not red_owner_only(red_repo_of(self.rec))  # its commits are never landed by it: filed with `red owner-push`
+
+    def _landed(self) -> Any:
+        """Everything is on main: the state and the nudge go; an escalated fixer is told it recovered."""
+        if not self.state:
+            return []
+        for x in (self.state_path, os.path.join(self.wt, "RED-NUDGE.md")):
+            with suppress(OSError):
+                os.unlink(x)
+        if self.state.get("escalated_at"):
+            inbox_write("red fixer", f"RECOVERED: {self.label}: its commits are on main ({tilde(self.wt)})",
+                        [], [], 0, cwd=self.wt)
+        return [f"{self.label}: everything landed"]
+
+    def _due(self, count: Any, mins: Any, shas: Any, age: Any) -> Any:
+        """The nudge once the oldest is FIXER_UNLANDED_NUDGE old, else the escalation after a nudge."""
+        st = self.state
+        if age >= env_num("AGENTCTL_FIXER_UNLANDED_NUDGE", FIXER_UNLANDED_NUDGE) and not st.get("nudged_at"):
+            return [self._nudge(count, mins, shas)]
+        if st.get("nudged_at") and not st.get("escalated_at") and \
+                age >= env_num("AGENTCTL_FIXER_UNLANDED_ESCALATE", FIXER_UNLANDED_ESCALATE):
+            return [self._escalate(count, mins, shas)]
+        return []
+
+    def _nudge(self, count: Any, mins: Any, shas: Any) -> Any:
+        with open(os.path.join(self.wt, "RED-NUDGE.md"), "w") as f:
+            f.write(f"LAND NOW (agentctl, {ts()}): {count} commit(s) here are not on {remote()}/main, the oldest "
+                    f"{mins} min old ({shas}). Land each verified step with `~/bin/agentctl land` (Fixes-Red lands on "
+                    f"red); if one is not ready, say why in `agentctl red claim {self.rec.get('run')} --note`. Delete this "
+                    "file once they are queued.\n")
+        self.state["nudged_at"] = self.t
+        return f"{self.label}: nudged ({count} commit(s) unlanded for {mins} min)"
+
+    def _escalate(self, count: Any, mins: Any, shas: Any) -> Any:
+        line = (f"RED ESCALATE: {self.label}: {count} commit(s) unlanded for {mins} min in {tilde(self.wt)} "
+                f"({shas}), nudged at {time.strftime('%H:%M', time.localtime(self.state['nudged_at']))}: land them or stop it")
+        inbox_write("red fixer", line, [line], [], 1, cwd=self.wt)
+        self.state["escalated_at"] = self.t
+        return line
 
 
 def dispatch_log(u, what):
