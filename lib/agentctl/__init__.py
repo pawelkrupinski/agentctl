@@ -7,7 +7,7 @@ must not import (`CurrentStore(process_store)`, the probes, ...) and holds main.
 MODULES is every module in import order, each after every module it imports (devtools/placemodules.py writes it): the
 manifest the quality tools (quality/typecheck.py) and the tests' view of the package (tests/agentctl_view.py) read.
 """
-MODULES = ("procrunner", "govpool", "usage", "statefile", "moviestools", "selfcode", "statemachines", "clock", "ids",
+MODULES = ("procrunner", "psparse", "govpool", "usage", "statefile", "moviestools", "selfcode", "statemachines", "clock", "ids",
            "timefmt", "storeauth", "offers", "livepage", "statsrecords", "holdgraph", "configfile", "core",
            "classify", "ghapp", "ghtally", "forge", "repos", "buildview", "notifyurl", "config", "workflows",
            "trailers", "waitingdir", "redretired", "storetoken", "claudefiles", "gating", "allowedpaths", "procs",

@@ -7,6 +7,8 @@ import re
 import sys
 from typing import Any
 from agentctl.core import attempt, env_num, run_cmd
+from agentctl.procs import ps_rows
+from agentctl.psparse import PsRow, parse_ps
 from agentctl.statefile import read_record, write_json
 from agentctl.cpu import cpu_pressure, machine_busy_cores
 from agentctl.machine import machine_cores, machine_fixed, read_meminfo, run_queue
@@ -35,22 +37,18 @@ def gov_busy_cores():
 def ps_busy_cores(probe=None):
     """ps's %CPU summed (the machine's own ticks unreadable, or the tests' $AGENTCTL_GOV_PS_PROBE rows), less the
     governor's waiters and idle Claude sessions."""
-    out = run_cmd(probe, shell=True).stdout if probe else run_cmd(["ps", "-A", "-o", "pcpu=,args="]).stdout
-    return sum(ps_row_percent(line) for line in out.splitlines()) / 100.0
+    cols = ("pcpu", "args")
+    rows = parse_ps(run_cmd(probe, shell=True).stdout, cols) if probe else ps_rows(cols)
+    return sum(ps_row_percent(row) for row in rows) / 100.0
 
 
-def ps_row_percent(line: str) -> float:
-    """The %CPU a `ps` row counts: 0 for a row that is not `<pcpu> <args>`, a governor waiter or an idle Claude session."""
-    parts = line.split(None, 1)
-    if len(parts) != 2:
+def ps_row_percent(row: PsRow) -> float:
+    """The %CPU a `ps` row counts: 0 for a governor waiter or an idle Claude session."""
+    if "agentctl gov admit" in row.args:
         return 0.0
-    pct = attempt(lambda: float(parts[0]), None, catch=(ValueError,))
-    args = parts[1]
-    if pct is None or "agentctl gov admit" in args:
+    if os.path.basename(row.args.split()[0]) == "claude" and row.pcpu < GOV_IDLE_CLAUDE:
         return 0.0
-    if os.path.basename(args.split()[0]) == "claude" and pct < GOV_IDLE_CLAUDE:
-        return 0.0
-    return pct
+    return row.pcpu
 
 
 # THE LAPTOP'S PRESSURE, read as it is NOW. Two movies reds sat `waiting: laptop pressure (swap 17.7 of 19.0 GB used)`

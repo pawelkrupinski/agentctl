@@ -2,7 +2,9 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
+import subprocess
 from typing import Any
+from agentctl.psparse import PsRow, parse_ps
 from agentctl.core import pid_alive, run_cmd
 from agentctl.allowedpaths import allowed_path
 
@@ -32,30 +34,19 @@ def record_alive(rec: Any) -> bool:
 
 
 # ---------------------------------------------------------------- orphans
+def ps_rows(cols: tuple[str, ...], pids: tuple[int, ...] = (), wide: bool = False) -> list[PsRow]:
+    """THE PROCESS TABLE: every process (or the `pids` asked for) with the ps `cols` (psparse.COLUMNS), parsed once.
+    `wide` stops ps cutting a command line at the terminal's width. No rows when ps cannot run."""
+    argv = ["ps", *(["-ww"] if wide else []), "-o", ",".join(f"{c}=" for c in cols),
+            *(["-p", ",".join(map(str, pids))] if pids else ["-A"])]
+    try:
+        return parse_ps(run_cmd(argv).stdout, cols)
+    except (OSError, subprocess.SubprocessError):
+        return []
+
+
 def ps() -> list[tuple[int, int, str, str]]:
-    r = run_cmd(["ps", "-axo", "pid=,ppid=,etime=,command="])
-    out = []
-    for line in r.stdout.splitlines():
-        parts = line.split(None, 3)
-        if len(parts) == 4:
-            out.append((int(parts[0]), int(parts[1]), parts[2], parts[3]))
-    return out
-
-
-def tosec(t: Any) -> float:
-    """ps's [[dd-]hh:]mm:ss[.frac] (etime) or unbounded mm:ss (cputime) -> seconds."""
-    dd = 0
-    t = str(t)
-    if "-" in t:
-        d_, t = t.split("-", 1)
-        dd = int(d_ or 0)
-    s = 0.0
-    for part in t.split(":"):
-        try:
-            s = s * 60 + float(part)
-        except ValueError:
-            return 0.0
-    return s + dd * 86400
+    return [(r.pid, r.ppid, r.etime, r.args) for r in ps_rows(("pid", "ppid", "etime", "command"))]
 
 
 def safe_cwd() -> str:

@@ -30,6 +30,8 @@ import re
 import time
 from typing import Any, Callable, Optional
 from agentctl.core import HOME, run_cmd, state_root, tilde
+from agentctl.procs import ps_rows
+from agentctl.psparse import parse_ps
 from agentctl.statefile import read_record, read_text_or, write_json
 from agentctl.machine import machine_fixed, ram_gb
 from agentctl.govtickets import gov_tickets
@@ -67,17 +69,12 @@ ProcRow = tuple[int, int, int, float, str]  # (pid, ppid, rss KB, %cpu, command 
 def proc_rows(ps_out: Optional[str] = None) -> list[ProcRow]:
     """[(pid, ppid, rss KB, %cpu, command name)] of every process (ps), or of `ps_out` (the tests')."""
     fixed = machine_fixed() if ps_out is None else None  # the tests' fixed machine: its own processes, else none
-    out = ps_out if ps_out is not None else str(fixed.get("ps") or "") if fixed is not None else \
-        run_cmd(["ps", "-A", "-o", "pid=,ppid=,rss=,pcpu=,comm="]).stdout
-    rows = []
-    for line in out.splitlines():
-        parts = line.split(None, 4)
-        try:
-            rows.append((int(parts[0]), int(parts[1]), int(parts[2]), float(parts[3]),
-                         os.path.basename(parts[4].strip())))
-        except (ValueError, IndexError):
-            continue
-    return rows
+    cols = ("pid", "ppid", "rss", "pcpu", "comm")
+    if ps_out is None and fixed is None:
+        found = ps_rows(cols)
+    else:
+        found = parse_ps(ps_out if ps_out is not None else str(fixed.get("ps") or ""), cols)
+    return [(r.pid, r.ppid, r.rss, r.pcpu, os.path.basename(r.comm)) for r in found]
 
 
 def jvm_xmx_kb(args: str) -> Optional[int]:

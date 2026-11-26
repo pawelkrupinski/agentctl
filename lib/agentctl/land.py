@@ -12,9 +12,9 @@ import json
 from typing import Any, Iterator
 from agentctl.procrunner import process_runner
 from agentctl.clock import Clock
-from agentctl.core import HOME, env_num, err, process_cache, run_cmd
+from agentctl.core import HOME, env_num, err, process_cache
 from agentctl.store import LeaseLost, StoreUnavailable
-from agentctl.procs import tosec
+from agentctl.procs import ps_rows
 from agentctl.leases import lock_beat
 from agentctl.core import spawn_detached
 from agentctl.selfcode import TOOL_PATH
@@ -49,18 +49,11 @@ LAND_WAIT_REPORT_MIN = 10
 LAND_PRECHECK_ROUNDS = 2  # main moved under the lock this often: the next check runs under it, so a lander finishes
 
 
-def _ps_rows() -> Any:
-    """Every process as [pid, ppid, pgid, time, stat] (stat "" where ps printed none)."""
-    r = run_cmd(["ps", "-A", "-o", "pid=,ppid=,pgid=,time=,stat="])
-    rows = [line.split() for line in r.stdout.splitlines()]
-    return [x if len(x) == 5 else x + [""] for x in rows if len(x) in (4, 5)]
-
-
 def _descendants(rows: Any, leader: Any) -> Any:
     """The pids of process `leader` and every descendant of it, whatever group each runs in."""
     kids = {}
-    for pid, ppid, _g, _t, _s in rows:
-        kids.setdefault(ppid, []).append(pid)
+    for row in rows:
+        kids.setdefault(row.ppid, []).append(row.pid)
     tree, todo = set(), [leader]
     while todo:
         cur = todo.pop()
@@ -75,19 +68,19 @@ def group_cpu_seconds(pgid: Any) -> Any:
     leader, whatever group it runs in (ps's cumulative TIME), or 0. ISSUE 20261108T232313-7384d0: the movies hook's
     run-script-tests runs each self-test in a process group of its own, so a push whose hook ran scripttests for 19
     silent minutes read "no output and no CPU" and was ended twice."""
-    rows = _ps_rows()
-    tree = _descendants(rows, str(pgid))
-    mine = [x for x in rows if x[2] == str(pgid) or x[0] in tree]
+    rows = ps_rows(("pid", "ppid", "pgid", "time", "stat"))
+    tree = _descendants(rows, int(pgid))
+    mine = [x for x in rows if x.pgid == int(pgid) or x.pid in tree]
     # A RUNNABLE PROCESS IS PROGRESS (as movies' stall-watch.sh counts it): under a load of 75 on 18 cores a busy child
     # is granted ~0.25 CPU-s a second, under the judge's 1 s a window, yet it is working, not stalled. Each sample with
     # one of the tree running or waiting for a CPU (state R) is credited STALL_CPU_SECONDS.
     # A process new since the last sample is no progress (a hook's helper loop forks one every second).
     seen = _tree_seen.get(pgid, set())
-    if any(x[4].startswith("R") and x[0] in seen for x in mine):
+    if any(x.stat.startswith("R") and x.pid in seen for x in mine):
         _runnable_credit[pgid] = _runnable_credit.get(pgid, 0.0) + env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
-    _tree_seen[pgid] = {x[0] for x in mine}
+    _tree_seen[pgid] = {x.pid for x in mine}
     # ps's d-hh:mm:ss: a day is 86400 s (the old split read it as 60 s)
-    return sum(tosec(x[3]) for x in mine) + _runnable_credit.get(pgid, 0.0)
+    return sum(x.cpu_seconds for x in mine) + _runnable_credit.get(pgid, 0.0)
 
 
 _runnable_credit, _tree_seen = process_cache({}), process_cache({})
@@ -155,12 +148,7 @@ HOOK_COMMAND = re.compile(r"(^|[\s/])hooks/pre-push(\s|$)")
 
 def group_runs_hook(pgid) -> bool:
     """Whether a live process of group `pgid` is a git pre-push hook (`.../hooks/pre-push <remote> <url>`)."""
-    r = run_cmd(["ps", "-A", "-o", "pgid=,command="])
-    for line in r.stdout.splitlines():
-        parts = line.split(None, 1)
-        if len(parts) == 2 and parts[0] == str(pgid) and HOOK_COMMAND.search(parts[1]):
-            return True
-    return False
+    return any(r.pgid == int(pgid) and HOOK_COMMAND.search(r.args) for r in ps_rows(("pgid", "command")))
 
 
 def _group_gone_on(p: Any, sig: Any) -> Any:

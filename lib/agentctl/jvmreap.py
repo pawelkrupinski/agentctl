@@ -13,7 +13,8 @@ from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, env_num, pid_alive, run_cmd, state_root
 from agentctl.timefmt import ts
-from agentctl.procs import lsof_cwds, tosec
+from agentctl.procs import lsof_cwds, ps_rows
+from agentctl.psparse import tosec
 from agentctl.allowedpaths import allowed_path
 
 
@@ -411,10 +412,9 @@ def _busy_duplicate(pid: int, rule: str) -> str | None:
     """Why a dup-sbt-server is not reaped: it is busy now (recent CPU above DUP_MAX_RECENT_CPU_PERCENT)."""
     if rule != "dup-sbt-server":
         return None
-    r = run_cmd(["ps", "-o", "%cpu=", "-p", str(pid)]).stdout.strip()
-    with suppress(ValueError):
-        if float(r) > float(jvm_knob("DUP_MAX_RECENT_CPU_PERCENT", 5)):
-            return f"busy now ({r}% CPU), not idle"
+    for row in ps_rows(("pcpu",), pids=(pid,)):
+        if row.pcpu > float(jvm_knob("DUP_MAX_RECENT_CPU_PERCENT", 5)):
+            return f"busy now ({row.pcpu}% CPU), not idle"
     return None
 
 

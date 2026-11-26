@@ -9,12 +9,12 @@ from dataclasses import dataclass
 from typing import Any, Callable
 from contextlib import suppress
 from agentctl.core import HOME, REPOS, git, pid_alive, run_cmd, slug, state_root
-from agentctl.procs import tosec
+from agentctl.psparse import tosec
 from agentctl.selfcode import code_version
 from agentctl.owned import owner_records
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import gh_json
-from agentctl.procs import process_cwds, ps
+from agentctl.procs import process_cwds, ps, ps_rows
 from agentctl.jvmreap import (
     awake_now, is_sbt, jvm_candidates, jvm_reap, jvm_scan, reap_log, sbt_serving, sbt_stuck_reasons, swap_free_mb,
     thread_dump, tree_cpu)
@@ -300,11 +300,9 @@ def wait_loop_target_reasons(pid: Any, body: Any, status_cache: Any, seen_target
 def ps_cpu_tree() -> Any:
     """({pid: cpu seconds}, {ppid: [child pids]}) of every process."""
     procs_cpu, children = {}, {}
-    for line in run_cmd(["ps", "-A", "-o", "pid=,ppid=,time="]).stdout.splitlines():
-        f3 = line.split()
-        if len(f3) == 3:
-            procs_cpu[int(f3[0])] = tosec(f3[2])
-            children.setdefault(int(f3[1]), []).append(int(f3[0]))
+    for row in ps_rows(("pid", "ppid", "time")):
+        procs_cpu[row.pid] = row.cpu_seconds
+        children.setdefault(row.ppid, []).append(row.pid)
     return procs_cpu, children
 
 

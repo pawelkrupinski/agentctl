@@ -60,6 +60,7 @@ import threading
 import time
 from typing import Any, Callable, Sequence, TypeVar
 from agentctl.procrunner import process_runner
+from agentctl.psparse import parse_ps
 from agentctl.configfile import config_load
 
 # THE PROCESS-WIDE CACHES, IN ONE REGISTRY (simplification-2026-10-31 item 10): every module-level dict, list or set a
@@ -349,12 +350,7 @@ def zombie_children(pid=None):
         out = process_runner().run(["ps", "-ax", "-o", "pid=,ppid=,stat="], capture_output=True, text=True, timeout=10).stdout
     except (OSError, subprocess.SubprocessError):
         return []
-    zs = []
-    for line in out.splitlines():
-        f = line.split()
-        if len(f) >= 3 and f[1] == str(me) and f[2].startswith("Z"):
-            zs.append(int(f[0]))
-    return zs
+    return [r.pid for r in parse_ps(out, ("pid", "ppid", "stat")) if r.ppid == me and r.stat.startswith("Z")]
 
 
 def reap_children():

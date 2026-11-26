@@ -11,6 +11,7 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
+from agentctl.procs import ps_rows
 from agentctl.core import branch_of, env_num, err, git, git_ok, process_cache, remote, slug, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime
@@ -89,12 +90,11 @@ def process_ancestry(stop_pid=None, depth=8):
     for _ in range(depth):
         if pid <= 1 or pid == stop_pid:
             break
-        r = process_runner().run(["ps", "-ww", "-o", "ppid=,args=", "-p", str(pid)], capture_output=True, text=True)
-        parts = r.stdout.strip().split(None, 1)
-        if r.returncode != 0 or len(parts) < 2 or not parts[0].isdigit():
+        rows = ps_rows(("ppid", "args"), pids=(pid,), wide=True)
+        if not rows:
             break
-        out.append(shell_args_text(parts[1]))
-        pid = int(parts[0])
+        out.append(shell_args_text(rows[0].args))
+        pid = rows[0].ppid
     return out
 
 
