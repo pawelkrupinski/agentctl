@@ -464,7 +464,7 @@ class OwnerWorkTest(unittest.TestCase):
         for k, gen in (("pid", lambda: r.choice([None, 100, 100, "100", 100, 200])), ("ended", lambda: r.choice([None, None, None, False, True])),
                        ("verdict", lambda: r.choice([None, "IDLE: " + "x" * 200])), ("process_start", lambda: "ps1"),
                        ("in_turn", lambda: r.choice([True, True, True, False, None])), ("bg_id", lambda: r.choice([None, "", "bg1"])),
-                       ("progress_at", lambda: r.choice([None, 0, NOW - 100, NOW - 10 ** 5, NOW - 400, NOW - 900, NOW - 1200])), ("transcript", lambda: r.choice([None, "/t"])),
+                       ("progress_at", lambda: r.choice([None, 0, NOW - 100, NOW - 10 ** 5, NOW - 400, NOW - 900, NOW - 1200, NOW - 300, NOW - A.RED_STALL - 300])), ("transcript", lambda: r.choice([None, "/t"])),
                        ("turn", lambda: r.choice([None, 3]))):
             if r.random() < 0.9 or k == "pid":
                 rec[k] = gen()
