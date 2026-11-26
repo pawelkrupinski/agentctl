@@ -1,10 +1,13 @@
-# agentctl, part `eventtrace`: an item's events read as one trace: the backfill merged in by provenance, walked into its stays (segments) and path
+# agentctl, part `eventtrace`: the event model -- one row shape over the store's events, the backfill and the offline log, merged by provenance, read by an indexed query -- and an item's trace walked into its stays (segments) and path
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import json
 import re
+import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
-from agentctl.statemachines import is_terminal
+from agentctl.statefile import json_object
+from agentctl.statemachines import MACHINES, is_terminal, terminal_states
 
 
 def ends_item(item_type: str, state: str) -> bool:
@@ -26,7 +29,7 @@ class Segment:
     end: float
     cause: Optional[str]
     actor: Optional[str]
-    origin: str  # own | exact | inferred | none
+    origin: str  # PROVENANCES: own | exact | inferred | file | none
 
     @property
     def length(self) -> float:
@@ -43,16 +46,75 @@ class ItemTrace:
     path: list[str] = field(default_factory=list)
 
 
+# THE EVENT MODEL (review 2026-11-26, C "three stores, one row shape"): an item's history has three sources and ONE row
+# shape (EVENT_FIELDS), each row saying where it came from (`origin`, PROVENANCES): the store's `events` (`own`: the
+# cause written with the move; `none`: an old row without one), the backfill's rows (`exact` or `inferred`: an old
+# event's cause overlaid, a missing opening derived; backfill.py) and this host's offline log not yet drained (`file`:
+# filelog.py, its own cause, the store's copy of it once drained). ONE reader merges them (eventreader.read_events);
+# the store answers an EventQuery -- an item, a type over a time window, or kinds -- through its indexes
+# (query_rows), never with its whole feed and backfill.
+EVENT_FIELDS = ("seq", "at", "kind", "item_type", "item_id", "from_state", "to_state", "actor", "cause", "detail",
+                "severity", "audience", "text", "refs", "dedupe", "origin")
+PROVENANCES = ("own", "exact", "inferred", "file", "none")
+
+
+@dataclass(frozen=True)
+class EventQuery:
+    """Which rows a trace reads. With `kinds`: the rows of those kinds (at or after `since`, of the type or item given).
+    Without: EVERY row of each item asked for -- one item (item_type and item_id), or each item of item_type active at
+    or after `since` (a row in the window, or not yet ended), so its stays are whole."""
+    item_type: Optional[str] = None
+    item_id: Optional[str] = None
+    since: Optional[float] = None
+    kinds: tuple[str, ...] = ()
+
+    def wire(self) -> dict[str, Any]:
+        return {"item_type": self.item_type, "item_id": self.item_id, "since": self.since, "kinds": list(self.kinds)}
+
+    @classmethod
+    def of(cls, d: dict[str, Any]) -> "EventQuery":
+        return cls(d.get("item_type"), d.get("item_id"), d.get("since"), tuple(d.get("kinds") or ()))
+
+    def admits(self, row: dict[str, Any]) -> bool:
+        """Whether a row is one this query reads (a window's items aside: the trace's own window decides those)."""
+        if self.item_type and row.get("item_type") != self.item_type:
+            return False
+        if self.item_id and row.get("item_id") != self.item_id:
+            return False
+        return not self.kinds or (row.get("kind") in self.kinds and float(row.get("at") or 0) >= (self.since or 0))
+
+
+def derived_event(d: dict[str, Any]) -> dict[str, Any]:
+    """A backfill-derived opening (backfill.derived_events) as an event row."""
+    return {**d, "seq": None, "severity": "info", "text": f"(derived from {d['source']})", "refs": {},
+            "origin": d["confidence"]}
+
+
+def file_event_row(r: dict[str, Any]) -> dict[str, Any]:
+    """An offline-log line not yet drained (filelog.py) as an event row: its own cause, no seq yet."""
+    return {**r, "seq": None, "origin": "file"}
+
+
+def _sorted(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows.sort(key=lambda e: (e.get("at") or 0, e.get("seq") or 0))
+    return rows
+
+
+def with_file_rows(rows: list[dict[str, Any]], pending: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The store's rows and the offline log's lines it has not taken yet (by dedupe: a drained line is the store's)."""
+    have = {r.get("dedupe") for r in rows}
+    extra = [file_event_row(r) for r in pending if r.get("dedupe") not in have]
+    return _sorted(rows + extra) if extra else rows
+
+
 def merge(events: Iterable[dict[str, Any]], derived: Optional[dict[str, list[dict[str, Any]]]] = None) -> list[dict[str, Any]]:
     """The events with the backfill merged in: an event without its own cause takes the derived one (origin = its
     confidence), the derived opening events added; every row's `origin` says which (own | exact | inferred | none)."""
     derived = derived or {}
     back = {r["seq"]: r for r in derived.get("backfill") or ()}
     out = [_attributed(dict(ev), back.get(ev.get("seq"))) for ev in events]
-    out += [{**d, "seq": None, "severity": "info", "text": f"(derived from {d['source']})", "refs": {},
-             "origin": d["confidence"]} for d in derived.get("derived") or ()]
-    out.sort(key=lambda e: (e.get("at") or 0, e.get("seq") or 0))
-    return out
+    out += [derived_event(d) for d in derived.get("derived") or ()]
+    return _sorted(out)
 
 
 def _attributed(ev: dict[str, Any], b: Optional[dict[str, Any]]) -> dict[str, Any]:
@@ -144,3 +206,61 @@ def _segments(tr: ItemTrace, now: float) -> None:
         end = now if s.end is None and not ends_item(tr.item_type, s.state) else s.end
         if end is not None and end > s.start:
             tr.segments.append(Segment(tr.item_type, tr.item_id, s.state, float(s.start), float(end), *s.said))
+
+
+# ---------------------------------------------------------------- the store's side: an EventQuery through its indexes
+# events_item (item_type, item_id, seq), events_type_at (item_type, at), events_kind (kind, at) and derived_events'
+# (item_type, item_id) / (item_type, at): Store.SCHEMA and backfill.BACKFILL_SCHEMA create them in place.
+_MOVE = "kind NOT LIKE '%.illegal' AND kind != 'policy.unapproved'"  # SKIP_KINDS: no move of the item
+
+
+def _window_ids(c: sqlite3.Connection, typ: str, since: float) -> list[str]:
+    """The items of type typ active at or after `since`: a row in the window, or -- a machine's item -- no move yet
+    into a terminal state (a machine's terminal state is never left), or -- a file-held type -- any (they are few)."""
+    if typ in MACHINES:
+        ends = terminal_states(typ)
+        open_sql = (f"SELECT item_id FROM events WHERE item_type=? GROUP BY item_id HAVING "
+                    f"SUM(to_state IN ({','.join('?' * len(ends))}) AND {_MOVE}) = 0") if ends else \
+            "SELECT DISTINCT item_id FROM events WHERE item_type=?"
+        params: tuple[Any, ...] = (typ, since, typ, since, typ, *ends)
+    else:
+        open_sql, params = "SELECT DISTINCT item_id FROM events WHERE item_type=?", (typ, since, typ, since, typ)
+    sql = ("SELECT item_id FROM events WHERE item_type=? AND at>=? UNION SELECT item_id FROM derived_events "
+           f"WHERE item_type=? AND at>=? UNION {open_sql}")
+    return [r[0] for r in c.execute(sql, params)]
+
+
+def _where(q: EventQuery, c: sqlite3.Connection) -> tuple[str, tuple[Any, ...]]:
+    """The rows' WHERE clause (for events and derived_events alike) and its parameters."""
+    if q.kinds:
+        sql, params = f"kind IN ({','.join('?' * len(q.kinds))}) AND at>=?", (*q.kinds, q.since or 0.0)
+        if q.item_type:
+            sql, params = sql + " AND item_type=?", (*params, q.item_type)
+        if q.item_id:
+            sql, params = sql + " AND item_id=?", (*params, q.item_id)
+        return sql, params
+    if q.item_id:
+        return "item_type=? AND item_id=?", (q.item_type, q.item_id)
+    if not q.item_type:
+        return "1", ()
+    if not q.since:
+        return "item_type=?", (q.item_type,)
+    ids = _window_ids(c, q.item_type, float(q.since))
+    return f"item_type=? AND item_id IN (SELECT value FROM json_each(?))", (q.item_type, json.dumps(ids))
+
+
+def query_rows(c: sqlite3.Connection, q: EventQuery) -> list[dict[str, Any]]:
+    """The rows an EventQuery reads, merged by provenance (merge): the events, the backfill's overlay of theirs, the
+    derived openings of the same items."""
+    where, params = _where(q, c)
+    events = []
+    for r in c.execute(f"SELECT * FROM events WHERE {where} ORDER BY seq", params):
+        d = dict(r)
+        for k in ("audience", "refs"):
+            d[k] = json_object(d[k])
+        events.append(d)
+    bare = [e["seq"] for e in events if not e.get("cause")]
+    back = [dict(r) for r in c.execute("SELECT * FROM event_backfill WHERE seq IN (SELECT value FROM json_each(?))",
+                                       (json.dumps(bare),))]
+    derived = [dict(r) for r in c.execute(f"SELECT * FROM derived_events WHERE {where} ORDER BY at", params)]
+    return merge(events, {"backfill": back, "derived": derived})

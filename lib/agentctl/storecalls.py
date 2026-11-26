@@ -64,6 +64,8 @@ STORE_CALLS = (
     StoreCall("mark_notified", "seq", IDEMPOTENT, 1),
     StoreCall("record_events", "rows", IDEMPOTENT, 1),
     StoreCall("derived", "", READ, 1),
+    StoreCall("trace_events", "query", READ, 2),
+    StoreCall("derived_check_runs", "", READ, 2),
 )
 
 # Store's public methods no client calls: the server's own (its tick, its API's contact clock, the connection)

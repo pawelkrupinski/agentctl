@@ -112,10 +112,11 @@ def _outliers(segs: list[Segment], k: int = 10) -> list[dict[str, Any]]:
 
 
 def coverage(segs: list[Segment]) -> dict[str, float]:
-    """The share of segment time with a cause: `own` (written with the event), `own_or_exact` (and the backfill's
-    exact rows) and `with_derived` (its inferred ones too)."""
+    """The share of segment time with a cause: `own` (written with the event, or with an offline-log line the store has
+    not taken yet), `own_or_exact` (and the backfill's exact rows) and `with_derived` (its inferred ones too)."""
     total = sum(s.length for s in segs) or 1.0
-    tiers = {"own": ("own",), "own_or_exact": ("own", "exact"), "with_derived": ("own", "exact", "inferred")}
+    tiers = {"own": ("own", "file"), "own_or_exact": ("own", "file", "exact"),
+             "with_derived": ("own", "file", "exact", "inferred")}  # file: an undrained line's own cause
     out = {k: sum(s.length for s in segs if s.cause and s.origin in v) / total for k, v in tiers.items()}
     return {**out, "seconds": total}
 

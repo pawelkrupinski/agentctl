@@ -13,7 +13,8 @@ from agentctl.core import err, state_root
 from agentctl.statefile import json_object
 from agentctl.offers import OfferTable
 from agentctl.leasetable import LeaseLost
-from agentctl.backfill import backfill_store, derived_rows, backfill_check_runs
+from agentctl.backfill import backfill_store, check_run_rows, derived_rows, backfill_check_runs, ensure_backfill_tables
+from agentctl.eventtrace import EventQuery, query_rows
 from agentctl.eventrows import insert_event, migrate_events, move_event, opened_event, record_rows
 from agentctl.statemachines import (
     ARCHIVE, IllegalTransition, MACHINES, check_move, level_after, StaleVersion, StateSpec, TerminalState, change_exit_event, machine_state)
@@ -61,8 +62,11 @@ class Store(OfferTable):
               "CREATE TABLE IF NOT EXISTS offers (id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, item TEXT NOT NULL, "
               "lease TEXT NOT NULL, tier TEXT, priority INTEGER, deadline REAL, picture TEXT, opened_at REAL, closed_at REAL, "
               "closed_why TEXT, taken_by TEXT, reason TEXT)",
-              # one item's history (stats.py reads it per finished item)
-              "CREATE INDEX IF NOT EXISTS events_item ON events (item_type, item_id, seq)")
+              # one item's history (stats.py reads it per finished item); a type's window and a kind's rows
+              # (eventtrace.query_rows: history and analyze), created in place on a store older than them
+              "CREATE INDEX IF NOT EXISTS events_item ON events (item_type, item_id, seq)",
+              "CREATE INDEX IF NOT EXISTS events_type_at ON events (item_type, at)",
+              "CREATE INDEX IF NOT EXISTS events_kind ON events (kind, at)")
 
     def __init__(self, path: str | None = None, clock: Callable[[], float] | None = None) -> None:
         self.path = path or state_root("store.db")
@@ -259,8 +263,17 @@ class Store(OfferTable):
     def record_events(self, rows: list[dict[str, Any]]) -> int:  # file-held state's moves (filelog.py, eventrows.py)
         return record_rows(self.db, rows)
 
-    def derived(self) -> dict[str, Any]:  # the backfill's derived rows (backfill.py)
+    def derived(self) -> dict[str, Any]:  # the backfill's derived rows, whole (backfill.py; a client before v2's reads)
         return derived_rows(self.db)
+
+    def trace_events(self, query: dict[str, Any]) -> list[dict[str, Any]]:
+        """The event rows an EventQuery (its wire form) reads, merged by provenance, through the indexes (eventtrace)."""
+        with closing(self.db()) as c:
+            ensure_backfill_tables(c)
+            return query_rows(c, EventQuery.of(query))
+
+    def derived_check_runs(self) -> dict[str, Any]:  # the old check runs' fetched rows (backfill.py), by run
+        return check_run_rows(self.db)
 
     def backfill_check_runs(self, fetch: Any, now: float, pause: Any) -> int:  # old runs' rows (backfill.py; server)
         return backfill_check_runs(self.db, fetch, now, pause)

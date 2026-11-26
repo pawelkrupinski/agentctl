@@ -96,6 +96,14 @@ def _pending(offset: int) -> tuple[list[tuple[dict[str, Any], int]], int]:
     return out, pos
 
 
+def undrained_rows() -> list[dict[str, Any]]:
+    """The log's lines the store has not taken yet (after the cursor): a trace's `file` rows (eventreader.py)."""
+    if not os.path.exists(log_path()):
+        return []
+    offset = _read_cursor()
+    return [r for r, _end in _pending(0 if offset > os.path.getsize(log_path()) else offset)[0]]
+
+
 def drain_event_log(store: Any, page: int = DRAIN_PAGE, refused: Any = None) -> int:
     """THE SYNC: the offline log's new lines into the store, a page a call, the cursor moved after each page the store
     took; a store that cannot take them (down, older than `record_events`) leaves them for the next tick, its error

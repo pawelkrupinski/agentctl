@@ -1,8 +1,9 @@
 # agentctl, part `timelinecmd`: `agentctl history`, `agentctl analyze`, and maintain's backfill and weekly summary
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 #
-# The store and the clock are passed in (cli). On the laptop the store is ci-runner's (RemoteStore): its events, items
-# and the backfill's derived rows come over the API; the backfill itself runs there (Store.backfill).
+# The store and the clock are passed in (cli). On the laptop the store is ci-runner's (RemoteStore): an item's rows, or
+# a type's over the window, come over the API through its indexes (eventreader.read_events, with this host's undrained
+# offline log merged in); the backfill itself runs there (Store.backfill).
 
 import argparse
 import re
@@ -10,8 +11,9 @@ from typing import Any, Callable
 
 from agentctl.timeline import analyze, as_json, find_items, history_lines, render_text, render_tsv, top_sinks
 from agentctl.checkrows import change_rows_lines, change_runs, rows_lines, rows_report
-from agentctl.store import StoreLacksCall
-from agentctl.eventtrace import merge, traces
+from agentctl.eventtrace import EventQuery, traces
+from agentctl.eventreader import old_check_runs, read_events
+from agentctl.filelog import undrained_rows
 
 ITEM_TYPES = ("change", "red", "watch", "batch", "condition", "hold", "revert", "issue", "branch-red",
               "gov-ticket", "inbox", "entry", "sbt-server", "escalation")  # the last five: file-held state (filelog.py)
@@ -27,36 +29,15 @@ def parse_since(text: str) -> float:
     return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
 
 
-def all_events(store: Any, page: int = 5000) -> list[dict[str, Any]]:
-    """Every event of the store, paged by its cursor."""
-    out: list[dict[str, Any]] = []
-    while True:
-        rows = store.events(after=out[-1]["seq"] if out else 0, limit=page)
-        out += rows
-        if len(rows) < page:
-            return out
-
-
-def derived_of(store: Any) -> dict[str, list[dict[str, Any]]]:
-    """The backfill's rows; none from a store older than them (its API has no `derived`). A store that does not answer
-    raises (review 2026-11-26: it read as "no backfill", and analyze reported a wrong coverage, not an error)."""
-    try:
-        return store.derived() or {}
-    except StoreLacksCall:  # an older store server: the own columns alone
-        return {}
-
-
-def item_trace(store: Any, derived: dict[str, list[dict[str, Any]]], typ: str, iid: str, now: float) -> Any:
-    """Item (typ, iid)'s trace: its events, the backfill's rows for it merged in."""
-    mine = [d for d in derived.get("derived") or () if (d["item_type"], d["item_id"]) == (typ, iid)]
-    evs = merge(store.item_events(typ, iid), {"backfill": derived.get("backfill") or [], "derived": mine})
-    return traces(evs, now).get((typ, iid))
+def item_trace(store: Any, typ: str, iid: str, now: float, pending: list[dict[str, Any]]) -> Any:
+    """Item (typ, iid)'s trace: its rows (eventreader.read_events: the store's, the backfill's, this host's undrained)."""
+    return traces(read_events(store, EventQuery(typ, iid), pending), now).get((typ, iid))
 
 
 def traced(store: Any, hits: list[tuple[str, dict[str, Any]]], now: float) -> list[tuple[dict[str, Any], Any]]:
     """(item, its trace) of each hit that has events."""
-    derived = derived_of(store)
-    shown = [(it, item_trace(store, derived, typ, it["id"], now)) for typ, it in hits]
+    pending = undrained_rows()
+    shown = [(it, item_trace(store, typ, it["id"], now, pending)) for typ, it in hits]
     return [(it, tr) for it, tr in shown if tr is not None]
 
 
@@ -65,8 +46,15 @@ def _history_doc(it: dict[str, Any], tr: Any) -> dict[str, Any]:
             "segments": [vars(s) for s in tr.segments]}
 
 
+def referenced_items(store: Any, ref: str) -> list[tuple[str, dict[str, Any]]]:
+    """The items `ref` names (timeline.find_items): an exact id is asked of the store item by item, which find_items
+    would keep alone anyway; only a part of a name, a sha or a branch reads every item (7.5 MB on the 2026-11-26 copy)."""
+    exact = [(t, it) for t in ITEM_TYPES for it in [store.item(t, ref)] if it]
+    return exact or find_items({t: store.items(t) for t in ITEM_TYPES}, ref)
+
+
 def cmd_history(a: argparse.Namespace, store: Any, now: Callable[[], float]) -> int:
-    hits = find_items({t: store.items(t) for t in ITEM_TYPES}, a.ref)
+    hits = referenced_items(store, a.ref)
     if not hits:
         print(f"history: nothing matches {a.ref!r} (a change, red or watch id, a sha, a branch or worktree)")
         return 1
@@ -84,16 +72,15 @@ def cmd_history(a: argparse.Namespace, store: Any, now: Callable[[], float]) -> 
 
 def cmd_analyze(a: argparse.Namespace, store: Any, now: Callable[[], float]) -> int:
     t = now()
-    derived = derived_of(store)
-    events = merge(all_events(store), derived)
     since = t - a.since if a.since else 0.0
+    events = read_events(store, EventQuery(a.type, since=since), undrained_rows())
     if a.tsv:
         trs = traces(events, t, a.type).values()
         print(render_tsv(s for tr in trs for s in tr.segments if s.end >= since), end="")
         return 0
     rep = analyze(events, t, since, a.type)
     if a.type == "change":  # the CI rows the check time went to (checkrows.py)
-        rep["check_rows"] = rows_report(change_runs(store.items("change"), derived.get("check_runs")), since)
+        rep["check_rows"] = rows_report(change_runs(store.items("change"), old_check_runs(store)), since)
     print(as_json(rep) if a.json else "\n".join([render_text(rep)] + (
         ["", *rows_lines(rep["check_rows"])] if "check_rows" in rep else [])))
     return 0
@@ -124,7 +111,7 @@ def weekly_time_sinks(store: Any, now: float, write: Callable[[str, list[str]], 
     last = float(store.meta_get("time_sinks_at", 0) or 0)
     if now - last < WEEK:
         return None
-    rep = analyze(merge(all_events(store), derived_of(store)), now, now - WEEK)
+    rep = analyze(read_events(store, EventQuery("change", since=now - WEEK)), now, now - WEEK)
     sinks = top_sinks(rep)
     cov = rep["coverage"]
     line = (f"TIME SINKS (7 d): {'; '.join(sinks) or 'none'} -- attribution {cov['own']:.0%} own, "

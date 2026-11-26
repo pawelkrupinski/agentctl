@@ -29,6 +29,9 @@ BACKFILL_SCHEMA = (
     "source TEXT NOT NULL, confidence TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS derived_check_runs (run TEXT PRIMARY KEY, change TEXT NOT NULL, record TEXT NOT NULL, "
     "fetched_at REAL NOT NULL)",
+    # an item's derived rows, and a type's in a window (eventtrace.query_rows)
+    "CREATE INDEX IF NOT EXISTS derived_events_item ON derived_events (item_type, item_id, at)",
+    "CREATE INDEX IF NOT EXISTS derived_events_type_at ON derived_events (item_type, at)",
 )
 
 Derived = Optional[tuple[str, str, str]]  # (cause, source, confidence)
@@ -203,8 +206,22 @@ def derived_rows(open_db: Callable[[], sqlite3.Connection]) -> dict[str, Any]:
         ensure_backfill_tables(c)
         return {"backfill": [dict(r) for r in c.execute("SELECT * FROM event_backfill ORDER BY seq")],
                 "derived": [dict(r) for r in c.execute("SELECT * FROM derived_events ORDER BY at")],
-                "check_runs": {r["run"]: {**json_object(r["record"]), "change": r["change"]}
-                               for r in c.execute("SELECT * FROM derived_check_runs") if json_object(r["record"]).get("rows")}}
+                "check_runs": _check_runs(c)}
+    finally:
+        c.close()
+
+
+def _check_runs(c: sqlite3.Connection) -> dict[str, Any]:
+    return {r["run"]: {**json_object(r["record"]), "change": r["change"]}
+            for r in c.execute("SELECT * FROM derived_check_runs") if json_object(r["record"]).get("rows")}
+
+
+def check_run_rows(open_db: Callable[[], sqlite3.Connection]) -> dict[str, Any]:
+    """The old check runs' fetched records with rows, by run id (derived_rows' `check_runs`, alone)."""
+    c = open_db()
+    try:
+        ensure_backfill_tables(c)
+        return _check_runs(c)
     finally:
         c.close()
 

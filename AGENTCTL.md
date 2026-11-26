@@ -3023,7 +3023,7 @@ no state: a change's queue entry, a condition's open, a watch's start). A reject
 THE BACKFILL never rewrites an event: the server's tick (`timeline` step, hourly) runs `Store.backfill` in-process (idempotent),
 deriving into `event_backfill` (an old event's cause and actor) and `derived_events` (the missing openings, from the
 items' recorded times), each row with its source and confidence (`exact`: a state or a recorded time; `inferred`: text).
-`history` and `analyze` merge them in; analyze's coverage says own / own-or-exact / with-inferred. An inferred row the store's own
+`history` and `analyze` merge them in; analyze's coverage says own / own-or-exact / with-inferred (an undrained offline-log line counts as own). An inferred row the store's own
 structured history proves is then marked EXACT (backfillexact.py), its proof its source: a change entering `waiting`
 while a gate red item was open (that red's own events), a held reminder whose holder -- a change or a batch -- was open
 in the state it names (the holder's own events), a change `checking in ... batch B` that B's item lists as a member.
@@ -3033,6 +3033,18 @@ and 10.6 d of held `queued` now proven); what stays inferred is mostly `waiting 
 agentctl's main was red. On the 2026-11-26
 store copy: 0% own (the history predates the columns), 56% own-or-exact, ~100% with inferred. Once a week the tick sends
 the owner the top 3 time sinks (`TIME SINKS (7 d)`).
+
+THE EVENT MODEL (eventtrace.py, eventreader.py; 2026-11-27): the store's events, the backfill's rows and this host's
+offline-log lines not yet drained are ONE row shape, each row's `origin` its provenance -- `own` (the cause written with
+the move), `exact` / `inferred` (the backfill's), `file` (an undrained line: its own cause; the store's once drained,
+by its dedupe key), `none`. ONE reader, `read_events(store, EventQuery)`, serves `history`, `analyze` and the weekly
+summary: the store answers the query through its indexes (`trace_events`, API version 2: one item's rows, every row of
+each item of a type active in a window -- a row in it, or not yet ended --, or the rows of some kinds; indexes
+`events_type_at`, `events_kind`, `derived_events_item`, `derived_events_type_at`, made in place on an older store).
+A store older than the call is read the old way (its whole feed and backfill, merged by the client): the same rows.
+On the 2026-11-26 22:00Z copy, `analyze --since 7d` moved 22.0 MB over the API before, 7.9 MB now (3.6 MB of rows, the
+rest the change items its check-row table reads), and `history <id>` 11.0 MB before, a few KB now (an exact id is
+asked item by item); every report and trace the same.
 
 PER-ROW RUNTIME (checkrows.py): a decided remote check's jobs become ROWS on its change item (`check_runs`, one record
 a run, the newest 10: the run, the tip it checked, its verdict, and each row's runner wait, start, end, seconds and
