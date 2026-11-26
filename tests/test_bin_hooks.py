@@ -65,8 +65,10 @@ class BinPrePushHookTest(unittest.TestCase):
             git(repo, "add", "-A")
             git(repo, "commit", "-qm", "base")
             sha = git(repo, "rev-parse", "HEAD")
+            home = os.path.join(tmp, "home")  # no suite-wall.json: the base is the 280 s floor, not this machine's last run
+            os.makedirs(home)
             for load, want, per_test in (("9.0", "280", "60"), ("36.0", "560", "120"), ("200", "1120", "240")):
-                env = dict(ENV, AGENTCTL_PREPUSH_LOAD=load, AGENTCTL_PREPUSH_CORES="18")
+                env = dict(ENV, HOME=home, AGENTCTL_PREPUSH_LOAD=load, AGENTCTL_PREPUSH_CORES="18")
                 p = subprocess.run(["sh", HOOK, "origin", "x"], cwd=repo, input=f"refs/heads/main {sha} refs/heads/main "
                                    f"{'0' * 39}1\n", capture_output=True, text=True, env=env, timeout=60)
                 self.assertEqual(p.returncode, 0, p.stderr)
