@@ -11,7 +11,7 @@ from agentctl.redretired import red_run_retired
 from agentctl.gating import GATING_CHECKS_FILE
 from agentctl.cistate import state_read
 from agentctl.ciwhy import (
-    NO_VERDICT_FLOWS, _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap,
+    NO_VERDICT_FLOWS, _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap, gate_snap_rows,
     gate_report_only, gate_runs, outside_from_snap, red_for, run_no_verdict, run_target)
 from agentctl.runsigs import run_sigs, save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
@@ -306,8 +306,7 @@ def ci_state_refresh(o_r: str, write: bool = True) -> dict[str, Any]:
     later), return it. Raises when the gate cannot be read (nothing is written: the old snapshot ages out)."""
     gate = gate_runs(o_r)
     snap = {"at": epoch_now(), "repo": o_r, "outside_error": None, "outside": [],
-            "gate": [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
-                      "runs": _gate_lists.get(n, []), "no_verdict": _gate_no_verdict.get(n)} for n, d, nw, st in gate]}
+            "gate": gate_snap_rows(gate)}
     if gated_repo(o_r):
         snap.update(outside_snap(o_r))
         snap["callable_only"] = sorted(main_callable_flows(o_r))  # their reds wait for red_callable_evidence

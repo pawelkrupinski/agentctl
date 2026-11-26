@@ -17,7 +17,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.lander import blame_change_name, blame_decision
 from agentctl.redrecord import red_what
 from agentctl.redrepos import red_repo_tag
-from agentctl.fixerland import dispatch_log
+from agentctl.fixerland import red_dispatch_log
 from agentctl.blameopen import BLAME_MAX, CONVERGENCE_FLOWS, PATHISH, TEST_TOKEN
 from agentctl.redopen import red_offer
 from agentctl.redprobe import BLAME_PROBE_WALL
@@ -131,7 +131,7 @@ def _blame_confirmed(store: Any, it: Any, b: Any, k: Any, t: Any) -> Any:
             f"({', '.join(c[:10] for c in g['commits'][:5])}, {g.get('subject') or ''!s:.80}), {text}: its parent "
             f"{b['parent'][:10]} passes the same check, its end fails ({b['evidence'][:200]})")
     inbox_write("red", line, [line], [], 0)
-    dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
+    red_dispatch_log(d, line)
     red_offer(store, it, line, data={"blame": b}, quiet=True)
     return [line]
 
@@ -151,7 +151,7 @@ def blame_finish(store, it, b, why, t):
             return _blame_confirmed(store, it, b, k, t)
     b = dict(b, state="undetermined", why=why, decided_at=t)
     line = f"RED BLAME: {red_what(d)}: no culprit determined ({why}): the normal fixer flow"
-    dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
+    red_dispatch_log(d, line)
     red_offer(store, it, line, data={"blame": b}, quiet=True)
     return [line]
 
@@ -248,7 +248,7 @@ def _blame_probe_line(store: Any, it: Any, repo: Any, o_r: Any, b: Any, i: Any) 
     store.update_item("red", it["id"], it["version"], {"blame": b})
     line = (f"RED BLAME: {red_what(d)}: probing {blame_boundary(b, i)[:10]} (boundary {i} of {len(b['groups'])}, "
             f"{b['kind']}) on CI")
-    dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
+    red_dispatch_log(d, line)
     return [line]
 
 

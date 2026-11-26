@@ -403,11 +403,12 @@ class Store(OfferTable):
         finally:
             c.close()
 
-    def events(self, after=0, limit=500):
+    def _event_rows(self, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+        """The events a query selects, their audience and refs read from JSON."""
         c = self.db()
         try:
             out = []
-            for r in c.execute("SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?", (after, limit)):
+            for r in c.execute(sql, params):
                 d = dict(r)
                 for k in ("audience", "refs"):
                     d[k] = json.loads(d[k] or "{}")
@@ -416,19 +417,12 @@ class Store(OfferTable):
         finally:
             c.close()
 
+    def events(self, after=0, limit=500):
+        return self._event_rows("SELECT * FROM events WHERE seq>? ORDER BY seq LIMIT ?", (after, limit))
+
     def item_events(self, typ, iid):
         """One item's events, in order."""
-        c = self.db()
-        try:
-            out = []
-            for r in c.execute("SELECT * FROM events WHERE item_type=? AND item_id=? ORDER BY seq", (typ, iid)):
-                d = dict(r)
-                for k in ("audience", "refs"):
-                    d[k] = json.loads(d[k] or "{}")
-                out.append(d)
-            return out
-        finally:
-            c.close()
+        return self._event_rows("SELECT * FROM events WHERE item_type=? AND item_id=? ORDER BY seq", (typ, iid))
 
     def archive_free_leases(self, older=None):
         """Free leases (released, revoked, lapsed) free for over LEASE_ARCHIVE_AFTER become one `lease.archived` event

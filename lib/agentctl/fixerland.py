@@ -319,6 +319,11 @@ def dispatch_log(u, what):
     return line
 
 
+def red_dispatch_log(d: dict[str, Any], what: str) -> str:
+    """One line to reds/dispatch.log for the red whose item data is d (its workflow, last run and job); returns it."""
+    return dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, what)
+
+
 def fixer_mark(rec, wt):
     """A dispatched fixer's (or an owner's) progress mark: its transcript's bytes, its worktree's HEAD and `git status`,
     and the session's other real activity (session_activity: its sub-agents' transcripts, its commands' output, its job

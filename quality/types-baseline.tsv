@@ -12,9 +12,9 @@ mypy-errors	batchpush	19
 mypy-errors	batchrun	26
 mypy-errors	batchtick	41
 mypy-errors	beats	4
-mypy-errors	blame	42
+mypy-errors	blame	39
 mypy-errors	blameopen	11
-mypy-errors	blamerecords	18
+mypy-errors	blamerecords	17
 mypy-errors	branches	67
 mypy-errors	buildview	16
 mypy-errors	changekind	21
@@ -36,7 +36,7 @@ mypy-errors	dispatches	47
 mypy-errors	explorer	15
 mypy-errors	fixer	15
 mypy-errors	fixerenv	3
-mypy-errors	fixerland	24
+mypy-errors	fixerland	26
 mypy-errors	fixerlife	56
 mypy-errors	fixersession	38
 mypy-errors	forge	43
@@ -116,7 +116,7 @@ mypy-errors	reddispatch	31
 mypy-errors	redearly	8
 mypy-errors	redfamilies	9
 mypy-errors	redfixcheck	18
-mypy-errors	redfixes	38
+mypy-errors	redfixes	40
 mypy-errors	redfixread	8
 mypy-errors	redfollow	5
 mypy-errors	redhold	29
@@ -124,7 +124,7 @@ mypy-errors	redlease	27
 mypy-errors	redmove	12
 mypy-errors	redobserve	20
 mypy-errors	redopen	34
-mypy-errors	redpending	36
+mypy-errors	redpending	34
 mypy-errors	redprobe	21
 mypy-errors	redquota	9
 mypy-errors	redrecord	3
@@ -161,7 +161,7 @@ mypy-errors	status	83
 mypy-errors	statusagents	34
 mypy-errors	statusline	4
 mypy-errors	statuspage	30
-mypy-errors	store	71
+mypy-errors	store	70
 mypy-errors	storeauth	22
 mypy-errors	storestate	7
 mypy-errors	storetoken	46

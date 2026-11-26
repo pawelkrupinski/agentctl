@@ -15,7 +15,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.worktrees import worktrees
 from agentctl.deletions import log_deletion
 from agentctl.cleanup import own_ancestry
-from agentctl.fixerland import dispatch_log
+from agentctl.fixerland import red_dispatch_log
 from agentctl.redmove import red_stop_holder
 from agentctl.waiting import cancel_submitted
 from agentctl.redopen import red_offer
@@ -295,6 +295,6 @@ def blame_withdraw(store, it, why, repo=None):
     line = (f"RED BLAME WITHDRAWN: {red_what(d)}: {blame_change_name(g)} is not the culprit ({why}); its revert never "
             f"lands; {dropped}; the normal fixer flow")
     inbox_write("red", line, [line], [], 0)
-    dispatch_log({"workflow": d.get("workflow"), "run": d.get("last_run") or {}, "job": d.get("job")}, line)
+    red_dispatch_log(d, line)
     _record_withdrawal(store, it, nb, line)
     return True, line

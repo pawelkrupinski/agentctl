@@ -13,7 +13,8 @@ from agentctl.trailers import trailer_values
 from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.clones import fetch_main
 from agentctl.patches import equivalent_on, patch_id
-from agentctl.redrecord import red_names
+from agentctl.inboxentry import inbox_write
+from agentctl.redrecord import red_names, red_what
 from agentctl.redfixread import FIX_OPEN, RED_MAIN_REFETCH, red_unrelated
 from agentctl.fixchange import fixes_named, red_fix_fresh
 from agentctl.redlink import red_change_link
@@ -149,6 +150,18 @@ def red_refuted(d):
     """The red's refuted fixes, each once, in the order they were refuted. A list that took one sha many times (784badc4406e.3,
     2026-11-11: 2 shas stored 593 times) counts its distinct fixes, never its entries."""
     return list(dict.fromkeys(d.get("refuted") or []))
+
+
+def fix_failed_said(d: dict[str, Any], sha: str, last: dict[str, Any]) -> str:
+    """The FIX FAILED line of red data d (its fix `sha` still fails in run `last`), said to the inbox; the line."""
+    line = f"FIX FAILED: {red_what(d)}: #{last.get('number')} still fails this way (fix {sha[:10]})"
+    inbox_write("red", line, [line], [d.get("line") or ""], 1)
+    return line
+
+
+def red_refuted_with(d: dict[str, Any], sha: str) -> list[str]:
+    """The red's refuted fixes (red_refuted), fix `sha` among them."""
+    return red_refuted({"refuted": (d.get("refuted") or []) + [sha]})
 
 
 def red_set_aside(d, facts):

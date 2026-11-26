@@ -3,7 +3,7 @@
 
 from agentctl.clock import epoch_now
 import os
-from typing import Any
+from typing import IO, Any, Iterator
 import re
 from agentctl.core import git, git_ok, remote
 from agentctl.statefile import write_json
@@ -85,6 +85,15 @@ _clone_lock_depth = threading.local()
 
 
 @contextlib.contextmanager
+def clone_gated(repo: str) -> Iterator[tuple[IO[str], IO[str]]]:
+    """The clone's two lock files, open, the gate taken exclusive (its holder releases it: fcntl.LOCK_UN): (gate, lock)."""
+    os.makedirs(os.path.dirname(clone_side(repo, "x")), exist_ok=True)
+    with open(clone_side(repo, "clone-gate.lock"), "a+") as gate, open(clone_side(repo, "clone.lock"), "a+") as lk:
+        fcntl.flock(gate, fcntl.LOCK_EX)
+        yield gate, lk
+
+
+@contextlib.contextmanager
 def clone_shared(repo):
     """Use the clone: shared under its lock (the swap takes it exclusive). A no-op where it never heals, and nested."""
     depth = getattr(_clone_lock_depth, "n", 0)
@@ -95,9 +104,7 @@ def clone_shared(repo):
         finally:
             _clone_lock_depth.n = depth
         return
-    os.makedirs(os.path.dirname(clone_side(repo, "x")), exist_ok=True)
-    with open(clone_side(repo, "clone-gate.lock"), "a+") as gate, open(clone_side(repo, "clone.lock"), "a+") as lk:
-        fcntl.flock(gate, fcntl.LOCK_EX)  # a swap waiting for the lock holds the gate: no new user starves it
+    with clone_gated(repo) as (gate, lk):  # a swap waiting for the lock holds the gate: no new user starves it
         try:
             fcntl.flock(lk, fcntl.LOCK_SH)
         finally:

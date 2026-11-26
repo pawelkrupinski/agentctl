@@ -16,7 +16,7 @@ from agentctl.procrunner import process_runner
 from agentctl.core import env_num, err, git, git_ok, pid_alive, process_cache, remote
 from agentctl.statefile import read_record
 from agentctl.repos import server_repo
-from agentctl.clones import CORRUPT_GIT, clone_shared, clone_side, heal_enabled
+from agentctl.clones import CORRUPT_GIT, clone_gated, clone_shared, clone_side, heal_enabled
 from agentctl.conditions import open_condition, recovery_recheck, run_probe
 from agentctl.sdnotify import SD_READY, sd_notify
 
@@ -190,9 +190,7 @@ _clone_repair_at = process_cache({})
 def clone_exclusive(repo, wait=None):
     """The swap's hold: the gate (no new user), then the lock once every user let go. Yields False after wait s."""
     wait = env_num("AGENTCTL_CLONE_LOCK_WAIT", CLONE_LOCK_WAIT) if wait is None else wait
-    os.makedirs(os.path.dirname(clone_side(repo, "x")), exist_ok=True)
-    with open(clone_side(repo, "clone-gate.lock"), "a+") as gate, open(clone_side(repo, "clone.lock"), "a+") as lk:
-        fcntl.flock(gate, fcntl.LOCK_EX)
+    with clone_gated(repo) as (gate, lk):
         try:
             deadline = time.monotonic() + wait  # wall: waits on and times real processes and threads
             while True:

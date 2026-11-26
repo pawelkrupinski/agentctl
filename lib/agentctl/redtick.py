@@ -17,7 +17,7 @@ from agentctl.fixerrecords import agent_name, own_fixer_record_path
 from agentctl.owned import default_repo
 from agentctl.redrepos import red_gate_flows, red_is_other
 from agentctl.ciwhy import (
-    _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap, gate_runs)
+    _gate_lists, _gate_no_verdict, _outside_lists, ci_state_load, ci_state_write, gate_from_snap, gate_runs, gate_snap_rows)
 from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
 from agentctl.dispatchblock import in_fixer
 from agentctl.redrecord import RED_TERMINAL, red_what
@@ -218,8 +218,7 @@ def red_gate_snap(o_r, store):
             if r:
                 latest[wf] = {k: r.get(k) for k in fields}
         return {"at": epoch_now(), "repo": o_r, "outside": [], "outside_error": None,
-                "gate": [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
-                          "runs": _gate_lists.get(n, []), "no_verdict": _gate_no_verdict.get(n)} for n, d, nw, st in gate],
+                "gate": gate_snap_rows(gate),
                 "latest": latest}
     finally:
         for live, old in zip((_gate_lists, _outside_lists, _gate_no_verdict), saved):

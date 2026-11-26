@@ -359,6 +359,12 @@ def ci_state_load(o_r: str, now: float | None = None) -> dict[str, Any] | None:
     return snap if snap.get("repo") == o_r and -5 <= age <= CI_STATE_MAX_AGE else None
 
 
+def gate_snap_rows(gate: list[tuple[Any, Any, Any, Any]]) -> list[dict[str, Any]]:
+    """The snapshot's `gate` rows of gate_runs' units (the inverse of gate_from_snap): each with its listed runs."""
+    return [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
+             "runs": _gate_lists.get(n, []), "no_verdict": _gate_no_verdict.get(n)} for n, d, nw, st in gate]
+
+
 def gate_from_snap(snap):
     out = []
     for g in snap["gate"]:

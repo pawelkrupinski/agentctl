@@ -13,8 +13,8 @@ from agentctl.redrecord import RED_RECURRING, lease_is_live, red_lease, red_what
 from agentctl.redfixread import FIX_OPEN
 from agentctl.fixchange import red_change, red_fix_fresh
 from agentctl.redfixes import (
-    red_entry_status, red_fix_is_set_aside, red_fix_of, red_fix_on_main, red_main_equivalent, red_refuted,
-    red_set_aside)
+    red_entry_status, red_fix_is_set_aside, red_fix_of, red_fix_on_main, red_main_equivalent, red_refuted_with,
+    fix_failed_said, red_set_aside)
 from agentctl.redask import red_decision
 from agentctl.red import (
     RED_FIX_GIVEUP, RED_FIX_RUN_START, red_fix_giveup, red_verify_plan, red_verify_run_on_way,
@@ -384,13 +384,12 @@ class FixPending:
 
     def refuted_unproven(self, row: dict[str, Any]) -> list[str]:
         d, f, sha, last = self.d, self.f, self.sha, self.last
-        line = f"FIX FAILED: {self.what}: #{last.get('number')} still fails this way (fix {sha[:10]})"
-        inbox_write("red", line, [line], [d.get("line") or ""], 1)
+        line = fix_failed_said(d, sha, last)
         red_keep_holder(row, f"{line}: the red is still yours -- fix it again, with a `Fix-Replay:` this time")
         h = self.entry(f.get("entry") or sha[:10], f"fix {sha[:10]} refuted by #{last.get('number')} (unproven; its holder keeps it)")
         red_move(self.store, self.it, "leased", f"{line}: back to {row['holder']}",
                  data={"attempts": self.attempts(), "fix": None, "holder": row["holder"],
-                       "refuted": red_refuted({"refuted": (d.get("refuted") or []) + [sha]}),
+                       "refuted": red_refuted_with(d, sha),
                        "history": self.history_with(h)})
         return [line]
 
@@ -399,9 +398,8 @@ class FixPending:
         red_stop_holder(self.store, d["key"], f"your fix {sha[:10]} is refuted by #{last.get('number')}", "fix refuted",
                         force=True)
         refuted_blame = blame_refuted(self.repo, d.get("blame"), sha)  # the red's own revert: the culprit was wrong
-        line = f"FIX FAILED: {self.what}: #{last.get('number')} still fails this way (fix {sha[:10]})"
-        inbox_write("red", line, [line], [d.get("line") or ""], 1)
-        refuted = red_refuted({"refuted": (d.get("refuted") or []) + [sha]})
+        line = fix_failed_said(d, sha, last)
+        refuted = red_refuted_with(d, sha)
         h = self.entry(f.get("entry") or sha[:10], f"fix {sha[:10]} refuted by #{last.get('number')}",
                        session=f.get("session"), worktree=f.get("worktree"))
         red_offer(self.store, self.it, line, data={"attempts": self.attempts(), "refuted": refuted, "fix": None,
