@@ -145,7 +145,7 @@ class AwaitEntryTest(unittest.TestCase):
 
         def sleep(secs):
             clock["now"] += secs
-        case.fake("env_num", lambda rng, name, default: rng.choice([30, 200, 900]))
+        case.fake("env_num", lambda rng, name, default: rng.choice([15, 30, 200, 900]))
         case.fake("spawn_waiting_processor", lambda rng, repo: None)
         case.fake("restart_if_changed", lambda rng, owned: None)
         case.fake("err", lambda rng, m: None)
@@ -157,7 +157,7 @@ class AwaitEntryTest(unittest.TestCase):
             if rng.random() < 0.15:
                 return None
             data = {k: g() for k, g in (("landed_sha", lambda: "sha1"), ("tip", lambda: "tip"), ("head", lambda: "hd"), ("batch", lambda: 3),
-                                        ("pushed_at", lambda: 77.0), ("why", lambda: rng.choice(["", "SUPERSEDED by x", "NOT LANDED: y", "z"])),
+                                        ("pushed_at", lambda: 77.0), ("why", lambda: rng.choice(["", "SUPERSEDED by x", "SUPERSEDED", "SUPERFLUOUS", "NOT LANDED: y", "NOT SO: y", "z"])),
                                         ("superseded_by", lambda: "e9")) if rng.random() < 0.5}
             return {"state": rng.choice(states) if rng.random() < 0.6 else rng.choice(["queued", "checking", "waiting"]),
                     "data": maybe(rng, data, 0.9), "entered_at": 5.0}

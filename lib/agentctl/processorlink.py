@@ -158,36 +158,60 @@ def await_entry(repo: str, eid: str, clock: Clock, store: Any, close: str | None
         own.release()
 
 
+def _observe_change(store: Any, eid: str) -> tuple[Any, str]:
+    """(the change's item, what it is): the item's state, `not in the store yet`, or `unknown` when the store did not
+    answer (a blip: asked again at the next poll, bounded by the await's timeout)."""
+    try:
+        it = store.item("change", eid)
+    except StoreUnavailable as ex:
+        return None, f"unknown (the store did not answer: {str(ex)[:80]})"
+    return it, it["state"] if it else "not in the store yet"
+
+
+def _landed_outcome(data: dict[str, Any], it: dict[str, Any]) -> tuple[int, str | None, float | None]:
+    sha = data.get("landed_sha") or data.get("tip") or data.get("head")
+    print(f"LANDED {sha} (with the {data.get('batch', 1)} change(s) of `{WAITING_BRANCH}`, once main was "
+          "green)", flush=True)
+    return 0, sha, data.get("pushed_at") or it.get("entered_at")
+
+
+def _superseded_outcome(data: dict[str, Any]) -> tuple[int, str | None, float | None]:
+    """Its newer entry lands the change: exit 0, as its event says (supersede)."""
+    why = str(data.get("why") or "")
+    print(why if why.startswith("SUPERSEDED") else
+          f"SUPERSEDED by {data.get('superseded_by') or 'another entry'}: {why or 'superseded'}", flush=True)
+    return 0, None, None
+
+
+def _rejected_outcome(state: str, data: dict[str, Any]) -> tuple[int, str | None, float | None]:
+    """Rejected, cancelled: never hangs a follow."""
+    why = str(data.get("why") or state)
+    print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)
+    return 1, None, None
+
+
+def _settled(it: dict[str, Any]) -> tuple[int, str | None, float | None] | None:
+    """The await's outcome once the change landed, was superseded or ended (its line printed), else None."""
+    state, data = it["state"], it.get("data") or {}
+    if state == "landed":
+        return _landed_outcome(data, it)
+    if state == "superseded":
+        return _superseded_outcome(data)
+    return _rejected_outcome(state, data) if machine_state("change", state).terminal else None
+
+
 def _await_entry(repo: str, eid: str, own: Owned, clock: Clock, store: Any) -> tuple[int, str | None, float | None]:
     """The change's STORE ITEM decides (a RemoteStore on the laptop): an entry's JSON is only on the host whose queue
     runs it -- ci-runner's for every change since ONE QUEUE (2026-11-16: `waiting await` on the laptop crashed with
     FileNotFoundError on one). A joined change's item follows its waiting entry (project_changes)."""
     t0, delays = clock.time(), backoff(15, 60)
     timeout = env_num("AGENTCTL_WAITING_TIMEOUT", WAITING_AWAIT_TIMEOUT)
-    state, said = "not in the store yet", None
+    said = None
     while True:
-        try:
-            it = store.item("change", eid)
-            if not it:
-                state = "not in the store yet"
-        except StoreUnavailable as ex:  # a blip: asked again at the next poll, bounded by the timeout below
-            it, state = None, f"unknown (the store did not answer: {str(ex)[:80]})"
-        if it:
-            state, data = it["state"], it.get("data") or {}
-            if state == "landed":
-                sha = data.get("landed_sha") or data.get("tip") or data.get("head")
-                print(f"LANDED {sha} (with the {data.get('batch', 1)} change(s) of `{WAITING_BRANCH}`, once main was "
-                      "green)", flush=True)
-                return 0, sha, data.get("pushed_at") or it.get("entered_at")
-            if state == "superseded":  # its newer entry lands the change: exit 0, as its event says (supersede)
-                why = str(data.get("why") or "")
-                print(why if why.startswith("SUPERSEDED") else
-                      f"SUPERSEDED by {data.get('superseded_by') or 'another entry'}: {why or 'superseded'}", flush=True)
-                return 0, None, None
-            if machine_state("change", state).terminal:  # rejected, cancelled: never hangs a follow
-                why = str(data.get("why") or state)
-                print(why if why.startswith("NOT LANDED") else f"NOT LANDED: {why}", flush=True)
-                return 1, None, None
+        it, state = _observe_change(store, eid)
+        outcome = _settled(it) if it else None
+        if outcome:
+            return outcome
         if state != said:  # what it waits on, said once each time it changes (a store outage is never silent)
             err(f"awaiting {eid}: it is {state}")
             said = state
