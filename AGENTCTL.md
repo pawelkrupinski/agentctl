@@ -590,7 +590,7 @@ went red (Main #2164 / #2172 named while the gate read #2173 / #2174: main red ~
 it names ANY run of the CURRENT red EPISODE: the gating workflow's failed runs on main since its last green that share a
 failure signature with its newest red run (`gate_reds` / `episode_names`: red_units' names, the ones a red item links
 by). A run of an older episode -- main went green in between -- never counts; neither does a run of this episode that
-failed another way. Signatures unreadable: only the newest red run counts. movies' pre-push judges the same rule from
+failed another way. Signatures unreadable: only the newest red run counts, and it is SURFACED (`episode_unread`: the queue facts carry why, a waiting fix's words say it). movies' pre-push judges the same rule from
 gh (main's runs since that workflow's last green, and their failed job names; unread: refused as before).
 
 **A fix of an open gate red never waits (2026-11-25, batch #124: Main #2898 red, `Fixes-Red: 2896`).** The classifier
@@ -607,14 +607,21 @@ waiting batch's "a fix waits" read it. Characterised first (`tests/test_red_land
 two disagreements were resolved: a gate red's fix beside a production commit naming no red is a red fix but NO gate fix
 (it may not land on the red, so it is not first in the batch order); and a change's commits' COUNTING trailers decide,
 not the names its entry recorded at submission (a trailer fix_check stopped counting makes no fix). An item's data read
-without git is judged by its recorded names.
+without git is judged by its recorded names. The queue facts it reads are read once per queue tick (`facts_for` inside
+`facts_tick`, opened by `tick_changes` and `tick_batch`); outside a tick every call reads afresh. Whether a fix's commit is
+on main is one `maincontain.MainContainment` (a clone's git, or the forge's compare with no clone here): `contains`,
+`landed`, `carrying` -- "cannot tell" is None, never "not on main". `land hold` makes its hold in one store transaction
+(`Store.open_singleton`): two holders at once make one hold.
 
 **WR self-heals, and an episode counts by signature (2026-11-25, the owner: "fix the class").** Three more pieces, so a
 fix of the open red never waits on bookkeeping again:
 - *Episode names* (`redepisode.py`, read by `queue_facts`): besides the red item's own names, a gate red's names include
   every run of its workflow's red streak since the last green whose CACHED run signature has the red's failing job and
   line -- a run the item dropped (or never attached) still counts for a fix naming it; a run failing another way, or one
-  before the green, does not (it waits as before). No forge read: an uncached signature counts nothing.
+  before the green, does not (it waits as before). No forge read. ONE SOURCE (2026-11-26, `RedEpisode`): the gate's
+  episode and this one read a run's signatures in one fallback order -- this classifier's record, a read again within
+  the tick's budget (the facts' is 0), the stale record of an older classifier -- so a stale record naming the red's job
+  and line counts here as it does for the gate.
 - *The heal* (`batch.py release_red_fixes`, run by the batch tick while red as well as at green): a waiting change the
   store's open red names, whose commits `must_wait` no longer holds, goes back to the queue -- first, alone, in the
   red-fix tree -- and the batch is left to the changes that may wait. A red fix `must_wait` still holds is told what holds
