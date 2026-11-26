@@ -74,14 +74,43 @@ class BackfillTest(unittest.TestCase):
                      "NOT LANDED: the change no longer applies on origin/main 123", {}),
                      ("queued", "queued", "c1: queued for 15 min, held: overlap with c0", {})])
         before = self.st.events()
-        self.assertEqual(self.st.backfill(), {"attributed": 3, "opened": 1})
+        self.assertEqual(self.st.backfill(), {"attributed": 3, "opened": 1, "exact": 0})
         self.assertEqual(self.st.events(), before)  # the originals as they were
-        self.assertEqual(self.st.backfill(), {"attributed": 0, "opened": 0})  # re-run: nothing new
+        self.assertEqual(self.st.backfill(), {"attributed": 0, "opened": 0, "exact": 0})  # re-run: nothing new
         d = self.st.derived()
         self.assertEqual([(r["cause"], r["confidence"]) for r in d["backfill"]],
                          [("check-running", "exact"), ("no-longer-applies", "inferred"), ("overlap-hold", "inferred")])
         self.assertEqual([(r["kind"], r["at"], r["cause"], r["confidence"]) for r in d["derived"]],
                          [("change.queued", 900.0, "submitted", "exact")])
+
+    def test_the_history_makes_an_inferred_row_exact_when_its_own_states_prove_it(self):
+        """backfillexact.py: a `waiting` entry inside a gate red's open window, a held reminder whose holder's own
+        events show it in the state named, a batch member -- exact; a holder that had ended stays inferred."""
+        self.st.put_item("red", "r1", "cleared", {"gate": True})
+        self.st.put_item("batch", "b#1", "landed", {"members": ["c1"]})
+        c = self.st.db()
+        c.execute("DELETE FROM events")
+        rows = [(990, "red", "r1", None, "red"), (1100, "red", "r1", "red", "cleared"),
+                (995, "change", "h1", None, "queued"), (996, "change", "h1", "queued", "checking"),
+                (1003, "change", "h1", "checking", "landed")]
+        for i, (at, typ, iid, frm, to) in enumerate(rows):
+            A.insert_event(c, {"at": at, "kind": f"{typ}.{to}", "item_type": typ, "item_id": iid, "from_state": frm,
+                               "to_state": to, "text": "", "dedupe": f"x{i}", "cause": "probe"})
+        mine = [(1000, "checked", "waiting", "c1: checked -> waiting"),
+                (1001, "waiting", "waiting", "c1: queued for 15 min, held: its check waits for h1 (checking): both"),
+                (1002, "queued", "checking", "c1: checking in push batch b#1 (2 change(s) at abc)"),
+                (1004, "queued", "queued", "c1: queued for 15 min, held: its check waits for h1 (checking): both"),
+                (1200, "checked", "waiting", "c1: checked -> waiting")]
+        for i, (at, frm, to, text) in enumerate(mine):
+            A.insert_event(c, {"at": at, "kind": f"change.{to}", "item_type": "change", "item_id": "c1",
+                               "from_state": frm, "to_state": to, "text": text, "dedupe": f"c{i}"})
+        c.commit()
+        c.close()
+        self.assertEqual(self.st.backfill()["exact"], 3)
+        got = {r["seq"]: (r["cause"], r["confidence"]) for r in self.st.derived()["backfill"]}
+        self.assertEqual(sorted(got.values()), [("batch", "exact"), ("gate-red", "exact"), ("gate-red", "inferred"),
+                                                ("overlap-hold", "exact"), ("overlap-hold", "inferred")])
+        self.assertEqual(self.st.backfill()["exact"], 0, "idempotent")
 
     def test_history_prints_the_merged_timeline(self):
         self.st.put_item("change", "c1", "queued", {"submitted_at": 900.0, "head": "abc123def456"})

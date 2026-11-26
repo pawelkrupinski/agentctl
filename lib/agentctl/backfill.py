@@ -17,6 +17,7 @@ import sqlite3
 from typing import Any, Callable, Iterable, Optional
 
 from agentctl.checkrows import check_run_record
+from agentctl.backfillexact import upgrade_inferred
 from agentctl.causes import HOLD_CAUSE, red_move_cause, reject_cause
 from agentctl.statefile import json_object
 
@@ -189,7 +190,7 @@ def backfill_store(open_db: Callable[[], sqlite3.Connection], page: int = 5000) 
                       ":from_state, :to_state, :actor, :cause, :detail, :source, :confidence)", openings)
         m = c.total_changes - before
         c.execute("COMMIT")
-        return {"attributed": n, "opened": m}
+        return {"attributed": n, "opened": m, "exact": upgrade_inferred(c)}
     finally:
         c.close()
 

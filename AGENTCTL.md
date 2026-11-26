@@ -2955,7 +2955,14 @@ no state: a change's queue entry, a condition's open, a watch's start). A reject
 THE BACKFILL never rewrites an event: the server's tick (`timeline` step, hourly) runs `Store.backfill` in-process (idempotent),
 deriving into `event_backfill` (an old event's cause and actor) and `derived_events` (the missing openings, from the
 items' recorded times), each row with its source and confidence (`exact`: a state or a recorded time; `inferred`: text).
-`history` and `analyze` merge them in; analyze's coverage says own / own-or-exact / with-inferred. On the 2026-11-26
+`history` and `analyze` merge them in; analyze's coverage says own / own-or-exact / with-inferred. An inferred row the store's own
+structured history proves is then marked EXACT (backfillexact.py), its proof its source: a change entering `waiting`
+while a gate red item was open (that red's own events), a held reminder whose holder -- a change or a batch -- was open
+in the state it names (the holder's own events), a change `checking in ... batch B` that B's item lists as a member.
+On the 14:00Z copy this raised the exact share of change time from 55.8% to 89.5% (1,557 rows; 17.0 d of `waiting`
+and 10.6 d of held `queued` now proven); what stays inferred is mostly `waiting on a check slot` (3.0 d), push waits
+(1.3 d) and cancels (1.2 d). The live store wrote no own cause until 14:29Z: ci-runner's pin held 12cecce while
+agentctl's main was red. On the 2026-11-26
 store copy: 0% own (the history predates the columns), 56% own-or-exact, ~100% with inferred. Once a week the tick sends
 the owner the top 3 time sinks (`TIME SINKS (7 d)`).
 
