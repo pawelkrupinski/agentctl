@@ -30,7 +30,6 @@ cognitive	migrate_local_queue	19
 cognitive	open_condition	20
 cognitive	owner_orphans	22
 cognitive	owner_work	21
-cognitive	pressure_reading	23
 cognitive	project_changes	14
 cognitive	recovery_tick	26
 cognitive	red_attach_obs	17
@@ -88,7 +87,6 @@ cyclomatic	migrate_local_queue	13
 cyclomatic	open_condition	22
 cyclomatic	owner_orphans	13
 cyclomatic	owner_work	19
-cyclomatic	pressure_reading	18
 cyclomatic	project_changes	11
 cyclomatic	recovery_tick	17
 cyclomatic	red_attach_obs	18

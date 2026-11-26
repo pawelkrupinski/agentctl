@@ -101,6 +101,39 @@ def swap_growth(mb, now_):
     return mb - first[1], now_ - first[0]
 
 
+def _meminfo_reading(mi: dict[str, Any]) -> dict[str, Any]:
+    """The memory fields (free_pct, swap_mb) a Linux /proc/meminfo dict gives, those it has."""
+    got: dict[str, Any] = {}
+    if "MemAvailable" in mi:
+        got["free_pct"] = round(100 * mi["MemAvailable"] / mi["MemTotal"])
+    if "SwapTotal" in mi and "SwapFree" in mi:
+        got["swap_mb"] = (mi["SwapTotal"] - mi["SwapFree"]) / 1024
+    return got
+
+
+def _sysctl_reading(text: str) -> dict[str, Any]:
+    """The memory fields (free_pct, level, swap_mb) macOS's pressure_sysctl text gives, those it has."""
+    lines = text.splitlines()
+    got: dict[str, Any] = {}
+    if len(lines) >= 2 and lines[0].strip().isdigit() and lines[1].strip().isdigit():
+        got["free_pct"], got["level"] = int(lines[0]), int(lines[1])
+    used = re.search(r"used = ([\d.]+)M", "\n".join(lines))
+    if used:
+        got["swap_mb"] = float(used.group(1))
+    return got
+
+
+def _memory_reading(sysctl_out: Any, meminfo: Any) -> dict[str, Any]:
+    """The memory fields of this machine: the fixed probe's (the tests'), else /proc/meminfo, else sysctl."""
+    fixed = machine_fixed() if meminfo is None and sysctl_out is None else None
+    if fixed is not None:
+        return {"free_pct": fixed.get("free_pct"), "level": fixed.get("level"), "swap_mb": fixed.get("swap_used_mb")}
+    mi = read_meminfo() if meminfo is None else meminfo
+    if mi.get("MemTotal"):
+        return _meminfo_reading(mi)
+    return _sysctl_reading(pressure_sysctl() if sysctl_out is None else sysctl_out)
+
+
 def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_=None):
     """{free_pct, level, load1, cores, swap_mb, swap_growth_mb, swap_span}: this machine now, None where unreadable.
     The readers are the tests' seams: sysctl_out (pressure_sysctl's text), meminfo (read_meminfo's dict)."""
@@ -109,22 +142,7 @@ def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_
     # 18 cores while 5.2 were busy, 2026-11-19); `load1` passed in (the tests' seam) stands for it
     r = {"free_pct": None, "level": None, "swap_mb": None, "load1": gov_busy_cores() if load1 is None else load1,
          "cores": cores or machine_cores(), "runq": run_queue(passed=load1)}
-    fixed = machine_fixed() if meminfo is None and sysctl_out is None else None
-    mi = {} if fixed is not None else read_meminfo() if meminfo is None else meminfo
-    if fixed is not None:
-        r["free_pct"], r["level"], r["swap_mb"] = fixed.get("free_pct"), fixed.get("level"), fixed.get("swap_used_mb")
-    elif mi.get("MemTotal"):
-        if "MemAvailable" in mi:
-            r["free_pct"] = round(100 * mi["MemAvailable"] / mi["MemTotal"])
-        if "SwapTotal" in mi and "SwapFree" in mi:
-            r["swap_mb"] = (mi["SwapTotal"] - mi["SwapFree"]) / 1024
-    else:
-        lines = (pressure_sysctl() if sysctl_out is None else sysctl_out).splitlines()
-        if len(lines) >= 2 and lines[0].strip().isdigit() and lines[1].strip().isdigit():
-            r["free_pct"], r["level"] = int(lines[0]), int(lines[1])
-        used = re.search(r"used = ([\d.]+)M", "\n".join(lines))
-        if used:
-            r["swap_mb"] = float(used.group(1))
+    r.update(_memory_reading(sysctl_out, meminfo))
     r["swap_growth_mb"], r["swap_span"] = swap_growth(r["swap_mb"], now_)
     return r
 
