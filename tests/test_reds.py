@@ -2153,6 +2153,10 @@ class StuckLimitTest(unittest.TestCase):
         self.assertEqual(A.workflow_timeout_bound("jobs:\n  a:\n    runs-on: x\n"), 360 * 60,
                          "no job sets one: GitHub's own 360-minute default")
 
+    def test_a_timeout_minutes_with_a_trailing_comment_is_honoured(self):
+        txt = "jobs:\n  a:\n    runs-on: x\n    timeout-minutes: 30  # the real bound\n    steps: []\n"
+        self.assertEqual(A.workflow_timeout_bound(txt), 30 * 60, "not GitHub's 360-minute default")
+
     def test_a_job_without_its_own_timeout_counts_githubs_default_beside_the_others(self):
         """Review 2026-11-07: one job setting timeout-minutes made every other job count 0, so a workflow of a 30-min
         job and a job with none was bounded at 30 min (a false stuck red past it). A job with none runs up to 360."""

@@ -43,7 +43,7 @@ def stuck_history(o_r, name):
     return runs
 
 
-JOB_BOUND_LINE = re.compile(r"^\s*timeout-minutes:\s*(\d+)\s*$")
+JOB_BOUND_LINE = re.compile(r"^\s*timeout-minutes:[ \t]*(\d+)[ \t]*(?:#.*)?$")  # a trailing comment, as workflow_jobs reads it
 JOB_USES_LINE = re.compile(r"^\s*uses:")
 
 
