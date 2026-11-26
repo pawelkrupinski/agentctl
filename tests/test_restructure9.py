@@ -177,8 +177,8 @@ class AwaitEntryTest(unittest.TestCase):
 
 # ------------------------------------------------------------------------------------------------ lander
 def a_land_call(r, i):
-    cmd = r.choice(["agentctl land", "x; agentctl land --range", "git status", "agentctl land status", "cd /w/a && agentctl land", "", "cd /w/b; land"])
-    odd = [[{"type": "text"}], "str", None, [{"type": "tool_use", "input": None}], [{"type": "tool_use", "input": {"command": 5}}]]
+    cmd = r.choice(["agentctl land", " agentctl land ", "cd /w/link && agentctl land", "x; agentctl land --range", "git status", "agentctl land status", "cd /w/a && agentctl land", "", "cd /w/b; land"])
+    odd = [[{"type": "text", "input": {"command": "agentctl land"}}], [{"type": "text"}], "str", None, [{"type": "tool_use", "input": None}], [{"type": "tool_use", "input": {"command": 5}}]]
     return {"message": {"content": [{"type": "tool_use", "input": {"command": cmd}}] if r.random() < 0.75 else r.choice(odd)},
             "timestamp": r.choice([None, f"2026-11-0{i % 9 + 1}T00:00:00Z"])}
 
@@ -201,13 +201,14 @@ class LanderTranscriptTest(unittest.TestCase):
         main = [f"/proj/x/s.jsonl"] if r.random() < 0.7 else []
         case.fake("claude_projects_root", lambda rng: "/proj")
         case.patch(glob_module, "glob", lambda rng, pat: subs if "subagents" in pat else main)
-        case.fake("mtime", lambda rng, p: NOW - rng.choice([0, 10, 100, 599, 601, 5000]))
-        calls = lambda rng, p: [(rng.choice(["", "2026-11-01T00", "2026-11-02T00"]), rng.choice(["agentctl land", "cd /w/a && agentctl land", "ctl /w/b land", " "]))
+        case.fake("mtime", lambda rng, p: NOW - rng.choice([0, 10, 100, 599, 600, 601, 5000]))
+        calls = lambda rng, p: [(rng.choice(["", "2026-11-01T00", "2026-11-02T00"]), rng.choice(["agentctl land", " agentctl land ", "cd /w/a && agentctl land", "ctl /w/b land", "cd /w/real; agentctl land", "cd /w/link; agentctl land", " "]))
                                 for _ in range(rng.randint(0, 3))]
         case.fake("land_calls", calls)
         case.fake("process_ancestry", lambda rng, stop: ["bash -c agentctl land", "zsh"][:rng.randint(0, 2)])
+        case.patch(os.path, "realpath", lambda rng, p: p.replace("/w/link", "/w/real"))
         sid = r.choice(["s"] * 8 + ["", None])
-        args = (sid, maybe(r, NOW, 0.6), maybe(r, r.choice(["/w/a", "/w/b", "", "/w/c"]), 0.7), maybe(r, r.choice([[], ["cd /w/a && agentctl land", "x"]]), 0.5))
+        args = (sid, maybe(r, NOW, 0.6), maybe(r, r.choice(["/w/a", "/w/b", "", "/w/c", "/w/link"]), 0.7), maybe(r, r.choice([[], ["cd /w/a && agentctl land", "x"], ["a agentctl land b"]]), 0.5))
         return args[:r.choice([1, 4, 4])], {"pid": r.choice([None, "", "123", "x"])}
 
     def test_lander_transcript(self):
@@ -229,7 +230,7 @@ class LanderRecordsTest(unittest.TestCase):
 
         def items(rng, typ):
             if rng.random() < 0.15:
-                raise RuntimeError("down")
+                raise RuntimeError("down " * rng.randint(1, 40))
             return [{"id": f"{typ}{i}", "state": rng.choice(["landed", "queued"]),
                      "data": maybe(rng, {k: g() for k, g in (("lander", lambda: maybe(rng, {"repo": rng.choice(["o/a", "o/b", None])}, 0.7)),
                                                                 ("commit_keys", lambda: rng.choice([[], [{"sha": "s"}], None])),
