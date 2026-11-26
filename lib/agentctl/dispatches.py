@@ -6,7 +6,7 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.core import HOME, PROTECTED_BRANCHES, dispatches_dir, git, git_ok, remote
+from agentctl.core import PROTECTED_BRANCHES, dispatches_dir, git, git_ok, remote, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import RUN_FIELDS, gh_json
@@ -263,7 +263,7 @@ def owner_text(rec, short=False):
         return who or "?"
     if short:
         return os.path.basename(wt)
-    return wt.replace(HOME, "~") + (f" ({who})" if who and who != os.path.basename(wt) else "")
+    return tilde(wt) + (f" ({who})" if who and who != os.path.basename(wt) else "")
 
 
 # -- an ORPHAN branch red closes itself (the owner, 2026-10-29: `branch reds: 3 → NOBODY` -- identity runs #2365, #2370,

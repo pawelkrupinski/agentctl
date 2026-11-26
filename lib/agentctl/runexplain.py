@@ -6,7 +6,7 @@ import json
 import os
 import urllib.request
 from typing import Any, Optional
-from agentctl.core import HOME, err
+from agentctl.core import err, tilde
 from agentctl.classify import SETUP_STEP, classify_job, job_log_verdict
 from agentctl.forge import GH_CLI, RED_CONCLUSIONS, gh_json, runner_queue
 from agentctl.workflows import STEP_TIMED_OUT, workflow_jobs
@@ -325,7 +325,7 @@ class RunExplanation:
         return self._decided(lines)
 
     def _decided(self, lines: list[str]) -> str:
-        rerun = f"rerun: {GH_CLI.replace(HOME, '~')} run rerun {self.rid} --failed -R {self.o_r}"
+        rerun = f"rerun: {tilde(GH_CLI)} run rerun {self.rid} --failed -R {self.o_r}"
         if self.no_verdict:
             return NO_VERDICT
         if any(l.startswith("  [test]") and ": TIMEOUT: " in l for l in lines):

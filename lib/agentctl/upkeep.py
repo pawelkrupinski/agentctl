@@ -9,7 +9,7 @@ import sys
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, _bounded, env_num, reds_dir, run_bounded, state_root
+from agentctl.core import HOME, _bounded, env_num, reds_dir, run_bounded, state_root, tilde
 from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
 from agentctl.fixerrecords import fixer_records
@@ -134,7 +134,7 @@ def rotate_log(path, max_bytes=None, keep=None):
         f.write(data)
     os.replace(tmp, f"{path}.1")
     _truncate_keeping_late(path, pos)
-    return (f"rotated {path.replace(HOME, '~')} ({size >> 20} MB): its newest {len(data) >> 10} KB kept as .1"
+    return (f"rotated {tilde(path)} ({size >> 20} MB): its newest {len(data) >> 10} KB kept as .1"
             + (f", {start >> 20} MB older dropped" if start > (1 << 20) else "") + (f", .{keep} dropped" if gone else ""))
 
 
@@ -152,7 +152,7 @@ def rotate_logs():
             try:
                 line = rotate_log(p)
             except OSError as e:
-                line = f"could not rotate {p.replace(HOME, '~')}: {e.strerror or e}"
+                line = f"could not rotate {tilde(p)}: {e.strerror or e}"
             if line:
                 out.append(line)
         return out

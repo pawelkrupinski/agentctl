@@ -4,7 +4,7 @@
 
 import os
 from typing import Any
-from agentctl.core import HOME, git, remote, slug
+from agentctl.core import git, remote, slug, tilde
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_write
 from agentctl.worktrees import worktree_of
@@ -19,12 +19,12 @@ def _unfileable_worktree(o_r: Any, wt: Any) -> Any:
     """(rc, lines) refusing worktree wt as the source of an owner push for o_r (not a worktree of one's own, a clone of
     another repo, uncommitted changes), or None."""
     if not os.path.isdir(wt) or root_checkout(wt, o_r):
-        return 2, [f"NOT FILED: {wt.replace(HOME, '~')} is not a worktree of your own: `--worktree <yours>`"]
+        return 2, [f"NOT FILED: {tilde(wt)} is not a worktree of your own: `--worktree <yours>`"]
     try:
         if slug(wt) != o_r:
-            return 2, [f"NOT FILED: {wt.replace(HOME, '~')} is a clone of {slug(wt)}, not {o_r}"]
+            return 2, [f"NOT FILED: {tilde(wt)} is a clone of {slug(wt)}, not {o_r}"]
     except (Exception, SystemExit) as e:
-        return 2, [f"NOT FILED: {wt.replace(HOME, '~')} is no clone of {o_r} ({str(e)[:120]})"]
+        return 2, [f"NOT FILED: {tilde(wt)} is no clone of {o_r} ({str(e)[:120]})"]
     if git(wt, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
         return 1, ["NOT FILED: the worktree has uncommitted changes: commit each step first"]
     return None
@@ -34,7 +34,7 @@ def _owner_push_line(items: Any, o_r: Any, branch: Any, ahead: Any, wt: Any, not
     """The escalation line of an owner push: the reds, the commits ready on the branch, the owner's one-liner."""
     what = ", ".join(red_what(it["data"]) for it in items)
     return (f"RED OWNER PUSH: {what}: a fix is ready on {branch} ({len(ahead)} commit(s), "
-            f"{', '.join(s[:10] for s, _ in ahead[:6])}) in {wt.replace(HOME, '~')}"
+            f"{', '.join(s[:10] for s, _ in ahead[:6])}) in {tilde(wt)}"
             + (f" -- {note}" if note else "") + f". {o_r} is owner-only (a push is a deploy): `! {cmd}`")
 
 
@@ -53,13 +53,13 @@ def red_owner_push(store: Any, o_r: Any, target: Any, note: Any = "", wt: Any = 
     git(wt, "fetch", "--quiet", remote(), "main", check=False)
     ahead = unlanded_commits(wt)
     if not ahead:
-        return 1, [f"NOT FILED: nothing in {wt.replace(HOME, '~')} that is not on {remote()}/main"]
+        return 1, [f"NOT FILED: nothing in {tilde(wt)} that is not on {remote()}/main"]
     items = red_targets(store, o_r, target, create=False)
     if not items:
         return 1, [f"NOT FILED: #{target} names no open red of {o_r}"]
     head = git(wt, "rev-parse", "HEAD").strip()
     branch = git(wt, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip() or head[:10]
-    tw = wt.replace(HOME, "~")
+    tw = tilde(wt)
     cmd = f"git -C {tw} pull --rebase {remote()} main && git -C {tw} push {remote()} HEAD:main"
     t = store.clock()
     line = _owner_push_line(items, o_r, branch, ahead, wt, note, cmd)

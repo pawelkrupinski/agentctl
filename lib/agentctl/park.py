@@ -7,7 +7,7 @@ import datetime as dt
 import os
 import re
 import time
-from agentctl.core import HOME, attempt, env_num, git
+from agentctl.core import attempt, env_num, git, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.inboxentry import inbox_write
@@ -107,7 +107,7 @@ def park_duty(repo, store, dry_run=False, now_=None):
                 m.update(state="released", why=why, decided=ts())
                 changed = True
                 drop_orphan_records(wt)
-                inbox_write("maintain", f"UNPARKED {wt.replace(HOME, '~')}: {why}; the orphan rules apply again "
+                inbox_write("maintain", f"UNPARKED {tilde(wt)}: {why}; the orphan rules apply again "
                                         f"(parked: {m['reason']})", [], [], 0, cwd=wt)
             did.append(f"parked {name}: released ({why}); the orphan rules apply again")
             continue
@@ -209,7 +209,7 @@ def cmd_park(a: argparse.Namespace, store: Any) -> int:
         return 2
     marks[wt] = {"reason": a.reason, "until": until, "at": time.time(), "parked": ts(), "state": "parked", "repo": repo}
     write_json(parked_path(), marks)
-    print(f"PARKED {wt.replace(HOME, '~')} {park_until_text(marks[wt])}: {a.reason} -- no orphan escalation")
+    print(f"PARKED {tilde(wt)} {park_until_text(marks[wt])}: {a.reason} -- no orphan escalation")
     return 0
 
 
@@ -219,10 +219,10 @@ def cmd_unpark(a):
     wt = wt or os.path.realpath(os.path.expanduser(a.worktree))
     m = marks.get(wt)
     if not m or m.get("state") != "parked":
-        print(f"unpark: {wt.replace(HOME, '~')} is not parked")
+        print(f"unpark: {tilde(wt)} is not parked")
         return 0
     m.update(state="unparked", decided=ts())
     write_json(parked_path(), marks)
     drop_orphan_records(wt)
-    print(f"UNPARKED {wt.replace(HOME, '~')}: the orphan rules apply again")
+    print(f"UNPARKED {tilde(wt)}: the orphan rules apply again")
     return 0

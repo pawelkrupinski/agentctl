@@ -9,7 +9,7 @@ import time
 from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.claudefiles import claude_limit
-from agentctl.core import HOME, SHORT, env_num, fmt_age, remote, spawn_detached
+from agentctl.core import SHORT, env_num, fmt_age, remote, spawn_detached, tilde
 from agentctl.timefmt import iso_epoch, parse_time, ts
 from agentctl.statefile import read_record
 from agentctl.repos import RED_PRIMARY, red_repo_of
@@ -168,7 +168,7 @@ def red_crash_evidence(streak):
             tail.append(f"{h.get('at')} {h.get('holder')}: LAUNCH FAILED: {failed[:400]}")
             continue
         tail.append(f"{h.get('at')} {h.get('holder')}: {str(h.get('outcome'))[:200]}"
-                    + (f" (log: {str(h['log']).replace(HOME, '~')})" if h.get("log") else ""))
+                    + (f" (log: {tilde(str(h['log']))})" if h.get("log") else ""))
         tail += [f"    {l[:200]}" for l in str(h.get("notes") or "").splitlines()[-4:] if l.strip()]
     return tail[-30:]
 
@@ -188,7 +188,7 @@ def red_crash_cmd(streak):
     p = _crash_evidence(streak)
     if not p:
         return "~/bin/agentctl red status -v"
-    return (f"~/bin/agentctl red status -v; " + (f"less {p}" if not os.path.isdir(p) else f"cd {p}")).replace(HOME, "~")
+    return tilde(f"~/bin/agentctl red status -v; " + (f"less {p}" if not os.path.isdir(p) else f"cd {p}"))
 
 
 def red_crash_launches(streak):
@@ -384,9 +384,9 @@ def red_decision_block(store, it, upd, decide, t, category=None):
     cmd = decision_look_command(d)
     until = f"a newer {d.get('workflow')} run than #{run} no longer fails this way"
     maxh = env_num("AGENTCTL_RED_DECISION_BLOCK_MAX", RED_DECISION_BLOCK_MAX)
-    text = (f"WAITING ON YOU: {decide[:400]} -- {red_what(d)} waits on it. Answer: `! {decide_cmd(key)}` (its fixer "
+    text = tilde(f"WAITING ON YOU: {decide[:400]} -- {red_what(d)} waits on it. Answer: `! {decide_cmd(key)}` (its fixer "
             f"is dispatched with your answer). " + (f"Why: DIAGNOSED: {diag[:400]}. " if diag else "") +
-            f"Look: `{cmd}`. Auto-clears when {until}, or in {fmt_age(maxh)} (offered again)").replace(HOME, "~")
+            f"Look: `{cmd}`. Auto-clears when {until}, or in {fmt_age(maxh)} (offered again)")
     lname = block_lease(key)
     probe = red_newer_probe(it, d)
     got = store.acquire(lname, f"owner:{DECISION_CAUSE}", BLOCK_TTL, maxh, progress=f"decision@{int(t)}",

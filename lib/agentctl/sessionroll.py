@@ -4,7 +4,7 @@
 import json
 import os
 from typing import Any, BinaryIO, Optional
-from agentctl.core import HOME, env_num, git
+from agentctl.core import env_num, git, tilde
 from agentctl.timefmt import ts
 from agentctl.claudefiles import bg_transcript
 from agentctl.fixersession import turn_entry
@@ -93,7 +93,7 @@ def worktree_lines(wt: Optional[str]) -> list[str]:
     head = str(git(wt, "log", "-1", "--format=%h %s", check=False).stdout).strip()[:120]
     branch = str(git(wt, "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout).strip() or "(detached)"
     dirty = [l for l in str(git(wt, "status", "--porcelain", check=False).stdout).splitlines() if l.strip()]
-    return ([f"worktree: {wt.replace(HOME, '~')}, branch {branch}, HEAD {head}",
+    return ([f"worktree: {tilde(wt)}, branch {branch}, HEAD {head}",
              f"dirty files ({len(dirty)}):" if dirty else "dirty files: none"] + [f"  {l}" for l in dirty[:15]])
 
 

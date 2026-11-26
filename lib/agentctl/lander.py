@@ -10,7 +10,7 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, branch_of, env_num, err, git, git_ok, process_cache, remote, slug
+from agentctl.core import branch_of, env_num, err, git, git_ok, process_cache, remote, slug, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime
 from agentctl.repos import RED_PRIMARY
@@ -319,7 +319,7 @@ def lander_name(l: dict[str, Any] | None) -> str:
     l = l or {}
     who = f"subagent {l['agent']} of session {str(l.get('session'))[:8]}" if l.get("agent") else \
         f"session {str(l.get('session'))[:8]}" if l.get("session") else "the owner"
-    return f"{who} ({str(l.get('worktree') or '?').replace(HOME, '~')})"
+    return f"{who} ({tilde(str(l.get('worktree') or '?'))})"
 
 
 def blame_decision(b: dict[str, Any] | None) -> tuple[str | None, str]:

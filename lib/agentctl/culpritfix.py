@@ -6,7 +6,7 @@ import subprocess
 import sys
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, NO_SIGN, git, reds_dir, remote
+from agentctl.core import NO_SIGN, git, reds_dir, remote, tilde
 from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
 from agentctl.redrecord import red_what
@@ -108,7 +108,7 @@ def _refuted_note(g: Any, shas: Any, b: Any) -> Any:
 def _offending_note(g: Any, shas: Any, b: Any, rv: Any) -> Any:
     """The fixer's note naming the offending change: reverted (rv ok) or not."""
     offending = (f" THE OFFENDING CHANGE is {blame_change_name(g)} ({shas}: `git show {shas}`), landed from "
-                 f"{str(g.get('worktree') or '?').replace(HOME, '~')}; its parent passes the same check, its end fails")
+                 f"{tilde(str(g.get('worktree') or '?'))}; its parent passes the same check, its end fails")
     if rv.get("ok"):
         return (f"{offending} ({str(b.get('evidence') or '')[:200]}). It was REVERTED ({rv.get('msg')}): your job is to "
                 f"make it land again, fixed -- in your worktree, after `git fetch {remote()} && git rebase "
@@ -264,7 +264,7 @@ def lander_revive(store, o_r, repo, off, took, u, b):
                                                                                     "worktree": wt})})
     line = (f"LANDER REVIVED: {red_what(u)}: {lander_name(l)} -- its change {name} "
             f"{'was reverted' if rv.get('ok') else 'could not be reverted (it fixes forward)'} -- "
-            f"{'resumed' if brief['mode'] == 'resume' else 'continued from its transcript'} in {wt.replace(HOME, '~')} "
+            f"{'resumed' if brief['mode'] == 'resume' else 'continued from its transcript'} in {tilde(wt)} "
             "to fix it and land it again (`claude agents`)")
     inbox_write("red", line, [line], [], 0, cwd=wt)
     return True, line

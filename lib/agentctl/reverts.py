@@ -6,7 +6,7 @@ import re
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.core import HOME, fmt_age, git, git_ok, remote
+from agentctl.core import fmt_age, git, git_ok, remote, tilde
 from agentctl.timefmt import ts
 from agentctl.store import StoreUnavailable
 from agentctl.repos import RED_PRIMARY
@@ -334,7 +334,7 @@ def revert_notes(st):
             with open(os.path.join(wt, REVERT_NOTE), "a") as f:
                 f.write(revert_note_text(it["id"], d))
             st.update_item("revert", it["id"], it["version"], {"noted": ts()})
-            out.append(f"revert {it['id']}: noted in {wt.replace(HOME, '~')}/{REVERT_NOTE}")
+            out.append(f"revert {it['id']}: noted in {tilde(wt)}/{REVERT_NOTE}")
         except (OSError, StaleVersion) as e:
             out.append(f"revert {it['id']}: note not written ({str(e)[:120]})")
     return out

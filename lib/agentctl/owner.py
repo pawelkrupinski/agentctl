@@ -9,7 +9,7 @@ import sys
 import time
 from typing import Any
 from contextlib import suppress
-from agentctl.core import HOME, git, git_ok, remote, spawn_detached
+from agentctl.core import git, git_ok, remote, spawn_detached, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.selfcode import TOOL_PATH
@@ -90,7 +90,7 @@ def _ensure_notebook(nb: Any, fam: Any) -> None:
 
 def _owner_started_line(fam: Any, restarted: Any, pid: Any, wt: Any, pic: Any) -> str:
     return (f"RED OWNER {fam}: {'RESTARTED (it had died)' if restarted else 'STARTED'} pid {pid} in "
-            f"{wt.replace(HOME, '~')} for {pic.get('workflow')} #{(pic.get('run') or {}).get('number')}")
+            f"{tilde(wt)} for {pic.get('workflow')} #{(pic.get('run') or {}).get('number')}")
 
 
 def owner_spawn(store, o_r, repo, fam, off, took, extra=()):

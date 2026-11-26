@@ -10,7 +10,7 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, SHORT, _tokens, env_num, git, pid_alive, state_root
+from agentctl.core import HOME, SHORT, _tokens, env_num, git, pid_alive, state_root, tilde
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.repos import red_repo_clone, red_repos
 from agentctl.inboxentry import inbox_write
@@ -89,7 +89,7 @@ def claude_trust_gap(path):
     main, cands = _trust_candidates(os.path.realpath(path))
     if any(isinstance(projects.get(c), dict) and projects[c].get("hasTrustDialogAccepted") is True for c in cands):
         return None
-    return (f"claude does not trust {main.replace(HOME, '~')} (`claude --bg` refuses an untrusted workspace; a "
+    return (f"claude does not trust {tilde(main)} (`claude --bg` refuses an untrusted workspace; a "
             f"worktree is trusted through its main checkout): owner, once: `! cd {shlex.quote(main)} && claude` -- "
             f"accept the trust prompt, then /exit; the red dispatches at the next tick")
 
@@ -123,7 +123,7 @@ def trust_asks():
         now_asked[clone] = asked.get(clone) or time.time()
         if clone not in asked:
             inbox_write("red", trust_ask_line(clone, gap), [], [], 1, item=TRUST_ASK_PREFIX + os.path.realpath(clone))
-            out.append(f"asked the owner to trust {clone.replace(HOME, '~')} ({c['repo']})")
+            out.append(f"asked the owner to trust {tilde(clone)} ({c['repo']})")
     if now_asked != asked:
         write_json(path, now_asked)
     return out

@@ -4,7 +4,7 @@
 import os
 import re
 from typing import Any
-from agentctl.core import HOME, remote
+from agentctl.core import remote, tilde
 from agentctl.classify import is_regression
 from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import RED_PRIMARY, red_repo_clone, red_repo_of
@@ -105,7 +105,7 @@ def fixer_preamble(u: Any, wt: Any, brief: Any, owner: Any, o_r: str) -> str:
               + f"Read {brief} and ~/bin/AGENTCTL.md first. Your worktree is {wt} (branch off {remote()}/main, already "
               "created): work only there. " + first + "Commits unlanded for "
               f"{FIXER_UNLANDED_NUDGE // 60} min get a RED-NUDGE.md in your worktree (read it, land, delete it), then an "
-              f"escalation to the owner.\n\n=== THE FIXER BRIEF ({bpath.replace(HOME, '~')}) ===\n{btext}\n"
+              f"escalation to the owner.\n\n=== THE FIXER BRIEF ({tilde(bpath)}) ===\n{btext}\n"
               "=== END OF THE FIXER BRIEF ===\n\n")
     common += fixer_replay_notes(u, owner, o_r)
     if u.get("orphan"):  # an unlanded change whose author ended (orphan_duty)

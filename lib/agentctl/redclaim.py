@@ -4,7 +4,7 @@
 import os
 import time
 from typing import Any, Callable
-from agentctl.core import HOME, git
+from agentctl.core import git, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.procs import safe_cwd
@@ -128,7 +128,7 @@ def _claim_one(store: Any, it: dict[str, Any], holder: str, wt: str, who: str, n
         return 1, (f"NOT CLAIMED: {red_what(it['data'])} is held by {r['held']['holder']} until "
                    f"{time.strftime('%H:%M', time.localtime(r['held']['expires_at']))}")
     store.close_offer(f"red:{it['id']}", "taken")
-    return 0, (f"claimed {red_what(it['data'])} for {who} ({wt.replace(HOME, '~')}) as {name}"
+    return 0, (f"claimed {red_what(it['data'])} for {who} ({tilde(wt)}) as {name}"
                + (f": {note}" if note else "") + f"; it lapses after {RED_CLAIM_TTL // 60} min without activity in "
                f"your worktree; release: ~/bin/agentctl red release {it['data']['key']}")
 
@@ -148,7 +148,7 @@ def red_claim(store: Any, o_r: Any, target: Any, note: str = "", wt: Any = None)
         wt = wt or rec_wt
     wt = os.path.realpath(wt or worktree_of(here) or here)
     if root_checkout(wt, o_r) or not os.path.isdir(wt):
-        return 2, [f"NOT CLAIMED: {wt.replace(HOME, '~')} is not a worktree of your own (a claim is renewed by its worktree's "
+        return 2, [f"NOT CLAIMED: {tilde(wt)} is not a worktree of your own (a claim is renewed by its worktree's "
                    "activity; the root checkout counts for nobody): `--worktree <your worktree>`"]
     items = items if own else red_targets(store, o_r, target)
     if not items:

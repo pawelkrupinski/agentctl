@@ -7,7 +7,7 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.core import HOME, _bounded, err, git, git_ok, pid_alive, reds_dir, remote
+from agentctl.core import _bounded, err, git, git_ok, pid_alive, reds_dir, remote, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, read_text_or, write_json
 from agentctl.moviestools import hook_checks
@@ -210,7 +210,7 @@ def _tidy_local_fixer(r: Any) -> Any:
         if msg.startswith("closed"):
             acts.append(f"removed the local fixer's worktree: {msg}")
         else:
-            line = f"RED LEFTOVER: the local fixer's {wt.replace(HOME, '~')} was kept ({msg.split(': ', 1)[-1]}); not patch-equivalent on main, review it"
+            line = f"RED LEFTOVER: the local fixer's {tilde(wt)} was kept ({msg.split(': ', 1)[-1]}); not patch-equivalent on main, review it"
             inbox_write("red", line, [line], [], 1)
             acts.append(line)
     rec = read_record(r["path"]) or {}

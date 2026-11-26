@@ -3,7 +3,7 @@
 
 import os
 from typing import Any
-from agentctl.core import HOME, SHORT, attempt, env_num, err, fmt_age, git, remote
+from agentctl.core import SHORT, attempt, env_num, err, fmt_age, git, remote, tilde
 from agentctl.timefmt import iso_at, parse_time, ts
 from agentctl.statefile import read_record
 from agentctl.repos import RED_PRIMARY
@@ -40,7 +40,7 @@ def _author_verdict(d: dict[str, Any], deadline: Any) -> str:
     """The line addressed to the change's recorded author (the projector writes it to their inbox)."""
     a = d["author"]
     return (f"RED AUTHOR: {red_what(d)} contains your {', '.join(s[:9] for s in a.get('shas') or [])} "
-            f"({str(a.get('worktree')).replace(HOME, '~')}): offered to you for {deadline // 60} min -- "
+            f"({tilde(str(a.get('worktree')))}): offered to you for {deadline // 60} min -- "
             f"`~/bin/agentctl red claim {d['key']} --worktree .` and fix it "
             f"(`Fixes-Red: {(d.get('last_run') or {}).get('number')}`); else a fixer takes it")
 

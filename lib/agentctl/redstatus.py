@@ -3,7 +3,7 @@
 
 import time
 from typing import Any
-from agentctl.core import HOME
+from agentctl.core import tilde
 from agentctl.statefile import read_record, write_json
 from agentctl.repos import RED_PRIMARY, red_repo_short
 from agentctl.reverts import revert_line
@@ -49,7 +49,7 @@ def family_line(f: dict[str, Any]) -> str:
     if f.get("holder") and f.get("at_work") is False:  # never "leased ... none at work": orphaned, re-offered
         who = f"ORPHANED LEASE ({f['holder']}: {f.get('work')}) -> revoked and re-offered at the next tick"
     elif f.get("holder"):
-        who = (f"{f['holder']} ({str(f.get('worktree') or '?').replace(HOME, '~')})"
+        who = (f"{f['holder']} ({tilde(str(f.get('worktree') or '?'))})"
                + (f": {f['work']}" if f.get("at_work") else ""))
     else:
         who = "none at work"
@@ -97,7 +97,7 @@ def owner_status_lines(o: dict[str, Any], verbose: bool) -> list[str]:
     """An owner's line; verbose, its session's context and its last rollovers to a fresh session (sessionroll)."""
     line = (f"owner {o['family']}: {'ALIVE' if o['alive'] else 'not running'}, turn {o.get('turn') or 0}, "
             f"{o.get('reds') or 0} red(s) in hand, {o.get('restarts') or 0} restart(s); "
-            f"{str(o['worktree']).replace(HOME, '~')}" + (f" (ended: {o['verdict']})" if o.get("ended") else ""))
+            f"{tilde(str(o['worktree']))}" + (f" (ended: {o['verdict']})" if o.get("ended") else ""))
     return [line] + (owner_context_lines(o) if verbose else [])
 
 

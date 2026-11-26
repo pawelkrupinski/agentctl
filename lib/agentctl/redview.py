@@ -6,7 +6,7 @@ import time
 from typing import Any
 from agentctl.timefmt import hhmmz, ts
 from agentctl.statefile import read_record
-from agentctl.core import HOME, env_num, state_root
+from agentctl.core import env_num, state_root, tilde
 from agentctl.cistate import snapshot_gate_reds
 from agentctl.dispatchblock import short_flow
 from agentctl.redrecord import RED_RECURRING, red_active, red_lease, red_names
@@ -102,7 +102,7 @@ class RedViewer:
         wt = m.get("worktree")
         if not wt and m.get("kind") == "owned" and m.get("family"):  # an owner's red: the owner's ONE worktree
             wt = (read_record(owner_record_path(m["family"])) or {}).get("worktree")
-        return str(wt or "?").replace(HOME, "~")
+        return tilde(str(wt or "?"))
 
     def lease_family(self, m: dict[str, Any]) -> str:
         prim = str(m.get("primary") or "").split("/")[-1]  # a sibling's primary red; an owner's red has none

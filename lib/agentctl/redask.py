@@ -3,7 +3,7 @@
 
 import re
 from typing import Any
-from agentctl.core import HOME, env_num
+from agentctl.core import env_num, tilde
 from agentctl.leases import red_block_of
 from agentctl.conditions import PROBES
 
@@ -142,7 +142,7 @@ def red_ask(it, b):
     if not asked:
         return None
     q, how = asked
-    return {"q": " ".join(str(q).split()).replace(HOME, "~"), "how": how.replace(HOME, "~"), "until": until,
+    return {"q": tilde(" ".join(str(q).split())), "how": tilde(how), "until": until,
             "category": category}
 
 

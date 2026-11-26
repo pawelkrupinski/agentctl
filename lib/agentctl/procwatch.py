@@ -28,7 +28,7 @@ import os
 import re
 import time
 from typing import Any, Callable, Optional
-from agentctl.core import HOME, run_cmd, state_root
+from agentctl.core import HOME, run_cmd, state_root, tilde
 from agentctl.statefile import read_record, read_text_or, write_json
 from agentctl.machine import machine_fixed, ram_gb
 from agentctl.govtickets import gov_tickets
@@ -301,7 +301,7 @@ def proc_fix(pid: int, name: str, cwd_of: Optional[Callable[[int], Optional[str]
     cwd = (cwd_of or proc_cwd)(pid) if OURS.match(name) else None
     ours = tuple(os.path.join(HOME, d) for d in ("projects", "bitcashier", "bin")) + ("/private/tmp", "/tmp")
     if cwd and cwd.startswith(ours):
-        return f"ours: it runs in {cwd.replace(HOME, '~')} (that worktree's session: `agentctl status`, `agentctl orphans`)"
+        return f"ours: it runs in {tilde(cwd)} (that worktree's session: `agentctl status`, `agentctl orphans`)"
     return "the owner's to look at (agentctl never stops a process it did not start)"
 
 

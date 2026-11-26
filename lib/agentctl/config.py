@@ -7,7 +7,7 @@ import operator
 import os
 import re
 from typing import Any, Callable
-from agentctl.core import HOME
+from agentctl.core import HOME, tilde
 from agentctl.selfcode import TOOL_PATH, code_files
 from agentctl.configfile import CONFIG_ERRORS, CONFIG_SOURCE, config_files
 
@@ -188,7 +188,7 @@ def config_doc_text():
     """AGENTCTL.md's reference table (generated)."""
     rows = [CONFIG_DOC_BEGIN, "", "| key (`agentctl.toml`) | environment | default | what |", "|---|---|---|---|"]
     for k in config_knobs():
-        d = "" if k["default"] is None else str(k["default"]).replace(HOME, "~")  # the same text on every machine
+        d = "" if k["default"] is None else tilde(str(k["default"]))  # the same text on every machine
         rows.append(f"| `{k['key']}` | `{k['name']}` | {('`' + d + '`') if d else '-'} | "
                     f"{k['doc'].replace('|', '/') or '-'} |")
     return "\n".join(rows + ["", CONFIG_DOC_END])

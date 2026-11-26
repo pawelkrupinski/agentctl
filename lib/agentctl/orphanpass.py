@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from agentctl.timefmt import parse_time, ts
 from agentctl.statefile import read_record, write_json
-from agentctl.core import HOME, branch_of, env_num, git, reds_dir, remote, slug
+from agentctl.core import branch_of, env_num, git, reds_dir, remote, slug, tilde
 from agentctl.classify import NETWORK_CHECK_FAILURE
 from agentctl.repos import movies_repo_path
 from agentctl.fixerrecords import fixer_records
@@ -86,9 +86,9 @@ def orphan_dispatch(repo: str, wt: str, name: str, verdict: Optional[str]) -> tu
            "why": "orphaned change, author gone, its checks rejected it", "log": os.path.join(d, f"claude-{k}.log"),
            "names": [num], "orphan": True}
     p = spawn_fixer(repo, d, rec_path, rec, wt, fixer_env(slug(repo), num))
-    inbox_write("maintain", f"ORPHAN FIXER DISPATCHED: {wt.replace(HOME, '~')} -> fixer session 'orphan · {name}' "
+    inbox_write("maintain", f"ORPHAN FIXER DISPATCHED: {tilde(wt)} -> fixer session 'orphan · {name}' "
                             f"(`claude agents`): {str(verdict or '')[:200]}", [], [], 0, cwd=wt)
-    return True, f"fixer pid {p.pid} in {wt.replace(HOME, '~')}"
+    return True, f"fixer pid {p.pid} in {tilde(wt)}"
 
 
 # LAND INTENT (2026-11-06, es-gate-check: queued though nobody had ever asked to land it). Orphan duty submits only
@@ -105,15 +105,15 @@ def orphan_submitted_alert(wt: str, commits: Any, msg: Any) -> None:
     """ORPHAN SUBMITTED, an owner alert: recovery put somebody's work into the queue -- say which, so it can be stopped."""
     subjects = [f"{c[:10]} {git(wt, 'log', '-1', '--format=%s', c, check=False).stdout.strip()[:80]}" for c in commits[:5]]
     more = f" (+{len(commits) - 5} more)" if len(commits) > 5 else ""
-    inbox_write("maintain", f"ORPHAN SUBMITTED: {wt.replace(HOME, '~')} (branch {branch_of(wt) or 'detached'}): "
+    inbox_write("maintain", f"ORPHAN SUBMITTED: {tilde(wt)} (branch {branch_of(wt) or 'detached'}): "
                             f"{len(commits)} commit(s) queued by orphan duty -- {'; '.join(subjects)}{more}. {msg}. "
                             "Stop it with `agentctl land cancel <id>` and `agentctl park <worktree> --reason ...`",
-                [], [], 0, cwd=wt, item=f"orphan:{wt.replace(HOME, '~')}")
+                [], [], 0, cwd=wt, item=f"orphan:{tilde(wt)}")
 
 
 def orphan_escalate(store: Any, repo: str, wt: str, name: str, commits: Any, key: str, rec: dict[str, Any],
                     verdict: Optional[str]) -> list[str]:
-    text = (f"UNLANDED ORPHAN: {wt.replace(HOME, '~')}: {len(commits)} commit(s) not on {remote()}/main, its author "
+    text = (f"UNLANDED ORPHAN: {tilde(wt)}: {len(commits)} commit(s) not on {remote()}/main, its author "
             f"gone, still not landed after a {rec['actions'][-1]['what']} ({verdict or 'never landed'}) -- land it, "
             "hand it to an agent, park it (`agentctl park <worktree> --reason ...`), or drop it")
     c = open_condition("UNLANDED_ORPHAN", text, run_probe("orphan_landed", {"worktree": wt, "key": key, "repo": repo}),

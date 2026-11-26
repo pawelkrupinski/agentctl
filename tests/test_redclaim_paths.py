@@ -4,6 +4,7 @@ the refusals (not a worktree, no red), a fresh, renewed and held lease, and a re
 owner block, or none. `run_claim` / `run_release` take the module so a copy of the code can be driven the same way."""
 import contextlib
 import copy
+import importlib
 import os
 import sys
 import tempfile
@@ -56,10 +57,11 @@ def _harness(module, script, log, tmp, stack):
         "red_what": lambda d: f"what-{d['key']}", "red_block_of": lambda it, st: script.get("blocks", {}).get(it["data"]["key"]),
         "lease_meta": lambda row: (row or {}).get("meta", {}), "worktree_of": lambda p: os.path.join(tmp, "wt") if script.get("worktree_of") else None,
         "claimant": lambda here=None: script.get("who", "me"), "root_checkout": lambda wt, o_r: script.get("root", False),
-        "red_wt_mark": lambda wt: "MARK", "red_noted": rec("red_noted"), "HOME": tmp,
+        "red_wt_mark": lambda wt: "MARK", "red_noted": rec("red_noted"),
     }
     for name, fake in patches.items():
         stack.enter_context(mock.patch.object(module, name, fake))
+    stack.enter_context(mock.patch.object(importlib.import_module("agentctl.core"), "HOME", tmp))  # core.tilde's home
     stack.enter_context(mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "SESSION", "TZ": "UTC"}))
     time.tzset()
     clock = type("Clock", (), {"time": staticmethod(lambda: 1000.0), "strftime": staticmethod(time.strftime),

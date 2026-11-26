@@ -3,7 +3,7 @@
 
 import re
 import sys
-from agentctl.core import HOME
+from agentctl.core import tilde
 from agentctl.inboxentry import INBOX_COMMANDS, inbox_write
 
 
@@ -102,7 +102,7 @@ def with_inbox(command, handler, a):
 
 
 def entry_line(e):
-    where = (e.get("cwd") or "").replace(HOME, "~")
+    where = tilde(e.get("cwd") or "")
     state = f"exit {e.get('exit')}" if e.get("final", True) else "still running"
     return f"{e['id']} {'read  ' if e['read'] else 'UNREAD'} {e.get('command')} {where} {state}: {e.get('verdict')}"
 

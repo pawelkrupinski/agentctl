@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-from agentctl.core import HOME
+from agentctl.core import tilde
 from agentctl.repos import red_repo_clone, red_repo_of
 from agentctl.procs import socket_host
 from agentctl.fixersession import claude_trust_gap
@@ -131,7 +131,7 @@ def offer_waits_why(store: Any, t: float, off: Any, pic: Any, item: Any, blocker
     after = float(item["data"].get("dispatch_after") or 0)
     cap_why = offer_capacity_why(store, t, off, pic)
     if off["tier"] == "author":
-        return f"offered to its author ({str((pic.get('author') or {}).get('worktree') or '?').replace(HOME, '~')})"
+        return f"offered to its author ({tilde(str((pic.get('author') or {}).get('worktree') or '?'))})"
     if off["tier"] == "blame":
         return blame_waiting(pic.get("blame"))
     if after > t:
