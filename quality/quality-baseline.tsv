@@ -31,7 +31,6 @@ cognitive	gov_fits	20
 cognitive	hold_for_overlap	21
 cognitive	job_ever_green	21
 cognitive	land_status_entry	25
-cognitive	land_until_done	28
 cognitive	lander_revive	25
 cognitive	lap_change_deadline	15
 cognitive	laptop_role	15
@@ -116,7 +115,6 @@ cyclomatic	hold_for_overlap	14
 cyclomatic	job_ever_green	20
 cyclomatic	jobs_verdict	23
 cyclomatic	land_status_entry	25
-cyclomatic	land_until_done	25
 cyclomatic	lander_revive	25
 cyclomatic	lap_change_deadline	17
 cyclomatic	laptop_role	17

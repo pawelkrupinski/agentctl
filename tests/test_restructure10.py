@@ -300,5 +300,110 @@ class SyncOntoMainTest(unittest.TestCase):
         check(self, "sync_onto_main", self.build, run, 6000)
 
 
+class LandUntilDoneTest(unittest.TestCase):
+    STATES = ["landed", "rejected", "queued", "running", "waiting", "cancelled", "superseded"]
+
+    def build(self, case):
+        r = case.rng
+        holder = {"case": case}
+        item = lambda rng: maybe(rng, {"id": "e9", "state": rng.choice(self.STATES), "data": rng.choice([None, {}, {"why": "boom"}, {"why": "NOT LANDED: x"}, {"why": "NOT DONE: z"}])}, 0.7)
+        existing = item(r)
+        case.fake("git", lambda rng, repo, *a, **k: "h" + str(rng.randint(1, 3)) + "abcdefghijkl\n")
+        case.fake("git_ok", lambda rng, *a, **k: rng.random() < 0.7)
+        case.fake("remote", lambda rng: "origin")
+        case.fake("env_num", lambda rng, name, default: default)
+        case.fake("fmt_age", lambda rng, secs: f"{int(secs)}s")
+        case.fake("own_change_item", lambda rng, repo, head, store: existing)
+        case.fake("verdict_still_holds", lambda rng, repo, main_ref, it: rng.random() < 0.5)
+        case.fake("take_delivery", lambda rng, it, store: None)
+        case.fake("next_command", lambda rng, repo, why: f"NEXT {why}")
+        case.fake("machine_state", lambda rng, typ, state: types.SimpleNamespace(terminal=state in ("landed", "rejected", "cancelled", "superseded")))
+        case.fake("cherry_landed", lambda rng, repo, main, head: rng.choice([(None, None), ([], []), (["c"], []), (["c"], ["d"])]))
+        case.fake("until_done_finish", lambda rng, *a: rng.choice([0, 1]))
+
+        def enqueue(rng, repo, main_ref, sh, a, clock, store):
+            a.queued_id = rng.choice([None, "e5", "e5"])
+            return rng.choice([0, 0, 1])
+        case.fake("enqueue", enqueue)
+        case.fake("await_verdict", lambda rng, eid, bound, clock, store: (rng.choice(["landed", "rejected", "queued", "running"]),
+                                                                            rng.choice([{}, {"landed_sha": "s1"}, {"why": "w"}, {"why": "NOT LANDED: w"}]), 1.0))
+        case.fake("landed_sha_of", lambda rng, eid, data: "sha-of")
+        case.fake("change_decided", lambda rng, state: state in ("rejected", "cancelled"))
+        clock = Probe(case, "clock", time=lambda rng: 1000.0 + rng.randint(0, 5000))
+        store = Probe(case, "store", item=lambda rng, typ, eid: maybe(rng, {"id": eid}, 0.5))
+        a = types.SimpleNamespace(deadline=r.choice([None, 0, 600]))
+        return ("/repo", "origin/main", None, a, clock, store), holder
+
+    def test_land_until_done(self):
+        def run(A):
+            def go(args, holder):
+                result = printing(holder, A.land_until_done)(*args)
+                holder["case"].log.append(["a", sorted(vars(args[3]).items())])
+                return result
+            return go
+        check(self, "land_until_done", self.build, run, 6000)
+
+
+# ------------------------------------------------------------------------------------------------ queuebatch
+def an_entry(r, i):
+    return {"id": f"e{i}", "seq": r.choice([i, i, 10 - i, 3]), "status": r.choice(["queued", "queued", "waiting", "checking", "checked", "pushing", "joined"]),
+            "worktree": r.choice(["/w/a", "/w/b", None]), "branch": r.choice(["b1", "b2", None, ""]),
+            "backlog_batch": r.choice([None, None, None, "bb"]), "batch_alone": r.choice([None, None, "regen", "resolve", "x"]),
+            "cycle_ignore": r.choice([None, [], ["e1"]]), "conflict_told": r.choice([None, None, "e1", "e2"])}
+
+
+class OverlapHoldTest(unittest.TestCase):
+    def build(self, case):
+        r = case.rng
+        entries = [an_entry(r, i) for i in range(r.randint(0, 5))]
+        e = an_entry(r, 9) if r.random() < 0.8 else dict(entries[0] if entries else an_entry(r, 8))
+        if r.random() < 0.3:
+            e["id"] = "e1"
+        waiting = [an_entry(r, i) for i in range(r.randint(0, 3))]
+        case.fake("waiting_entries", lambda rng, d: list(waiting))
+        case.fake("overlap_candidate", lambda rng, o, e_, stacks: rng.random() < 0.7)
+        case.fake("as_own", lambda rng, x, stacks: {"own": x["id"]})
+
+        def overlap_of(rng, repo, theirs, mine, strict=False):
+            shared = rng.choice([[], ["a.tsv"], ["a.tsv", "b.py"]])
+            return shared, rng.choice([None, None, ["c.py"]]), rng.choice([None, None, ["r.py"], []])
+        case.fake("overlap_of", overlap_of)
+        case.fake("ordered_overlap", lambda rng, repo, theirs, mine: rng.choice([[], [], ["o.tsv"]]))
+        case.fake("backlog_batchable", lambda rng, st, repo, d, x, t, facts: rng.random() < 0.6)
+        return (Probe(case, "st"), "/repo", "/d", e, entries, {"f": 1}, 5.0, r.choice([None, {}, {"e1": "e2"}]))
+
+    def test_overlap_hold(self):
+        check(self, "overlap_hold", self.build, lambda A: A.overlap_hold, 6000)
+
+
+class HoldForOverlapTest(unittest.TestCase):
+    def build(self, case):
+        r = case.rng
+        case.put("_behind_said", A.process_cache({}) if r.random() < 0.5 else {("e9", "overlap"): r.choice(["e1", "e2"])})
+        case.fake("remote", lambda rng: "origin")
+        case.fake("conflict_hunks", lambda rng, repo, o, e, conflict: rng.choice([[], ["h1 a.py:3"], ["h1", "h2"]]))
+        case.fake("machine_state", lambda rng, typ, state: types.SimpleNamespace(terminal=state in ("done", "landed")))
+        case.fake("save_entry", lambda rng, d, e: None)
+        case.fake("wlog", lambda rng, d, line: None)
+
+        def transition(rng, *a, **k):
+            if rng.random() < 0.25:
+                raise A.StaleVersion("stale")
+        e = {"id": "e9", "worktree": r.choice(["/w/a", None]), "conflict_told": r.choice([None, "e1", "e2"])}
+        o = {"id": r.choice(["e1", "e2"]), "worktree": r.choice(["/w/o", None]), "branch": r.choice(["ob", None, ""]), "status": r.choice(["queued", "checking"])}
+        st = Probe(case, "st", item=lambda rng, typ, eid: maybe(rng, {"id": eid, "state": rng.choice(["queued", "done", "waiting"]), "version": 3}, 0.8),
+                   transition=transition)
+        return (st, "/d", e, o, r.choice([["a.tsv"], ["a.tsv", "b.tsv"], ["x"]]), r.choice([None, None, ["c.py"], ["c.py", "d.py", "e.py", "f.py"]]),
+                r.choice([True, False]), r.choice([None, "/repo"]))
+
+    def test_hold_for_overlap(self):
+        def run(A):
+            def go(*args):
+                result = A.hold_for_overlap(*args)
+                return result, args[2], dict(A._behind_said)
+            return go
+        check(self, "hold_for_overlap", self.build, run, 6000)
+
+
 if __name__ == "__main__":
     unittest.main()
