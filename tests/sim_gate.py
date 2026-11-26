@@ -74,6 +74,9 @@ def scenarios():
     # v6 (2026-11-26): two land holders at once, at each interleaving of the store's seams (IH; tests #289 / #292)
     out += [(f"two-holders-{o}-{s}", {"seed": s, "calm": True, "trees": 2, "script": f"TWO_HOLDERS_{o.upper()}"})
             for o in ("apart", "extend_first", "move_between") for s in range(2)]
+    # v10 (2026-11-26): the hold found expires before the other holder's extension is written (IH)
+    out += [(f"two-holders-expire-between-{s}", {"seed": s, "calm": True, "trees": 2, "script": "TWO_HOLDERS_EXPIRE_BETWEEN"})
+            for s in range(2)]
     # v7 (2026-11-26): a hold on a change parked on `waiting` past HOLD_IDLE_TTL (IT)
     out += [(f"hold-on-parked-{s}", {"seed": s, "calm": True, "trees": 2, "script": "HOLD_ON_PARKED",
                                          "profile": "PARKED"}) for s in range(4)]

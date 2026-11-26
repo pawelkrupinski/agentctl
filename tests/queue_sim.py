@@ -1154,8 +1154,10 @@ class Sim:
         """TWO HOLDERS AT ONCE (2026-11-26, tests #289 / #292): the laptop and ci-runner run `land hold --for` while no
         hold is in force, interleaved at the store's seams as ORDER says -- `apart` (one after the other), `extend-first`
         (the other extends between the maker's making and its expiry move), `move-between` (both read the hold, the
-        maker moves, then the other: its read is stale). IH: exactly one hold in force, both holders return it and
-        neither raises, and both moves -- the maker's expiry, the other's extension -- are said (two hold.held events)."""
+        maker moves, then the other: its read is stale), `expire-between` (the other finds the maker's hold, which expires
+        before its extension is written: review 2026-11-26). IH: exactly one hold in force and neither holder raises;
+        both return it and both moves -- the maker's expiry, the other's extension -- are said (two hold.held events);
+        after `expire-between`, the one in force is the other's, made anew."""
         st, got, errors = self.store, {}, {}
         h1_read, h0_moved = threading.Event(), threading.Event()
 
@@ -1169,7 +1171,7 @@ class Sim:
             hold("h1", 120, SeamStore(st, before_move=lambda: (h1_read.set(), h0_moved.wait(10))))
         h1 = threading.Thread(target=the_other, name="sim-holder-h1", daemon=True)
         after_open = {"apart": None, "extend-first": lambda: hold("h1", 120, st),
-                      "move-between": lambda: (h1.start(), h1_read.wait(10))}[order]
+                      "move-between": lambda: (h1.start(), h1_read.wait(10)), "expire-between": None}[order]
         was = A._PROCESS_CLOCK[0]
         A.wire_clock(self.sim_clock)  # the holders' "now" is the simulation's, as the store's is
         try:
@@ -1177,15 +1179,34 @@ class Sim:
             h0_moved.set()
             if order == "apart":
                 hold("h1", 120, st)
+            elif order == "expire-between":
+                hold("h1", 120, SeamStore(st, after_open=self._expire_once(st)))
             elif order == "move-between":
                 h1.join(10)
         finally:
             A.wire_clock(was)
         held = [h["id"] for h in A.land_holds(st)]
         said = [e["kind"] for i in held for e in st.item_events("hold", i) if e["from_state"] is not None]
-        if errors or len(held) != 1 or {h["id"] for h in got.values()} != set(held) or said.count("hold.held") != 2:
+        if order == "expire-between":
+            bad = errors or len(held) != 1 or (got.get("h1") or {}).get("id") != held[0]
+        else:
+            bad = errors or len(held) != 1 or {h["id"] for h in got.values()} != set(held) or said.count("hold.held") != 2
+        if bad:
             self.violate("IH", f"two holders ({order}): holds in force {held}, returned "
                          f"{ {k: v['id'] for k, v in got.items()} }, raised {errors}, moves said {said}")
+
+    @staticmethod
+    def _expire_once(st):
+        """The first open's hold found is past its deadline and the other holder's tick expires it (the second open
+        finds none: once)."""
+        done = []
+
+        def expire():
+            if not done:
+                done.append(1)
+                st.db().execute("UPDATE items SET deadline=0 WHERE type='hold' AND state='held'")  # autocommit
+                A.land_hold(st)
+        return expire
 
     def stale_episode(self):
         """The open red's EPISODE holds its older run only through the CI snapshot: the gate's streak lists it, and its
@@ -1801,6 +1822,7 @@ def two_holders_script(order):
 TWO_HOLDERS_APART = two_holders_script("apart")
 TWO_HOLDERS_EXTEND_FIRST = two_holders_script("extend-first")
 TWO_HOLDERS_MOVE_BETWEEN = two_holders_script("move-between")
+TWO_HOLDERS_EXPIRE_BETWEEN = two_holders_script("expire-between")
 # A HOLD ON A PARKED CHANGE (2026-11-23..25, py-reuse-git behind py-under-bar): the gate red, `a` checked and parked on
 # `waiting`; `b`, conflicting with it, queued behind it. The red stays open past HOLD_IDLE_TTL: b's hold on the parked
 # change expires (IT), and b is checked meanwhile.

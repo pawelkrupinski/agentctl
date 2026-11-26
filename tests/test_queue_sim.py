@@ -320,7 +320,8 @@ class TwoHoldersTest(unittest.TestCase):
     return it, neither raises, both moves are said (IH), and the queue lands its changes once the short holds expire."""
 
     def test_every_interleaving_makes_one_hold_both_report(self):
-        for script in (queue_sim.TWO_HOLDERS_APART, queue_sim.TWO_HOLDERS_EXTEND_FIRST, queue_sim.TWO_HOLDERS_MOVE_BETWEEN):
+        for script in (queue_sim.TWO_HOLDERS_APART, queue_sim.TWO_HOLDERS_EXTEND_FIRST, queue_sim.TWO_HOLDERS_MOVE_BETWEEN,
+                       queue_sim.TWO_HOLDERS_EXPIRE_BETWEEN):
             for seed in range(2):
                 sim = queue_sim.Sim(seed, calm=True, trees=2, script=list(script)).run()
                 self.assertEqual(failures([sim]), [], script[0][1]["order"])
