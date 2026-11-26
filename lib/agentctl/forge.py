@@ -217,31 +217,35 @@ def forge_workflow_names(o_r):
     return names
 
 
+def _run_list_page(o_r: Any, path: str, opts: Any, params: dict[str, Any]) -> list[Any]:
+    """One page of runs; a REST failure as gh's own words (a workflow file not on the default branch: its 404)."""
+    try:
+        answer = api(o_r, "GET", path, params) or {}
+    except ForgeHTTPError as e:
+        if "workflow" in opts and re.search(r"HTTP 404|Not Found", str(e)):
+            raise RuntimeError(f"gh run list: HTTP 404: workflow {opts['workflow']} not found on the default "
+                               f"branch (https://api.github.com/repos/{o_r}/{path})") from None
+        raise RuntimeError(f"gh run list: {e}") from None
+    batch: list[Any] = answer.get("workflow_runs") or []
+    return batch
+
+
 def _run_list_pages(o_r: Any, opts: Any) -> tuple[list[Any], bool]:
-    """(the runs of the pages read until opts' limit, whether they are everything that matched). A workflow file not on
-    the default branch raises gh's own words for it."""
+    """(the runs of the pages read until opts' limit, whether they are everything that matched)."""
     path = (f"actions/workflows/{urllib.parse.quote(opts['workflow'], safe='')}/runs" if "workflow" in opts
             else "actions/runs")
     params = {"exclude_pull_requests": "true"}
     params.update({k: opts[k] for k in ("branch", "status") if k in opts})
     runs: list[Any] = []
-    page, complete = 1, False
+    page = 1
     while len(runs) < opts["limit"]:
-        per = min(100, opts["limit"]) if opts["limit"] <= 100 else 100
-        try:
-            answer = api(o_r, "GET", path, dict(params, per_page=per, page=page)) or {}
-        except ForgeHTTPError as e:
-            if "workflow" in opts and re.search(r"HTTP 404|Not Found", str(e)):
-                raise RuntimeError(f"gh run list: HTTP 404: workflow {opts['workflow']} not found on the default "
-                                   f"branch (https://api.github.com/repos/{o_r}/{path})") from None
-            raise RuntimeError(f"gh run list: {e}") from None
-        batch = answer.get("workflow_runs") or []
+        per = min(100, opts["limit"])
+        batch = _run_list_page(o_r, path, opts, dict(params, per_page=per, page=page))
         runs += batch
         if len(batch) < per:
-            complete = len(runs) <= opts["limit"]
-            break
+            return runs, len(runs) <= opts["limit"]
         page += 1
-    return runs, complete
+    return runs, False
 
 
 def _run_list_shaped(r: Any, fields: list[str], names: Any) -> Any:

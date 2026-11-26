@@ -229,6 +229,11 @@ def _regenerated(wt: Any, gen: list[str], regenerated: Any, provisional: Any, no
     return not why
 
 
+def _kept_both_sides(wt: Any, source: list[str], prose: list[str], resolved: Any) -> bool:
+    """The source files' additions on both sides and the prose files' both sides kept (staged)."""
+    return (not source or bool(source_resolve(wt, source, resolved))) and (not prose or union_resolve(wt, prose) is not None)
+
+
 def conflict_resolve(wt, regen=True, notes=None, regenerated=None, provisional=None, resolved=None):
     """Resolve wt's conflicted files when each is UNION_SAFE prose (both sides kept), a registered generated file
     (regenerate; only with regen) or -- with `resolved` a list, a backlog batch's assembly -- a source file whose
@@ -240,13 +245,9 @@ def conflict_resolve(wt, regen=True, notes=None, regenerated=None, provisional=N
     gen, prose, source = _conflict_kinds(wt, files)
     if (source and resolved is None) or (gen and not regen):
         return None
-    if source and not source_resolve(wt, source, resolved):
+    if not _kept_both_sides(wt, source, prose, resolved):
         return None
-    if prose and union_resolve(wt, prose) is None:
-        return None
-    if gen and not _regenerated(wt, gen, regenerated, provisional, notes):
-        return None
-    return files
+    return files if not gen or _regenerated(wt, gen, regenerated, provisional, notes) else None
 
 
 def pick(wt, commits, dropped=None, regen=True, regenerated=None, provisional=None, resolved=None):

@@ -84,6 +84,21 @@ def _land_ref_unneeded(eid: str, every: Any, items: Any, t: float) -> Optional[s
     return f": unknown to entries and store, {int(age // 3600)} h old"
 
 
+def _change_items(store: Any) -> Any:
+    """{id: item} of the store's changes; None (said) when the store is unreachable: decide nothing this tick."""
+    try:
+        return {it["id"]: it for it in store.items("change")}
+    except Exception as ex:
+        err(f"land refs: store unreadable ({ex}); no ref deleted")
+        return None
+
+
+def _delete_land_ref(repo: Any, ref: str, note: str) -> list[str]:
+    """Delete the remote ref: the lines it did (its note, when it has one, then the deletion's)."""
+    dr = git(repo, "push", "--quiet", remote(), f":{ref}", check=False)
+    return ([ref + note] if note else []) + [f"{ref}: deleted" if dr.returncode == 0 else f"{ref}: could not delete"]
+
+
 def sweep_land_refs(repo, d, store, now_=None):
     """Every LAND_REF_SWEEP_EVERY s: each remote land/<entry> ref whose change is decided, deleted. Since phase 2 the
     changes live in ci-runner's STORE, not in entries/ (2026-11-04: every queued change looked unknown and lost its
@@ -96,21 +111,15 @@ def sweep_land_refs(repo, d, store, now_=None):
     if r.returncode != 0:
         return []
     every = {e["id"]: e for e in waiting_entries(d, open_only=False)}
-    try:
-        items = {it["id"]: it for it in store.items("change")}
-    except Exception as ex:  # the store unreachable: decide nothing this tick
-        err(f"land refs: store unreadable ({ex}); no ref deleted")
+    items = _change_items(store)
+    if items is None:
         return []
     did = []
     for line in r.stdout.splitlines():
         ref = line.split()[-1]
         note = _land_ref_unneeded(ref[len("refs/heads/land/"):], every, items, t)
-        if note is None:
-            continue
-        if note:
-            did.append(ref + note)
-        dr = git(repo, "push", "--quiet", remote(), f":{ref}", check=False)
-        did.append(f"{ref}: deleted" if dr.returncode == 0 else f"{ref}: could not delete")
+        if note is not None:
+            did += _delete_land_ref(repo, ref, note)
     return did
 
 
