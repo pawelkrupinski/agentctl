@@ -17,7 +17,7 @@ from agentctl.launchd import SERVICE_LABEL, launch_agents_dir
 from agentctl.beats import beat_age
 from agentctl.redrecord import red_what
 from agentctl.conditions import open_conditions
-from agentctl.fixerland import bin_repo
+from agentctl.repos import bin_repo
 from agentctl.changekind import change_hold_visible
 from agentctl.projector import notify_failure
 from agentctl.queueclose import change_rows, close_landed_changes

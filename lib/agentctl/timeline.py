@@ -18,7 +18,8 @@ from typing import Any, Iterable, Optional
 from agentctl.timefmt import iso_at
 
 TERMINAL = {"landed", "rejected", "cancelled", "superseded", "verified", "cleared", "ok", "red", "unknown", "closed",
-            "released", "acked", "evicted"}  # the last three: file-held state (filelog.py)
+            "released", "acked", "evicted", "owner"}  # the last four: file-held state (filelog.py; `owner`: an escalation
+# handed to the owner, escalations.py)
 SKIP_KINDS = re.compile(r"\.illegal$|^policy\.unapproved$")
 
 
@@ -151,7 +152,19 @@ def analyze(events: list[dict[str, Any]], now: float, since: float = 0.0, item_t
             "variants": _variants(trs), "rework": _rework(trs), "refusals": _refusals(trs),
             "waiting_by_cause": _by([s for s in segs if s.state in ("queued", "checked", "waiting")],
                                     lambda s: f"{s.state}: {s.cause or 'unattributed'}"),
-            "throughput": _throughput(trs), "outliers": _outliers(segs), "coverage": coverage(segs)}
+            "throughput": _throughput(trs), "outliers": _outliers(segs), "coverage": coverage(segs),
+            "to_end_by_kind": _to_end_by_kind(trs)}
+
+
+def _to_end_by_kind(trs: list[ItemTrace]) -> dict[str, dict[str, float]]:
+    """For items named `<kind>/<id>` (an escalation: escalations.py), the time from the first event to the terminal
+    one, by kind and how it ended (`INVARIANT:W2 -> cleared`): an escalation's time to clear, per kind."""
+    groups: dict[str, list[float]] = collections.defaultdict(list)
+    for t in trs:
+        if "/" in t.item_id and t.path and t.path[-1] in TERMINAL and t.events:
+            groups[f"{t.item_id.rsplit('/', 1)[0]} -> {t.path[-1]}"].append(
+                float(t.events[-1]["at"]) - float(t.events[0]["at"]))
+    return dict(sorted((k, dist(v)) for k, v in groups.items()))
 
 
 def _window(events: list[dict[str, Any]], now: float, since: float, item_type: str) -> tuple[list[ItemTrace], list[Segment]]:
@@ -241,9 +254,18 @@ def render_text(rep: dict[str, Any]) -> str:
     lines += ["", "path variants:"] + [f"  {v['n']}  {v['path']}  e.g. {v['example']}" for v in rep["variants"][:10]]
     lines += ["", "throughput per day:"] + [f"  {d}  " + " ".join(f"{k} {n}" for k, n in sorted(v.items()))
                                             for d, v in rep["throughput"].items()]
+    lines += _to_end_lines(rep.get("to_end_by_kind"))
     lines += ["", "outliers:"] + [f"  {hum(o['length'])}  {o['state']}  {o['cause'] or 'unattributed'}  {o['item']}"
                                   for o in rep["outliers"]]
     return "\n".join(lines)
+
+
+def _to_end_lines(by_kind: Optional[dict[str, dict[str, float]]]) -> list[str]:
+    """The escalations' time to end per kind (none: no lines)."""
+    if not by_kind:
+        return []
+    return ["", "time to end by kind:  kind -> end  n  p50  p90  max"] + [
+        f"  {k}  {d['n']}  {hum(d['p50'])}  {hum(d['p90'])}  {hum(d['max'])}" for k, d in by_kind.items()]
 
 
 def render_tsv(trs_segments: Iterable[Segment]) -> str:

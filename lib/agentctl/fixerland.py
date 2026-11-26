@@ -32,7 +32,6 @@ from agentctl.redfamilies import red_family
 from agentctl.laptoprole import laptop_role_standby
 from agentctl.queueknobs import knob_fixer_land_watch
 from agentctl.fixerknobs import knob_fixer_unlanded_escalate, knob_fixer_unlanded_nudge
-from agentctl.storeknobs import knob_bin_repo
 from agentctl.fixerknobs import knob_claude_tmp
 
 
@@ -44,13 +43,6 @@ LAND_BRIEF = (" `~/bin/agentctl land` QUEUES your fix like every change (red fix
               "LANDED: <why>. Run it with run_in_background=true and act on its last line. Never wrap it in `timeout` "
               "(a kill leaves your change queued without you), and never run scripts/hooks/pre-push yourself: the "
               "queue's checks are the landing checks.")
-
-
-# THE agentctl REPOSITORY (~/bin): a fixer never edits it (`agentctl issue`); watchdog WB checks its checkout stays clean.
-# $AGENTCTL_BIN_REPO ('-': none, the tests').
-def bin_repo() -> str | None:
-    r = knob_bin_repo() or os.path.dirname(TOOL_PATH)
-    return None if r == "-" or not os.path.isdir(os.path.join(r, ".git")) else r
 
 
 def red_dispatch(o_r: Any, repo: Any, u: Any, why: Any = "by hand", resume: Any = None, effort: Any = None, lease: Any = None,

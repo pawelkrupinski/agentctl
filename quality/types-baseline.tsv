@@ -2,7 +2,7 @@
 # mypy --strict errors per part (quality/typecheck.py), frozen at its value. A row may only fall (update records it); a row added or raised
 # lands only in a commit carrying the kind's trailer (`Typing:`). CLAUDE.md, "The ratchets".
 limit	mypy-errors	0
-mypy-errors	alertprobe	21
+mypy-errors	alertprobe	20
 mypy-errors	alertroute	29
 mypy-errors	alerts	59
 mypy-errors	ask	29
@@ -35,11 +35,11 @@ mypy-errors	core	21
 mypy-errors	culpritfix	29
 mypy-errors	explorer	15
 mypy-errors	fixer	15
-mypy-errors	fixerblockers	13
+mypy-errors	fixerblockers	4
 mypy-errors	fixerenv	3
 mypy-errors	fixerland	25
 mypy-errors	fixerlife	56
-mypy-errors	fixersession	37
+mypy-errors	fixersession	19
 mypy-errors	forge	43
 mypy-errors	gatesummary	4
 mypy-errors	gating	29
@@ -71,13 +71,13 @@ mypy-errors	live	33
 mypy-errors	livestream	38
 mypy-errors	localrecheck	34
 mypy-errors	maint	28
-mypy-errors	maintain	9
+mypy-errors	maintain	8
 mypy-errors	netwatch	16
 mypy-errors	notifier	26
 mypy-errors	notifyurl	13
-mypy-errors	offerdispatch	19
+mypy-errors	offerdispatch	17
 mypy-errors	orphanpass	7
-mypy-errors	orphanreap	32
+mypy-errors	orphanreap	28
 mypy-errors	orphans	15
 mypy-errors	outsideflows	14
 mypy-errors	owned	39
@@ -113,7 +113,7 @@ mypy-errors	redask	18
 mypy-errors	redauthors	11
 mypy-errors	redblock	16
 mypy-errors	redclaim	17
-mypy-errors	redcommands	13
+mypy-errors	redcommands	11
 mypy-errors	redcrash	31
 mypy-errors	reddecision	11
 mypy-errors	reddispatch	31
@@ -159,7 +159,7 @@ mypy-errors	sessionpaths	9
 mypy-errors	slots	51
 mypy-errors	statemachines	29
 mypy-errors	stats	33
-mypy-errors	status	82
+mypy-errors	status	81
 mypy-errors	statusagents	34
 mypy-errors	statusline	4
 mypy-errors	statuspage	30
@@ -169,7 +169,7 @@ mypy-errors	storestate	7
 mypy-errors	storetoken	46
 mypy-errors	stuckruns	4
 mypy-errors	superseded	21
-mypy-errors	syncsteps	30
+mypy-errors	syncsteps	29
 mypy-errors	tickservice	8
 mypy-errors	tools	55
 mypy-errors	trailers	2

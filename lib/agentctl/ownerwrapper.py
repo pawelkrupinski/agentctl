@@ -12,7 +12,7 @@ from agentctl.statefile import read_record, write_json
 from agentctl.claudefiles import bg_transcript, fixer_verdict
 from agentctl.procs import process_start
 from agentctl.inboxentry import inbox_write
-from agentctl.fixersession import bg_failure, bg_session, bg_start, bg_stop, bg_turn, bg_turn_over
+from agentctl.fixersession import SESSION_DENIED_TOOLS, bg_failure, bg_session, bg_start, bg_stop, bg_turn, bg_turn_over
 from agentctl.redknobs import RED_STALL
 from agentctl.inbox import INBOX_TAIL
 from agentctl.fixerblockers import claude_cli, interactive_mode
@@ -387,8 +387,7 @@ class OwnerWrapper:
     def _start_turn(self, held: Any, prompt: Any, now: Any) -> str | None:
         """`claude --bg` started on the prompt (resuming the owner's session): the turn begun, or the stop reason."""
         argv = [self.cli, "--bg", prompt, "--permission-mode", interactive_mode(), "--permission-prompts", "none",
-                "-n", f"red owner · {self.fam}", "--disallowedTools", "Bash(git push:*)", "Bash(*--no-verify*)",
-                "Bash(*PREPUSH_SKIP*)"]
+                "-n", f"red owner · {self.fam}", "--disallowedTools", *SESSION_DENIED_TOOLS]
         if self.rec.get("session"):
             argv += ["--resume", self.rec["session"]]
         bid, why = bg_start(argv, self.wt, self.env)

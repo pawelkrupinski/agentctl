@@ -38,13 +38,14 @@ def land_cwds():
 _blocker_cache = process_cache({})
 
 
-def cached_dispatch_blocker(ttl=60):
+def cached_dispatch_blocker(ttl: float = 60) -> str | None:
     """dispatch_blocker runs `claude --help`: once a minute per process is enough for a display."""
     key = (reds_dir(), os.path.exists(reds_dir("DISPATCH_OFF")), knob_claude(),
            knob_claude_settings())
     hit = _blocker_cache.get(key)
     if hit and epoch_now() - hit[0] < ttl:
-        return hit[1]
+        cached: str | None = hit[1]
+        return cached
     v = dispatch_blocker()
     _blocker_cache[key] = (epoch_now(), v)
     return v
@@ -54,7 +55,7 @@ def short_flow(name):
     return "main" if name == "Main" else "convergence" if "convergence" in name.lower() else name.lower()
 
 
-def dispatch_blocker():
+def dispatch_blocker() -> str | None:
     """None when a headless fixer may be dispatched, else what stops it (and what the owner must run)."""
     if os.path.exists(reds_dir("DISPATCH_OFF")):
         return "dispatch is OFF (`~/bin/agentctl red auto on` turns it on)"
@@ -74,7 +75,7 @@ def dispatch_blocker():
     return None
 
 
-def claude_cli():
+def claude_cli() -> str | None:
     if knob_claude():  # set: that one only (the tests' fake)
         return knob_claude() if os.access(knob_claude(), os.X_OK) else None
     for c in (shutil_which("claude"), os.path.join(HOME, ".local", "bin", "claude")):
@@ -83,12 +84,12 @@ def claude_cli():
     return None
 
 
-def shutil_which(name):
+def shutil_which(name: str) -> str | None:
     import shutil
     return shutil.which(name)
 
 
-def interactive_mode():
+def interactive_mode() -> str:
     """The permission mode interactive sessions start in (~/.claude/settings.json's permissions.defaultMode)."""
     p = knob_claude_settings() or os.path.join(HOME, ".claude", "settings.json")
     rec = read_record(p) or {}

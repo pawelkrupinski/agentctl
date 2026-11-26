@@ -20,7 +20,7 @@ from agentctl.statefile import read_record, write_json
 from agentctl.cistate import state_read
 from agentctl.forge import gh_json
 from agentctl.redrepos import diagnosis, read_failure
-from agentctl.fixerland import bin_repo
+from agentctl.repos import bin_repo
 from agentctl.watchknobs import knob_wa_red_max
 from agentctl.watchknobs import knob_wa_read_every, knob_wa_undecided_max, knob_wa_unpinned_max
 

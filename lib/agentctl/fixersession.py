@@ -14,7 +14,8 @@ from agentctl.procrunner import process_runner
 from agentctl.procs import proc_alive
 from agentctl.core import HOME, SHORT, _tokens, git, state_root, tilde
 from agentctl.statefile import mtime, read_record, write_json
-from agentctl.repos import red_repo_clone, red_repos
+from agentctl.repos import escalation_repo_path, red_repo_clone, red_repos
+from agentctl.escalationtable import escalation_repos
 from agentctl.inboxentry import inbox_write
 from agentctl.storetoken import no_vault, token, token_ns
 from agentctl.claudefiles import bg_transcript, claude_jobs_root, fixer_verdict
@@ -52,7 +53,7 @@ def fixer_label(rec):
 # parent of the repo (~/bitcashier did not count for ~/bitcashier/core). agentctl only READS the trust (granting it is
 # the owner's one prompt): an untrusted repo's red is never launched, its offer says so with the owner's one-liner, and
 # it dispatches the tick after the owner trusted it.
-def claude_config_path():
+def claude_config_path() -> str:
     d = os.environ.get("CLAUDE_CONFIG_DIR")
     return os.path.join(d, ".claude.json") if d else os.path.join(HOME, ".claude.json")
 
@@ -73,7 +74,7 @@ def _trust_candidates(p: Any) -> Any:
     return main, cands
 
 
-def claude_trust_gap(path):
+def claude_trust_gap(path: str | None) -> str | None:
     """None when claude trusts `path` (a checkout or worktree) for a background session -- or its config cannot be
     read (no verdict: the launch decides) -- else why not, with the owner's one-liner that trusts it."""
     config = read_record(claude_config_path())
@@ -98,32 +99,53 @@ def claude_trust_gap(path):
 TRUST_ASK_PREFIX = "trust:"
 
 
-def trust_ask_line(path, gap):
-    return (f"RED BLOCKED ON OWNER [tty-trust]: WAITING ON YOU: {gap.split(' (', 1)[0]} -- every red of that repo waits "
+def trust_ask_line(path: str, gap: str, waits: str = "every red of that repo") -> str:
+    return (f"RED BLOCKED ON OWNER [tty-trust]: WAITING ON YOU: {gap.split(' (', 1)[0]} -- {waits} waits "
             f"on it. Answer: `! cd {shlex.quote(path)} && claude` (accept the trust prompt, then /exit); this clears by "
             "itself once it is trusted")
 
 
-def trust_asks():
-    """The sync's pass: each watched repo's clone checked for claude's workspace trust; an untrusted one asked once."""
+def trusted_clones() -> dict[str, str]:
+    """(clone, what waits on its trust) for every checkout a dispatched session launches in: each watched repo's clone
+    (red-repos.json) and each repo the escalation dispatch table sends an agent to (escalationtable.py)."""
+    out: dict[str, str] = {}
+    for c in red_repos():
+        clone = red_repo_clone(c["repo"])
+        if clone:
+            out.setdefault(clone, f"every red of {c['repo']}")
+    for repo in sorted(escalation_repos()):
+        clone = escalation_repo_path(repo)
+        if clone:
+            out[clone] = (out[clone] + " and every escalation fixer there") if clone in out else \
+                f"every escalation fixer of {repo}"
+    return out
+
+
+def trust_asks() -> list[str]:
+    """The sync's pass: each checkout a session launches in (trusted_clones) checked for claude's workspace trust; an
+    untrusted one asked once."""
     path = state_root("trust-asks.json")
     asked = read_record(path) or {}
     out, now_asked = [], {}
-    for c in red_repos():
-        clone = red_repo_clone(c["repo"])
-        gap = claude_trust_gap(clone) if clone else None
+    for clone, waits in trusted_clones().items():
+        gap = claude_trust_gap(clone)
         if not gap:
             continue
         now_asked[clone] = asked.get(clone) or epoch_now()
         if clone not in asked:
-            inbox_write("red", trust_ask_line(clone, gap), [], [], 1, item=TRUST_ASK_PREFIX + os.path.realpath(clone))
-            out.append(f"asked the owner to trust {tilde(clone)} ({c['repo']})")
+            inbox_write("red", trust_ask_line(clone, gap, waits), [], [], 1, item=TRUST_ASK_PREFIX + os.path.realpath(clone))
+            out.append(f"asked the owner to trust {tilde(clone)} ({waits})")
     if now_asked != asked:
         write_json(path, now_asked)
     return out
 
 
-def bg_start(argv, cwd, env):
+# WHAT NO DISPATCHED SESSION MAY RUN (a red fixer's, a family owner's, an escalation fixer's): a push past the queue, a
+# check bypassed
+SESSION_DENIED_TOOLS = ("Bash(git push:*)", "Bash(*--no-verify*)", "Bash(*PREPUSH_SKIP*)")
+
+
+def bg_start(argv: list[str], cwd: str, env: dict[str, str]) -> tuple[str | None, str | None]:
     """(id, None) once `claude --bg` backgrounded the session, else (None, why)."""
     try:
         r = process_runner().run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=120)
@@ -139,11 +161,11 @@ def bg_start(argv, cwd, env):
 # ("The current directory no longer exists"), so every `claude agents` the wrapper ran read nothing ({}: no verdict
 # either way) and its session's `done` went unseen until the laptop's orphan reaper -- running elsewhere -- revoked the
 # turn. agentctl's own `claude agents` / `claude stop` run from HOME.
-def claude_cwd():
+def claude_cwd() -> str:
     return HOME if os.path.isdir(HOME) else "/"
 
 
-def bg_rows(cli):
+def bg_rows(cli: str) -> list[dict[str, Any]] | None:
     """The rows of `claude agents --json --all`, or None when they cannot be read."""
     try:
         r = process_runner().run([cli, "agents", "--json", "--all"], capture_output=True, text=True, timeout=60,
@@ -154,7 +176,7 @@ def bg_rows(cli):
     return rows if isinstance(rows, list) else None
 
 
-def bg_session(cli, bid):
+def bg_session(cli: str, bid: str) -> dict[str, Any] | None:
     """The session's row in `claude agents --json --all` ({id, sessionId, name, state, ...}); None when it is not
     listed; {} when the list cannot be read (no verdict either way)."""
     rows = bg_rows(cli)
@@ -171,7 +193,7 @@ BG_ENDED_STATES = ("done", "stopped", "failed", "error")
 BG_WAITING_STATES = ("blocked", "idle")
 
 
-def bg_ended(ent):
+def bg_ended(ent: dict[str, Any] | None) -> bool:
     """The session's row says its turn is over (ent: bg_session's row; {} -- unread -- and None -- not listed -- say
     nothing here)."""
     if not ent:
@@ -335,7 +357,9 @@ def store_reauth():
     return None
 
 
-def bg_stop(cli, bid):
+def bg_stop(cli: str, bid: str | None) -> None:
+    if not bid:
+        return
     try:
         process_runner().run([cli, "stop", bid], capture_output=True, timeout=60, stdin=subprocess.DEVNULL, cwd=claude_cwd())
     except (OSError, subprocess.TimeoutExpired):

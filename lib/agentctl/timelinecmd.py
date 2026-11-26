@@ -13,7 +13,7 @@ from agentctl.timeline import (analyze, as_json, find_items, history_lines, merg
                                traces)
 
 ITEM_TYPES = ("change", "red", "watch", "batch", "condition", "hold", "revert", "issue", "branch-red",
-              "gov-ticket", "inbox", "entry", "sbt-server")  # the last four: file-held state (filelog.py)
+              "gov-ticket", "inbox", "entry", "sbt-server", "escalation")  # the last five: file-held state (filelog.py)
 WEEK = 7 * 86400
 HISTORY_MAX = 5  # items one `history` prints at most
 

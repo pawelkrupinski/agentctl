@@ -36,6 +36,7 @@ from agentctl.reddispatch import red_renew_holders
 from agentctl.netwatch import network_watch, tunnel_watch
 from agentctl.redstatus import write_red_status_snapshot
 from agentctl.offerdispatch import red_dispatcher
+from agentctl.escalationsession import escalation_step
 from agentctl.tickknobs import knob_step_bound
 from agentctl.tickknobs import knob_sync_mirror
 
@@ -110,6 +111,10 @@ class _SyncDuties:
             return []
         return red_dispatcher(self.store, self.o_r, self.repo, self.clock.time())
 
+    def escalations(self) -> None:
+        for x in escalation_step(self.store, self.clock.time()):
+            err(f"escalation: {x}")
+
     def claim_role(self) -> None:
         self.role = laptop_role_step(self.store)
 
@@ -141,6 +146,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequenc
             ("regen holds", duty(lambda: [err(f"land: {x}") for x in answer_regen_holds(d, store)])),
             ("claims", duty(s.sync_claims)),
             ("dispatcher", duty(s.dispatch)),
+            ("escalation dispatcher", duty(s.escalations)),
             ("pins", duty(s.pins)), ("drift explorer", duty(s.explorer)),
             ("revert notes", duty(lambda: [err(x) for x in revert_notes(store)])),
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch()]),

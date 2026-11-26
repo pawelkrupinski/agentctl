@@ -19,8 +19,8 @@ from agentctl.procs import process_start, socket_host
 from agentctl.leases import lease_meta
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import (
-    bg_failure, bg_final_text, bg_row_brief, bg_session, bg_start, bg_stop, bg_turn, bg_turn_over, bg_wait_mark,
-    fixer_label, store_reauth)
+    SESSION_DENIED_TOOLS, bg_failure, bg_final_text, bg_row_brief, bg_session, bg_start, bg_stop, bg_turn,
+    bg_turn_over, bg_wait_mark, fixer_label, store_reauth)
 from agentctl.redknobs import RED_STALL
 from agentctl.worktrees import mark_internal
 from agentctl.inbox import INBOX_TAIL
@@ -251,7 +251,7 @@ class RedFixerWrapper:
              "decision": rec.get("decision"), "record": self.a.record}
         prompt = fixer_prompt(u, self.wt, sync_brief(), fixer_rollover(self.st, rec))  # its resumed session past its context: fresh
         argv = [self.cli, "--bg", prompt, "--permission-mode", interactive_mode(), "--permission-prompts", "none",
-                "-n", self.label, "--disallowedTools", "Bash(git push:*)", "Bash(*--no-verify*)", "Bash(*PREPUSH_SKIP*)"]
+                "-n", self.label, "--disallowedTools", *SESSION_DENIED_TOOLS]
         if red_owner_only(red_repo_of(rec)):  # an owner-only repo's fixer: no landing, no push, no deploy (red_owner_rules)
             argv += list(OWNER_ONLY_DENIED)
         if rec.get("resume") and rec.get("resumed_from"):

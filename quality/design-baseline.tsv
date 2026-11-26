@@ -206,13 +206,13 @@ fanout	lib/agentctl/cli.py	51
 fanout	lib/agentctl/cliparser.py	11
 fanout	lib/agentctl/culpritfix.py	15
 fanout	lib/agentctl/fixer.py	12
-fanout	lib/agentctl/fixerland.py	22
+fanout	lib/agentctl/fixerland.py	21
 fanout	lib/agentctl/fixerlife.py	26
 fanout	lib/agentctl/fixersession.py	10
 fanout	lib/agentctl/gov.py	21
 fanout	lib/agentctl/govcmd.py	11
 fanout	lib/agentctl/inboxentry.py	10
-fanout	lib/agentctl/invariants.py	22
+fanout	lib/agentctl/invariants.py	21
 fanout	lib/agentctl/land.py	11
 fanout	lib/agentctl/landdryrun.py	23
 fanout	lib/agentctl/lander.py	12
@@ -273,7 +273,7 @@ fanout	lib/agentctl/status.py	36
 fanout	lib/agentctl/statusagents.py	12
 fanout	lib/agentctl/statuspage.py	13
 fanout	lib/agentctl/superseded.py	11
-fanout	lib/agentctl/syncsteps.py	28
+fanout	lib/agentctl/syncsteps.py	29
 fanout	lib/agentctl/tools.py	14
 fanout	lib/agentctl/upkeep.py	13
 fanout	lib/agentctl/waiting.py	12

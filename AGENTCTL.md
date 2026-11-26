@@ -685,6 +685,41 @@ Decodo (2026-10-28): `Decodo probe` (movies, every 30 min + dispatch) CONNECTs t
 Security headers' block is `red block <n> --cmd "Check the Decodo dashboard ..." --until-green "Decodo probe"`, so it
 clears and Security headers is re-dispatched once Decodo answers.
 
+### escalations: an agent for every escalation an agent may take (2026-11-26)
+
+The owner: "can agentctl just kick off an agent when sth escalates?" An ESCALATION is an open condition (above) past
+its bound; its kind is the condition's kind, an invariant's refined by its id (`INVARIANT:W2`). ONE TABLE, as data,
+routes every kind (`lib/agentctl/escalationtable.py` `DISPATCH_TABLE`): `agent` -- its task, its repo (`bin` or
+`movies`), its model (sonnet by default, opus where the root cause is unknown: W1, WR, W2, W8, STALLED,
+change-stranded, UNKNOWN), its wall time (60 / 120 min) and its tries (3 / 2) -- or `owner-only`, with its ask.py
+category: WB (somebody's edits in ~/bin), WN (notification permissions), WF (sudo in the VM), WD (the disk),
+NETWORK (an outage), UNLANDED_ORPHAN (its orphan fixer already ran). A kind no row names is the owner's, and so is
+any condition whose text names the vault, Touch ID, a credential, a reboot or outage, a force push, the repository's
+visibility or an owner decision (`OWNER_SIGNALS`), or the row's own `owner_when` (WP on a process agentctl did not
+start, `the owner's to look at`). tests/test_escalations.py fails on a condition kind the code opens, or an
+invariant, that has no row.
+
+The laptop's sync runs the dispatcher (`escalation dispatcher`, beside the red one) on the red dispatcher's own
+machinery: the store's OFFERS (kind `escalation`, item `condition:<id>`: one offer per kind and subject) and LEASES
+(`escalation/<kind>`: taking it closes the offer atomically, and a held lease refuses a second taker -- ONE FIXER PER
+KIND), at most 2 escalation fixers alive over all kinds (`ESCALATION_FIXERS`; the red fixers' cap is apart). A taken
+offer starts `claude --bg -n "escalation · <kind>" --model <model>` in a fresh `<repo>-wt-escalation-<kind>` off main,
+denied what every dispatched session is (`SESSION_DENIED_TOOLS`), briefed with the condition's text, its probe, the
+earlier tries, its history (`agentctl history <condition id>`) and the rules (the worktree, `devtools/selfpush.py`
+for ~/bin or `agentctl land` for movies, the commit gate, no bypass, the owner's things left to him). The lease is
+renewed while `claude agents` shows the session at work and is stopped at the row's wall time. THE ESCALATION CLOSES
+WHEN ITS CONDITION CLOSES (its own probe), never on the agent's word: a session that ends with the condition open,
+times out, never starts or loses its lease is a FAILED TRY, the next one backed off 10 min, doubled each try; once the
+row's tries are spent ONE entry `ESCALATION GAVE UP: <kind> <key>: WAITING ON YOU: ... try 1: ... (worktree)` goes
+to the owner under the condition's alert item (it closes with the condition), and the kind is not dispatched again
+that spell. A repo claude does not trust is NOT DISPATCHABLE on the offer (no try counted, no retry storm); the owner
+is asked once by the sync's `workspace trust` pass, which checks the table's repos beside red-repos.json's clones.
+Every offer, dispatch, take (actor `session:<id>`), failed try, give-up and clear is a move of the file-held item
+`escalation` (`<kind>/<condition id>`), so `agentctl analyze --type escalation` prints `time to end by kind`
+(`INVARIANT:W6 -> cleared  n  p50  p90  max`). The simulator holds it too (tests/queue_sim.py's ESCALATIONS
+scenarios): IE never two fixers of a kind nor more than the cap, IO an owner-only kind never dispatched, IG every
+dispatched escalation cleared or handed to the owner within its budget.
+
 ### always claimed: no red is ever NOBODY (2026-10-28)
 
 The owner: "why unclaimed ... should always claim, fix structurally".

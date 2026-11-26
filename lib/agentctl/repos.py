@@ -9,8 +9,20 @@ import shlex
 from typing import Any, Dict, List, Optional
 from agentctl.core import HOME, REPOS, err, git_ok, host_role, process_cache, remote, slug
 from agentctl.selfcode import TOOL_PATH
-from agentctl.storeknobs import knob_movies_repo
+from agentctl.storeknobs import knob_bin_repo, knob_movies_repo
 from agentctl.redknobs import knob_red_repo, knob_red_repos
+
+
+# THE agentctl REPOSITORY (~/bin): a fixer never edits it (`agentctl issue`); watchdog WB checks its checkout stays clean.
+# $AGENTCTL_BIN_REPO ('-': none, the tests').
+def bin_repo() -> str | None:
+    r = knob_bin_repo() or os.path.dirname(TOOL_PATH)
+    return None if r == "-" or not os.path.isdir(os.path.join(r, ".git")) else r
+
+
+def escalation_repo_path(repo: str) -> str | None:
+    """The checkout an escalation fixer of repo `bin` (agentctl's) or `movies` works off (escalationtable.py)."""
+    return bin_repo() if repo == "bin" else movies_repo_path() if repo == "movies" else None
 
 
 def movies_repo_path() -> str:
