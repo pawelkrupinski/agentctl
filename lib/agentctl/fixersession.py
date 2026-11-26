@@ -81,11 +81,8 @@ def _trust_candidates(p: Any) -> Any:
 def claude_trust_gap(path):
     """None when claude trusts `path` (a checkout or worktree) for a background session -- or its config cannot be
     read (no verdict: the launch decides) -- else why not, with the owner's one-liner that trusts it."""
-    try:
-        with open(claude_config_path()) as f:
-            projects = (json.load(f) or {}).get("projects")
-    except (OSError, ValueError, AttributeError):
-        return None
+    config = read_record(claude_config_path())
+    projects = config.get("projects") if isinstance(config, dict) else None
     if not isinstance(projects, dict) or not path or not os.path.isdir(path):
         return None
     main, cands = _trust_candidates(os.path.realpath(path))

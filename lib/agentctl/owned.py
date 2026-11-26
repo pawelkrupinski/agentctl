@@ -15,7 +15,7 @@ from typing import Any, Sequence
 from agentctl.procrunner import process_runner
 from agentctl.core import SHORT, env_num, err, git, process_cache, run_cmd, slug, state_root
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json
+from agentctl.statefile import load_record, read_record, write_json
 from agentctl.forge import forge_argv, forge_env
 from agentctl.procs import Terminated, process_start, safe_cwd
 from agentctl.selfcode import TOOL_PATH, code_files, code_version
@@ -340,7 +340,7 @@ class Waiter:
         if lock_held(self.own.lockpath):
             return
         try:
-            v = json.load(open(self.verdict))
+            v = load_record(self.verdict)
             self.result = (v["ok"], v["line"])
         except (OSError, ValueError, KeyError):
             err(f"{self.key}: waiter pid {(self.holder or {}).get('pid')} ended without a verdict; taking over")

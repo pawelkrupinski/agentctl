@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
+from agentctl.statefile import load_record
 import json
 import os
 import re
@@ -38,8 +39,7 @@ def red_families():
 def load_families(path: str) -> list[dict[str, Any]]:
     """The families of the config file at path, their job patterns compiled; none when it is unreadable."""
     try:
-        with open(path) as f:
-            fams = json.load(f).get("families") or []
+        fams = load_record(path).get("families") or []
         return [dict(x, _jobs=[re.compile(j) for j in x.get("jobs") or []]) for x in fams if x.get("name")]
     except (OSError, ValueError, re.error) as e:
         err(f"red families: {path} unreadable ({e}): none apply")

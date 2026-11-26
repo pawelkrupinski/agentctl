@@ -7,11 +7,16 @@ import threading
 from typing import Any
 
 
+def load_record(path: str) -> Any:
+    """The JSON at path; OSError (missing, unreadable) or ValueError (torn) for a caller that says why it could not."""
+    with open(path) as f:
+        return json.load(f)
+
+
 def read_record(path: str, default: Any = None) -> Any:
     """THE JSON STATE READER: the JSON at path, or default when it is missing or unreadable (a torn or foreign file)."""
     try:
-        with open(path) as f:
-            return json.load(f)
+        return load_record(path)
     except (OSError, ValueError):
         return default
 

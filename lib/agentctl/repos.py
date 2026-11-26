@@ -1,6 +1,7 @@
 # agentctl, part `repos`: the repositories agentctl serves: red-repos.json (each repository's clone, short name, gate workflows and push policy) and the movies and server clones' paths.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.statefile import load_record
 import json
 import os
 import re
@@ -201,8 +202,7 @@ def red_repos():
     repos = red_repos_parse({"repos": RED_REPOS_DEFAULT})
     if m is not None:
         try:
-            with open(path) as f:
-                repos = red_repos_parse(json.load(f))
+            repos = red_repos_parse(load_record(path))
         except (OSError, ValueError) as e:
             err(f"red repos: {path} unreadable ({str(e)[:200]}): only {RED_PRIMARY} is watched")
     _red_repos_cache[path] = (m, repos)

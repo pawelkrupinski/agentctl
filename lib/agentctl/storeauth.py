@@ -5,7 +5,7 @@ import json
 import os
 import re
 from agentctl.timefmt import ts
-from agentctl.statefile import write_json
+from agentctl.statefile import load_record, write_json
 
 
 # THE STORE'S OWN TOKENS (github-return plan §4.1 W5b): `store serve` checks each caller's token itself -- no forge in
@@ -58,8 +58,7 @@ def store_token_mac(secret, tid, user):
 
 def store_tokens_load():
     try:
-        with open(store_tokens_path()) as f:
-            return json.load(f)
+        return load_record(store_tokens_path())
     except FileNotFoundError:
         return {}
 
