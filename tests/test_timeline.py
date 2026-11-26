@@ -23,6 +23,24 @@ class SegmentsTest(unittest.TestCase):
                          [("queued", 60, "submitted"), ("queued", 240, "overlap-hold"), ("checking", 600, "check-running")])
         self.assertEqual(tr.path, ["queued", "checking", "rejected"])
 
+    def test_one_walker_with_or_without_the_reminders(self):
+        """Review 2026-11-26 (C 0): history/analyze (timeline._Walk) and the stats records (state_spans) each walked an
+        item's events; both are eventtrace.stays now, the stats asking for no reminders."""
+        evs = [ev(1, 0, None, "queued", "submitted"), ev(2, 60, "queued", "queued", "overlap-hold"),
+               ev(3, 300, "queued", "checking", "check-running")]
+        split = A.stays(evs, "queued", 0.0)
+        self.assertEqual([(s.state, s.start, s.end, s.said[0]) for s in split],
+                         [("queued", 0.0, 60, None), ("queued", 60, 300, "overlap-hold"), ("checking", 300, None, "check-running")])
+        self.assertEqual([(s.state, s.start, s.end) for s in A.stays(evs, "queued", 0.0, reminders=False)],
+                         [("queued", 0.0, 300), ("checking", 300, None)])
+        self.assertEqual(A.state_spans(evs, 0.0), [("queued", 0.0, 300, evs[2]), ("checking", 300, None, None)])
+
+    def test_an_item_whose_events_name_no_state_has_no_stays(self):
+        """An `agentctl` pin's events name no state: the old walk read each as the item's first, a path of ''s."""
+        tr = A.traces([ev(1, 0, None, None, iid="pin", typ="agentctl"), ev(2, 5, None, None, iid="pin", typ="agentctl")],
+                      now=50)[("agentctl", "pin")]
+        self.assertEqual((tr.path, tr.segments), ([], []))
+
     def test_an_open_stay_ends_at_now(self):
         tr = A.traces(A.merge([ev(1, 0, None, "queued", "submitted")]), now=50)[("change", "c1")]
         self.assertEqual([(s.state, s.length) for s in tr.segments], [("queued", 50)])

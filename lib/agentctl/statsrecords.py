@@ -5,6 +5,7 @@ import re
 from typing import Any, Iterable, Optional, Sequence, cast
 from agentctl.timefmt import iso_at
 from agentctl.statemachines import is_terminal, terminal_states
+from agentctl.eventtrace import stays
 
 Rec = dict[str, Any]  # an item, an event, a record: JSON-shaped
 Span = tuple[str, float, Optional[float], Optional[Rec]]  # (state, entered, left or None, the event that left it)
@@ -102,18 +103,9 @@ def job_area(name: Optional[str]) -> Optional[str]:
 
 
 def state_spans(events: Iterable[Rec], start_at: float, first_state: str = "queued") -> list[Span]:
-    """[(state, entered, left)] of an item from its events in order: the item starts in first_state at start_at."""
-    spans: list[Span] = []
-    state, since = first_state, start_at
-    for ev in events:
-        if ev.get("from_state") is None or ev.get("to_state") is None:
-            continue
-        if ev["to_state"] == state and ev["from_state"] == state:  # a self-transition (an escalation): no new span
-            continue
-        spans.append((state, since, ev["at"], ev))
-        state, since = ev["to_state"], ev["at"]
-    spans.append((state, since, None, None))
-    return spans
+    """[(state, entered, left, the event that left it)] of an item from its events in order, the item in first_state
+    from start_at; an escalation (a self-move) is no new span (eventtrace.stays, the one walker)."""
+    return [(s.state, s.start, s.end, s.left_by) for s in stays(events, first_state, start_at, reminders=False)]
 
 
 def _sum(spans: Iterable[Span], state: str, until: Optional[float] = None) -> float:

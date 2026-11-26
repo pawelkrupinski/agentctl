@@ -81,44 +81,66 @@ def traces(events: Iterable[dict[str, Any]], now: float, item_type: Optional[str
     return by
 
 
-class _Walk:
-    """One item's events walked into its segments and path: the state it is in, since when, and the stay's cause."""
+Said = tuple[Optional[str], Optional[str], str]  # why an item is in a state: (cause, actor, origin)
+UNSAID: Said = (None, None, "none")
 
-    def __init__(self, tr: ItemTrace) -> None:
-        self.tr, self.cur, self.start = tr, "", 0.0
-        self.said: tuple[Optional[str], Optional[str], str] = (None, None, "none")
 
-    def first(self, ev: dict[str, Any]) -> None:
-        """The first event: its from-state began then (an opening: its own state, and what it says)."""
-        frm, to = ev.get("from_state"), str(ev.get("to_state") or "")
-        self.cur, self.start = (to if frm is None else str(frm)), float(ev["at"])
-        self.tr.path.append(self.cur)
-        if frm is None:
-            self.said = (ev.get("cause"), ev.get("actor"), ev.get("origin", "none"))
-        else:
-            self.step(ev)
+@dataclass
+class Stay:
+    """One stay of an item in a state: [start, end) (end None: still there), why it was there, the event that ended it."""
+    state: str
+    start: float
+    end: Optional[float]
+    said: Said
+    left_by: Optional[dict[str, Any]]
 
-    def step(self, ev: dict[str, Any]) -> None:
-        """A later event: the stay so far a segment; a move a new state; a reminder with a cause a new attribution."""
-        frm, to, at = ev.get("from_state"), str(ev.get("to_state") or ""), float(ev["at"])
-        if at > self.start:
-            self.tr.segments.append(Segment(self.tr.item_type, self.tr.item_id, self.cur, self.start, at, *self.said))
-        if to != self.cur:
-            self.tr.path.append(to)
-        self.cur, self.start = to, at
-        if ev.get("cause") or to != frm:  # a reminder without a cause keeps the stay's cause
-            self.said = (ev.get("cause"), ev.get("actor"), ev.get("origin", "none"))
 
-    def end(self, now: float) -> None:
-        if self.cur and not ends_item(self.tr.item_type, self.cur) and now > self.start:
-            self.tr.segments.append(Segment(self.tr.item_type, self.tr.item_id, self.cur, self.start, now, *self.said))
+def _said(ev: dict[str, Any]) -> Said:
+    return ev.get("cause"), ev.get("actor"), ev.get("origin", "none")
+
+
+def stays(events: Iterable[dict[str, Any]], state: str, since: float, said: Said = UNSAID,
+          reminders: bool = True) -> list[Stay]:
+    """THE STAY WALKER (review 2026-11-26, C 0: history/analyze and the stats records each walked an item's events):
+    the item in `state` since `since`, then each of its moves in order -- an opening (no from-state) says nothing of a
+    begun item's states. A move ends the stay and begins the next; a reminder (a self-move) ends it too when
+    `reminders` (a stay split into segments, each with the cause last said), else it is no new stay. A reminder with no
+    cause keeps the stay's. The last stay is open (end None)."""
+    out: list[Stay] = []
+    for ev in events:
+        frm, to = ev.get("from_state"), ev.get("to_state")
+        if frm is None or to is None or (not reminders and frm == to == state):
+            continue
+        out.append(Stay(state, since, ev["at"], said, ev))
+        if ev.get("cause") or to != frm:
+            said = _said(ev)
+        state, since = str(to), ev["at"]
+    return out + [Stay(state, since, None, said, None)]
+
+
+def _walked(events: list[dict[str, Any]]) -> list[Stay]:
+    """An item's stays from its first move: an opening's own state and what it says, else the state a move left. An
+    event naming no state (an `agentctl` pin, a lease archived) is no move: an item of only such has no stays."""
+    moves = [ev for ev in events if ev.get("from_state") is not None or ev.get("to_state") is not None]
+    if not moves:
+        return []
+    first = moves[0]
+    if first.get("from_state") is None:
+        return stays(moves[1:], str(first.get("to_state") or ""), float(first["at"]), _said(first))
+    return stays(moves, str(first["from_state"]), float(first["at"]))
+
+
+def _path(walked: list[Stay]) -> list[str]:
+    """The states an item went through, a reminder's split stay once."""
+    return [s.state for i, s in enumerate(walked) if not i or walked[i - 1].state != s.state]
 
 
 def _segments(tr: ItemTrace, now: float) -> None:
-    w = _Walk(tr)
-    for ev in tr.events:
-        if not w.cur:
-            w.first(ev)
-        elif ev.get("from_state") is not None:  # an opening after the item began says nothing of its states
-            w.step(ev)
-    w.end(now)
+    """The trace's path and segments: each stay of positive length, the open one ended at `now` unless its state ends
+    the item."""
+    walked = _walked(tr.events)
+    tr.path = _path(walked)
+    for s in walked:
+        end = now if s.end is None and not ends_item(tr.item_type, s.state) else s.end
+        if end is not None and end > s.start:
+            tr.segments.append(Segment(tr.item_type, tr.item_id, s.state, float(s.start), float(end), *s.said))
