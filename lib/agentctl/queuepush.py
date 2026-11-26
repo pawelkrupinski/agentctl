@@ -23,7 +23,7 @@ from agentctl.queuediff import push_change
 from agentctl.queueclose import lap_change_deadline, regen_hold_overdue
 from agentctl.recovery import current_batch
 from agentctl.queuebatchsel import backlog_held, push_held
-from agentctl.queuehold import break_hold_cycles, note_hold
+from agentctl.queuehold import break_hold_cycles, expire_idle_hold, idle_hold_expired, note_hold
 
 
 # THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16, workermem: fully checked by 09:15, then its combined tree verified
@@ -263,13 +263,16 @@ def queued_waiting_on_changes(repo, d, st, t, e, fix, todo, facts, stacks):
     if parent is not None and parent.get("status") in OPEN_PARENT_STATES \
             and parent["id"] not in (e.get("cycle_ignore") or []):
         return stacked_wait(st, t, e, parent), True
-    hold = overlap_hold(st, repo, d, e, todo, facts, t, stacks)
+    hold, did = overlap_hold(st, repo, d, e, todo, facts, t, stacks), []
+    while hold and not fix and idle_hold_expired(st, e, hold[0], t):  # AN IDLE HOLDER'S HOLD EXPIRES (queuehold.py)
+        did.append(expire_idle_hold(st, d, e, hold[0], t))
+        hold = overlap_hold(st, repo, d, e, todo, facts, t, stacks)
     if hold and fix:  # a red fix never waits: its author is told of a conflict, and it goes on
         return hold_for_overlap(st, d, e, *hold, waits=False, repo=repo), False
     if not hold:
-        return [], False
+        return did, False
     o, shared = hold[0], hold[1]
-    did = hold_for_overlap(st, d, e, *hold, repo=repo)
+    did += hold_for_overlap(st, d, e, *hold, repo=repo)
     note_hold(st, e, "overlap", f"its check waits for {o['id']} ({o.get('status')}): both change "
               f"{', '.join(shared[:3])}" + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else ""), t,
               blocker=o["id"], files=shared[:10])

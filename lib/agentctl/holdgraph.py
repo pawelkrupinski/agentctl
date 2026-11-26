@@ -25,6 +25,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set
 # its item and in `status`. Tests: tests/test_hold_graph.py.
 STACK_PARENT_STATES = ("queued", "checking", "checked", "pushing", "waiting", "landed")
 OPEN_PARENT_STATES = ("queued", "checking", "checked", "pushing", "waiting")
+HOLDER_IN_FLIGHT = ("checking", "checked", "pushing")  # a holder whose check (or push) is under way: it moves by itself
 
 
 def stacked_on(e: Dict[str, Any], entries: Iterable[Dict[str, Any]]) -> Optional[Dict[str, Any]]:

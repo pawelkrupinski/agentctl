@@ -1793,6 +1793,15 @@ The reconciler then takes it, a step per tick:
   younger push and no backlog batch. holdgraph.py, queuebatch.py `break_hold_cycles`, `change_waits`; tests:
   tests/test_hold_graph.py. The watchdog tells one notification per episode (a subject: the change it names) per 6 h
   (`AGENTCTL_WATCHDOG_RETELL`), and the tick's rederive lap never clears a hold between two readings.
+- **AN IDLE HOLDER'S HOLD EXPIRES (2026-11-26; 11-23..25: 631 `STUCK: held for over 6 h` laps of four changes, each
+  queued 14-19 h behind an older change that was not being checked -- py-reuse-git behind py-under-bar, parked 43 h on
+  `waiting` for Main #2877; py-page-tests-local behind py-gitops-specs, itself queued and held).** Two faults: the
+  6-h cap (`$AGENTCTL_CHANGE_HOLD_MAX`) read `escalate` whatever the hold's kind, so the overlap kind's own recovery
+  (`rederive`, THE HOLD TABLE) never ran; and nothing let a change go of a blocker that was not moving. Now the cap
+  runs the kind's recovery, and an overlap hold on a holder NOT IN FLIGHT (not checking, checked or pushing) lasts at
+  most `$AGENTCTL_HOLD_IDLE_TTL` (1 h): the change lets go of that blocker for good (`hold_expired` on its entry), is
+  told once (`its hold on X (waiting, not being checked) expired after 1 h`) and goes on. queuehold.py
+  `idle_hold_expired`; tests: tests/test_conflict_holds.py, the simulator's IH (`hold-on-parked-*`).
 - **OVERLAPPING CHANGES ARE CHECKED AS ONE (2026-11-18: B1 against the CI-workflows change, the scraper catalog
   against the scrapers refactor, the cycle-breaking change against both -- each checked alone, then `NOT LANDED: the
   change no longer applies ... main moved during its checks`, a rebase and a full recheck).** A queued change sharing a
@@ -3199,6 +3208,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `gov_resume` | `AGENTCTL_GOV_RESUME` | `0.8` | x the cores: under it, admitting again |
 | `gov_spare` | `AGENTCTL_GOV_SPARE` | `0.5` | x the cores: under it, spare |
 | `gov_starved` | `AGENTCTL_GOV_STARVED` | `1.0` | x the cores: over it, starved |
+| `hold_idle_ttl` | `AGENTCTL_HOLD_IDLE_TTL` | `3600` | s |
 | `hostname` | `AGENTCTL_HOSTNAME` | - | this host's name (default: the system's) |
 | `identity` | `AGENTCTL_IDENTITY` | - | github-app: credentials come from the GitHub Apps (ci-runner) |
 | `inbox_dir` | `AGENTCTL_INBOX_DIR` | - | the inbox's directory (default inbox under the state root) |

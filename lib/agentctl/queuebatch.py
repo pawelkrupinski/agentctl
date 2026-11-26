@@ -28,7 +28,7 @@ from agentctl.checkslot import check_slot
 from agentctl.redseen import gate_reds
 from agentctl.remote import remote_check, remote_checks_supported, remote_matches
 from agentctl.statemachines import StaleVersion, change_event, machine_state
-from agentctl.holdgraph import as_own, dependency_between
+from agentctl.holdgraph import HOLDER_IN_FLIGHT, as_own, dependency_between
 
 
 # OVERLAPPING CHANGES ARE CHECKED AS ONE (the coordinator, 2026-11-18: B1 against the CI-workflows change, the scraper
@@ -132,7 +132,7 @@ def overlap_of(repo, older, younger, strict=False):
 # fix -- and meets the others in the next batch. Replaces A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT (2026-11-21:
 # every generated file but a `holds: false` one). A DERIVED FILE HOLDS NOTHING (2026-11-23): regenerated over the tree
 # it lands in, its push's new round regenerating it (queuediff.py _push_change). Tests: tests/test_conflict_holds.py.
-IN_FLIGHT = ("checking", "checked", "pushing")
+IN_FLIGHT = HOLDER_IN_FLIGHT
 
 
 def ordered_overlap(repo: Optional[str], older: dict[str, Any], younger: dict[str, Any]) -> list[str]:
@@ -171,7 +171,8 @@ def overlap_candidate(o, e, stacks):
             or same_change_source(o, e["worktree"], e.get("branch") or ""):  # its own older version: superseded
         return False
     # a broken cycle's wait, or a parent and its stacked change: a dependency, never an overlap
-    return o["id"] not in (e.get("cycle_ignore") or []) and not dependency_between(o, e, stacks)
+    let_go = set(e.get("cycle_ignore") or []) | set(e.get("hold_expired") or [])  # a broken cycle's, an expired hold's
+    return o["id"] not in let_go and not dependency_between(o, e, stacks)
 
 
 class OverlapScan:
@@ -233,7 +234,8 @@ def overlap_hold(st, repo, d, e, entries, facts, t, stacks=None):
     """(older entry, shared files, conflicting files or None) queued change e waits for (OVERLAPPING CHANGES ARE
     CHECKED AS ONE), or None. stacks: {id: the entry it is stacked on} (holdgraph.py A STACKED CHANGE WAITS FOR ITS
     PARENT): a parent and its stacked change are never each other's overlap, and each change's files are its own
-    commits'. A blocker e's cycle_ignore names (A HOLD CYCLE IS BROKEN) holds it no more."""
+    commits'. A blocker e's cycle_ignore names (A HOLD CYCLE IS BROKEN) or hold_expired names (AN IDLE HOLDER'S HOLD
+    EXPIRES, queuehold.py) holds it no more."""
     if e.get("backlog_batch"):
         return None
     return OverlapScan(st, repo, d, e, t, facts, stacks or {}).run(entries)

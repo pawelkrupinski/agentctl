@@ -255,6 +255,11 @@ LAND_BEFORE_QUEUE_SECONDS = 1200
 CHANGE_HOLD_MAX = 6 * 3600  # s ($AGENTCTL_CHANGE_HOLD_MAX)
 
 
+# AN IDLE HOLDER'S HOLD EXPIRES (2026-11-26; queuehold.py): an overlap hold on a change that is not in flight -- parked
+# on `waiting`, or queued and itself held -- lets go of it for good after this long.
+HOLD_IDLE_TTL = 60 * 60  # s ($AGENTCTL_HOLD_IDLE_TTL)
+
+
 # NO HOLD YET IS NO STUCK HOLD (2026-11-23 04:19Z/04:44Z: py-restore-corpus, checked, was pushed by the next tick 40 s
 # and 27 s later; W1 read it in between as "nothing holds it, yet it has not pushed"). A change that has just entered
 # its state has no recorded hold until a tick pushes, starts or holds it: past this grace with none, it is stuck.
@@ -297,6 +302,10 @@ def knob_batch_retry_max() -> float:
 
 def knob_change_hold_max() -> float:
     return env_num("AGENTCTL_CHANGE_HOLD_MAX", CHANGE_HOLD_MAX)
+
+
+def knob_hold_idle_ttl() -> float:
+    return env_num("AGENTCTL_HOLD_IDLE_TTL", HOLD_IDLE_TTL)
 
 
 def knob_drift_stall() -> float:

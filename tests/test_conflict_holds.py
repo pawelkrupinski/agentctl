@@ -124,6 +124,39 @@ class ConflictHoldTest(test_derived.DerivedTest):
         self.assertNotIn(ey, self.started)
         self.assertEqual((self.hold_of(ey).get("blocker"), self.hold_of(ey).get("files")), (ei, [SOURCE]))
 
+    def test_a_hold_on_a_holder_not_in_flight_expires_and_the_change_goes_on(self):
+        """AN IDLE HOLDER'S HOLD EXPIRES (2026-11-23..25: py-reuse-git queued 21 h behind py-under-bar, parked on
+        `waiting` for Main #2877, 155 laps saying `STUCK: held for over 6 h` and nothing acting). A real conflict holds
+        the younger while the older is in flight; once the older is not -- parked on `waiting` -- the hold lasts at
+        most HOLD_IDLE_TTL, then the younger lets go of it for good, is told so once, and is checked."""
+        ei = self.lane_of("underbar", "u", line=(4, "underbar's line 5"), alone=True)
+        self.in_flight(ei)
+        ey = self.lane_of("reusegit", "g", line=(4, "reusegit's line 5"))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        self.assertEqual(self.hold_of(ey).get("blocker"), ei, "held while the older's check is in flight")
+        st = A.CurrentStore(A.process_store)
+        for state in ("checked", "waiting"):  # its checks failed only as main fails: parked until green
+            A.set_change(st, self.d, self.entry(ei), state, cause="gate-red" if state == "waiting" else "check-passed")
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        self.assertNotIn(ey, self.started, "within the TTL it still waits")
+        it = st.item("change", ey)
+        old = A.epoch_now() - 2 * 3600  # past HOLD_IDLE_TTL (1 h)
+        st.update_item("change", ey, it["version"], {"hold": {**it["data"]["hold"], "since": old}})
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        self.assertIn(ey, self.started, f"its hold on the parked change expired: {self.hold_of(ey)}")
+        self.assertEqual(self.entry(ey).get("hold_expired"), [ei])
+        told = [ev["text"] for ev in st.item_events("change", ey) if "expired after" in (ev.get("text") or "")]
+        self.assertEqual(len(told), 1, told)
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        self.assertNotEqual(self.hold_of(ey).get("blocker"), ei, "let go for good")
+
+    def test_the_six_hour_cap_runs_an_overlap_holds_own_recovery_never_a_stuck_escalation(self):
+        """The 6-h cap (CHANGE_HOLD_MAX) read `escalate` whatever the hold's kind, so the overlap kind's `rederive`
+        (THE HOLD TABLE) never ran: every lap past 6 h said STUCK to the author, 631 times on 11-23..25."""
+        hold = {"kind": "overlap", "why": "its check waits for x (waiting): both change a", "blocker": "x", "since": 0}
+        self.assertEqual(A.stuck_recovery(hold, f"held for over {A.fmt_age(A.knob_change_hold_max())}"), "rederive")
+        self.assertEqual(A.stuck_recovery({**hold, "kind": "trees"}, "held for over 6 h"), "escalate")
+
 
 for _name in list(test_derived.DerivedTest.__dict__) + list(test_generated.GeneratedQueueTest.__dict__) \
         + dir(test_backlog_batch.BacklogBatchTest):
