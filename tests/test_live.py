@@ -348,15 +348,37 @@ class StreamServerTest(LiveBase):
         said = [e for e in evs if e["event"] == "entry"][-1]["data"]["message"]["content"][0]["text"]
         self.assertEqual(said, "done, token " + A.LIVE_MASKED)
         self.assertEqual([e for e in evs if e["event"] == "state"][-1]["data"]["state"], "waiting on background")
-        with open(self.p, "w") as f:
+        with open(self.p, "w") as f:  # truncated, then written: a look between the two sends the reset alone
             f.write(entry("user", message={"content": "fresh"}))
-        _h, evs = self.read_until(s, lambda es: any(e["event"] == "state" and e["data"]["state"] == "working"
-                                                    for e in es[es.index(next(x for x in es if x["event"] == "reset")):])
-                                  if any(x["event"] == "reset" for x in es) else False)
+
+        def fresh_after_reset(es):
+            names = [e["event"] for e in es]
+            after = es[names.index("reset"):] if "reset" in names else []
+            return any(e["event"] == "entry" for e in after) and any(e["event"] == "state" and e["data"]["state"] == "working" for e in after)
+        _h, evs = self.read_until(s, fresh_after_reset)
         after = evs[[e["event"] for e in evs].index("reset"):]
         self.assertEqual(after[0]["id"], "0")
         self.assertEqual([e["data"]["message"]["content"] for e in after if e["event"] == "entry"], ["fresh"])
         s.close()
+
+    def test_a_look_between_the_truncation_and_the_new_content_sends_the_reset_alone(self):
+        """open(path, "w") truncates before it writes: a look in between finds an empty file, so the reset goes out with no
+        entry yet, and the new content follows in the next step (test_history_then_growth_then_truncation waits for both)."""
+        writes, calls = [], [0]
+
+        def closed():  # runs before each look at the file
+            calls[0] += 1
+            if calls[0] == 3:
+                open(self.p, "w").close()
+            elif calls[0] == 4:
+                with open(self.p, "a") as f:
+                    f.write(entry("user", message={"content": "fresh"}))
+            return calls[0] > 5
+        A.live_stream(A.live_lookup("fixer-31-1"), 0, writes.append, closed=closed, poll=0, max_secs=60)
+        steps = [sse_events(w.decode()) for w in writes if b"event: reset" in w or b"event: entry" in w][1:]  # after the history
+        self.assertEqual([[e["event"] for e in evs] for evs in steps][0][0], "reset")
+        self.assertNotIn("entry", [e["event"] for e in steps[0]])
+        self.assertEqual([e["data"]["message"]["content"] for evs in steps[1:] for e in evs if e["event"] == "entry"], ["fresh"])
 
     def test_resume_from_an_offset_or_last_event_id(self):
         size = os.path.getsize(self.p)
