@@ -6,7 +6,8 @@ from agentctl.core import pct
 from agentctl.forge import runner_queue
 from agentctl.govtickets import gov_tickets
 from agentctl.govbudget import GOV_MEM_GB
-from agentctl.gov import GOV_CLASSES, gov_fits, gov_machine, gov_waiters
+from agentctl.gov import GOV_CLASSES, gov_machine, gov_waiters
+from agentctl.govfits import gov_fits
 from agentctl.govusage import GOV_JOB_CORES, gov_job_cores
 
 

@@ -432,5 +432,29 @@ class CmdRecoverTest(unittest.TestCase):
         check(self, "cmd_recover", self.build, run, 3000)
 
 
+# ------------------------------------------------------------------------------------------------ gov
+class GovFitsTest(unittest.TestCase):
+    def build(self, case):
+        r = case.rng
+        case.put("wall_epoch", lambda: NOW)
+        case.fake("env_num", lambda rng, n, d: rng.choice([d, d, d, 0, 1, 2, 3, 6, 10 ** 9]))
+        case.fake("checks_cap", lambda rng: rng.choice([0, 1, 2, 4]))
+        case.fake("gov_budget", lambda rng: rng.choice([4.0, 10.0, 16.0, 40.0]))
+        case.fake("gov_capacity", lambda rng, tickets, m: {"state": rng.choice(["starved", "ok", "ok", "spare"]), "busy": rng.choice([0, 3.5, 9.0]),
+                                                           "cores": rng.choice([4, 8, 16]), "charged": rng.choice([0, 0, 2.0, 6.5]), "measured": rng.choice([0.5, 7.25])})
+        tickets = [{"class": r.choice(["suite", "agent", "red", "check"]), "kind": r.choice(["job", "check", "check"]), "mem": r.choice([0, 1, 2.5, 4, None, "3"]),
+                    "at": r.choice([NOW - 10, NOW - 119, NOW - 120, NOW - 500])} for _ in range(r.randint(0, 5))]
+        m = {}
+        for k, gen in (("free", lambda: r.choice([0.5, 2.0, 3.0, 8.0, 40.0])), ("pressure", lambda: r.choice([10, 74, 75, 76, 90.0])),
+                       ("laptop", lambda: r.choice(["", "swapping", None]))):
+            if r.random() < 0.7:
+                m[k] = gen()
+        return (r.choice(["agent", "agent", "suite", "red", "fixer", "check"]), r.choice([0, 1, 2.5, 4.0, 8.0, 30.0]), tickets, m,
+                r.choice(["job", "check"]), r.choice([0.0, 0.0, 1.0, 4.0, 12.0]))
+
+    def test_gov_fits(self):
+        check(self, "gov_fits", self.build, lambda A: A.gov_fits, 12000)
+
+
 if __name__ == "__main__":
     unittest.main()

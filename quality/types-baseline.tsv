@@ -45,10 +45,11 @@ mypy-errors	gating	28
 mypy-errors	generated	21
 mypy-errors	generatedregen	14
 mypy-errors	ghapp	34
-mypy-errors	gov	42
+mypy-errors	gov	27
 mypy-errors	govbudget	12
 mypy-errors	govcmd	30
-mypy-errors	govroute	10
+mypy-errors	govfits	13
+mypy-errors	govroute	9
 mypy-errors	govusage	6
 mypy-errors	identitychange	11
 mypy-errors	inbox	14

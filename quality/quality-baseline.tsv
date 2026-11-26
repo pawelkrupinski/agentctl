@@ -14,7 +14,6 @@ cognitive	cmd_lease	17
 cognitive	conflict_resolve	17
 cognitive	explorer_tick	19
 cognitive	forge_run_list	22
-cognitive	gov_fits	20
 cognitive	laptop_role	15
 cognitive	laptop_role_refusal	23
 cognitive	live_state	12
@@ -54,7 +53,6 @@ cyclomatic	conflict_resolve	21
 cyclomatic	explorer_tick	19
 cyclomatic	forge_run_list	15
 cyclomatic	gate_flow_names	14
-cyclomatic	gov_fits	21
 cyclomatic	jobs_verdict	23
 cyclomatic	laptop_role	17
 cyclomatic	laptop_role_refusal	16
