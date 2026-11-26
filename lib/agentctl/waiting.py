@@ -164,20 +164,26 @@ def cancel_entry_remote(st: Any, e: dict[str, Any], why: str) -> None:
             err(f"could not cancel run {rem['run']} of {e['id']}: {str(ex)[:120]}")
 
 
+def stop_checker(e: dict[str, Any]) -> None:
+    """An entry's running checker stopped (its CI run is cancelled with it): never this process itself, and a checker
+    that ended since its lock was read is no error (review 2026-11-26: `land cancel` had its own copy with neither)."""
+    h = read_record(entry_owned(e["id"]).record) or {}
+    if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid") and int(h["pid"]) != os.getpid():
+        try:
+            os.kill(int(h["pid"]), signal.SIGTERM)
+        except ProcessLookupError:  # it ended on its own meanwhile
+            pass
+        except OSError as exc:
+            note_failure("checker not signalled", exc)
+
+
 def supersede(st, d, e, by, why) -> None:
     """The entry gives way to `by` (a newer entry of the same worktree and branch, or one carrying the same change): its
     checker, if running, is stopped; said in the inbox."""
     line = f"SUPERSEDED {e['id']} by {by}: {why}"
     set_change(st, d, e, "superseded", cause="superseded", event=change_event(e, line, code=0), superseded_by=by, why=why, decided=ts())
     cancel_entry_remote(st, e, f"its queue entry was superseded by {by}")
-    h = read_record(entry_owned(e["id"]).record) or {}
-    if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid") and int(h["pid"]) != os.getpid():
-        try:
-            os.kill(int(h["pid"]), signal.SIGTERM)  # its checker: its CI run is cancelled with it
-        except ProcessLookupError:
-            pass
-        except OSError as exc:
-            note_failure("checker not signalled", exc)
+    stop_checker(e)
     wlog(d, line)
 
 

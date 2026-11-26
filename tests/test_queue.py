@@ -2126,5 +2126,33 @@ def load_tests(loader, tests, pattern):
                                if n.startswith("test_") and callable(vars(c)[n])])
 
 
+class StopCheckerTest(unittest.TestCase):
+    """Review 2026-11-26 (A B3): `land cancel` stopped a queued entry's checker with a bare os.kill -- no guard against
+    its own pid (supersede had one) and no OSError caught: a checker ending between the lock read and the kill made
+    the cancel die with ProcessLookupError after the entry was already cancelled. One stop_checker for both."""
+
+    def test_a_checker_gone_before_the_kill_is_no_crash_and_a_cancel_never_stops_itself(self):
+        dead = subprocess.Popen(["true"])
+        dead.wait()
+        names = ("set_change", "cancel_entry_remote", "lock_held", "read_record")
+        saved = {n: getattr(A, n) for n in names}
+        killed = []
+        real_kill = os.kill
+        try:
+            A.set_change = lambda *a, **k: None
+            A.cancel_entry_remote = lambda *a, **k: None
+            A.lock_held = lambda path: True
+            for pid in (dead.pid, os.getpid()):
+                A.read_record = lambda path, pid=pid: {"pid": pid}
+                os.kill = lambda p, sig: (killed.append(p), real_kill(p, sig))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(A.cancel_queued(None, "/nowhere", {"id": "e-1"}), 0)
+        finally:
+            os.kill = real_kill
+            for n, v in saved.items():
+                setattr(A, n, v)
+        self.assertEqual(killed, [dead.pid])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -4,24 +4,22 @@
 from agentctl.clock import epoch_now
 import argparse
 import os
-import signal
 import sys
 import time
 from typing import Any
 from agentctl.clock import Clock
 from agentctl.core import fmt_age, git, git_ok, host_role
 from agentctl.timefmt import hhmmz, ts
-from agentctl.statefile import read_json_file, read_record, unlink_file
+from agentctl.statefile import read_json_file, unlink_file
 from agentctl.repos import movies_repo_path
 from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, waiting_state
 from agentctl.procs import safe_cwd
-from agentctl.owned import lock_held
 from agentctl.clones import main_clone
-from agentctl.queueslots import entry_owned, set_change
+from agentctl.queueslots import set_change
 from agentctl.queue import hold_text, land_hold
 from agentctl.queuerecheck import queued_entries
 from agentctl.changekind import HOLD_SHOWN
-from agentctl.waiting import GATE_UNREAD, cancel_entry_remote, cancel_submitted, unread_why
+from agentctl.waiting import GATE_UNREAD, cancel_entry_remote, cancel_submitted, stop_checker, unread_why
 from agentctl.queuesubmit import landed_sha_of
 from agentctl.remotestore import StoreUnavailable, store_unreachable_text, store_url
 from agentctl.landhold import LAND_HOLD_DEFAULT, hold_by, land_hold_release, land_hold_set
@@ -183,9 +181,7 @@ def cancel_queued(st: Any, d: str, e: dict[str, Any]) -> int:
     set_change(st, d, e, "cancelled", cause="agent", event={"text": f"{e['id']}: cancelled"},
                why="cancelled by `agentctl land cancel`", decided=ts())
     cancel_entry_remote(st, e, "its queue entry was cancelled")
-    h = read_record(entry_owned(e["id"]).record) or {}
-    if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid"):
-        os.kill(int(h["pid"]), signal.SIGTERM)  # its checker: its CI run is cancelled with it
+    stop_checker(e)
     print(f"cancelled {e['id']}")
     return 0
 
