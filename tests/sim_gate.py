@@ -65,6 +65,9 @@ def scenarios():
     out += [(f"redepisode-{n}-{s}", {"seed": s, "calm": True, "trees": 2, "script": name})
             for n, name in (("older", "REDFIX_OLDER_RUN"), ("heals", "REDFIX_HEALS"), ("other", "REDFIX_OTHER_FAILURE"))
             for s in range(4)]
+    # v4 (2026-11-26): the red-landing rule -- a fix beside a bare production commit waits for green (IR)
+    out += [(f"redfix-beside-bare-{s}", {"seed": s, "calm": True, "trees": 2, "script": "REDFIX_BESIDE_BARE"})
+            for s in range(4)]
     return out
 
 

@@ -291,6 +291,16 @@ class RedEpisodeTest(unittest.TestCase):
             fix = next(c for c in sim.changes if c.label == "fix")
             self.assertLessEqual(sim.done_at[fix.cid], 8 + 10, "the red learned the run at tick 8: the fix goes at once")
 
+    def test_a_fix_beside_a_bare_production_commit_waits_for_green_and_holds_nothing(self):
+        """THE RED-LANDING RULE (redland.py): it may not land on the red, so it lands only once the gate is green; the
+        tools-only change lands on the red meanwhile (IR: nothing bare is pushed onto the red)."""
+        for sim in self.sims(queue_sim.REDFIX_BESIDE_BARE):
+            self.assertEqual(failures([sim]), [])
+            by = {c.label: c for c in sim.changes}
+            self.assertTrue(sim.green_ticks, "the gate went green")
+            self.assertGreaterEqual(sim.done_at[by["fix"].cid], sim.green_ticks[0], "it waited for green")
+            self.assertLess(sim.done_at[by["tools"].cid], sim.green_ticks[0], "the tools-only change landed on the red")
+
     def test_the_fix_of_another_failure_waits_for_green(self):
         for sim in self.sims(queue_sim.REDFIX_OTHER_FAILURE):
             self.assertEqual(failures([sim]), [])

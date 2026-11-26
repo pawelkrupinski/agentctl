@@ -46,6 +46,7 @@ INVARIANT_KINDS = {
     "Id": "executors start in the documented priority order within a tick",
     "IX": "no executor for a decided change",
     "IW": "a red fix of an open gate red the store names never waits for green past N ticks",
+    "IR": "the queue never lands on a red gate a production commit naming no run of the open red",
 }
 VIOLATIONS_MAX = 50  # lines one scenario keeps in the gate's count mode
 ROOT = "0" * 40
@@ -347,6 +348,7 @@ class Sim:
         # same red is named only by its red item in the store (red_item_runs: what the store holds, learned later by
         # `learn-run`), and a run of another failure by no item at all
         self.red_older, self.red_item, self.red_item_runs, self.fix_waits = None, None, set(), {}
+        self.green_ticks = []  # the ticks the gate went green (the forge's)
         self.outside, self.outside_run, self.outside_clears = {}, 5000, {}  # reds outside the gate: {run: red id}
         # their own draws (a stream of their own: a seed without one replays exactly as before they were modelled)
         self.outside_rng = random.Random(f"outside-{seed}")
@@ -702,6 +704,18 @@ class Sim:
         self.forge_push(sha, "queue")
         return 0, "pushed\n"
 
+    def check_red_landing(self, commits):
+        """R. THE RED-LANDING RULE, by the simulation's own truth (never the rule under test, redland.py, which the
+        simulated hook applies): while the gate is red, every production commit the queue LANDS names a run of the open
+        red -- the gate's or its item's. (A push the hook refuses -- the gate turned red after the queue decided -- lands
+        nothing and is no violation.)"""
+        known = set(self.reds) | self.red_item_runs
+        for c in commits if self.reds else ():
+            p = self.patches.get(self.commits.get(c, (None, None))[1])
+            if p and any(sim_production(x) for x in p.paths) and not p.fixes & known:
+                self.violate("IR", f"patch {p.pid} of change {p.cid} pushed while the gate is red {sorted(self.reds)}: "
+                             f"a production commit naming {sorted(p.fixes) or 'no red'}")
+
     def forge_push(self, sha, who):
         new = [self.commits[c][1] for c in self.chain(self.main, sha)]
         for pid in new if who == "queue" else ():  # NEVER A DECIDED CHANGE PUSHED (superseded, cancelled, rejected)
@@ -713,6 +727,8 @@ class Sim:
             self.pushed_patch_count[pid] = self.pushed_patch_count.get(pid, 0) + 1
             if self.pushed_patch_count[pid] > 1:
                 self.violate("I2", f"patch {pid} of change {self.patches[pid].cid} pushed to main twice")
+        if who == "queue":
+            self.check_red_landing(self.chain(self.main, sha))
         if who == "queue" and not self.tree_verified(sha, new):  # INVARIANT 11
             self.violate("I11", f"an unverified combined tree reached main: {sha[:10]} (patches {sorted(new)}) passed no check")
         self.pushes.append((self.tick, sha, new, who))
@@ -991,7 +1007,7 @@ class Sim:
                 paths.append(theirs.paths[0])
         base = self.main
         pids, head = [], base
-        for k in range(1 if spec.get("one_commit") else self.rng.choice((1, 1, 2))):
+        for k in range(2 if spec.get("two_commits") else 1 if spec.get("one_commit") else self.rng.choice((1, 1, 2))):
             pid = f"p{cid}{letters(k)}"
             self.patches[pid] = Patch(pid, cid, paths if k == 0 else [paths[0]], fixes if k == 0 else (),
                                       bad=bad and k == 0, conflicts=conflicts)
@@ -1148,6 +1164,7 @@ class Sim:
         self.close_outside_reds()
         if self.red_clears_at is not None and self.tick >= self.red_clears_at:
             self.reds, self.red_since, self.red_clears_at = set(), None, None
+            self.green_ticks.append(self.tick)
             self.close_red_item()
         if self.tick >= self.drain_from and self.reds and self.red_clears_at is None:
             self.red_clears_at = self.tick + 1  # the drain: the gate goes green
@@ -1576,7 +1593,22 @@ REDFIX_OTHER_FAILURE = [
     (1, {"label": "fix", "worktree": "fix", "kind": "redfix-other", "one_commit": True, "paths": ["worker/src/main/Fix.scala"]}),
     (20, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]}),
 ]
+# A FIX BESIDE A BARE PRODUCTION COMMIT (2026-11-26, the red-landing rule; 2026-10-31, Main #2877): the fix's second
+# commit touches production and names no red, so the change may not land on the red -- it waits for green, while a
+# tools-only change lands on the red at once; it is no gate fix, so nothing waits for it (IR, IW, I3).
+REDFIX_BESIDE_BARE = [
+    (0, {"kind": "open-red"}),
+    (1, {"label": "fix", "worktree": "fix", "kind": "redfix-older", "two_commits": True, "paths": ["worker/src/main/Fix.scala"]}),
+    (2, {"label": "tools", "worktree": "tools", "paths": ["scripts/tools.sh"]}),
+    (3, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
+    (20, {"label": "late", "worktree": "late", "paths": ["docs/late.md"]}),
+]
 FIX_08010C_BOUND = 8  # ticks from its arrival to LANDED (a check is 2-4 ticks; nothing may hold it)
+
+
+def sim_production(path):
+    """The simulation's own production paths (an sbt module's src/main, as movies' pre-push says)."""
+    return path.split("/")[0] in SBT_MODULES and "/src/main/" in path
 
 
 def landing_waits(sim):
