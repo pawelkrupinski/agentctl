@@ -264,7 +264,7 @@ COMMIT_MSGS = ["subject\n\nFixes-Red: 12\nFix-Replay: sbt t base=FAIL head=PASS\
                "s\n\nFix-Replay: none: x\n\nFixes-Red: 3\nFix-Replay: none\n", "s\nFixes-Red: 7, #8\n", "no trailers at all", "",
                "s\n\nFix-Replay: sbt t\nFix-Replay: sbt t\nFix-Replay: other\n", "s\n\nFix-Replay:\nFixes-Red:\n",
                "s\n\nfixes-red: 5\nfix-replay: cmd BASE=fail HEAD=pass\n", "s\n\nFix-Replay: none -- two dashes here are a reason\n\nFixes-Red: 9\n",
-               "s\n\nFix-Replay: none - hyphen\nFixes-Red: 1\n\nCo-Authored-By: x\n", "s\n\nFix-Replay: nonexistent thing\n"]
+               "s\n\nFix-Replay: none - hyphen\nFixes-Red: 1\n\nCo-Authored-By: x\n", "s\n\nFix-Replay: nonexistent thing\n", "s\n\nFix-Replay: \nFixes-Red: 2\n", "s\n\nFix-Replay: none \nFixes-Red: 2\n"]
 
 
 class FixReplayTrailersTest(unittest.TestCase):
@@ -284,7 +284,7 @@ class FixReplayTrailersTest(unittest.TestCase):
 class FixReplayRefusalTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
-        named = set(r.sample(["1", "2", "3"], r.randint(0, 3)))
+        named = set(r.sample(["1", "2", "3", "None"], r.randint(0, 3)))
         cmds = ["sbt t", "bt run", "other cmd"]
         claimed = [(r.choice(cmds), r.choice(["FAIL", "PASS"]), r.choice(["FAIL", "PASS"])) for _ in range(r.randint(0, 2))]
         bare = r.sample(cmds, r.randint(0, 2))
@@ -295,7 +295,7 @@ class FixReplayRefusalTest(unittest.TestCase):
         for i in range(r.randint(0, 4)):
             d = {"key": r.choice(["k", None, "k2"]), "gate": r.choice([True, False, None]), "workflow": r.choice(["W", "Alert backtest", None]),
                  "ids": r.sample(["1", "2", "3", "4"], r.randint(0, 2))}
-            items.append({"id": f"i{i}", "state": r.choice(["open", "closed", "fixing"]), "data": d})
+            items.append({"id": f"i{i}", "state": r.choice(["open", "verified", "fixing", "cleared"]), "data": d})
         case.fake("red_names", lambda rng, d: d["ids"] + [None])
         case.fake("red_what", lambda rng, d: f"RED {d['key']}")
         case.fake("red_workflows_on_main", lambda rng, repo: rng.random() < 0.7)

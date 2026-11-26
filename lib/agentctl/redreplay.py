@@ -61,32 +61,55 @@ def red_replay_command(repo, d):
     return cmd.replace("{run}", str(run)) if cmd and run else cmd
 
 
+def _final_trailers(msg: str) -> set[str]:
+    """The trailer lines of a message's final paragraph (the block git reads), none for a one-paragraph message."""
+    paras = [p for p in re.split(r"\n\s*\n", msg.strip()) if p.strip()]
+    return set(commit_trailers("-\n\n" + paras[-1])) if len(paras) > 1 else set()
+
+
+class _ReplayTrailers:
+    """What the trailers of commits say of FIX REPLAY: the red names of `Fixes-Red:`, the claimed results (`Fix-Replay:
+    <cmd> base=X head=Y`), the bare commands agentctl runs, the `none` reasons."""
+
+    def __init__(self) -> None:
+        self.named: set[str] = set()
+        self.claimed: list[tuple[str, str, str]] = []
+        self.bare: list[str] = []
+        self.nones: list[str] = []
+
+    def read(self, msg: str) -> None:
+        final = _final_trailers(msg)
+        for ln in commit_trailers(msg):
+            self._line(ln, final)
+
+    def _line(self, ln: str, final: set[str]) -> None:
+        k, _, v = ln.partition(":")
+        if k.strip().lower() == "fixes-red":
+            self.named |= trailer_values(v)
+        claimed = FIX_REPLAY_TRAILER.match(ln)
+        if claimed:
+            self.claimed.append((claimed.group(1).strip(), claimed.group(2).upper(), claimed.group(3).upper()))
+            return
+        said = FIX_REPLAY_ANY.match(ln)
+        if said and said.group(1):
+            self._command_or_none(said.group(1), ln, final)
+
+    def _command_or_none(self, value: str, ln: str, final: set[str]) -> None:
+        none = FIX_REPLAY_NONE.match(value)
+        if none or value.lower() == "none":
+            if ln in final:  # the escape hatch counts only where git reads it, as the weekly list does
+                self.nones.append(none.group(1) if none else "")
+        elif value not in self.bare:
+            self.bare.append(value)
+
+
 def fix_replay_trailers(repo, commits):
     """(the names Fixes-Red: gives, [(command, base, head)] of claimed results, [command] agentctl runs, [none
     reasons]) over commits' trailers."""
-    named, claimed, bare, nones = set(), [], [], []
+    found = _ReplayTrailers()
     for c in commits or []:
-        msg = git(repo, "log", "-1", "--format=%B", c, check=False).stdout
-        paras = [p for p in re.split(r"\n\s*\n", msg.strip()) if p.strip()]
-        final = set(commit_trailers("-\n\n" + paras[-1])) if len(paras) > 1 else set()
-        for ln in commit_trailers(msg):
-            k, _, v = ln.partition(":")
-            if k.strip().lower() == "fixes-red":
-                named |= trailer_values(v)
-            m = FIX_REPLAY_TRAILER.match(ln)
-            if m:
-                claimed.append((m.group(1).strip(), m.group(2).upper(), m.group(3).upper()))
-                continue
-            m = FIX_REPLAY_ANY.match(ln)
-            if not m or not m.group(1):
-                continue
-            none = FIX_REPLAY_NONE.match(m.group(1))
-            if none or m.group(1).lower() == "none":
-                if ln in final:  # the escape hatch counts only where git reads it, as the weekly list does
-                    nones.append((none.group(1) if none else "").strip())
-            elif m.group(1) not in bare:
-                bare.append(m.group(1))
-    return named, claimed, bare, nones
+        found.read(git(repo, "log", "-1", "--format=%B", c, check=False).stdout)
+    return found.named, found.claimed, found.bare, found.nones
 
 
 def fix_replay_none_reasons(repo, commits):
@@ -189,6 +212,35 @@ def gate_fix_replay_refusal(d: Any, claimed: Any, bare: Any, nones: Any, proofs:
     return _proof_replay_refusal(what, cmds, proofs)
 
 
+def _open_reds(store: Any) -> list[dict[str, Any]] | None:
+    """The store's open reds that carry a key, or None when the store cannot be read (an unread store refuses nothing).
+    THE LAPTOP'S LAND NEEDS NO VAULT: never `secrets` for this read (no token: no refusal)."""
+    try:
+        with no_vault():
+            return [it for it in store.items("red") if it["data"].get("key") and it["state"] not in RED_TERMINAL]
+    except (Exception, SystemExit):
+        return None
+
+
+def _outside_replay_refusal(repo: Any, d: Any, claimed: Any) -> str | None:
+    """The warning for a red outside the gate: its registry missing from main, or its workflow's replay command not
+    claimed with base=FAIL head=PASS; None when the workflow names no replay or it is claimed."""
+    if not red_workflows_on_main(repo) and (red_repo_conf(red_repo_of(d)) or {}).get("red_workflows"):
+        return (f"{RED_WORKFLOWS_FILE} is missing on {remote()}/main, though red-repos.json says "
+                f"{red_repo_of(d)} keeps one: no Fixes-Red lands for {red_what(d)} until it is back (its rows "
+                "say which reds need a `Fix-Replay:`)")
+    cmd = red_replay_command(repo, d)
+    if not cmd:
+        return None
+    stem = red_workflow_policy(repo, d.get("workflow"))["replay"].split("{run}")[0].strip()
+    ok = [r for r in claimed if r[0].startswith(stem)]
+    if any(r[1:] == ("FAIL", "PASS") for r in ok):
+        return None
+    said = f" (this push says base={ok[0][1]} head={ok[0][2]})" if ok else ""
+    return (f"{red_what(d)} has a replay: run `{cmd}` at origin/main and at your fix, see base=FAIL "
+            f"head=PASS, and record it as the trailer `Fix-Replay: {cmd} base=FAIL head=PASS`{said}")
+
+
 def fix_replay_refusal(repo, commits, store, proofs=None):
     """(policy id, why) when the Fixes-Red: of commits is refused by FIX REPLAY (above) -- `fix-replay` for a gate red,
     enforced; `fix-replay-outside` for a red outside the gate whose workflow names a replay, warn-only -- or None.
@@ -199,11 +251,8 @@ def fix_replay_refusal(repo, commits, store, proofs=None):
     named, claimed, bare, nones = fix_replay_trailers(repo, commits)
     if not named:
         return None
-    try:
-        with no_vault():  # THE LAPTOP'S LAND NEEDS NO VAULT: never `secrets` for this read (no token: no refusal)
-            items = [it for it in store.items("red") if it["data"].get("key")
-                     and it["state"] not in RED_TERMINAL]
-    except (Exception, SystemExit):
+    items = _open_reds(store)
+    if items is None:
         return None
     outside = None
     for it in sorted(items, key=lambda it: not it["data"].get("gate")):  # the gate's first: enforced
@@ -214,21 +263,6 @@ def fix_replay_refusal(repo, commits, store, proofs=None):
             why = gate_fix_replay_refusal(d, claimed, bare, nones, proofs)
             if why:
                 return "fix-replay", why
-            continue
-        if outside:
-            continue
-        if not red_workflows_on_main(repo) and (red_repo_conf(red_repo_of(d)) or {}).get("red_workflows"):
-            outside = (f"{RED_WORKFLOWS_FILE} is missing on {remote()}/main, though red-repos.json says "
-                       f"{red_repo_of(d)} keeps one: no Fixes-Red lands for {red_what(d)} until it is back (its rows "
-                       "say which reds need a `Fix-Replay:`)")
-            continue
-        cmd = red_replay_command(repo, d)
-        if not cmd:
-            continue
-        stem = red_workflow_policy(repo, d.get("workflow"))["replay"].split("{run}")[0].strip()
-        ok = [r for r in claimed if r[0].startswith(stem)]
-        if not any(r[1:] == ("FAIL", "PASS") for r in ok):
-            said = f" (this push says base={ok[0][1]} head={ok[0][2]})" if ok else ""
-            outside = (f"{red_what(d)} has a replay: run `{cmd}` at origin/main and at your fix, see base=FAIL "
-                       f"head=PASS, and record it as the trailer `Fix-Replay: {cmd} base=FAIL head=PASS`{said}")
+        elif not outside:
+            outside = _outside_replay_refusal(repo, d, claimed)
     return ("fix-replay-outside", outside) if outside else None
