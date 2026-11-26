@@ -95,32 +95,43 @@ def _gh_api_run(method: str, path: str, argv: list[str], env: dict[str, str],
     return net_run(f"gh api GET {gh_tally_shape(path)}", argv, **kw) if method == "GET" else process_runner().run(argv, **kw)
 
 
-def _gh_api_once(o_r, method, path, params=None, body=None):
-    url = f"repos/{o_r}/{path}" + ("?" + urllib.parse.urlencode(params) if params else "")
+def _gh_api_argv(method: str, url: str, cached: Any, body: object) -> list[str]:
+    """`gh api`'s argv: a GET asks with its cached ETag (and wants the headers), a body is read from stdin."""
     argv = [GH_CLI, "api", "-X", method, "-H", "Accept: application/vnd.github+json", url]
-    cached = read_record(etag_path(url)) if method == "GET" else None
     if method == "GET":
         argv[2:2] = ["-i"] + (["-H", f"If-None-Match: {cached['etag']}"] if cached and cached.get("etag") else [])
     if body is not None:
         argv += ["--input", "-"]
-    with gh_tally_as(f"api {method} {gh_tally_shape(path)}"):
-        env = forge_env(o_r)
-    r = _gh_api_run(method, path, argv, env, body)
-    if method != "GET":
-        if r.returncode != 0:
-            raise ForgeHTTPError(f"gh api {method} {url}: {(r.stderr or r.stdout).strip()[:300]}")
-        return json.loads(r.stdout) if r.stdout.strip() else None
+    return argv
+
+
+def _gh_api_read(url: str, r: "subprocess.CompletedProcess[Any]", cached: Any) -> Any:
+    """A GET's answer: the cache's on a 304, else the body, kept with its ETag."""
     status, hdrs, text = _split_response(r.stdout)
     if status == 304 and cached is not None:
         gh_tally(free=True)
         return cached.get("body")
     if r.returncode != 0:
-        raise ForgeHTTPError(f"gh api {method} {url}: {(r.stderr or text or r.stdout).strip()[:300]}")
+        raise ForgeHTTPError(f"gh api GET {url}: {(r.stderr or text or r.stdout).strip()[:300]}")
     out = json.loads(text) if text.strip() else None
     if hdrs.get("etag"):
         with contextlib.suppress(OSError):
             write_json(etag_path(url), {"etag": hdrs["etag"], "body": out})
     return out
+
+
+def _gh_api_once(o_r, method, path, params=None, body=None):
+    url = f"repos/{o_r}/{path}" + ("?" + urllib.parse.urlencode(params) if params else "")
+    cached = read_record(etag_path(url)) if method == "GET" else None
+    argv = _gh_api_argv(method, url, cached, body)
+    with gh_tally_as(f"api {method} {gh_tally_shape(path)}"):
+        env = forge_env(o_r)
+    r = _gh_api_run(method, path, argv, env, body)
+    if method == "GET":
+        return _gh_api_read(url, r, cached)
+    if r.returncode != 0:
+        raise ForgeHTTPError(f"gh api {method} {url}: {(r.stderr or r.stdout).strip()[:300]}")
+    return json.loads(r.stdout) if r.stdout.strip() else None
 
 
 # -- `gh run list` as conditional REST reads (2026-11-10)
@@ -206,17 +217,15 @@ def forge_workflow_names(o_r):
     return names
 
 
-def forge_run_list(o_r, args):
-    """`gh run list ...` (args from `run`), as gh prints it with --json, read through api(): None when it is not one
-    this answers (gh is asked instead). A workflow file not on the default branch raises gh's own words for it."""
-    opts = _run_list_options(args)
-    if opts is None:
-        return None
+def _run_list_pages(o_r: Any, opts: Any) -> tuple[list[Any], bool]:
+    """(the runs of the pages read until opts' limit, whether they are everything that matched). A workflow file not on
+    the default branch raises gh's own words for it."""
     path = (f"actions/workflows/{urllib.parse.quote(opts['workflow'], safe='')}/runs" if "workflow" in opts
             else "actions/runs")
     params = {"exclude_pull_requests": "true"}
     params.update({k: opts[k] for k in ("branch", "status") if k in opts})
-    fields, runs, page, complete = opts["json"].split(","), [], 1, False
+    runs: list[Any] = []
+    page, complete = 1, False
     while len(runs) < opts["limit"]:
         per = min(100, opts["limit"]) if opts["limit"] <= 100 else 100
         try:
@@ -232,18 +241,29 @@ def forge_run_list(o_r, args):
             complete = len(runs) <= opts["limit"]
             break
         page += 1
+    return runs, complete
 
+
+def _run_list_shaped(r: Any, fields: list[str], names: Any) -> Any:
+    """One REST run as gh prints it with --json fields."""
+    out = {f: r.get(RUN_LIST_FIELDS[f]) for f in fields if f in RUN_LIST_FIELDS}
+    if "workflowName" in fields:  # the WORKFLOW's name, as gh names it: REST's `name` is the run's run-name
+        out["workflowName"] = names.get(r.get("workflow_id")) or names.get(r.get("path")) or r.get("name")
+    if "conclusion" in fields:
+        out["conclusion"] = r.get("conclusion") or ""  # gh prints a pending run's conclusion as ""
+    return out
+
+
+def forge_run_list(o_r, args):
+    """`gh run list ...` (args from `run`), as gh prints it with --json, read through api(): None when it is not one
+    this answers (gh is asked instead). A workflow file not on the default branch raises gh's own words for it."""
+    opts = _run_list_options(args)
+    if opts is None:
+        return None
+    runs, complete = _run_list_pages(o_r, opts)
+    fields = opts["json"].split(",")
     names = forge_workflow_names(o_r) if "workflowName" in fields else {}
-
-    def shaped(r):
-        out = {f: r.get(RUN_LIST_FIELDS[f]) for f in fields if f in RUN_LIST_FIELDS}
-        if "workflowName" in fields:  # the WORKFLOW's name, as gh names it: REST's `name` is the run's run-name
-            out["workflowName"] = names.get(r.get("workflow_id")) or names.get(r.get("path")) or r.get("name")
-        if "conclusion" in fields:
-            out["conclusion"] = r.get("conclusion") or ""  # gh prints a pending run's conclusion as ""
-        return out
-
-    out = RunList(shaped(r) for r in runs[:opts["limit"]])
+    out = RunList(_run_list_shaped(r, fields, names) for r in runs[:opts["limit"]])
     out.complete = complete
     return out
 
