@@ -99,8 +99,7 @@ def workflow_ever_green(store, o_r, workflow, runs=(), now_=None):
         return True
     green = _completed_green(runs)
     if not green:
-        at = _never_green_at.get((o_r, workflow))
-        if at is not None and t - at < env_num("AGENTCTL_EVER_GREEN_RECHECK", EVER_GREEN_RECHECK):
+        if _never_green_recently((o_r, workflow), t):
             return False
         # SystemExit: NoToken
         green = attempt(lambda: newest_green_main(o_r, workflow), _UNREAD, catch=(Exception, SystemExit))
@@ -113,6 +112,45 @@ def workflow_ever_green(store, o_r, workflow, runs=(), now_=None):
     return True
 
 
+def _never_green_recently(key: tuple[str, ...], t: float) -> bool:
+    """True when the workflow (or job) of `key` was found never green within EVER_GREEN_RECHECK before t."""
+    at = _never_green_at.get(key)
+    return at is not None and t - at < env_num("AGENTCTL_EVER_GREEN_RECHECK", EVER_GREEN_RECHECK)
+
+
+def _has_success(runs: list[Any]) -> bool:
+    return any(r.get("conclusion") == "success" for r in runs)
+
+
+def _job_candidate_runs(o_r: Any, workflow: Any, runs: Any) -> list[Any]:
+    """The runs whose jobs are read for a job's green: the decided ones, green first (EVER_GREEN_JOB_RUNS of them), led
+    by the newest green run on main when none of them is green."""
+    cands = sorted(decided_runs(runs), key=lambda r: r.get("conclusion") != "success")[:EVER_GREEN_JOB_RUNS]
+    if not _has_success(cands):
+        g = attempt(lambda: newest_green_main(o_r, workflow), None, catch=(Exception, SystemExit))
+        cands = ([g] if g else []) + cands
+    return cands
+
+
+def _job_green_in_runs(store: Any, o_r: Any, workflow: Any, job: Any, cands: list[Any]) -> bool | None:
+    """True when a run of cands has job green (every green job found is noted), None when a green run could not be read
+    (its jobs may hold this one), False when none of them has it."""
+    for r in cands:
+        rid = r.get("databaseId")
+        try:
+            jobs = decided_run_jobs(o_r, rid)
+        except (Exception, SystemExit):
+            if r.get("conclusion") == "success":
+                return None
+            continue
+        greens = green_job_names(jobs)
+        if greens:
+            ever_green_note(store, o_r, workflow, rid, greens)
+        if any(job_matches(g, job) for g in greens):
+            return True
+    return False
+
+
 def job_ever_green(store, o_r, workflow, job, runs=(), now_=None):
     """True when job of (ever green) workflow concluded success in a run on main; False when it did in none of the runs
     read -- at least one green run among them, every green one read; None (unknown, tracked) otherwise."""
@@ -120,31 +158,15 @@ def job_ever_green(store, o_r, workflow, job, runs=(), now_=None):
     known = ((ever_green_record(store).get(o_r) or {}).get("jobs") or {}).get(workflow) or {}
     if any(job_matches(k, job) for k in known):
         return True
-    at = _never_green_at.get((o_r, workflow, job))
-    if at is not None and t - at < env_num("AGENTCTL_EVER_GREEN_RECHECK", EVER_GREEN_RECHECK):
+    if _never_green_recently((o_r, workflow, job), t):
         return False
-    decided = decided_runs(runs)
-    cands = sorted(decided, key=lambda r: r.get("conclusion") != "success")[:EVER_GREEN_JOB_RUNS]
-    if not any(r.get("conclusion") == "success" for r in cands):
-        g = attempt(lambda: newest_green_main(o_r, workflow), None, catch=(Exception, SystemExit))
-        cands = ([g] if g else []) + cands
-    if not any(r.get("conclusion") == "success" for r in cands):
+    cands = _job_candidate_runs(o_r, workflow, runs)
+    if not _has_success(cands):
         return None  # no green run to read its jobs from: unknown, tracked
-    for r in cands:
-        rid = r.get("databaseId")
-        try:
-            jobs = decided_run_jobs(o_r, rid)
-        except (Exception, SystemExit):
-            if r.get("conclusion") == "success":
-                return None  # a green run unread: its jobs may hold this one -- unknown, tracked
-            continue
-        greens = green_job_names(jobs)
-        if greens:
-            ever_green_note(store, o_r, workflow, rid, greens)
-        if any(job_matches(g, job) for g in greens):
-            return True
-    _never_green_at[(o_r, workflow, job)] = t
-    return False
+    seen = _job_green_in_runs(store, o_r, workflow, job, cands)
+    if seen is False:
+        _never_green_at[(o_r, workflow, job)] = t
+    return seen
 
 
 def _never_green_jobs(store: Any, o_r: Any, ob: Any, wf: Any, runs: Any, now_: Any) -> Any:

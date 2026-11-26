@@ -22,7 +22,6 @@ cognitive	fix_between	21
 cognitive	forge_run_list	22
 cognitive	gate_runs_pass	17
 cognitive	gov_fits	20
-cognitive	job_ever_green	21
 cognitive	lap_change_deadline	15
 cognitive	laptop_role	15
 cognitive	laptop_role_refusal	23
@@ -80,7 +79,6 @@ cyclomatic	forge_run_list	15
 cyclomatic	gate_flow_names	14
 cyclomatic	gate_runs_pass	21
 cyclomatic	gov_fits	21
-cyclomatic	job_ever_green	20
 cyclomatic	jobs_verdict	23
 cyclomatic	lap_change_deadline	17
 cyclomatic	laptop_role	17
