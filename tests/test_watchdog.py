@@ -316,10 +316,14 @@ class TableJudgedInvariantsTest(unittest.TestCase):
     bound -- and violates only outside it, or past W1_HARD_FACTOR x the bound whatever it says."""
 
     def setUp(self):
+        # A STORE OF ITS OWN (2026-11-26, the stress lane's --repeat): the ids below are fixed, and a worker running a
+        # test twice found the first run's item cancelled by this setUp -- put_item leaves a terminal item terminal.
+        import tempfile
+        from unittest import mock
+        patch = mock.patch.dict(os.environ, {"AGENTCTL_STATE_ROOT": tempfile.mkdtemp()})
+        patch.start()
+        self.addCleanup(patch.stop)
         self.st = A.process_store()
-        for it in self.st.items("change"):
-            if not A.machine_state("change", it["state"]).terminal:
-                self.st.transition("change", it["id"], "cancelled", it["version"])
 
     def checker(self, eid):
         self.st.acquire(f"check/{eid}", f"laptop:check:{eid}", 600, 4 * 3600, progress="x")
