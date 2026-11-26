@@ -7,19 +7,17 @@ import time
 from contextlib import suppress
 from typing import Any
 from agentctl.timefmt import parse_time, ts
-from agentctl.landstate import landed_state
-from agentctl.core import attempt, git, git_ok, process_cache, remote
-from agentctl.forge import gh_json
+from agentctl.core import attempt, git, process_cache
 from agentctl.trailers import trailer_values
 from agentctl.waitingdir import waiting_entries, waiting_state
-from agentctl.clones import fetch_main
-from agentctl.patches import equivalent_on, patch_id
+from agentctl.patches import patch_id
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_names, red_what
-from agentctl.redfixread import FIX_OPEN, RED_MAIN_REFETCH, red_unrelated
+from agentctl.redfixread import FIX_OPEN, red_unrelated
 from agentctl.fixchange import fixes_named, red_fix_fresh
 from agentctl.redlink import red_change_link
 from agentctl.redfixcheck import fix_check, fix_reaches_red, landed_fix_commits
+from agentctl.maincontain import MainContainment
 
 
 def commit_fixes(repo: str, sha: str, store: Any) -> set[str]:
@@ -314,46 +312,6 @@ def red_run_on_way(d, snap, repo):
     return None
 
 
-_landed_fetched = process_cache({})
-
-
-def red_sha_on_main(repo, sha):
-    """sha is on <remote>/main in clone repo -- main fetched (at most once per RED_MAIN_REFETCH for that sha) when the
-    clone does not show it yet: a fixer's LANDED comes seconds after its push. Never in a clone that tracks no main."""
-    ref = f"refs/remotes/{remote()}/main"
-    if not repo or not sha or not git_ok(repo, "rev-parse", "--verify", "-q", ref):
-        return False
-    if git_ok(repo, "merge-base", "--is-ancestor", sha, ref):
-        return True
-    if epoch_now() - _landed_fetched.get((repo, sha), 0) < RED_MAIN_REFETCH:
-        return False
-    _landed_fetched[(repo, sha)] = epoch_now()
-    return fetch_main(repo)[0] and git_ok(repo, "merge-base", "--is-ancestor", sha, ref)
-
-
-# A REPO WITH NO CLONE HERE IS ASKED (issue 20261102T085329-930a4a: ci-runner holds no clone of bitcashier/core, so
-# red_sha_on_main read False for every fixer's LANDED and the red was offered again after each -- 12 leases, 11
-# attempts): its forge's compare of the sha with main says whether main contains it.
-_api_on_main = process_cache({})
-
-
-def red_sha_on_main_api(o_r, sha):
-    """main of o_r contains sha, by the forge's compare (asked again at most once per RED_MAIN_REFETCH while it does
-    not); False when it cannot tell."""
-    if not o_r or not sha:
-        return False
-    got = _api_on_main.get((o_r, sha))
-    if got and (got[0] or epoch_now() - got[1] < RED_MAIN_REFETCH):
-        return got[0]
-    try:
-        c = gh_json(o_r, "api", f"repos/{o_r}/compare/{sha}...main") or {}
-        on = c.get("status") in ("ahead", "identical")
-    except (Exception, SystemExit):
-        on = False
-    _api_on_main[(o_r, sha)] = (on, epoch_now())
-    return on
-
-
 # ONE SET-ASIDE FIX HIDES NO OTHER (2026-11-13, Verify scrape recording #26, 784badc4406e.4): the queue entry of a refuted
 # fix whose file still read `waiting` (b6d3d8235, naming #23, a run of the same red key) was THE candidate red_fix_of
 # returned; the store turned it into its landed, set-aside sha and red_fix_current dropped it -- and with it 8d06b1a5ab,
@@ -365,43 +323,16 @@ def red_sha_on_main_api(o_r, sha):
 # landing re-cut it as 19482f5c08 (Verify scrape recording #23's Filmweb fix, 2026-11-11), so no main ever held it. The
 # change's entry FILE still read `joined` and also named "40" (a run of an earlier spell of this key), so five days
 # later the new spell took it as a fix on its way, and the store turned it into the landed phantom. Now a landed fix's
-# sha is resolved against main (red_main_equivalent): kept when main contains it, followed to the main commit carrying
+# sha is resolved against main (maincontain.MainContainment.carrying): kept when main contains it, followed to the main commit carrying
 # its patch (a re-cut on landing), and no fix at all when main carries neither; and a fix that landed before this spell
 # opened is no fix for it (the run that opened it already contained it), however its entry reads. A red already
 # fix-pending on such a sha is corrected the same way (red_fix_pending).
-_main_equivalents = process_cache({})
-
-
-def red_main_equivalent(repo, sha):
-    """The commit of <remote>/main that carries landed fix sha: sha itself when main contains it, else the main commit
-    with its patch (or content twin); None when main carries neither -- it never landed. sha as given when the clone
-    cannot tell (no repo or main ref, git unsure)."""
-    ref = f"refs/remotes/{remote()}/main"
-    if not repo or not sha or not git_ok(repo, "rev-parse", "--verify", "-q", ref):
-        return sha
-    if red_sha_on_main(repo, sha):
-        return sha
-    if not git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
-        return None  # main fetched (red_sha_on_main) and still no such commit: it is on no main
-    key = (repo, sha, git(repo, "rev-parse", ref, check=False).stdout.strip())
-    if key not in _main_equivalents:
-        state = landed_state(repo, ref, sha, after=f"{sha}~1")
-        if state.unknown:
-            _main_equivalents[key] = sha  # git cannot tell (a root commit): unsure counts
-        elif not state.landed:
-            _main_equivalents[key] = None
-        else:
-            _main_equivalents[key] = attempt(lambda: equivalent_on(repo, sha, ref) or sha, sha,
-                                             catch=(Exception, SystemExit))
-    return _main_equivalents[key]
-
-
 def red_fix_on_main(fix, repo):
-    """A landed fix with its sha on main (red_main_equivalent: `recut` names the sha it was given), None when main never
-    got it; any other fix as given."""
+    """A landed fix with its sha on main (MainContainment.carrying: `recut` names the sha it was given), None when main
+    never got it; any other fix as given."""
     if not fix or fix.get("status") != "landed" or not fix.get("sha"):
         return fix
-    on = red_main_equivalent(repo, fix["sha"])
+    on = MainContainment(repo).carrying(fix["sha"])
     if on is None:
         return None
     return fix if on == fix["sha"] else {**fix, "sha": on, "recut": fix["sha"]}
@@ -409,8 +340,7 @@ def red_fix_on_main(fix, repo):
 
 def _counted_fix(fix: Any, facts: Any, d: Any, store: Any, since: Any) -> Any:
     """A fix candidate as red_fix_of counts it (corrected by its store item and by main), or None when it counts no more."""
-    if fix.get("via") and not (red_sha_on_main(facts.get("repo"), fix["sha"]) if facts.get("repo") else
-                               red_sha_on_main_api(d.get("repo"), fix["sha"])):
+    if fix.get("via") and MainContainment(facts.get("repo"), d.get("repo")).contains(fix["sha"]) is not True:
         return None  # a fixer's LANDED counts once its commit is on main (a verdict alone proves nothing)
     if store is not None:
         fix = red_fix_fresh(store, fix)

@@ -13,7 +13,7 @@ from agentctl.redrecord import RED_RECURRING, lease_is_live, red_lease, red_what
 from agentctl.redfixread import FIX_OPEN
 from agentctl.fixchange import red_change, red_fix_fresh
 from agentctl.redfixes import (
-    red_entry_status, red_fix_is_set_aside, red_fix_of, red_fix_on_main, red_main_equivalent, red_refuted_with,
+    red_entry_status, red_fix_is_set_aside, red_fix_of, red_fix_on_main, red_refuted_with,
     fix_failed_said, red_set_aside)
 from agentctl.redask import red_decision
 from agentctl.red import (
@@ -125,7 +125,7 @@ class FixPending:
                                   f"re-offered {self.what} (its fix {f['sha'][:10]} already refuted)")
 
     def landed_on_main(self) -> list[str] | None:
-        """A LANDED FIX IS A COMMIT ON MAIN (above red_main_equivalent): else, or if it landed before this spell opened,
+        """A LANDED FIX IS A COMMIT ON MAIN (redfixes, MainContainment.carrying): else, or if it landed before this spell opened,
         offered again; landed as another sha, verified as that one."""
         f = self.f
         if not (f.get("status") == "landed" and f.get("sha")):

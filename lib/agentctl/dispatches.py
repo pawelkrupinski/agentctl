@@ -7,14 +7,15 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.core import PROTECTED_BRANCHES, dispatches_dir, git, git_ok, remote, tilde
+from agentctl.core import PROTECTED_BRANCHES, dispatches_dir, git, remote, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import RUN_FIELDS, gh_json
+from agentctl.maincontain import MainContainment
 from agentctl.procs import process_start, record_alive, safe_cwd
 from agentctl.waitingdir import waiting_dir
 from agentctl.fixerrecords import agent_name
-from agentctl.worktrees import CACHE_TREES, internal_trees_dir, merged_reason, worktree_of, worktrees
+from agentctl.worktrees import CACHE_TREES, internal_trees_dir, worktree_of, worktrees
 from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
 
 
@@ -233,17 +234,10 @@ def owner_gone(rec):
     return False
 
 
-def commit_on_main(repo, base):
-    """True/False: base is on main (ancestor or patch-equivalent); None: unknown here (no repo or no base). A commit
-    this clone does not hold is not on main."""
-    if not repo or not base:
-        return None
-    if not git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}"):
-        return False
-    try:
-        return bool(merged_reason(repo, base, f"refs/remotes/{remote()}/main"))
-    except (Exception, SystemExit):
-        return None
+def commit_on_main(repo: str | None, base: str | None) -> bool | None:
+    """True/False: base's work is on main (MainContainment.landed: ancestor or patch-equivalent, main fetched when the
+    clone does not hold it); None: unknown here (no repo or no base, no main ref, git unable to compare)."""
+    return MainContainment(repo).landed(base) if repo and base else None
 
 
 def owner_gone_why(rec: Any) -> str:

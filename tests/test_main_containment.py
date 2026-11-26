@@ -71,7 +71,8 @@ def git_decisions(w, clone, kind):
     asked of the clone as the World left it (main fetched before the other clone's push)."""
     repo, sha = w.repo(clone), w.shas[kind]
     out = []
-    for ask in (lambda: A.red_sha_on_main(repo, sha), lambda: kind_of(A.red_main_equivalent(repo, sha), sha, w.twin),
+    main = A.MainContainment(repo)
+    for ask in (lambda: main.contains(sha), lambda: kind_of(main.carrying(sha), sha, w.twin),
                 lambda: A.commit_on_main(repo, sha)):
         clear_caches()
         sh(w.r.path, "git", "update-ref", "refs/remotes/origin/main", w.twin)
@@ -88,7 +89,7 @@ def api_decision(test, compare):
         return {"status": compare}
     test.addCleanup(setattr, A, "gh_json", A.gh_json)
     A.gh_json = gh_json
-    return A.red_sha_on_main_api("o/r", "a" * 40)
+    return A.MainContainment(o_r="o/r").contains("a" * 40)
 
 
 # (route, clone or compare, commit kind): before the consolidation -- git: (red_sha_on_main, red_main_equivalent's
@@ -116,7 +117,17 @@ MATRIX = {
     ('git', 'no-repo', 'unlanded'): (False, 'self', None),
 }
 
-RESOLVED = {}
+# THE DISAGREEMENTS, resolved (maincontain.py's header says why; each has its own test below):
+#  - a commit main has but the clone has not fetched: commit_on_main said "not on main" -- now it fetches, as the
+#    contains route did: landed;
+#  - UNKNOWN IS NOT "NO": no clone, no main ref, a failed compare answered False -- now None (each caller says what
+#    unknown means: every red reader takes only True as "on main").
+RESOLVED = {
+    ("git", "clone", "remote-only"): (True, "self", True),
+    **{("git", "no-main-ref", k): (None, "self", None) for k in SHAS},
+    **{("git", "no-repo", k): (None, "self", None) for k in SHAS},
+    ("api", "raises"): None,
+}
 
 
 class MainContainmentMatrixTest(Base):
@@ -131,6 +142,33 @@ class MainContainmentMatrixTest(Base):
         want = {k: RESOLVED.get(k, v) for k, v in MATRIX.items()}
         diff = {k: (want.get(k), v) for k, v in got.items() if want.get(k) != v}
         self.assertEqual(diff, {}, "\n" + "\n".join(f"    {k!r}: {v!r}," for k, v in sorted(got.items(), key=str)))
+
+    def test_a_commit_the_clone_has_not_fetched_is_landed_once_main_is_fetched(self):
+        """Before: commit_on_main never fetched -- a branch red built on a commit another clone had just landed was
+        "not on main" here (an orphan, its owner gone)."""
+        w = World(self)
+        sh(w.r.path, "git", "update-ref", "refs/remotes/origin/main", w.twin)
+        self.assertIs(A.commit_on_main(w.r.path, w.shas["remote-only"]), True)
+
+    def test_no_main_ref_is_unknown_never_not_on_main(self):
+        w = World(self)
+        self.assertIsNone(A.MainContainment(w.bare_clone).contains(w.shas["ancestor"]))
+        self.assertIsNone(A.commit_on_main(w.bare_clone, w.shas["ancestor"]), "an unknown answer is never an orphan")
+
+    def test_a_failed_compare_is_unknown_and_asked_again(self):
+        """Before: the forge's error was remembered as "not on main" for RED_MAIN_REFETCH."""
+        answers = [RuntimeError("HTTP 502"), {"status": "ahead"}]
+
+        def gh_json(o_r, *args, **kw):
+            got = answers.pop(0)
+            if isinstance(got, Exception):
+                raise got
+            return got
+        self.addCleanup(setattr, A, "gh_json", A.gh_json)
+        A.gh_json = gh_json
+        main = A.MainContainment(o_r="o/r")
+        self.assertIsNone(main.contains("b" * 40))
+        self.assertIs(main.contains("b" * 40), True, "asked again at once: the error was not remembered")
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@
 from typing import Any
 from agentctl.timefmt import iso_at
 from agentctl.redrecord import RED_TERMINAL, red_of_key, red_what
-from agentctl.redfixes import red_main_equivalent, red_sha_on_main
+from agentctl.maincontain import MainContainment
 from agentctl.redmove import red_move
 from agentctl.redopen import red_offer
 
@@ -52,8 +52,8 @@ def _waits_on_landed(store: Any, it: dict[str, Any], sha: str, other: Any, ofix:
     """The fix it waited on (or the other red's own landed one) is on main: verified against the next run; else None."""
     d = it["data"]
     for cand in [sha] + ([ofix["sha"]] if ofix.get("status") == "landed" and ofix.get("sha") else []):
-        on = red_main_equivalent(repo, cand)
-        if on and red_sha_on_main(repo, on):
+        on = MainContainment(repo).carrying(cand)
+        if on and MainContainment(repo).contains(on) is True:
             line = f"{red_what(d)}: red {other}'s fix {cand[:10]} is on main ({on[:10]}): verifying"
             red_move(store, it, "fix-pending", line, data={"fix": {"entry": None, "status": "landed", "sha": on,
                                                                     "at": t, "verify_since": t, "waited_on": other}})
