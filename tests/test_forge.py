@@ -19,6 +19,7 @@ class GithubForgeTest(unittest.TestCase):
         os.makedirs(self.d)
         self.env = {"FAKE_GH_DIR": self.d, "GH_TOKEN": "dummy",
                     "AGENTCTL_SCRATCH": os.path.join(self.tmp.name, "scratch"),
+                    "AGENTCTL_STATE_ROOT": os.path.join(self.tmp.name, "state"),  # the ETags a GET kept: a rerun of a test must not read them
                     "AGENTCTL_DISPATCH_DIR": os.path.join(self.tmp.name, "dispatches"),
                     "AGENTCTL_DISPATCH_FIND": "1", "AGENTCTL_DISPATCH_FIND_POLL": "0"}
         self.saved_env = {k: os.environ.get(k) for k in self.env}
