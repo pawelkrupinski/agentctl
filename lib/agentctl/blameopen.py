@@ -93,42 +93,81 @@ def blame_kind(o_r, d):
     return "checks" if o_r == RED_PRIMARY else "run"
 
 
-def blame_open(store, repo, o_r, ob, t):
-    """The red's culprit search, opened with the red (`blame` in its data): {state: none|probing, ...}."""
+class NoBlame(Exception):
+    """A red whose culprit search is not opened: its message is why (blame_open's `why`)."""
+
+
+def blame_eligible(repo: Any, ob: Any) -> None:
+    """Raises NoBlame unless the red is a gate test red and its clone is here."""
     if ob.get("kind") != "test" or ob.get("red_kind") != "gate":
-        return {"state": "none", "why": "only a gate test red is blamed (infra, flakes and outside reds never)"}
+        raise NoBlame("only a gate test red is blamed (infra, flakes and outside reds never)")
     if not repo:
-        return {"state": "none", "why": "no clone here to read its range"}
+        raise NoBlame("no clone here to read its range")
+
+
+def streak_boundary(ob: Any) -> Any:
+    """(decided runs, the red streak, the green run before it) of the red's workflow runs. Raises NoBlame."""
     runs = ob.get("runs_list") or []
     decided = decided_runs(runs)
     streak = streak_runs(runs)
     if not streak or len(decided) <= len(streak) or decided[len(streak)].get("conclusion") != "success":
-        return {"state": "none", "why": "no green run before the red streak"}
-    first, green = streak[-1], decided[len(streak)]
-    base, head = green.get("headSha"), first.get("headSha")
+        raise NoBlame("no green run before the red streak")
+    return decided, streak, decided[len(streak)]
+
+
+def blame_range(repo: Any, base: Any, head: Any) -> None:
+    """Raises NoBlame unless the range base..head can be read in the clone (fetching main once when head is missing)."""
     if not base or not head or not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
         git(repo, "fetch", "--quiet", remote(), "main", check=False)
     if not base or not head or not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}") \
             or not git_ok(repo, "merge-base", "--is-ancestor", base, head):
-        return {"state": "none", "why": f"the range {str(base)[:10]}..{str(head)[:10]} cannot be read here"}
+        raise NoBlame(f"the range {str(base)[:10]}..{str(head)[:10]} cannot be read here")
+
+
+def blame_range_keys(repo: Any, base: Any, head: Any) -> Any:
+    """The range's commits (commit_keys). Raises NoBlame when it holds none or more than BLAME_RANGE_MAX."""
     keys = commit_keys(repo, base, head)
     if not keys:
-        return {"state": "none", "why": "no commit between the green run and the red one"}
+        raise NoBlame("no commit between the green run and the red one")
     if len(keys) > BLAME_RANGE_MAX:
-        return {"state": "none", "why": f"{len(keys)} commits in its range"}
+        raise NoBlame(f"{len(keys)} commits in its range")
+    return keys
+
+
+def blame_group(repo: Any, rec: Any, k: Any) -> Any:
+    """A new group of the landed change `rec` (None: no record) whose first commit is `k`."""
+    au = git(repo, "log", "-1", "--format=%an <%ae>", k["sha"], check=False).stdout.strip()
+    return {"change": rec["change"] if rec else None, "commits": [k["sha"]], "lander": (rec or {}).get("lander"),
+            "worktree": (rec or {}).get("worktree") or ((rec or {}).get("lander") or {}).get("worktree"),
+            "author": au, "bot": bool(BOT_AUTHOR.search(au)), "subject": k.get("subject")}
+
+
+def blame_groups(store: Any, repo: Any, o_r: Any, keys: Any) -> Any:
+    """The range's commits grouped by the change that landed them (consecutive commits of one change are one group)."""
     idx = lander_index(lander_records(store, o_r))
-    groups = []
+    groups: list = []
     for k in keys:
         rec = lander_of_commit(idx, k)
         cid = rec["change"] if rec else None
         if groups and cid and groups[-1]["change"] == cid:
             groups[-1]["commits"].append(k["sha"])
         else:
-            au = git(repo, "log", "-1", "--format=%an <%ae>", k["sha"], check=False).stdout.strip()
-            groups.append({"change": cid, "commits": [k["sha"]], "lander": (rec or {}).get("lander"),
-                           "worktree": (rec or {}).get("worktree") or ((rec or {}).get("lander") or {}).get("worktree"),
-                           "author": au, "bot": bool(BOT_AUTHOR.search(au)), "subject": k.get("subject")})
+            groups.append(blame_group(repo, rec, k))
         groups[-1]["end"] = k["sha"]
+    return groups
+
+
+def blame_open(store, repo, o_r, ob, t):
+    """The red's culprit search, opened with the red (`blame` in its data): {state: none|probing, ...}."""
+    try:
+        blame_eligible(repo, ob)
+        decided, streak, green = streak_boundary(ob)
+        first = streak[-1]
+        base, head = green.get("headSha"), first.get("headSha")
+        blame_range(repo, base, head)
+        groups = blame_groups(store, repo, o_r, blame_range_keys(repo, base, head))
+    except NoBlame as why:
+        return {"state": "none", "why": str(why)}
     return {"state": "probing", "base": base, "head": head, "groups": groups, "lo": None, "hi": len(groups),
             "probes": [], "kind": blame_kind(o_r, ob), "since": t,
             "runs": [{k: r.get(k) for k in ("number", "headSha", "status", "conclusion")} for r in decided[:30]],
