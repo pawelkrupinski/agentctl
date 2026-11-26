@@ -1,7 +1,7 @@
 # agentctl, part `serverclone`: ci-runner's own clone: cloned into a temp dir and verified, kept healthy, repaired by a swap under its exclusive lock
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
+from agentctl.clock import epoch_now, stopwatch
 import contextlib
 import datetime as dt
 import fcntl
@@ -72,8 +72,8 @@ CLONE_TIMEOUT = 1800
 
 
 def clone_keepalive(what, started):
-    """One keepalive for a clone running since started (monotonic)."""
-    status = f"STATUS={what} ({int(time.monotonic() - started)} s)"  # wall: waits on and times real processes and threads
+    """One keepalive for a clone running since started (a Stopwatch)."""
+    status = f"STATUS={what} ({int(started.elapsed())} s)"  # wall: waits on and times real processes and threads
     if SD_READY[0]:
         return sd_notify(f"WATCHDOG=1\n{status}")
     every = env_num("AGENTCTL_CLONE_KEEPALIVE", CLONE_KEEPALIVE)
@@ -85,7 +85,7 @@ def run_clone(cmd, what):
     subprocess.TimeoutExpired (the clone killed) past the bound."""
     bound = env_num("AGENTCTL_CLONE_TIMEOUT", CLONE_TIMEOUT)
     every = env_num("AGENTCTL_CLONE_KEEPALIVE", CLONE_KEEPALIVE)
-    started = time.monotonic()  # wall: waits on and times real processes and threads
+    started = stopwatch()
     got = {}
 
     def work():  # subprocess.run (bounded, waited for): the keepalives go on in this thread meanwhile
@@ -192,13 +192,13 @@ def clone_exclusive(repo, wait=None):
     wait = env_num("AGENTCTL_CLONE_LOCK_WAIT", CLONE_LOCK_WAIT) if wait is None else wait
     with clone_gated(repo) as (gate, lk):
         try:
-            deadline = time.monotonic() + wait  # wall: waits on and times real processes and threads
+            deadline = stopwatch(wait)
             while True:
                 try:
                     fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     break
                 except BlockingIOError:
-                    if time.monotonic() >= deadline:  # wall: waits on and times real processes and threads
+                    if deadline.expired():
                         yield False
                         return
                     time.sleep(0.2)  # wall: waits on and times real processes and threads

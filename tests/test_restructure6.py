@@ -66,8 +66,10 @@ class CleanupTest(unittest.TestCase):
             os.path.isdir = lambda p: p != "/w/gone"
 
             def run(*args):
+                until = args[-1]  # a Stopwatch now: one whose left() is the old `until - time.monotonic()`, same reads
+                left = None if until is None else types.SimpleNamespace(left=lambda: until - A.time.monotonic())
                 try:
-                    return A.plan_worktrees(*args)
+                    return A.plan_worktrees(*args[:-1], left)
                 finally:
                     os.path.isdir = real
             return run

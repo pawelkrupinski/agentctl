@@ -4,6 +4,30 @@
 import time
 
 
+class Stopwatch:
+    """Time since it started, on the monotonic wall (the one place agentctl's elapsed-time and bounded-wait lines read
+    it: a sleeping thread and a child process are timed by the OS's clock, not the process's). `bound` makes it a
+    deadline: left() counts down from it (inf without one) and expired() says it ran out."""
+
+    def __init__(self, bound: float | None = None) -> None:
+        self._t0 = time.monotonic()  # wall: waits on and times real processes and threads
+        self.bound = bound
+
+    def elapsed(self) -> float:
+        return time.monotonic() - self._t0  # wall: waits on and times real processes and threads
+
+    def left(self) -> float:
+        return float("inf") if self.bound is None else self.bound - self.elapsed()
+
+    def expired(self) -> bool:
+        return self.left() <= 0
+
+
+def stopwatch(bound: float | None = None) -> Stopwatch:
+    """A Stopwatch started now."""
+    return Stopwatch(bound)
+
+
 class Clock:
     """The wall's time, a monotonic time and a sleep: THE CLOCK IS PASSED IN (CLAUDE.md, "Design"). cli, the
     composition root, makes the one a process uses and hands it to each command that waits or reads the time; a test

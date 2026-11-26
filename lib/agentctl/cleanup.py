@@ -1,7 +1,7 @@
 # agentctl, part `cleanup`: cleanup and the lifecycle.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now, wall_epoch
+from agentctl.clock import Stopwatch, epoch_now, stopwatch, wall_epoch
 from typing import Any
 from collections.abc import Sequence
 import argparse
@@ -36,9 +36,9 @@ CLEANUP_ITEM_TIMEOUT = 120  # $AGENTCTL_CLEANUP_ITEM_TIMEOUT
 CLEANUP_REMOVE_RESERVE = 300  # $AGENTCTL_CLEANUP_REMOVE_RESERVE
 
 
-def cleanup_left(until: float | None) -> float:
-    """Seconds left before the cleanup's deadline (monotonic `until`); inf without one."""
-    return float("inf") if until is None else until - time.monotonic()  # wall: waits on and times real processes and threads
+def cleanup_left(until: Stopwatch | None) -> float:
+    """Seconds left before the cleanup's deadline (a Stopwatch bounded by it); inf without one."""
+    return float("inf") if until is None else until.left()
 
 
 DEADLINE_NOTE = "not looked at: the cleanup's deadline passed"
@@ -49,7 +49,7 @@ class TreeReview:
     use, its own git reads (status, merged). The first stage with an answer decides."""
 
     def __init__(self, repo: str, main: str, min_age_h: float, cwds: dict[int, str], include_caches: bool,
-                 until: float | None) -> None:
+                 until: Stopwatch | None) -> None:
         self.repo, self.main, self.min_age_h, self.cwds = repo, main, min_age_h, cwds
         self.include_caches, self.until = include_caches, until
         self.item = env_num("AGENTCTL_CLEANUP_ITEM_TIMEOUT", CLEANUP_ITEM_TIMEOUT)
@@ -101,7 +101,7 @@ class TreeReview:
 
     def by_git(self, path: str, sha: str) -> tuple[str, str]:
         """(action, reason) from the tree's own git reads: dirty, then merged into main."""
-        t0 = time.monotonic()  # wall: waits on and times real processes and threads
+        t0 = stopwatch()
         why = self.unclean(path)
         if why:
             return "skip", why
@@ -111,15 +111,15 @@ class TreeReview:
         if not why:
             n = git(self.repo, "rev-list", "--count", f"{self.main}..{sha}", check=False, timeout=self.item).stdout.strip() or "?"
             return "skip", f"unmerged ({n} commit(s) not on {remote()}/main)"
-        if time.monotonic() - t0 > 30:  # wall: waits on and times real processes and threads
-            err(f"cleanup: {path} took {time.monotonic() - t0:.0f} s to decide")  # wall: waits on and times real processes and threads
+        if t0.elapsed() > 30:
+            err(f"cleanup: {path} took {t0.elapsed():.0f} s to decide")
         return "delete", why
 
 
 def plan_worktrees(repo: str, main: str, min_age_h: float, cwds: dict[int, str], include_caches: bool = False,
-                   until: float | None = None) -> list[tuple[str, str, str | None, str, str]]:
+                   until: Stopwatch | None = None) -> list[tuple[str, str, str | None, str, str]]:
     """[(action, wt, branch, sha, reason)] where action is 'delete' or 'skip' -- 'stop' for every tree not looked at
-    once the deadline (`until`, monotonic) passed."""
+    once the deadline (`until`, a Stopwatch) passed."""
     wts = worktrees(repo)
     review = TreeReview(repo, main, min_age_h, cwds, include_caches, until)
     return [review.verdict(w) for w in wts[1:]]  # the first entry is the main checkout

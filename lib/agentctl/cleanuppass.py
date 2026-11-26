@@ -3,8 +3,8 @@
 
 import os
 import sys
-import time
 from typing import Any
+from agentctl.clock import stopwatch
 from agentctl.core import PROTECTED_BRANCHES, REPOS, env_num, err, git, remote, scratch, slug
 from agentctl.forge import forge_branch_sha, forge_delete_branch, gh_json
 from agentctl.procs import process_cwds
@@ -26,8 +26,7 @@ class CleanupPass:
     def __init__(self, a: Any) -> None:
         self.a = a
         self.dry = a.dry_run or (sys.stdin.isatty() and not a.execute)
-        self.t_start = time.monotonic()  # wall: waits on and times real processes and threads
-        self.until = self.t_start + a.deadline if getattr(a, "deadline", None) is not None else None
+        self.watch = stopwatch(getattr(a, "deadline", None))
         self.reserve = env_num("AGENTCTL_CLEANUP_REMOVE_RESERVE", CLEANUP_REMOVE_RESERVE)
         self.cwds = process_cwds()
         self.rc = 0
@@ -43,28 +42,28 @@ class CleanupPass:
         if self.stopped:
             print(f"cleanup: stopped at its {self.a.deadline:g} s deadline: {len(self.stopped)} left for the next pass "
                   f"({', '.join(self.stopped[:3])}{', ...' if len(self.stopped) > 3 else ''})")
-        print(f"cleanup: {time.monotonic() - self.t_start:.0f} s ({'; '.join(self.took) or 'no repo'})")  # wall: waits on and times real processes and threads
+        print(f"cleanup: {self.watch.elapsed():.0f} s ({'; '.join(self.took) or 'no repo'})")
         return self.rc
 
     def _repo(self, repo: str) -> None:
         name = os.path.basename(repo)
         if not os.path.isdir(repo):
             return
-        if cleanup_left(self.until) <= 0:
+        if cleanup_left(self.watch) <= 0:
             self.stopped.append(f"repo {name}")
             return
         if self.net_down:
             err(f"{name}: not fetched -- {self.net_down}; skipping repo")
             self.rc = 1
             return
-        t_repo = time.monotonic()  # wall: waits on and times real processes and threads
+        t_repo = stopwatch()
         main = self._fetched_main(repo, name)
         if main is None:
             return
         print(f"\n== {name} ({remote()}/main {main[:10]})")
-        for row in plan_worktrees(repo, main, self.a.min_age_hours, self.cwds, self.a.include_caches, self.until):
+        for row in plan_worktrees(repo, main, self.a.min_age_hours, self.cwds, self.a.include_caches, self.watch):
             self._worktree(repo, name, main, *row)
-        self.took.append(f"{name} {time.monotonic() - t_repo:.0f} s")  # wall: waits on and times real processes and threads
+        self.took.append(f"{name} {t_repo.elapsed():.0f} s")
         if not self.a.no_remote:
             self._measure_branches(repo, name)
 
@@ -94,7 +93,7 @@ class CleanupPass:
 
     def _deadline_cut(self, action: str, path: str) -> bool:
         """The deadline stops the pass (or leaves no time to remove one): the path is left for the next one."""
-        cut = action == "stop" or (action == "delete" and not self.dry and cleanup_left(self.until) < self.reserve)
+        cut = action == "stop" or (action == "delete" and not self.dry and cleanup_left(self.watch) < self.reserve)
         if cut:
             self.stopped.append(path)  # never a removal begun that the deadline could cut in half
         return cut

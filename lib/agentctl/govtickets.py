@@ -1,7 +1,7 @@
 # agentctl, part `govtickets`: the governor's ticket directory: its live tickets, its log, the change mark its waiters watch
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now, wall_epoch
+from agentctl.clock import epoch_now, stopwatch, wall_epoch
 import glob
 import json
 import os
@@ -75,9 +75,9 @@ def gov_change_mark() -> int:
 
 def gov_wait_change(mark: int, secs: float) -> None:
     """Sleep up to secs, returning early when the change mark moves past `mark`."""
-    end = time.monotonic() + secs  # wall: waits on and times real processes and threads
+    end = stopwatch(secs)
     step = min(env_num("AGENTCTL_GOV_POLL", GOV_POLL), secs)
-    while time.monotonic() < end:  # wall: waits on and times real processes and threads
-        time.sleep(max(0.01, min(step, end - time.monotonic())))  # wall: waits on and times real processes and threads
+    while not end.expired():
+        time.sleep(max(0.01, min(step, end.left())))  # wall: waits on and times real processes and threads
         if gov_change_mark() != mark:
             return

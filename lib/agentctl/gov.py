@@ -1,7 +1,7 @@
 # agentctl, part `gov`: the governor: ONE admission control for the laptop's memory and cores: its capacity, its waiters, a ticket admitted or refused, idle sbt servers evicted
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import wall_epoch
+from agentctl.clock import stopwatch, wall_epoch
 import fcntl
 import glob
 import json
@@ -213,7 +213,7 @@ class GovWait:
         self.cls, self.mem, self.cores, self.label, self.kind = cls, mem, cores, label, kind
         self.me, self.report, self.force, self.wait, self.max_wait = me, report, force, wait, max_wait
         self.t0 = wall_epoch()
-        self.said, self.report_at, self.waited_on = False, 0.0, None
+        self.said, self.report_due, self.waited_on = False, stopwatch(0), None
         self.idle = env_num("AGENTCTL_GOV_POLL", GOV_POLL)  # a waiter behind the head backs off to GOV_IDLE_MAX
 
     def verdict(self, tickets: Any, waiters: Any, head: Any) -> Any:
@@ -237,12 +237,12 @@ class GovWait:
             raise GovTimeout(f"{ex} while waiting for the governor") from None
 
     def maybe_report(self, why: Any, tickets: Any) -> Any:
-        if time.monotonic() < self.report_at:  # wall: waits on and times real processes and threads
+        if not self.report_due.expired():
             return
         self.report(f"{'still ' if self.said else ''}waiting for the governor ({self.cls}, {self.mem:g} GB, "
                     f"{self.cores:g} cores, {self.label}): {why}; {len(tickets)} admitted, "
                     f"{gov_committed(tickets):.0f}/{gov_budget():.0f} GB, {gov_charged(tickets):g} cores charged")
-        self.said, self.report_at = True, time.monotonic() + GOV_REPORT  # wall: waits on and times real processes and threads
+        self.said, self.report_due = True, stopwatch(GOV_REPORT)
 
     def pause(self, head: Any, mark: Any) -> Any:
         if head:  # the head reads the machine every poll: memory and load free up with no event
