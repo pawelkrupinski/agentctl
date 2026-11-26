@@ -199,10 +199,49 @@ def beat_mark(step, size, cpu, polls=0, quiet_ok=False):
     return f"{step}:{size}:{int(cpu or 0)}" + (f":{polls}" if quiet_ok else "")
 
 
+def lease_loss(step, size, cpu, polls, quiet_ok):
+    """Why the landing lease was lost at this poll (it renews on real progress only: output bytes, whole CPU seconds),
+    else None. A store that did not answer is no verdict: renewed at the next poll (a lease lapsed meanwhile is lost)."""
+    try:
+        lock_beat(beat_mark(step, size, cpu, polls, quiet_ok))
+    except LeaseLost as ex:
+        return f"{ex} (no progress within its TTL)"
+    except StoreUnavailable as ex:
+        err(f"{step}: the store did not answer the lease renewal ({str(ex)[:120]})")
+    return None
+
+
+class GroupProgress:
+    """What a watched group last did: its output size and CPU, and when either last moved."""
+
+    def __init__(self, started):
+        self.size, self.cpu, self.changed = -1, None, started
+
+    def stalled(self, size, cpu, now, need, hook_toggled, bound):
+        """Progress: output grew, or the group used a real second of CPU since the last progress (the hook idle in `wait`
+        with only its watchdog polling used ~0.08 s in 50 min, 2026-10-27: that is not progress); a hook ending is
+        progress too (the transport's bound starts there). Else whether it has gone `bound` s without."""
+        if size != self.size or self.cpu is None or cpu - self.cpu >= need or hook_toggled:
+            self.size, self.cpu, self.changed = size, cpu, now
+            return False
+        return now - self.changed > bound
+
+
+def poll_verdict(lease_why, stalled, bound, in_hook, waited, wall):
+    """The first reason to end the group at this poll: its lease lost, no progress within `bound`, past its wall bound."""
+    if lease_why:
+        return lease_why
+    if stalled:
+        return f"no output and no CPU for {bound:g} s" + (" while its pre-push hook ran" if in_hook else "")
+    if wall is not None and waited > wall:  # busy or not: the wall bound (a push's)
+        return f"past its wall bound of {wall:g} s"
+    return None
+
+
 def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_ok=False, hook_stall=None, hooks=None):
     """run_watched's wait: why it ended the group (it stalled, lost a lease, passed its wall bound), or None when the
     group exited by itself."""
-    size, cpu, changed, polls, in_hook = -1, None, clock(), 0, False
+    seen, polls, in_hook = GroupProgress(clock()), 0, False
     poll = max(0.2, min(15.0, stall / 4))
     need = env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
     t_start = clock()  # the wall bound reads the same clock: tests drive it, so no verdict depends on the load
@@ -212,27 +251,14 @@ def _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_o
             break
         if sampler:
             sampler()
-        now_size, now_cpu = os.path.getsize(out_path), cpu_of(p.pid)
+        size, cpu = os.path.getsize(out_path), cpu_of(p.pid)
         was_hook, in_hook = in_hook, hook_stall is not None and hooks(p.pid)
-        why = None
-        try:  # the landing lease's holder renews on real progress only (output bytes, whole CPU seconds)
-            polls += 1
-            lock_beat(beat_mark(step, now_size, now_cpu, polls, quiet_ok or in_hook))
-        except LeaseLost as ex:
-            why = f"{ex} (no progress within its TTL)"
-        except StoreUnavailable as ex:  # no verdict: renewed at the next poll (a lease that lapsed meanwhile is lost)
-            err(f"{step}: the store did not answer the lease renewal ({str(ex)[:120]})")
-        # progress: output grew, or the group used a real second of CPU since the last progress (the hook idle in
-        # `wait` with only its watchdog polling used ~0.08 s in 50 min, 2026-10-27: that is not progress); a hook
-        # ending is progress too (the transport's bound starts there)
-        now_c = clock()
+        polls += 1
+        why = lease_loss(step, size, cpu, polls, quiet_ok or in_hook)
+        now = clock()
         bound = hook_stall if in_hook else stall
-        if now_size != size or cpu is None or now_cpu - cpu >= need or was_hook != in_hook:
-            size, cpu, changed = now_size, now_cpu, now_c
-        elif now_c - changed > bound:
-            why = why or (f"no output and no CPU for {bound:g} s" + (" while its pre-push hook ran" if in_hook else ""))
-        if wall is not None and now_c - t_start > wall:  # busy or not: the wall bound (a push's)
-            why = why or f"past its wall bound of {wall:g} s"
+        stalled = seen.stalled(size, cpu, now, need, was_hook != in_hook, bound)
+        why = poll_verdict(why, stalled, bound, in_hook, now - t_start, wall)
         if why and p.poll() is not None:  # it exited while it was judged (a late wakeup under load): its own end
             break
         if why:
