@@ -28,7 +28,7 @@ from agentctl.changekind import facts_for
 from agentctl.redland import may_land_on_red
 from agentctl.pressure import laptop_pressure, pressure_reading
 from agentctl.govusage import gov_job_cores
-from agentctl.govfits import gov_charged, gov_committed, gov_fits
+from agentctl.govfits import gov_charged, gov_committed, gov_fits, gov_grant
 from agentctl.govknobs import knob_gov_poll
 from agentctl.govknobs import knob_laptop_pressure
 from agentctl.govknobs import knob_gov_evict_settle, knob_gov_idle_max
@@ -203,8 +203,11 @@ class GovTimeout(RuntimeError):
 class GovWait:
     """One unit of work waiting its turn at the governor: the loop that polls until it is the head and fits."""
 
-    def __init__(self, cls, mem: Any, cores: Any, label: Any, kind: Any, me: Any, report: Any, force: Any = False, wait: Any = True, max_wait: Any = None) -> None:
+    def __init__(self, cls, mem: Any, cores: Any, label: Any, kind: Any, me: Any, report: Any, force: Any = False,
+                 wait: Any = True, max_wait: Any = None, floor: Any = None) -> None:
         self.cls, self.mem, self.cores, self.label, self.kind = cls, mem, cores, label, kind
+        self.floor = None if floor is None else min(float(floor), cores)  # a pool that can run narrower: its least
+        self.granted = cores
         self.me, self.report, self.force, self.wait, self.max_wait = me, report, force, wait, max_wait
         self.t0 = wall_epoch()
         self.said, self.report_due, self.waited_on = False, stopwatch(0), None
@@ -217,7 +220,11 @@ class GovWait:
         if not head:
             w = waiters[0] if waiters else {}
             return False, f"behind {w.get('class')} work ({w.get('label') or '?'}, pid {w.get('pid')})", False
-        return gov_fits(self.cls, self.mem, tickets, gov_machine(), self.kind, self.cores)
+        m = gov_machine()
+        ok = gov_fits(self.cls, self.mem, tickets, m, self.kind, self.cores if self.floor is None else self.floor)
+        if ok[0]:
+            self.granted = gov_grant(self.cores, self.floor, tickets, m)
+        return ok
 
     def check_timeout(self, why: Any) -> Any:
         if self.max_wait is not None and wall_epoch() - self.t0 > self.max_wait:
@@ -287,15 +294,16 @@ def gov_take_ticket(d: Any, t0: Any, ticket: Any, fd: Any) -> Any:
 
 
 def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=True, force=False, pid=None, cwd=None,
-              report=None, max_wait=None, cores=None, job=None):
+              report=None, max_wait=None, cores=None, job=None, min_cores=None):
     """Admit one unit of work: a GovTicket once it may start (None for a --try that may not). With `fd`, the lock is
     taken on that inherited descriptor (a shell's, which then holds the ticket); else on a file this process keeps open.
-    `cores`: what it is charged (default: its `job`'s, gov_job_cores)."""
+    `cores`: what it is charged (default: its `job`'s, gov_job_cores); with `min_cores`, a pool admitted once that
+    many fit and charged what it is granted (THE GRANTED WIDTH, govfits.gov_grant: the ticket record's `cores`)."""
     cls = cls if cls in GOV_CLASSES else "agent"
     mem = GOV_MEM_GB.get(cls, 5.0) if mem is None else float(mem)
     cores = gov_job_cores(job, cls, kind) if cores is None else float(cores)
     d = gov_dir()
-    waiter = GovWait(cls, mem, cores, label, kind, None, report or err, force, wait, max_wait)
+    waiter = GovWait(cls, mem, cores, label, kind, None, report or err, force, wait, max_wait, floor=min_cores)
     t0 = waiter.t0
     waiter.me = me = os.path.join(d, f"w-{t0:.6f}-{os.getpid()}.json")
     write_json(me, {"class": cls, "mem": mem, "cores": cores, "job": job, "label": label, "kind": kind,
@@ -305,7 +313,7 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
             return None
         # THE TICKET BEFORE THE WAITER GOES: the next head never looks between the two and misses this admission
         path, f = gov_take_ticket(d, t0, ticket, fd)
-        waited = round(wall_epoch() - t0, 1)
+        waited, cores = round(wall_epoch() - t0, 1), waiter.granted
         rec = {"class": cls, "mem": mem, "cores": cores, "job": job, "label": label, "kind": kind,
                "pid": pid or os.getpid(), "cwd": cwd or os.getcwd(), "at": wall_epoch(), "since": ts(), "waited": waited,
                "waited_on": waiter.waited_on if waited >= 1 else None, "id": os.path.basename(path)}

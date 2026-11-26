@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import contextlib
+import json
 import os
 import subprocess
 import sys
@@ -15,8 +16,9 @@ from typing import Callable, Iterator, Mapping, Optional
 # chunks -- takes its width from here, the one place that asks the governor:
 #
 # - NOT UNDER A TICKET: it takes one (`agentctl gov admit`, the CLI movies' scripts/jvm-gate.sh and bitcashier's
-#   bin/gov-sbt call too), charged the cores it wants, held on a descriptor this process keeps open until the pool ends
-#   (the kernel frees it however the process ends). Its width is what it asked for.
+#   bin/gov-sbt call too), held on a descriptor this process keeps open until the pool ends (the kernel frees it however
+#   the process ends). It asks with --min-cores 1 (THE GRANTED WIDTH, govknobs.py): admitted once one core fits, it is
+#   granted and charged what the free cores allow up to what it wants, and runs that wide.
 # - UNDER A TICKET ($AGENTCTL_GOV_WIDTH, set by whoever holds one: a check's hook, a governed pool for its workers): it
 #   takes NONE -- a nested call never waits on its own parent, so it never deadlocks -- and its width is the smaller of
 #   what it asks and what the ticket above it allows.
@@ -91,7 +93,18 @@ def default_governor() -> str:
 
 def admit_args(gov: str, fd: int, ticket: str, cls: str, want: int, job: str, label: str) -> list[str]:
     return [gov, "gov", "admit", "--fd", str(fd), "--ticket", ticket, "--class", cls, "--mem", "1", "--cores",
-            str(want), "--job", job, "--label", label, "--pid", str(os.getpid())]
+            str(want), "--min-cores", "1", "--job", job, "--label", label, "--pid", str(os.getpid())]
+
+
+def granted_width(ticket: str, want: int) -> int:
+    """THE GRANTED WIDTH (govknobs.py): the cores the governor charged the pool's ticket (its record beside it), at most
+    what it asked; what it asked when the record names none (an older governor)."""
+    try:
+        with open(ticket[:-len(".lock")] + ".json") as f:
+            cores = json.load(f).get("cores")
+    except (OSError, ValueError, AttributeError):
+        return want
+    return max(1, min(want, int(cores))) if isinstance(cores, (int, float)) and cores else want
 
 
 def gov_dir_path(env: Mapping[str, str] = os.environ) -> str:
@@ -148,6 +161,6 @@ def governed(job: str, want: int, label: str, cls: str = "suite", env: Optional[
     if held is None:
         say(f"{job}: the governor refused or failed: no ticket for {want} cores, running one wide\n")
     try:
-        yield Fanout(want, held[1], "admitted") if held else Fanout(1, None, "no ticket: one wide")
+        yield Fanout(granted_width(held[1], want), held[1], "admitted") if held else Fanout(1, None, "no ticket: one wide")
     finally:
         give_back(held)

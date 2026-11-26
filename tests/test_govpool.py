@@ -48,6 +48,14 @@ class FakeGovernorTest(unittest.TestCase):
             self.assertIn("--job suite", call)
         self.assertFalse(os.path.exists(pool.ticket), "given back when the pool ends")
 
+    def test_a_pool_runs_as_wide_as_the_governor_granted(self):
+        """THE GRANTED WIDTH: the pool asks with --min-cores 1 and sizes itself from its ticket's record."""
+        self.write_gov('for a; do case "$prev" in --ticket) t=$a;; esac; prev=$a; done\n'
+                       'echo \'{"cores": 3}\' > "${t%.lock}.json"; exit 0')
+        with governed("script-tests", 8, "x", env=self.env(), say=quiet) as pool:
+            self.assertEqual(pool.width, 3, "granted 3 of the 8 it asked")
+            self.assertIn("--min-cores 1", open(self.calls).read())
+
     def test_its_workers_run_on_one_core_of_it(self):
         with governed("suite", 6, "x", env=self.env(), say=quiet) as pool:
             self.assertEqual(pool.env({"A": "b"}), {"A": "b", WIDTH_ENV: "1"})
@@ -108,13 +116,15 @@ class RealGovernorTest(unittest.TestCase):
             release.wait(30)
 
     def test_the_second_of_two_suites_waits_while_the_first_holds_the_cores(self):
+        """The first granted every core (GOV_POOL_SHARE 1 here): the second's floor does not fit until it ends."""
         admitted, done = [], threading.Event()
-        with governed("suite", 8, "first", env=self.base, say=quiet) as first:
-            self.assertIsNotNone(first.ticket)
-            t = threading.Thread(target=self.second, args=(self.base, admitted, done), daemon=True)
+        env = {**self.base, "AGENTCTL_GOV_POOL_SHARE": "1"}
+        with governed("suite", 12, "first", env=env, say=quiet) as first:
+            self.assertEqual(first.width, 12)
+            t = threading.Thread(target=self.second, args=(env, admitted, done), daemon=True)
             t.start()
             time.sleep(3)
-            self.assertEqual(admitted, [], "the second went in beside the first: 16 cores on 12")
+            self.assertEqual(admitted, [], "the second went in beside the first: 13 cores on 12")
             waiters = glob.glob(os.path.join(self.d, "w-*.json"))
             self.assertEqual(len(waiters), 1, "the second waits in the governor's queue")
             freed = time.monotonic()
@@ -129,6 +139,12 @@ class RealGovernorTest(unittest.TestCase):
         self.assertGreaterEqual(at, freed)
         self.assertEqual(width, 8)
         self.assertIsNotNone(ticket)
+
+    def test_a_second_suite_is_granted_the_cores_the_first_left(self):
+        """THE GRANTED WIDTH: the first suite holds 6 of the 12 cores (GOV_POOL_SHARE), the second runs on the rest."""
+        with governed("suite", 8, "first", env=self.base, say=quiet) as first:
+            with governed("suite", 8, "second", env=self.base, wait=20, say=quiet) as second:
+                self.assertEqual((first.width, second.width), (6, 6))
 
     def test_a_nested_pool_under_a_held_ticket_does_not_deadlock(self):
         with governed("suite", 8, "outer", env=self.base, say=quiet) as outer:

@@ -25,7 +25,7 @@ from agentctl.govknobs import knob_max_checks
 # THE GOVERNOR'S FEATURES, for a caller in another repository (movies' scripts/jvm-gate.sh governor_bin, bitcashier's
 # bin/gov-sbt): a stable line, never a grep of agentctl's source (2026-11-22 to -25: jvm-gate.sh grepped gov.py for
 # `def cmd_gov` and `def gov_route`; a module split moved both, and movies took no ticket for three days).
-GOV_FEATURES = ("admit", "cores", "route", "width")
+GOV_FEATURES = ("admit", "cores", "route", "width", "grant")  # grant: `gov admit --min-cores` (THE GRANTED WIDTH)
 
 
 def admit_rows() -> list[Any]:
@@ -44,7 +44,7 @@ def gov_probe(a: Any) -> int:
 
 def gov_admit_cmd(a: Any) -> int:
     t = gov_admit(a.cls, a.mem, a.label or "", kind=a.kind, fd=a.fd, ticket=a.ticket, wait=not a.try_,
-                  force=a.force, pid=a.pid, cwd=a.cwd, cores=a.cores, job=a.job)
+                  force=a.force, pid=a.pid, cwd=a.cwd, cores=a.cores, job=a.job, min_cores=a.min_cores)
     return 0 if t else 1
 
 

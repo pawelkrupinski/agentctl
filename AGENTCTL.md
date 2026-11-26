@@ -2426,7 +2426,17 @@ agentctl suite [run.py args]       # agentctl's own tests (tests/run.py) under a
   governor's bounded wait (900 s) or with it failing, a pool runs ONE wide, never its full width ticketless. Guards:
   `tests/test_govpool.py` (agentctl) and movies' `scripts/ci/fanout_lint.py` refuse a fan-out (`xargs -P`, a
   thread/process pool, `-n auto`) outside it, an allowed one naming why (network-bound).
-- **`gov probe`**: `agentctl governor: admit cores route width`, the stable line a caller in another repository reads
+- **THE GRANTED WIDTH** (2026-11-26: one movies `run-script-tests` ticket was charged 17 of 18 cores at load 9.8 --
+  its ask was its tests' widths summed against the machine's cores, and with nothing charged the head went whatever it
+  asked -- and every suite waited behind it). `gov admit --min-cores M` marks a pool that can run narrower: it is
+  admitted once M cores fit and granted (and charged) what is free now -- `GOV_CPU_FACTOR` x the cores less the busy
+  ones -- at most `$AGENTCTL_GOV_POOL_SHARE` (0.5) of the machine, never under M; the grant is the `cores` of the
+  ticket's record (`<ticket>.json`), and the pool runs that wide. agentctl's governed() asks with `--min-cores 1`;
+  `gov probe` lists `grant`. A fixed ask (no `--min-cores`) is charged what it asked, as before. MOVIES' SIDE (not yet
+  done; its run-script-tests is being migrated): jvm-gate.sh `gov_take`, called from `gov_width`, passes `--min-cores
+  1` when `governor_has grant` and then sets `GOV_WIDTH` and `AGENTCTL_GOV_WIDTH` from the ticket record's `cores`
+  instead of its ask; run-script-tests' `govern_run` counts its wide tests' extra only when the grant covers them.
+- **`gov probe`**: `agentctl governor: admit cores route width grant`, the stable line a caller in another repository reads
   (jvm-gate.sh governor_bin; bitcashier's bin/gov-sbt calls `gov admit`, whose arguments stay as they are), never
   agentctl's source. `gov status` lists every live ticket with its class, memory, cores, JOB, label, pid, since and
   checkout, and `outside any ticket: B of M busy cores` when the machine's busy cores exceed the charged ones by a core.
@@ -3203,6 +3213,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `gov_free_need_gb` | `AGENTCTL_GOV_FREE_NEED_GB` | `2.5` | free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later |
 | `gov_idle_max` | `AGENTCTL_GOV_IDLE_MAX` | `30.0` | s a waiter behind the head waits at most between two reads of the queue |
 | `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | - |
+| `gov_pool_share` | `AGENTCTL_GOV_POOL_SHARE` | `0.5` | of the machine's cores, the widest one pool is granted |
 | `gov_ps_probe` | `AGENTCTL_GOV_PS_PROBE` | - | a file of ps `pcpu args` rows (tests) |
 | `gov_reserve_gb` | `AGENTCTL_GOV_RESERVE_GB` | `1.0` | - |
 | `gov_resume` | `AGENTCTL_GOV_RESUME` | `0.8` | x the cores: under it, admitting again |

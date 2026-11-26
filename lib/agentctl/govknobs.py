@@ -197,6 +197,13 @@ LAPTOP_LOAD = 2.0             # holds other work while the 1-min load is over th
 # gate) behind the other's -- 20.3 h of suite waits on the cap in 7 days, a step's wait up to 84 min. The cores rule
 # (govfits' CPU refusal: busy + the suite's charge within the cores) still decides whether the second may start, so
 # two run only when the cores are free; a third queues.
+# THE GRANTED WIDTH (2026-11-26: one movies run-script-tests ticket was charged 17 of 18 cores at load 9.8 -- its ask
+# was its tests' widths summed against the machine's cores, and with nothing charged the head "goes whatever it asks"
+# -- and every suite waited behind it). A pool that asks with --min-cores is granted what it can use now: the free
+# cores (the cores x GOV_CPU_FACTOR less the busy ones), at most GOV_POOL_SHARE of the machine, at least its floor.
+GOV_POOL_SHARE = 0.5  # of the machine's cores, the widest one pool is granted ($AGENTCTL_GOV_POOL_SHARE)
+
+
 SUITE_CAP = 2  # agentctl's own test-suite runs at once ($AGENTCTL_SUITE_CAP): more agents queue, never pile up
 
 
@@ -290,6 +297,10 @@ def knob_laptop_load() -> float:
 
 def knob_laptop_role_ttl() -> float:
     return env_num("AGENTCTL_LAPTOP_ROLE_TTL", LAPTOP_ROLE_TTL)
+
+
+def knob_gov_pool_share() -> float:
+    return env_num("AGENTCTL_GOV_POOL_SHARE", GOV_POOL_SHARE)
 
 
 def knob_suite_cap() -> float:

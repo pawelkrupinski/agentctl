@@ -72,7 +72,7 @@ def run_gov(module, script):
 
 
 BASE = dict(cls="sbt", mem=4, label=None, kind="job", fd=3, ticket=None, try_=False, force=False, pid=77, cwd="/wt",
-            cores=None, job="testUnit")
+            cores=None, job="testUnit", min_cores=None)
 USAGE = [{"job": "testUnit"}, {"job": "testUnit"}, {"job": "unmeasured"}, {"label": "no job"}]
 ADMIT_ROWS = [admit_row("check", 10), admit_row("check", 120), admit_row("red", 0), admit_row("check", 5, at=NOW - 10 * 86400)]
 REPLAYED = {"old": [("a", 2.0)], "new": [("a", 2.0), ("b", 1.5)], "waiting": [("c", 4.0)], "old_peak": 6.0, "new_peak": 5.5,
@@ -111,14 +111,16 @@ class GovCmdTest(unittest.TestCase):
                 self.assertEqual(run_gov(module, script), EXPECTED[name], name)
 
 
-EXPECTED = {'probe': (0, [], 'agentctl governor: admit cores route width\n'),
+EXPECTED = {'probe': (0, [], 'agentctl governor: admit cores route width grant\n'),
  'admit, admitted': (0,
                      ["admit ('sbt', 4, '') [('cores', None), ('cwd', '/wt'), ('fd', 3), ('force', False), ('job', "
-                      "'testUnit'), ('kind', 'job'), ('pid', 77), ('ticket', None), ('wait', True)]"],
+                      "'testUnit'), ('kind', 'job'), ('min_cores', None), ('pid', 77), ('ticket', None), "
+                      "('wait', True)]"],
                      ''),
  'admit, refused, try': (1,
                          ["admit ('sbt', 4, 'L') [('cores', 2.0), ('cwd', '/wt'), ('fd', 3), ('force', False), "
-                          "('job', 'testUnit'), ('kind', 'job'), ('pid', 77), ('ticket', None), ('wait', False)]"],
+                          "('job', 'testUnit'), ('kind', 'job'), ('min_cores', None), ('pid', 77), ('ticket', None), "
+                          "('wait', False)]"],
                          ''),
  'usage, recorded': (0, ["record_usage ('j', 120.0, 300.0, 2.0, '', 'm') []"], 'j: 2.5 cores over 120 s\n'),
  'usage, too short': (0, ["record_usage ('j', 5.0, 1.0, 2.0, 'x', None) []"], 'j: under 20 s, not recorded\n'),

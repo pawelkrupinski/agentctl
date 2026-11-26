@@ -13,7 +13,7 @@ from agentctl.govbudget import checks_cap, gov_budget
 from agentctl.pressure import gov_busy_cores
 from agentctl.govknobs import knob_gov_cpu_factor
 from agentctl.govknobs import (
-    knob_gov_free_need_gb, knob_gov_reserve_gb, knob_gov_resume, knob_gov_spare, knob_gov_starved, knob_suite_cap)
+    knob_gov_pool_share, knob_gov_free_need_gb, knob_gov_reserve_gb, knob_gov_resume, knob_gov_spare, knob_gov_starved, knob_suite_cap)
 
 
 GOV_RAMP = 120          # seconds a new ticket's JVM is still growing into its expected memory
@@ -136,6 +136,18 @@ def _cpu_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: Any
                            f"+ {cores:g} over {limit:g} ({knob_gov_cpu_factor():g}x "
                            f"{cap['cores']} cores)"), False
     return None
+
+
+def gov_grant(cores: float, floor: Any, tickets: Any, m: Any) -> float:
+    """THE GRANTED WIDTH (govknobs.py): the cores an admitted pool asking `cores` with floor `floor` is granted and
+    charged -- what is free now (GOV_CPU_FACTOR x the cores less the busy ones), at most GOV_POOL_SHARE of the machine,
+    never under its floor. A fixed ask (no floor) is granted what it asked."""
+    if floor is None or not cores:
+        return cores
+    cap = gov_capacity(tickets, m)
+    free = int(knob_gov_cpu_factor() * cap["cores"] - cap["busy"])
+    share = int(knob_gov_pool_share() * cap["cores"])
+    return float(max(min(floor, cores), min(cores, free, max(share, 1))))
 
 
 # the admission checks, in the order they judge: the first refusal is the answer

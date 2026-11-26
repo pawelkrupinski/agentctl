@@ -332,6 +332,25 @@ class GovernorTest(unittest.TestCase):
         self.assertIsNotNone(self.admit("agent", 1), "no job named (a jvm-gate.sh from before cores): memory only")
         self.assertEqual(A.gov_charged(A.gov_tickets()), 12.0)
 
+    def test_a_pool_is_granted_the_free_cores_never_the_whole_machine(self):
+        """THE GRANTED WIDTH (2026-11-26: one movies run-script-tests ticket charged 17 of 18 cores at load 9.8 -- with
+        nothing charged the head went whatever it asked -- and every suite waited behind it). A pool asking with a floor
+        is charged what the free cores allow, at most GOV_POOL_SHARE of the machine, and the ticket's record says it."""
+        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = "echo 7"  # 7 of the harness's 12 cores busy, nothing charged
+        t = self.admit("agent", 1, cores=11, min_cores=1, job="script-tests")
+        self.assertIsNotNone(t, "its floor fits")
+        self.assertEqual(A.read_record(t.path[:-5] + ".json")["cores"], 5.0, "12 - 7 busy: the free cores")
+        self.assertEqual(A.gov_charged(A.gov_tickets()), 5.0)
+        self.assertIsNotNone(self.admit("agent", 1, job="compile"), "beside it there is room still: 7 + 3 <= 12")
+
+    def test_an_idle_machine_grants_a_pool_at_most_its_share(self):
+        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = "echo 0"
+        t = self.admit("agent", 1, cores=11, min_cores=1, job="script-tests")
+        self.assertEqual(t.rec["cores"], 6.0, "half of the 12 cores (GOV_POOL_SHARE)")
+        self.assertIsNotNone(self.admit("suite", 1, cores=4, job="suite"), "a suite still fits beside it")
+        fixed = self.admit("agent", 1, cores=2, job="compile")
+        self.assertEqual(fixed.rec["cores"], 2.0, "a fixed ask is charged what it asked")
+
     def usage(self, job, cores, load1=1.0, n=3, wall=100, meter="tree"):
         for _ in range(n):
             A.gov_record_usage(job, wall, cores * wall, load1, meter=meter)
@@ -456,7 +475,7 @@ class GovernorTest(unittest.TestCase):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             self.assertEqual(A.main(["gov", "probe"]), 0)
-        self.assertEqual(out.getvalue(), "agentctl governor: admit cores route width\n")
+        self.assertEqual(out.getvalue(), "agentctl governor: admit cores route width grant\n")
 
     def test_status_names_each_tickets_job_and_the_cores_outside_any_ticket(self):
         self.admit("agent", 1, job="testUnit")
