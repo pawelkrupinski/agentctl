@@ -5,7 +5,6 @@ from agentctl.clock import epoch_now
 import datetime as dt
 import itertools
 import json
-import os
 import re
 import time
 from typing import Any, Callable
@@ -310,9 +309,8 @@ def red_for(since, now=None):
         t = dt.datetime.fromisoformat(str(since).replace("Z", "+00:00"))
     except ValueError:
         return "?"
-    if now is None:  # $AGENTCTL_NOW: the tests' clock
-        now = (dt.datetime.fromisoformat(os.environ["AGENTCTL_NOW"].replace("Z", "+00:00")) if os.environ.get("AGENTCTL_NOW")
-               else dt.datetime.fromtimestamp(epoch_now(), dt.timezone.utc))
+    if now is None:  # the process's clock (the tests wire theirs; review 2026-11-26: $AGENTCTL_NOW was a second one)
+        now = dt.datetime.fromtimestamp(epoch_now(), dt.timezone.utc)
     mins = max(0, int((now - t).total_seconds() // 60))
     d, h, m = mins // 1440, mins % 1440 // 60, mins % 60
     return f"{d}d {h}h" if d else f"{h}h {m}m" if h else f"{m}m"

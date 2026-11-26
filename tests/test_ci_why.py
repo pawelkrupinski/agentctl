@@ -5,6 +5,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
 from test_wait_run import FakeForge, job  # noqa: E402
+from fake_clock import FakeClock  # noqa: E402
 
 SHA = "f" * 40
 
@@ -36,8 +37,8 @@ class CiWhyTest(FakeForge):
         self.put("run-39.json", {"jobs": imc_jobs, "headSha": SHA, "url": "http://f/runs/19", "number": 19, "status": "completed", "conclusion": "failure"})
         self.put("run-39.log", imc_log)
 
-    def why(self, *extra):
-        return self.tool("ci-why", "--repo", "movies", *extra)
+    def why(self, *extra, clock=None):
+        return self.tool("ci-why", "--repo", "movies", *extra, clock=clock)
 
     def test_test_failure_with_clearing_rule(self):
         self.scenario([job("preflight"), {**job("takes (poland)", conclusion="failure"), "steps": [step("Set up job", "success"), step("Check takes", "failure")]}],
@@ -140,17 +141,23 @@ class CiWhyTest(FakeForge):
             r(62, "Identity model convergence", "success", "2026-10-27T03:00:00Z"),
             r(61, "Verify scrape recording", "success", "2026-10-27T03:00:00Z"),
         ])
-        os.environ["AGENTCTL_NOW"] = "2026-10-27T06:00:00Z"
-        try:
-            rc, out, _ = self.why()
-        finally:
-            del os.environ["AGENTCTL_NOW"]
+        rc, out, _ = self.why(clock=FakeClock(A.parse_time("2026-10-27T06:00:00Z").timestamp()))  # the process's clock
         self.assertEqual(rc, 0, out)  # the gate is green: outside reds never make ci-why red
         self.assertIn("main is green for the gate", out)
         self.assertIn("Outside the gate", out)
         self.assertIn("Identity findings report: RED for 2d 2h since 2026-10-25T04:00:00Z (3 failed runs; newest run 69 #69)",
                       out)
         self.assertNotIn("Nightly stress", out)  # green again
+
+    def test_the_red_age_reads_the_process_clock_never_an_environment_variable(self):
+        """Review 2026-11-26 (B 4): red_for read $AGENTCTL_NOW in production code, a test seam beside the wired clock."""
+        import datetime as dt
+        os.environ["AGENTCTL_NOW"] = "2030-01-01T00:00:00Z"
+        try:
+            since = A.iso_at(A.epoch_now() - 7 * 60)
+            self.assertEqual(A.red_for(since), A.red_for(since, dt.datetime.fromtimestamp(A.epoch_now(), dt.timezone.utc)))
+        finally:
+            del os.environ["AGENTCTL_NOW"]
 
     def test_a_gate_red_says_how_long(self):
         self.put("runs.json", [
@@ -161,11 +168,7 @@ class CiWhyTest(FakeForge):
         self.put("run-81.json", {"jobs": [], "headSha": SHA, "url": "u", "number": 81, "status": "completed",
                                  "conclusion": "failure"})
         self.put("run-81.log", "")
-        os.environ["AGENTCTL_NOW"] = "2026-10-27T06:00:00Z"
-        try:
-            rc, out, _ = self.why()
-        finally:
-            del os.environ["AGENTCTL_NOW"]
+        rc, out, _ = self.why(clock=FakeClock(A.parse_time("2026-10-27T06:00:00Z").timestamp()))  # the process's clock
         self.assertEqual(rc, 1, out)
         self.assertIn("Main: RED (run 81 #81, failure; red for 3h 0m (2 failed runs))", out)
 

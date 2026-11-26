@@ -54,10 +54,10 @@ class FakeForge(unittest.TestCase):
         with open(p) as f:
             return f.read().splitlines()
 
-    def tool(self, *argv):
+    def tool(self, *argv, clock=None):
         out, errb = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(errb):
-            rc = A.main(list(argv))
+            rc = A.main(list(argv), clock=clock)
         return rc, out.getvalue(), errb.getvalue()
 
 

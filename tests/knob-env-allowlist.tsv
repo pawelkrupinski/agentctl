@@ -1,6 +1,5 @@
 # module	AGENTCTL_ name	reason: the reads of the environment outside knobs (tests/test_knobs.py). Only falls.
 blamerecords	AGENTCTL_STORE_TOKEN	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
-ciwhy	AGENTCTL_NOW	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 configfile	AGENTCTL_CONFIG	bootstrap: names the config file to load, read before any knob exists (the knob modules' readers see what it puts in the environment)
 configfile	AGENTCTL_CONFIG_SET	bootstrap: the names an earlier process put into the environment from a config file, read and written by the loader itself
 fixerlife	AGENTCTL_STORE_TOKEN	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
