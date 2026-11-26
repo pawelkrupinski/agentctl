@@ -265,6 +265,25 @@ class PerRedTest(FixCheckBase):
         it = self.st.item("red", "swift74")
         self.assertEqual((it["state"], (it["data"].get("fix") or {}).get("sha")), ("fix-pending", sha))
 
+    def test_a_wait_on_another_red_is_never_ended_by_a_store_that_does_not_answer(self):
+        """Review 2026-11-26 (B 3): red_of_key swallowed every exception into None, so a store read failing for a moment
+        made the red it waits on "gone": the wait was ended and the red offered again. The error now stands."""
+        sha = self.ios_fix()
+        it = self.st.item("red", "swift74")
+        fix = {"entry": None, "status": A.RED_WAITS_ON, "red": "ios74", "sha": sha, "at": 1.0}
+        self.st.transition("red", "swift74", "fix-pending", it["version"], data={"fix": fix}, event={"cause": "agent"})
+        it, real = self.st.item("red", "swift74"), self.st
+
+        class Unanswering:
+            def __getattr__(self, name):
+                return getattr(real, name)
+
+            def items(self, *a, **k):
+                raise A.StoreUnavailable("the tunnel is down")
+        with self.assertRaises(A.StoreUnavailable):
+            A.red_waits_on_step(Unanswering(), it, fix, self.r.path, 2.0)
+        self.assertEqual(self.st.item("red", "swift74")["state"], "fix-pending")
+
     def test_a_per_red_verdict_holds_where_the_cache_cannot_be_written(self):
         sha = self.ios_fix()
         d = self.st.item("red", "swift74")["data"]

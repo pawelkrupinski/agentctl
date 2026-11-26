@@ -42,14 +42,12 @@ RED_RECURRING = 3            # landed fixes the same failure outlived: `recurrin
 
 
 def red_of_key(store, key):
-    """The red item of key now: its open spell, else its newest closed one."""
-    try:
-        for it in store.items("red"):
-            if it["data"].get("key") == key and it["state"] not in RED_TERMINAL:
-                return it
-        return red_closed_of(store, key)
-    except Exception:
-        return None
+    """The red item of key now: its open spell, else its newest closed one. A store that does not answer raises
+    (review 2026-11-26: it read as "no such red", and a wait on that red was ended as if the red were gone)."""
+    for it in store.items("red"):
+        if it["data"].get("key") == key and it["state"] not in RED_TERMINAL:
+            return it
+    return red_closed_of(store, key)
 
 
 def red_closed_of(store, key):
