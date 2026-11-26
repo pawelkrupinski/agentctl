@@ -89,18 +89,20 @@ def worktree_activity(repo, wt, entries=()):
     return max(beats)
 
 
-def red_authors(repo, u, now_=None):
-    """[{worktree, session, shas, pids, live, activity}] for the commits of the red run, the newest commit's author
-    first. Live: an agent process works in that worktree now and it was active lately."""
-    t = now_ if now_ is not None else wall_epoch()  # against git times and mtimes
-    commits = red_commits(repo, u)
-    if not repo or not commits:
-        return []
+def _landed_head(heads: Any, c: Any) -> Any:
+    """The landed head (by exact or abbreviated sha) of commit c, or None."""
+    return heads.get(c) or next((v for k, v in heads.items() if c.startswith(k) or k.startswith(c)), None)
+
+
+def _commit_owners(repo: Any, commits: Any) -> Any:
+    """{commit: the landed head (or the holding worktree) that owns it}: a change's commits (oldest first) end at its
+    landed head; the ones not landed belong to the worktree holding them."""
     heads = landed_heads(repo)
-    owner, pending = {}, []
+    owner: dict[Any, Any] = {}
+    pending: list[Any] = []
     for c in reversed(commits):  # oldest first: a change's commits end at its landed head
         pending.append(c)
-        h = heads.get(c) or next((v for k, v in heads.items() if c.startswith(k) or k.startswith(c)), None)
+        h = _landed_head(heads, c)
         if h:
             for p in pending:
                 owner[p] = h
@@ -109,7 +111,13 @@ def red_authors(repo, u, now_=None):
         wt = worktree_holding(repo, c)
         if wt:
             owner[c] = {"worktree": wt}
-    by_wt = {}
+    return owner
+
+
+def _by_worktree(commits: Any, owner: Any) -> Any:
+    """{real worktree path: {worktree, shas (newest first), pids, session}} of the commits whose owner's worktree is an
+    allowed, existing directory."""
+    by_wt: dict[Any, Any] = {}
     for c in commits:  # newest first
         h = owner.get(c)
         if not h or not h.get("worktree") or not allowed_path(h["worktree"]) or not os.path.isdir(h["worktree"]):
@@ -117,10 +125,15 @@ def red_authors(repo, u, now_=None):
         a = by_wt.setdefault(os.path.realpath(h["worktree"]), {"worktree": h["worktree"], "shas": [], "pids": set(),
                                                                "session": h.get("session")})
         a["shas"].append(c)
+    return by_wt
+
+
+def _author_liveness(repo: Any, by_wt: Any, t: Any) -> Any:
+    """by_wt's authors with their pids, activity and liveness (an agent process alive and active lately) filled in."""
     entries = attempt(inbox_entries, [], catch=(OSError,))
     running = agent_pids_in(list(by_wt))
     active = env_num("AGENTCTL_AUTHOR_ACTIVE_MIN", AUTHOR_ACTIVE_MIN) * 60
-    out = []
+    out: list[Any] = []
     for k, a in by_wt.items():
         a["pids"] = sorted(set(a["pids"]) | set(running.get(k, [])))
         a["activity"] = worktree_activity(repo, a["worktree"], entries)
@@ -129,3 +142,13 @@ def red_authors(repo, u, now_=None):
         a["live"] = bool(alive) and t - a["activity"] <= active
         out.append(a)
     return out
+
+
+def red_authors(repo, u, now_=None):
+    """[{worktree, session, shas, pids, live, activity}] for the commits of the red run, the newest commit's author
+    first. Live: an agent process works in that worktree now and it was active lately."""
+    t = now_ if now_ is not None else wall_epoch()  # against git times and mtimes
+    commits = red_commits(repo, u)
+    if not repo or not commits:
+        return []
+    return _author_liveness(repo, _by_worktree(commits, _commit_owners(repo, commits)), t)
