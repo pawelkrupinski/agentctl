@@ -12,7 +12,7 @@ from agentctl.repos import RED_PRIMARY, red_repo_clone, red_repo_of
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.redrepos import red_owner_only
 from agentctl.redrecord import RED_RECURRING
-from agentctl.redreplay import FIX_REPLAY_NONE_MIN, red_replay_command
+from agentctl.redland import FIX_REPLAY_NONE_MIN, red_replay_command
 from agentctl.fixerland import LAND_BRIEF
 from agentctl.redfixes import red_refuted
 from agentctl.redknobs import knob_brief_src
@@ -120,11 +120,11 @@ def fixer_replay_notes(u: Any, owner: Any, o_r: str) -> str:
     """The replays the fixer's land will demand (redreplay.py) and the warning when fixes of this red already failed."""
     common = ""
     replay = red_replay_command(red_repo_clone(o_r), u) if not owner else None
-    if replay:  # FIX REPLAY (redreplay.py): its land is refused without the replay's base=FAIL head=PASS
+    if replay:  # FIX REPLAY (redland.py): its land is refused without the replay's base=FAIL head=PASS
         common += (f"REPLAY BEFORE LANDING: this red's check replays cheaply: `{replay}`. Run it at {remote()}/main "
                    "(base) and at your fix (head) and land only when it says base=FAIL head=PASS, with the trailer "
                    f"`Fix-Replay: {replay} base=FAIL head=PASS` beside Fixes-Red. ")
-    if u.get("gate") and not owner:  # FIX REPLAY FOR GATE REDS (redreplay.py; the owner, 2026-11-20): enforced
+    if u.get("gate") and not owner:  # FIX REPLAY FOR GATE REDS (redland.py; the owner, 2026-11-20): enforced
         common += ("REPLAY YOUR GATE FIX: beside Fixes-Red, add the trailer `Fix-Replay: <command>` -- the narrowest "
                    "command that fails where this red fails (a `testOnly`, a script's self-test) -- and agentctl's "
                    f"land runs it at {remote()}/main and at your fix: the change counts as the fix only on base=FAIL "

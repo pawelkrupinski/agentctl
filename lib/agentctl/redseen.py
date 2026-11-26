@@ -1,4 +1,5 @@
-# agentctl, part `redseen`: what is red now: one observation per key from the CI snapshot, stuck and unkicked runs.
+# agentctl, part `redseen`: what is red now: one observation per key from the CI snapshot, stuck and unkicked runs,
+# and everything red on main (red_observe) with main's own local-checks red (reds/local.json)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.statemachines import is_terminal
@@ -8,14 +9,14 @@ import subprocess
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import attempt, err, fmt_age, git, git_ok, remote, slug
+from agentctl.core import attempt, err, fmt_age, git, git_ok, reds_dir, remote, slug
 from agentctl.timefmt import parse_time
 from agentctl.classify import norm_line
 from agentctl.forge import RED_CONCLUSIONS
 from agentctl.repos import gated_repo
 from agentctl.workflows import LOCAL_FLOW
-from agentctl.ciwhy import gate_report_only, gate_runs, main_runs_of
-from agentctl.runsigs import classifier_version, run_names
+from agentctl.ciwhy import gate_from_snap, gate_report_only, gate_runs, main_runs_of, outside_from_snap
+from agentctl.runsigs import classifier_version, run_names, signature
 from agentctl.redepisode import RedEpisode, streak_budget
 from agentctl.redrecord import red_what
 from agentctl.red import STUCK_FACTOR, red_key
@@ -23,6 +24,7 @@ from agentctl.redmove import red_close
 from agentctl.waiting import UnreadGate
 from agentctl.branches import branch_reds, entry_predicts
 from agentctl.redknobs import knob_unkicked_after
+from agentctl.statefile import read_record
 
 
 # -- what is red now: one observation per key, from the CI-state snapshot
@@ -391,4 +393,55 @@ def predict_units(o_r, snap):
         for u in gate_red_units(o_r, [(e["workflow"], run, [run], True)]):
             u["predicts"] = e["branch"]
             units.append(u)
+    return units
+
+
+def red_observe(o_r, repo, snap):
+    """{key: observation} of everything red on main now: the gate, every other workflow (its newest decided run, audit
+    #7), main's local checks, the branch runs that predict main red, and the stuck runs (audit #8). A report-only gate
+    run's reds (gate_report_only) are outside the gate's."""
+    gate, outside, mine = gate_from_snap(snap), outside_from_snap(snap), main_runs_of(snap["repo"])
+    rows = [(n, d, mine.gate.get(n, []), not gate_report_only(o_r, n, d)[0]) for n, d, _nw, _s in gate]
+    others = [(n, r, mine.outside.get(n, []), False) for n, r, _s, _c in outside]
+    units = gate_red_units(o_r, rows, others) + local_units(repo) + predict_units(o_r, snap)
+    obs = red_obs_of_units(units)
+    obs.update(stuck_obs(snap))
+    try:
+        obs.update(unkicked_obs(o_r, repo, snap))
+    except (Exception, SystemExit) as e:
+        err(f"red: could not tell whether the convergence was kicked ({str(e)[:120]})")
+    return obs
+
+
+def local_red():
+    return read_record(reds_dir("local.json")) or {}
+
+
+def current_main(repo):
+    r = git(repo, "rev-parse", "--verify", "-q", f"{remote()}/main", check=False) if repo else None
+    return r.stdout.strip() if r is not None and r.returncode == 0 else None
+
+
+def local_stale(repo):
+    """origin/main's sha when the recorded local red was computed on an older one (the record is stale), else None."""
+    rec = local_red()
+    if not rec.get("checks"):
+        return None
+    cur = current_main(repo)
+    return cur if cur and cur != rec.get("main") else None
+
+
+def local_units(repo=None):
+    """main's own local-checks red (reds/local.json) as red units: one per failing check, run `local`. A record
+    computed on an older main is stale: no units (shown as `stale, rechecking`, never RED)."""
+    if repo and local_stale(repo):
+        return []
+    rec = local_red()
+    units = []
+    for check, c in sorted((rec.get("checks") or {}).items()):
+        line = (c.get("lines") or [""])[0]
+        s = {"job": check, "kind": "test", "line": line, "sig": signature(LOCAL_FLOW, check, line)}
+        run = {"number": "local", "databaseId": f"local-{str(c.get('main'))[:10]}", "headSha": c.get("main"),
+               "status": "completed", "conclusion": "failure"}
+        units += red_units("?", LOCAL_FLOW, run, [], [s], True)
     return units

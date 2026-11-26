@@ -12,7 +12,7 @@ from agentctl.workflows import workflow_file_of
 from agentctl.leases import block_lease, lease_meta
 from agentctl.redrecord import red_what
 from agentctl.issues import issue_open
-from agentctl.redfamilies import red_family
+from agentctl.redrepos import red_family
 from agentctl.redask import ask_held_until, red_ask_mark
 from agentctl.redmove import red_move
 from agentctl.cistate import ci_state_load

@@ -27,12 +27,10 @@ from agentctl.allowedpaths import allowed_path
 from agentctl.fixersession import fixer_label
 from agentctl.worktrees import fresh_worktree
 from agentctl.fixerenv import fixer_env
-from agentctl.redrepos import red_is_other, red_owner_only, red_repo_tag
-from agentctl.redfamilies import red_family
+from agentctl.redrepos import red_family, red_is_other, red_owner_only, red_repo_tag
 from agentctl.laptoprole import laptop_role_standby
 from agentctl.queueknobs import knob_fixer_land_watch
-from agentctl.fixerknobs import knob_fixer_unlanded_escalate, knob_fixer_unlanded_nudge
-from agentctl.fixerknobs import knob_claude_tmp
+from agentctl.fixerknobs import knob_claude_tmp, knob_fixer_unlanded_escalate, knob_fixer_unlanded_nudge
 
 
 # HOW A FIXER LANDS (2026-11-16, Main #2515: the fixer wrapped `agentctl land` in `timeout -s KILL` twice, then ran

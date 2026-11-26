@@ -21,8 +21,7 @@ from agentctl.redfixes import red_fix_facts
 from agentctl.red import red_active_of, red_obs_for
 from agentctl.redknobs import knob_red_others_every, knob_red_skip_say, knob_red_tick, RED_TICK_INTERVAL
 from agentctl.redmove import red_settled_runs
-from agentctl.redseen import gate_red_units, red_merge_rekeyed, red_obs_of_units, stuck_obs
-from agentctl.redobserve import red_observe
+from agentctl.redseen import gate_red_units, red_merge_rekeyed, red_obs_of_units, red_observe, stuck_obs
 from agentctl.reduntracked import red_active_untracked, red_note_untracked, red_split_untracked, red_untrack
 from agentctl.redblock import gate_unread_spell, red_renew_blocks
 from agentctl.redopen import red_attach_obs, red_open
@@ -34,7 +33,7 @@ from agentctl.reddispatch import RED_MODEL, red_migrate, red_renew_holders
 from agentctl.offerdispatch import red_dispatcher
 from agentctl.redstep import red_step
 from agentctl.redhold import red_enforce
-from agentctl.redquota import red_quota_waits
+from agentctl.redwaits import red_quota_waits
 from agentctl.tickknobs import knob_step_bound
 from agentctl.recovery import red_no_read_access
 

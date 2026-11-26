@@ -1,11 +1,11 @@
-# agentctl, part `redclaim`: interactive holders: claim, beat, release a red.
+# agentctl, part `redclaim`: interactive holders: claim, beat, release a red; `red owner-push`, an owner-only repo's fix
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now
 import os
 import time
 from typing import Any, Callable
-from agentctl.core import err, git, tilde
+from agentctl.core import err, git, remote, slug, tilde
 from agentctl.timefmt import ts
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.procs import safe_cwd
@@ -15,11 +15,14 @@ from agentctl.fixerrecords import fixer_session_path, own_fixer_record_path, rec
 from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.allowedpaths import allowed_dir
 from agentctl.worktrees import claimant, worktree_of
-from agentctl.redrepos import red_is_other
+from agentctl.redrepos import red_is_other, red_owner_only
 from agentctl.red import RED_CLAIM_MAX, RED_CLAIM_TTL, red_item_of_run, red_obs_for
 from agentctl.redseen import red_obs_of_units
 from agentctl.redblock import red_run_units
 from agentctl.redopen import red_attach_obs, red_open
+from agentctl.inboxentry import inbox_write
+from agentctl.fixerland import unlanded_commits
+from agentctl.redmove import red_move
 
 
 # -- interactive: claim, beat, release
@@ -232,3 +235,62 @@ def red_joined_progress(store, row, why) -> None:
     """Mark a joined (or owner-held) red's lease as worked on (why: `note: ...`, `commit <sha>`, `fix <entry>`): a joined
     red's backstop is done; an owner-held one's RED_HELD_IDLE counts from now."""
     store.set_meta(row["name"], row["epoch"], row["secret"], {"progressed": str(why)[:200], "progressed_at": epoch_now()})
+
+
+def _unfileable_worktree(o_r: Any, wt: Any) -> Any:
+    """(rc, lines) refusing worktree wt as the source of an owner push for o_r (not a worktree of one's own, a clone of
+    another repo, uncommitted changes), or None."""
+    if not os.path.isdir(wt) or root_checkout(wt, o_r):
+        return 2, [f"NOT FILED: {tilde(wt)} is not a worktree of your own: `--worktree <yours>`"]
+    try:
+        if slug(wt) != o_r:
+            return 2, [f"NOT FILED: {tilde(wt)} is a clone of {slug(wt)}, not {o_r}"]
+    except (Exception, SystemExit) as e:
+        return 2, [f"NOT FILED: {tilde(wt)} is no clone of {o_r} ({str(e)[:120]})"]
+    if git(wt, "status", "--porcelain", "--untracked-files=no", check=False).stdout.strip():
+        return 1, ["NOT FILED: the worktree has uncommitted changes: commit each step first"]
+    return None
+
+
+def _owner_push_line(items: Any, o_r: Any, branch: Any, ahead: Any, wt: Any, note: Any, cmd: Any) -> Any:
+    """The escalation line of an owner push: the reds, the commits ready on the branch, the owner's one-liner."""
+    what = ", ".join(red_what(it["data"]) for it in items)
+    return (f"RED OWNER PUSH: {what}: a fix is ready on {branch} ({len(ahead)} commit(s), "
+            f"{', '.join(s[:10] for s, _ in ahead[:6])}) in {tilde(wt)}"
+            + (f" -- {note}" if note else "") + f". {o_r} is owner-only (a push is a deploy): `! {cmd}`")
+
+
+def red_owner_push(store: Any, o_r: Any, target: Any, note: Any = "", wt: Any = None) -> Any:
+    """(rc, lines) of `red owner-push`: an owner-only repo's fix (red-repos.json; infra, whose push is a deploy), prepared
+    on the worktree's local branch, filed with the owner. The red goes to fix-pending with a fix of status `owner` (its
+    branch, head and the owner's one-liner) and one escalation reaches the inbox with the command; a green gate run
+    verifies it, and unproven after RED_FIX_GIVEUP it is offered again (red_fix_pending). Never pushes."""
+    if not red_owner_only(o_r):
+        return 2, [f"NOT FILED: {o_r} is not owner-only (red-repos.json): land the fix with `~/bin/agentctl land`"]
+    here = safe_cwd()
+    wt = os.path.realpath(wt or worktree_of(here) or here)
+    refusal = _unfileable_worktree(o_r, wt)
+    if refusal:
+        return refusal
+    git(wt, "fetch", "--quiet", remote(), "main", check=False)
+    ahead = unlanded_commits(wt)
+    if ahead is None:
+        return 1, [f"NOT FILED: git cannot compare {tilde(wt)} with {remote()}/main: fetch, then file again"]
+    if not ahead:
+        return 1, [f"NOT FILED: nothing in {tilde(wt)} that is not on {remote()}/main"]
+    items = red_targets(store, o_r, target, create=False)
+    if not items:
+        return 1, [f"NOT FILED: #{target} names no open red of {o_r}"]
+    head = git(wt, "rev-parse", "HEAD").strip()
+    branch = git(wt, "rev-parse", "--abbrev-ref", "HEAD", check=False).stdout.strip() or head[:10]
+    tw = tilde(wt)
+    cmd = f"git -C {tw} pull --rebase {remote()} main && git -C {tw} push {remote()} HEAD:main"
+    t = store.clock()
+    line = _owner_push_line(items, o_r, branch, ahead, wt, note, cmd)
+    for it in items:
+        cur = store.item("red", it["id"])
+        red_move(store, cur, "fix-pending", line, data={"fix": {"status": "owner", "entry": f"owner-push:{branch}",
+                                                                "sha": head, "at": t, "worktree": wt, "cmd": cmd,
+                                                                "note": note, "verify_since": t}})
+    inbox_write("red", line, [line], [], 1, cwd=wt)
+    return 0, [line, f"BLOCKED ON OWNER: {cmd}"]

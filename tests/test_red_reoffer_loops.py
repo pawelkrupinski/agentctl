@@ -248,7 +248,7 @@ class ReOfferLoopTest(RedsBase):
     def test_a_queued_untrailered_change_editing_only_a_script_an_outside_reds_workflow_runs_is_no_fix(self):
         """The same red (Order independence #89) took metrics-packages for its fix through
         scripts/ci/coupling_ratchet.py, a script many jobs read. Without a trailer, a script links a change to it only
-        when no other job runs it (redlink.py): here another workflow's job runs it too."""
+        when no other job runs it (redfixcheck.py): here another workflow's job runs it too."""
         self.r.write("scripts/ci/capture.sh", "#!/bin/sh\ncapture\n")
         self.r.write(".github/workflows/nightly.yml", "name: Nightly\non: push\njobs:\n  n:\n    steps:\n"
                      "      - run: scripts/ci/capture.sh --dry-run\n")

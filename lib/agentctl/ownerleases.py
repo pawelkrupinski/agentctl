@@ -5,7 +5,7 @@ from agentctl.clock import epoch_now
 import fcntl
 import os
 from agentctl.statefile import read_record, write_json
-from agentctl.redfamilies import red_families
+from agentctl.redrepos import red_families
 from agentctl.redrecord import lease_is_live
 from agentctl.owners import owner_dir, owner_lease, owner_record_path
 

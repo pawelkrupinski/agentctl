@@ -175,8 +175,8 @@ moves it forward; nothing is a detached process that can die with its state in i
     — agentctl blame's revert of <change>: <workflow> #N's parent <sha> passed the same check, ...` (the fallback: `...
     revert fallback of <sha>: ... outlived two fix attempts ...`) in their final trailer block -- a revert puts main back
     on code that passed, nothing new to replay -- and the owner's weekly list shows them like any other; the rule itself
-    is unchanged. redreplay.py `agentctl_revert_fix_replay`; tests: test_blame `test_the_reverts_fixes_red_passes_the_gates_fix_replay_rule`,
-    test_fix_replay `test_the_revert_fallbacks_fixes_red_passes_the_gates_fix_replay_rule`. redreplay.py `fix_replay_refusal`,
+    is unchanged. redland.py `agentctl_revert_fix_replay`; tests: test_blame `test_the_reverts_fixes_red_passes_the_gates_fix_replay_rule`,
+    test_fix_replay `test_the_revert_fallbacks_fixes_red_passes_the_gates_fix_replay_rule`. redland.py `fix_replay_refusal`,
     `run_fix_replays`; slots.py `fix_replay_blocks`; tests: `tests/test_fix_replay.py`. A fix-pending self-move (a fix landing, followed, re-cut) is never an
     escalation unless it says so. A cancelled fix change follows only a change of its worktree submitted after it
     (`submitted_at`, else the change id's stamp), and the invariant waits out `RED_FIX_REQUEUE_GRACE` as the red's own
@@ -1292,7 +1292,7 @@ agent must be assigned to it".
 - **Only a `Fixes-Red:` trailer makes a change a gate red's fix** (2026-11-20, Main #2716: metrics-packages, no
   trailer, edited `scripts/ci/coupling_ratchet.py`, which the failing job reads, and ci-why read "fix ... landing on red
   (Fixes-Red)" while the real fixer was stopped and its committed fix sat unlanded). An untrailered queued change links
-  only an OUTSIDE red, and only by what it changes of that red's failing step (`red_change_link`, redlink.py, the
+  only an OUTSIDE red, and only by what it changes of that red's failing step (`red_change_link`, redfixcheck.py, the
   owner 2026-11-22): the failing step's own text or its job's own keys (comments aside), or a file that step names and
   no other job of any workflow names (the code under it). Editing the workflow FILE links nothing: Alert backtest #21
   took ci-cpu, which added the job-telemetry steps to every job, for its fix. A linked change never stops a live

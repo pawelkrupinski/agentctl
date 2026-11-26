@@ -17,8 +17,7 @@ from agentctl.redrepos import red_gate_flows
 from agentctl.redask import OWNER_CAUSES, ask_category, ask_refusal
 from agentctl.red import red_item_of_run
 from agentctl.ciwhy import main_runs_of, resolve_run
-from agentctl.redseen import red_units
-from agentctl.redobserve import local_units
+from agentctl.redseen import local_units, red_units
 from agentctl.runsigs import run_sigs
 
 

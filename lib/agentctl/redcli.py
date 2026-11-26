@@ -18,10 +18,9 @@ from agentctl.redrecord import red_what
 from agentctl.worktrees import claimant
 from agentctl.redmove import red_put_offer
 from agentctl.redopen import red_offer
-from agentctl.redclaim import bind_fixer_session, red_beat, red_claim, red_release, red_targets
+from agentctl.redclaim import bind_fixer_session, red_beat, red_claim, red_owner_push, red_release, red_targets
 from agentctl.blamerecords import blame_withdraw
 from agentctl.redvault import red_block, red_unblock
-from agentctl.redownerpush import red_owner_push
 from agentctl.reddispatch import repo_dispatch_off_all
 from agentctl.offerdispatch import red_dispatcher
 from agentctl.redview import repo_dispatch_set

@@ -83,7 +83,7 @@ def red_fix_follow(store: Any, f: dict[str, Any], repo: Any, t: float) -> tuple[
     ch = red_change(store, f.get("entry"))
     if not ch or ch["state"] not in CHANGE_ENDED:
         return None, None
-    # a change linked only by what it edits (redlink.py) carries no fix on: its lane's next change is no fix of this
+    # a change linked only by what it edits (redfixcheck.py) carries no fix on: its lane's next change is no fix of this
     # red's (Alert backtest #21: ci-cpu's ...-711b99 followed ...-bf1eed)
     later = [] if f.get("linked") else red_later_changes(store, ch)
     moved = next((fix for fix in (_change_fix(f, o, t) for o in later) if fix), None)

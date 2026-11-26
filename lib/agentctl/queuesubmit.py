@@ -409,4 +409,4 @@ def submit_ref(repo, d, e, to_server=False):
 
 SUBMIT_FIELDS = ("worktree", "branch", "head", "commits", "fixes", "keep_worktree", "claude_pid", "session", "base", "host",
                  "lander", "commit_keys", "no_batch", "replays", "diagnoses")  # lander.py: who landed it, and its commits' keys;
-# no_batch: land --no-batch (never in a backlog batch); replays: agentctl's FIX REPLAY proofs (redreplay.py run_fix_replays)
+# no_batch: land --no-batch (never in a backlog batch); replays: agentctl's FIX REPLAY proofs (redland.py run_fix_replays)

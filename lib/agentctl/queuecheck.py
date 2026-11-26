@@ -1,12 +1,11 @@
 # agentctl, part `queuecheck`: a change's check round's pieces: main fetched, its commits, the run adopted, the rebase, the refusals, the mode, the failure judged
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
+from agentctl.clock import Clock, epoch_now
 import time
 from typing import Any
 from agentctl.timefmt import ts
 from agentctl.statemachines import change_event
-from agentctl.clock import Clock
 from agentctl.core import git, git_ok, remote
 from agentctl.classify import network_only
 from agentctl.networksignatures import network_failure
@@ -21,7 +20,7 @@ from agentctl.queue import (
 from agentctl.generated import generated_entry
 from agentctl.conflicts import CONFLICT_PLACE_KEPT, conflict_cause, conflict_paths
 from agentctl.queuerecheck import recheck_reason
-from agentctl.redreplay import fix_replay_refusal
+from agentctl.redland import fix_replay_refusal
 from agentctl.waiting import already_landed, cancel_entry_remote
 from agentctl.blamerecords import blame_land_refusal
 from agentctl.queuediff import rebase_in_tree

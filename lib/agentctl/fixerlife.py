@@ -21,23 +21,20 @@ from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import (
     SESSION_DENIED_TOOLS, bg_failure, bg_final_text, bg_row_brief, bg_session, bg_start, bg_stop, bg_turn,
     bg_turn_over, bg_wait_mark, fixer_label, store_reauth)
-from agentctl.redknobs import RED_STALL
+from agentctl.redknobs import knob_red_fixer_wall, knob_red_renew, knob_red_stall, RED_RENEW_EVERY, RED_STALL
 from agentctl.worktrees import mark_internal
 from agentctl.inbox import INBOX_TAIL
-from agentctl.redreplay import sync_brief
+from agentctl.redland import sync_brief
 from agentctl.redrepos import red_owner_only
 from agentctl.fixerland import fixer_mark, fixer_meta_sent
 from agentctl.fixer import FIXER_IDENTITY_ENV, OWNER_ONLY_DENIED, fixer_prompt
 from agentctl.red import RED_FIXER_MAX, RED_FIXER_TTL, RED_RELEASE_ASKS
-from agentctl.redknobs import RED_RENEW_EVERY
 from agentctl.redclaim import bind_fixer_session
 from agentctl.hostsleep import keep_awake
 from agentctl.reddecision import verdict_cut
 from agentctl.fixerblockers import claude_cli, interactive_mode
 from agentctl.sessionroll import fixer_rollover
-from agentctl.fixerknobs import knob_bg_poll
-from agentctl.redknobs import knob_red_fixer_wall, knob_red_renew, knob_red_stall
-from agentctl.fixerknobs import knob_fixer_claim_within
+from agentctl.fixerknobs import knob_bg_poll, knob_fixer_claim_within
 
 
 # ONE FIXER LIFECYCLE (2026-11-04): a dispatched fixer's wrapper (red_fixer) and a family owner's (owner.red_owner) keep

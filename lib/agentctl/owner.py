@@ -21,7 +21,7 @@ from agentctl.worktrees import worktree_exclude
 from agentctl.fixerenv import fixer_env
 from agentctl.redrecord import red_active, red_what
 from agentctl.leases import lease_meta
-from agentctl.redreplay import sync_brief
+from agentctl.redland import sync_brief
 from agentctl.owners import OWNER_TTL, owner_dir, owner_lease, owner_record_path
 from agentctl.redask import red_decision
 from agentctl.fixer import fixer_prompt

@@ -20,7 +20,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.land import HOOK_STATUS, run_watched, tool_env
 from agentctl.worktrees import mark_internal, worktrees
 from agentctl.cleanup import close_worktree
-from agentctl.redobserve import local_red, local_stale
+from agentctl.redseen import local_red, local_stale
 from agentctl.checkslot import check_slot
 
 

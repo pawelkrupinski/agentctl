@@ -17,7 +17,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.land import spawn_land
 from agentctl.worktrees import WorktreeGuard, fresh_worktree
 from agentctl.fixerenv import fixer_env
-from agentctl.redreplay import agentctl_revert_fix_replay
+from agentctl.redland import agentctl_revert_fix_replay
 from agentctl.redrepos import red_owner_only
 from agentctl.fixerland import dispatch_log, red_dispatch
 

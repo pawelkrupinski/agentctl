@@ -8,8 +8,7 @@ from agentctl.timefmt import iso_at, parse_time, ts
 from agentctl.statefile import read_record
 from agentctl.repos import RED_PRIMARY
 from agentctl.allowedpaths import allowed_path
-from agentctl.redrepos import red_gate_flows, red_is_other
-from agentctl.redfamilies import red_identity
+from agentctl.redrepos import red_gate_flows, red_identity, red_is_other
 from agentctl.ancestry import contains_local
 from agentctl.ciwhy import resolve_run
 from agentctl.runsigs import classifier_version, run_sigs
@@ -22,11 +21,10 @@ from agentctl.red import RED_OFFER, decided_revert, red_obs_for, red_tier
 from agentctl.redmove import red_keep_holder, red_move, red_offer_class, red_put_offer, tail_lines
 from agentctl.rundispatch import red_verify_dispatch
 from agentctl.blameopen import blame_open, culprit_of
-from agentctl.blameknobs import BLAME_MAX
+from agentctl.blameknobs import BLAME_MAX, knob_blame_max
 from agentctl.redseen import red_obs_of_units, red_units, sigs_no_verdict
 from agentctl.redauthors import red_authors
 from agentctl.outsideflows import main_flow_meta
-from agentctl.blameknobs import knob_blame_max
 from agentctl.redknobs import knob_red_join_idle
 
 

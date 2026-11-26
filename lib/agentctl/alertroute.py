@@ -9,12 +9,11 @@ from contextlib import suppress
 from typing import Any
 from agentctl.core import attempt
 from agentctl.inboxentry import CONDITION_KINDS, INBOX_COMMANDS, inbox_kind
-from agentctl.redfamilies import red_family
+from agentctl.redrepos import red_family
 from agentctl.statemachines import machine_state
 from agentctl.redrecord import lease_is_live, red_lease
 from agentctl.owners import owner_alive
-from agentctl.watchknobs import knob_alert_red_owner_level
-from agentctl.watchknobs import knob_alert_after
+from agentctl.watchknobs import knob_alert_after, knob_alert_red_owner_level
 
 
 ALERT_OWNER_KINDS = {"BLOCKED", "RED_BUDGET", "UNLANDED_ORPHAN", "ORPHAN_SUBMITTED", "REVERT_NOTICE"}  # a decision, what its bounded fixer

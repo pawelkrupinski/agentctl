@@ -22,7 +22,7 @@ from agentctl.landstate import landed_state
 from agentctl.worktrees import WorktreeGuard
 from agentctl.conflicts import conflict_resolve
 from agentctl.redfixes import fixes_of
-from agentctl.redreplay import fix_replay_refusal, run_fix_replays
+from agentctl.redland import fix_replay_refusal, run_fix_replays
 from agentctl.queueuntil import UNTIL_DONE_AGAIN, next_command, own_change_item, until_done_finish
 from agentctl.waiting import diagnoses_of, waiting_commits
 from agentctl.queuesubmit import (
@@ -37,8 +37,7 @@ from agentctl.syncsteps import submit_remote
 from agentctl.processorlink import offer_token, spawn_waiting_processor
 from agentctl.landqueue import queue_command
 from agentctl.statemachines import machine_state
-from agentctl.queueknobs import knob_max_foreign
-from agentctl.queueknobs import knob_land_before_queue_seconds, knob_until_done_deadline
+from agentctl.queueknobs import knob_land_before_queue_seconds, knob_max_foreign, knob_until_done_deadline
 
 
 def change_fields(repo, main_ref, head, a, store):
@@ -53,7 +52,7 @@ def change_fields(repo, main_ref, head, a, store):
             "base": git(repo, "rev-parse", main_ref).strip(), "host": os.uname().nodename,
             # THE LANDER (lander.py): who landed it, and each commit's keys to find it on main after the rebase
             "lander": lander_record(repo), "commit_keys": commit_keys(repo, main_ref, head),
-            # FIX REPLAY (redreplay.py): agentctl's own replays of the push, for the server's check
+            # FIX REPLAY (redland.py): agentctl's own replays of the push, for the server's check
             "replays": fix_replay_proofs(repo, head) or None}
 
 
@@ -409,7 +408,7 @@ def land_before_queue(repo, head):
     return now
 
 
-# FIX REPLAY at land (redreplay.py): on the rebased head, agentctl runs each bare `Fix-Replay: <command>` of a Fixes-Red push
+# FIX REPLAY at land (redland.py): on the rebased head, agentctl runs each bare `Fix-Replay: <command>` of a Fixes-Red push
 # at origin/main and at head (once per base, head and command), keeps the proof for the submission (change_fields'
 # `replays`), and refuses a gate red's fix it does not prove; a red outside the gate only warns.
 _fix_replay_proofs = process_cache({})  # (base, head) -> [proof]

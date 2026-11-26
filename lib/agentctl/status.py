@@ -13,7 +13,7 @@ from agentctl.timefmt import parse_time
 from agentctl.statefile import read_json_file, read_record
 from agentctl.forge import RED_CONCLUSIONS, forge_run_url
 from agentctl.owned import default_repo
-from agentctl.redfamilies import red_family
+from agentctl.redrepos import red_family
 from agentctl.cistate import state_read
 from agentctl.gatesummary import GATE_LINE
 from agentctl.fixerblockers import cached_dispatch_blocker

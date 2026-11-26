@@ -12,7 +12,7 @@ from agentctl.statefile import read_record
 from agentctl.forge import api, gh_json
 from agentctl.workflows import workflow_file_of
 from agentctl.cidispatches import record_dispatch
-from agentctl.redworkflows import RED_WORKFLOWS_FILE, verify_dispatchable
+from agentctl.redrepos import RED_WORKFLOWS_FILE, verify_dispatchable
 from agentctl.red import workflow_crons
 
 

@@ -15,8 +15,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_names, red_what
 from agentctl.redfixread import FIX_OPEN, red_unrelated
 from agentctl.fixchange import fixes_named, red_fix_fresh
-from agentctl.redlink import red_change_link
-from agentctl.redfixcheck import fix_check, fix_reaches_red, landed_fix_commits
+from agentctl.redfixcheck import fix_check, fix_reaches_red, landed_fix_commits, red_change_link
 from agentctl.maincontain import MainContainment
 
 
@@ -251,7 +250,7 @@ class FixCandidates:
         for e in [] if self.d.get("gate") else self.facts.get("untrailered") or []:
             if {str(x) for x in e.get("diagnoses") or []} & {str(x) for x in self.names}:
                 continue  # DIAGNOSTICS ARE NO FIX: a `Diagnoses-Red:` change never links its red, whatever it edits
-            link = red_change_link(self.repo, self.d, e.get("commits") or [])  # what it changes of the failing step (redlink.py)
+            link = red_change_link(self.repo, self.d, e.get("commits") or [])  # what it changes of the failing step (redfixcheck.py)
             if link:
                 yield {"entry": e["id"], "status": e["status"], "linked": link,
                        "author": {"worktree": e.get("worktree"), "session": e.get("session")}}
