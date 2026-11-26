@@ -88,6 +88,23 @@ class QueueTest(WaitingTest):
     def pushed(self):
         return open(self.pushes).read().splitlines() if os.path.exists(self.pushes) else []
 
+    def test_land_submits_only_the_worktree_it_runs_in(self):
+        """2026-11-26: an agent's plain `land` was said to have queued two other agents' worktrees too. Land takes the
+        checkout of its cwd (or --repo) and nothing else: another worktree holding unlanded commits is never submitted,
+        from a worktree, from a subdirectory of it, or when --repo names one."""
+        self.reds = set()
+        mine, mine_sha = self.agent("mine", "web/src/main/Mine.scala", "mine\n")
+        _other, other_sha = self.agent("other", "web/src/main/Other.scala", "other\n")
+        _third, third_sha = self.agent("third", "web/src/main/Third.scala", "third\n")
+        os.makedirs(os.path.join(mine, "web", "src"), exist_ok=True)
+        rc, out = self.run_tool("land", cwd=os.path.join(mine, "web", "src"))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual({e["head"] for e in self.entries().values()}, {mine_sha}, "only the worktree land ran in")
+        self.assertNotIn(other_sha[:10], out)
+        self.assertNotIn(third_sha[:10], out)
+        rc, out = self.run_tool("land", "--repo", _third, cwd=mine)
+        self.assertEqual({e["head"] for e in self.entries().values()} - {mine_sha}, {third_sha}, "--repo names the one it lands")
+
     def test_land_returns_at_queued_and_the_checker_lands_it_on_green(self):
         wt, sha = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: one")
         eid, out = self.queued(wt)
