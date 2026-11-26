@@ -226,7 +226,7 @@ class PressureReadingTest(unittest.TestCase):
                                                            "swap_used_mb": rng.choice([0, 2048.5, None])}, 0.5))
         case.fake("read_meminfo", lambda rng: rng.choice([{}, {"MemTotal": 1000, "MemAvailable": 333}, {"MemTotal": 1000, "SwapTotal": 4096, "SwapFree": 1024},
                                                           {"MemTotal": 2048, "MemAvailable": 1, "SwapTotal": 10, "SwapFree": 4}, {"MemTotal": 0}]))
-        case.fake("pressure_sysctl", lambda rng: rng.choice(["", "52\n2\nvm.swapusage: total = 1024.00M  used = 311.5M  free = 1.00M", "x\n1", "9\n9\n"]))
+        case.fake("pressure_sysctl", lambda rng: rng.choice(["", "52\n2\nvm.swapusage: total = 1024.00M  used = 311.5M  free = 1.00M", "x\n1", "9\n9\n", "52\nx\nused = 3M"]))
         case.fake("swap_growth", lambda rng, mb, now_: (None if mb is None else mb - 10, 120))
         args = [r.choice([None, None, "40\n1\nused = 5.0M", "", "bad\nx"]), r.choice([None, None, {}, {"MemTotal": 100, "MemAvailable": 50},
                                                                                        {"MemTotal": 100, "SwapTotal": 8, "SwapFree": 2}]),
