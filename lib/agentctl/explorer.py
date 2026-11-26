@@ -123,6 +123,36 @@ def explorer_file(o_r, repo, rows, now_):
             os.unlink(asset)
 
 
+def _explorer_close_named(st: Any, backlog: str) -> None:
+    """Self-recovering: an open flip item whose listing main's backlog names now is closed."""
+    for it in st.items("explorer-flip", ["open"]):
+        d = it["data"]
+        if d.get("venue") and explorer_named(backlog, d):
+            st.transition("explorer-flip", it["id"], "closed", it["version"])
+
+
+def _explorer_new_flips(st: Any, rows: Any, backlog: str) -> list[Any]:
+    """The asset's flips no backlog row names and no item files yet, each listing once."""
+    new, seen = [], set()
+    for r in rows:
+        iid = explorer_iid(r)
+        if iid in seen or explorer_named(backlog, r) or st.item("explorer-flip", iid):
+            continue
+        seen.add(iid)
+        new.append(r)
+    return new
+
+
+def _explorer_filed(o_r: Any, repo: Any, st: Any, new: list[Any], t: Any, filer: Any) -> list[str]:
+    """File the new flips in one commit and open an item for each; the line saying what came of it."""
+    wt = (filer or explorer_file)(o_r, repo, new, t)
+    if not wt:
+        return ["drift explorer: nothing to commit for the new flips"]
+    for r in new:
+        st.put_item("explorer-flip", explorer_iid(r), "open", dict(r, worktree=wt))
+    return [f"drift explorer: filed {len(new)} flip(s), landing from {wt}"]
+
+
 def explorer_tick(o_r, repo, st, now_=None, force=False, fetch=None, filer=None):
     """At most hourly. Returns what it said (a list of strings); never raises."""
     t = now_ if now_ is not None else epoch_now()
@@ -136,25 +166,8 @@ def explorer_tick(o_r, repo, st, now_=None, force=False, fetch=None, filer=None)
             return [f"drift explorer: asset not read ({str(e)[:160]}); nothing filed"]
         git(repo, "fetch", "--quiet", remote(), "main", check=False)
         backlog = explorer_backlog(repo)
-        out = []
-        for it in st.items("explorer-flip", ["open"]):  # self-recovering: main's backlog names it now
-            d = it["data"]
-            if d.get("venue") and explorer_named(backlog, d):
-                st.transition("explorer-flip", it["id"], "closed", it["version"])
-        new, seen = [], set()
-        for r in rows:
-            iid = explorer_iid(r)
-            if iid in seen or explorer_named(backlog, r) or st.item("explorer-flip", iid):
-                continue
-            seen.add(iid)
-            new.append(r)
-        if not new:
-            return out
-        wt = (filer or explorer_file)(o_r, repo, new, t)
-        if not wt:
-            return out + ["drift explorer: nothing to commit for the new flips"]
-        for r in new:
-            st.put_item("explorer-flip", explorer_iid(r), "open", dict(r, worktree=wt))
-        return out + [f"drift explorer: filed {len(new)} flip(s), landing from {wt}"]
+        _explorer_close_named(st, backlog)
+        new = _explorer_new_flips(st, rows, backlog)
+        return _explorer_filed(o_r, repo, st, new, t, filer) if new else []
     except (Exception, SystemExit) as e:
         return [f"drift explorer: skipped ({str(e).replace('agentctl: ', '')[:200]})"]
