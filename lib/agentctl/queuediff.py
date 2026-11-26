@@ -5,7 +5,7 @@ import os
 from typing import Any, List, Optional, Tuple
 from agentctl.statefile import read_record
 from agentctl.core import git, git_ok, remote
-from agentctl.classify import TRANSIENT_PUSH
+from agentctl.netretry import TRANSIENT_PUSH
 from agentctl.repos import precheck_hook, waiting_supported
 from agentctl.waitingdir import waiting_state, wlog
 from agentctl.gating import mark_gate_dirty

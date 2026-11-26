@@ -8,7 +8,8 @@ from agentctl.timefmt import ts
 from agentctl.statemachines import change_event
 from agentctl.clock import Clock
 from agentctl.core import git, git_ok, remote
-from agentctl.classify import network_failure, network_only
+from agentctl.classify import network_only
+from agentctl.netretry import network_failure
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import save_entry, wlog
 from agentctl.clones import fetch_main, note_clone_suspect

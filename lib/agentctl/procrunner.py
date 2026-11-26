@@ -10,7 +10,7 @@ RUN_TIMEOUT = 60  # s a run may take unless its caller says otherwise (timeout=N
 
 class ProcessRunner:
     """subprocess.run and Popen: THE PROCESS RUNNER IS PASSED IN (CLAUDE.md, "Design"). cli, the composition root, wires
-    the one a process uses (wire_runner); core.git, run_cmd, git_ok, spawn_detached, classify.net_run and every module
+    the one a process uses (wire_runner); core.git, run_cmd, git_ok, spawn_detached, netretry.net_run and every module
     starting a process go through process_runner(), so a test hands a fake one (tests/fake_runner.py FakeRunner)
     instead of patching a module."""
 

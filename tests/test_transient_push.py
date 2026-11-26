@@ -1,4 +1,4 @@
-"""ONE TRANSIENT CLASSIFIER for a push (classify.py PUSH_SIGNATURES): every network row network_failure reads a check
+"""ONE TRANSIENT CLASSIFIER for a push (netretry.py PUSH_SIGNATURES): every network row network_failure reads a check
 for, and the push's own transport and forge rows. 2026-11-22: queue.py kept its own TRANSIENT_PUSH regex beside
 classify's table; it lacked `Network is unreachable`, `No route to host`, `TLS handshake timeout`, a DNS
 `nodename nor servname`, `Temporary failure in name resolution` and the GitOps fetch, so a push failing that way was

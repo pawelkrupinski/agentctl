@@ -18,7 +18,7 @@ from agentctl.core import err, process_cache, state_root
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_record, write_json
 from agentctl.ghapp import ghapp_enabled, ghapp_token
-from agentctl.classify import net_run
+from agentctl.netretry import net_run
 from agentctl.core import HOME
 from agentctl.ghtally import gh_tally, gh_tally_as, gh_tally_shape
 from agentctl.storeknobs import knob_gh_cli, knob_runners_page_cache

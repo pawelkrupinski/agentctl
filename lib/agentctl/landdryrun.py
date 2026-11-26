@@ -8,7 +8,7 @@ from typing import Any
 from agentctl.core import err, git, host_role, reds_dir, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.classify import network_failure
+from agentctl.netretry import network_failure
 from agentctl.repos import batching, precheck_hook, waiting_supported
 from agentctl.waitingdir import waiting_state
 from agentctl.worktrees import mark_internal

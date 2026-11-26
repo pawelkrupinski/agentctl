@@ -16,7 +16,7 @@ from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import branch_of, err, git, remote, scratch, slug
 from agentctl.timefmt import ts
-from agentctl.classify import TRANSIENT_PUSH, is_transient_network, net_run
+from agentctl.netretry import TRANSIENT_PUSH, is_transient_network, net_run
 from agentctl.repos import precheck_hook, waiting_supported
 from agentctl.waitingdir import save_entry, waiting_entries, waiting_state
 from agentctl.lander import commit_keys, lander_note_direct

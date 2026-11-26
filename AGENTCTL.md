@@ -2410,7 +2410,7 @@ The old names (design §14.5) answer until 2026-11-05, each printing its new one
   check-branch push that succeeds (save_remote's `pushed_at`), or when no
   change waits on it (probe `push_credential`). The probe reads the queue's own records only, never a credential
   helper (the GitHub App's mints a token per call), and only on the host whose push failed (elsewhere it cannot tell).
-  A token GitHub refuses opens the same condition. What it says is redacted (classify.py `redact_credentials`). A held
+  A token GitHub refuses opens the same condition. What it says is redacted (netretry.py `redact_credentials`). A held
   change's status names its retry's reason.
 - **An unread gate is RED** (the owner, 2026-10-27). When the processor cannot read the gate (GitHub, gh's auth or
   the token down) a production change waits and no batch is taken; one `UNKNOWN: ... cannot read the gate (…)` per
@@ -3459,7 +3459,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
   (`store-lacking.json` under the state root); what it carried (the offline event log) stays for a store that has it.
   It clears itself once the pin moves.
 - **gh / GitHub / git timeouts on a lossy uplink.** Every forge read (gh_json, api GETs), the land/ ref push and the
-  push's proving fetch go through `net_retry` / `net_run` (lib/agentctl/classify.py, beside the network's signature table): a failure in the network's words
+  push's proving fetch go through `net_retry` / `net_run` (lib/agentctl/netretry.py, beside the network's signature table): a failure in the network's words
   (TRANSIENT_NETWORK) or a timeout is tried again 2-20 s apart within NET_RETRY_BUDGET (120 s), then raises
   TransientNetwork -- infra, never a red or a NOT LANDED (a push it cannot prove prints `UNKNOWN:`, exit 2). A
   mutation (a dispatch, a cancel) is never retried. A check that failed only reaching the network (no test runner's
