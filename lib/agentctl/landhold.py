@@ -41,11 +41,27 @@ def land_hold_set(st: Any, secs: int, why: str | None, by: str) -> Any:
     secs = max(60, min(int(secs), LAND_HOLD_MAX))
     data = {"by": by, "why": why or "", "at": epoch_now()}
     land_hold(st)  # a hold past its deadline expires first (its event says so)
+    for _ in range(2):
+        it = _hold_or_extend(st, data, secs, why, by)
+        if it is not None:
+            return it
+    return _hold_or_extend(st, data, secs, why, by, last=True)
+
+
+def _hold_or_extend(st: Any, data: dict[str, Any], secs: int, why: str | None, by: str, last: bool = False) -> Any:
+    """The hold made or extended, or None when the hold found expired before it was extended (review 2026-11-26:
+    move_held's transition out of `expired` raised TerminalState, `land hold` died with no hold in force): try again.
+    last: that raises."""
     it, new = st.open_singleton("hold", "held", data, "hold_seq", "land#", deadline_s=secs)
     if new and secs == LAND_HOLD_DEFAULT:
         return it
     said = f"by {by} for {secs // 60} min" if new else f"extended by {by}"  # the maker's own expiry, or an extension
-    move_held(st, it, data, secs, f"land hold {it['id']} {said}: {why or 'no reason given'}")
+    try:
+        move_held(st, it, data, secs, f"land hold {it['id']} {said}: {why or 'no reason given'}")
+    except TerminalState:
+        if last:
+            raise
+        return None
     return st.item("hold", it["id"])
 
 

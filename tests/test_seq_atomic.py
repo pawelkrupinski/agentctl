@@ -119,6 +119,28 @@ class LandHoldRaceTest(unittest.TestCase):
         self.assertEqual(again["id"], first["id"])
         self.assertEqual(again["data"]["by"], "h1")
 
+    def test_a_hold_expiring_between_the_extenders_read_and_write_is_made_again(self):
+        """Review 2026-11-26 (A B4): the extender found the hold in force, then the other holder's tick expired it (its
+        deadline passed) before the extension was written: move_held read it again and its transition out of the
+        terminal `expired` raised TerminalState -- `land hold` died and no hold was in force. It now makes the hold."""
+        first = A.land_hold_set(self.st, 60, "first", "h0")
+        real = self.st.open_singleton
+
+        def found_then_it_expires(*a, **k):
+            got = real(*a, **k)
+            if not got[1]:
+                self.st.open_singleton = real
+                with self.st.db() as c:
+                    c.execute("UPDATE items SET deadline=0 WHERE id=?", (got[0]["id"],))
+                A.land_hold(self.st)  # the other holder's tick: expired
+            return got
+        self.st.open_singleton = found_then_it_expires
+        again = A.land_hold_set(self.st, 7200, "second", "h1")
+        self.assertEqual(self.st.item("hold", first["id"])["state"], "expired")
+        self.assertNotEqual(again["id"], first["id"])
+        self.assertEqual([h["id"] for h in A.land_holds(self.st)], [again["id"]])
+        self.assertGreater(again["deadline"] - A.epoch_now(), 7000)
+
     def test_an_expired_hold_is_no_hold_in_force(self):
         it = A.land_hold_set(self.st, 60, "short", "me")
         self.st.update_item("hold", it["id"], it["version"], {})
