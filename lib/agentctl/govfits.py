@@ -51,7 +51,7 @@ def _capacity_state(busy: Any, measured: Any, n: Any, prev: Any) -> Any:
     return "starved" if prev == "starved" else "ok"
 
 
-def gov_capacity(tickets=None, m=None):
+def gov_capacity(tickets: list[dict[str, Any]] | None = None, m: dict[str, Any] | None = None) -> dict[str, Any]:
     """{state: starved | ok | spare, busy, charged, measured, cores, load1}: the laptop's CPU now, with hysteresis (the
     last state kept in <gov>/capacity.json between GOV_RESUME and GOV_STARVED)."""
     tickets = gov_tickets() if tickets is None else tickets
@@ -138,13 +138,12 @@ def _cpu_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: Any
     return None
 
 
-def gov_grant(cores: float, floor: Any, tickets: Any, m: Any) -> float:
+def gov_grant(cores: float, floor: float | None, cap: dict[str, Any]) -> float:
     """THE GRANTED WIDTH (govknobs.py): the cores an admitted pool asking `cores` with floor `floor` is granted and
-    charged -- what is free now (GOV_CPU_FACTOR x the cores less the busy ones), at most GOV_POOL_SHARE of the machine,
-    never under its floor. A fixed ask (no floor) is granted what it asked."""
+    charged under the capacity `cap` (gov_capacity) -- what is free now (GOV_CPU_FACTOR x the cores less the busy
+    ones), at most GOV_POOL_SHARE of the machine, never under its floor. A fixed ask (no floor) gets what it asked."""
     if floor is None or not cores:
         return cores
-    cap = gov_capacity(tickets, m)
     free = int(knob_gov_cpu_factor() * cap["cores"] - cap["busy"])
     share = int(knob_gov_pool_share() * cap["cores"])
     return float(max(min(floor, cores), min(cores, free, max(share, 1))))

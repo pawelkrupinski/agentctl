@@ -18,7 +18,7 @@ from agentctl.queuerecheck import queued_entries, same_change_source
 from agentctl.changekind import classify_change, classify_queue, kind_order, facts_for, facts_tick, record_change_kind
 from agentctl.waiting import supersede
 from agentctl.redseen import gate_reds
-from agentctl.queuebatch import _behind_said, hold_for_overlap, main_conflict, overlap_hold, spawn_executor
+from agentctl.queuebatch import OverlapHold, _behind_said, hold_for_overlap, main_conflict, overlap_hold, spawn_executor
 from agentctl.queuediff import push_change
 from agentctl.queueclose import lap_change_deadline, regen_hold_overdue
 from agentctl.recovery import current_batch
@@ -263,10 +263,7 @@ def queued_waiting_on_changes(repo, d, st, t, e, fix, todo, facts, stacks):
     if parent is not None and parent.get("status") in OPEN_PARENT_STATES \
             and parent["id"] not in (e.get("cycle_ignore") or []):
         return stacked_wait(st, t, e, parent), True
-    hold, did = overlap_hold(st, repo, d, e, todo, facts, t, stacks), []
-    while hold and not fix and idle_hold_expired(st, e, hold[0], t):  # AN IDLE HOLDER'S HOLD EXPIRES (queuehold.py)
-        did.append(expire_idle_hold(st, d, e, hold[0], t))
-        hold = overlap_hold(st, repo, d, e, todo, facts, t, stacks)
+    hold, did = live_overlap_hold(repo, d, st, t, e, fix, todo, facts, stacks)
     if hold and fix:  # a red fix never waits: its author is told of a conflict, and it goes on
         return hold_for_overlap(st, d, e, *hold, waits=False, repo=repo), False
     if not hold:
@@ -277,6 +274,17 @@ def queued_waiting_on_changes(repo, d, st, t, e, fix, todo, facts, stacks):
               f"{', '.join(shared[:3])}" + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else ""), t,
               blocker=o["id"], files=shared[:10])
     return did, True
+
+
+def live_overlap_hold(repo: str, d: str, st: Any, t: float, e: dict[str, Any], fix: object, todo: list[dict[str, Any]],
+                      facts: Any, stacks: dict[str, dict[str, Any]]) -> tuple[OverlapHold | None, list[str]]:
+    """(the overlap hold queued change e waits under, the lines said): every blocker whose hold on it expired (AN IDLE
+    HOLDER'S HOLD EXPIRES, queuehold.py) let go of first -- one at a time, each for good, so the walk ends."""
+    hold, did = overlap_hold(st, repo, d, e, todo, facts, t, stacks), []
+    while hold and not fix and idle_hold_expired(st, e, hold[0], t):
+        did.append(expire_idle_hold(st, d, e, hold[0], t))
+        hold = overlap_hold(st, repo, d, e, todo, facts, t, stacks)
+    return hold, did
 
 
 def retry_hold(e):

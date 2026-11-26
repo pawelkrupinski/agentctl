@@ -219,6 +219,12 @@ def not_run_on_base(key: str, own_paths: Optional[set[str]]) -> bool:
     return not (tested_paths(key.split(" ", 1)[1]) & own_paths)
 
 
+def head_only(keys: dict[str, str], known: dict[str, str], own_paths: Optional[set[str]]) -> tuple[list[str], list[str]]:
+    """(the change's own failing tests, those its base never ran) among the keys the base does not fail."""
+    unrun = sorted(n for k, n in keys.items() if k not in known and not_run_on_base(k, own_paths))
+    return sorted(n for k, n in keys.items() if k not in known and n not in unrun), unrun
+
+
 def judge_failure(repo: str, d: str, e: Entry, base: str, out: Optional[str], now: float,
                   own_paths: Optional[set[str]] = None) -> tuple[str, Any]:
     """('base', {key: where}) when every failing job's tests fail on the base too; ('unrun', [names]) when what fails
@@ -234,8 +240,7 @@ def judge_failure(repo: str, d: str, e: Entry, base: str, out: Optional[str], no
     if not keys:
         return "head", unnamed(unjudged) or ["(no failing test named)"]
     known = base_failure_keys(repo, d, e, base, now)
-    unrun = sorted(n for k, n in keys.items() if k not in known and not_run_on_base(k, own_paths))
-    mine = sorted(n for k, n in keys.items() if k not in known and n not in unrun)
+    mine, unrun = head_only(keys, known, own_paths)
     if mine or unjudged:
         return "head", mine + unnamed(unjudged) + [f"{n} (not run on its base)" for n in unrun]
     if unrun:

@@ -36,9 +36,7 @@ def add_gov(sub: Subparsers) -> None:
     gad.add_argument("--job", default=None, help="what the JVM runs (testUnit, test, compile, testOnly, what-if, slice, "
                                                  "measure, serve, keeper): charged its cores")
     gad.add_argument("--cores", type=float, default=None, help="the cores it is charged (default: its --job's)")
-    gad.add_argument("--min-cores", type=float, default=None, dest="min_cores",
-                     help="a pool that can run narrower: admitted once this many fit, granted (and charged) what the free "
-                          "cores allow up to --cores, written as `cores` in the ticket's record (THE GRANTED WIDTH)")
+    gad.add_argument("--min-cores", type=float, default=None, dest="min_cores", help="a pool's floor: granted the free cores up to --cores")
     gus = gvs.add_parser("usage", help="record one run's CPU (sbt-warm's call): the job's measured cores")
     gus.add_argument("--job", required=True)
     gus.add_argument("--wall", type=float, required=True, help="seconds it ran")

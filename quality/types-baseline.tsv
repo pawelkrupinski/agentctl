@@ -48,8 +48,8 @@ mypy-errors	generatedregen	14
 mypy-errors	ghapp	34
 mypy-errors	gov	24
 mypy-errors	govbudget	12
-mypy-errors	govcmd	30
-mypy-errors	govfits	13
+mypy-errors	govcmd	28
+mypy-errors	govfits	11
 mypy-errors	govroute	9
 mypy-errors	govusage	6
 mypy-errors	hostsleep	6
@@ -94,14 +94,14 @@ mypy-errors	processorlink	16
 mypy-errors	procwatch	2
 mypy-errors	projector	21
 mypy-errors	queue	27
-mypy-errors	queuebatch	39
+mypy-errors	queuebatch	38
 mypy-errors	queuebatchsel	19
 mypy-errors	queuecheck	28
 mypy-errors	queueclose	19
 mypy-errors	queuediff	29
 mypy-errors	queueenter	72
 mypy-errors	queuefailure	5
-mypy-errors	queuepush	47
+mypy-errors	queuepush	43
 mypy-errors	queuerecheck	43
 mypy-errors	queueslots	23
 mypy-errors	queuesubmit	31

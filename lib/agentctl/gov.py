@@ -28,7 +28,7 @@ from agentctl.changekind import facts_for
 from agentctl.redland import may_land_on_red
 from agentctl.pressure import laptop_pressure, pressure_reading
 from agentctl.govusage import gov_job_cores
-from agentctl.govfits import gov_charged, gov_committed, gov_fits, gov_grant
+from agentctl.govfits import gov_capacity, gov_charged, gov_committed, gov_fits, gov_grant
 from agentctl.govknobs import knob_gov_poll
 from agentctl.govknobs import knob_laptop_pressure
 from agentctl.govknobs import knob_gov_evict_settle, knob_gov_idle_max
@@ -223,7 +223,7 @@ class GovWait:
         m = gov_machine()
         ok = gov_fits(self.cls, self.mem, tickets, m, self.kind, self.cores if self.floor is None else self.floor)
         if ok[0]:
-            self.granted = gov_grant(self.cores, self.floor, tickets, m)
+            self.granted = gov_grant(self.cores, self.floor, gov_capacity(tickets, m))
         return ok
 
     def check_timeout(self, why: Any) -> Any:

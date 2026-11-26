@@ -230,7 +230,11 @@ class OverlapScan:
         return bool(self.together and backlog_batchable(self.st, self.repo, self.d, o, self.t, self.facts))
 
 
-def overlap_hold(st, repo, d, e, entries, facts, t, stacks=None):
+OverlapHold = tuple[dict[str, Any], list[str], Any]  # (the older entry, the files both change, the conflicting ones)
+
+
+def overlap_hold(st: Any, repo: str, d: str, e: dict[str, Any], entries: list[dict[str, Any]], facts: Any, t: float,
+                 stacks: dict[str, dict[str, Any]] | None = None) -> OverlapHold | None:
     """(older entry, shared files, conflicting files or None) queued change e waits for (OVERLAPPING CHANGES ARE
     CHECKED AS ONE), or None. stacks: {id: the entry it is stacked on} (holdgraph.py A STACKED CHANGE WAITS FOR ITS
     PARENT): a parent and its stacked change are never each other's overlap, and each change's files are its own
