@@ -6,7 +6,7 @@ import os
 from contextlib import closing
 import re
 import sqlite3
-from agentctl.clock import epoch_now
+from agentctl.clock import epoch_now, stopwatch
 import time
 from typing import Any, Callable, cast
 from agentctl.knobs import knob_contact_gap, knob_contact_pause_max
@@ -32,6 +32,22 @@ def lease_machine(holder):
     """The machine a holder names (`laptop:owner:x` -> laptop), or None."""
     m = str(holder or "").split(":", 1)[0]
     return m if ":" in str(holder or "") and CONTACT_MACHINE.fullmatch(m) else None
+
+
+# THE FIRST OPENERS OF A NEW DATABASE RACE ITS WAL SWITCH (2026-11-26, tests/test_seq_atomic.py, 20 of 200 fresh stores
+# opened by 4 threads at once): `PRAGMA journal_mode=WAL` takes the file's exclusive lock and answers `database is
+# locked` at once -- the connection's busy timeout does not cover it -- so a writer died before its first statement.
+# WAL is the file's own once set: an opener that loses the race retries the switch within the connect timeout.
+def wal_mode(c: sqlite3.Connection, bound: float = 30) -> None:
+    sw = stopwatch(bound)
+    while True:
+        try:
+            c.execute("PRAGMA journal_mode=WAL")
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e) or sw.expired():
+                raise
+            time.sleep(0.01)  # wall: another opener holds the switch for a moment
 
 
 class Store(OfferTable):
@@ -68,7 +84,7 @@ class Store(OfferTable):
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
         c = sqlite3.connect(self.path, timeout=30, isolation_level=None)
         c.row_factory = sqlite3.Row
-        c.execute("PRAGMA journal_mode=WAL")
+        wal_mode(c)
         for q in self.SCHEMA:
             c.execute(q)
         return c

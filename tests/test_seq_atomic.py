@@ -24,6 +24,23 @@ class NextSeqTest(unittest.TestCase):
         [t.join() for t in ts]
         self.assertEqual(sorted(got), list(range(1, 61)))
 
+    def test_the_first_openers_of_a_new_database_all_open(self):
+        """Their WAL switch raced: `database is locked` at once, past the busy timeout (20 of 200 fresh stores opened
+        by 4 threads) -- the writer died and its numbers went missing (store.py wal_mode)."""
+        errors = []
+        for _ in range(30):
+            st = A.Store(path=os.path.join(tempfile.mkdtemp(), "store.db"))
+
+            def mint(st=st):
+                try:
+                    st.next_seq("first")
+                except Exception as e:
+                    errors.append(repr(e))
+            ts = [threading.Thread(target=mint) for _ in range(6)]
+            [t.start() for t in ts]
+            [t.join() for t in ts]
+        self.assertEqual(errors, [])
+
     def test_a_key_continues_from_the_stored_meta_and_keys_are_independent(self):
         self.st.meta_set("hold_seq", 7)
         self.assertEqual(self.st.next_seq("hold_seq"), 8)

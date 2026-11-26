@@ -3,4 +3,4 @@
 # fall (update records it); a row added or raised lands only in a commit carrying the kind's trailer:
 # Complexity: (cognitive, cyclomatic, inner-defs), Length: (method-lines, file-lines), Duplication:
 # (copies), Coupling: (fan-out, cycle). CLAUDE.md, "The ratchets".
-file-lines	store	521
+file-lines	store	537
