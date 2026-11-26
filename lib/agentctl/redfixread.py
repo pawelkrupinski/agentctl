@@ -222,31 +222,47 @@ def fix_step_text(body, failing):
     return "\n".join([pre] + keep)
 
 
+def _failed_step_names(job: dict[str, Any]) -> list[str]:
+    return [str(s.get("name")) for s in job.get("steps") or [] if s.get("conclusion") in FIX_STEP_FAILED and s.get("name")]
+
+
+def _run_step_failures(d: dict[str, Any], rid: Any) -> dict[str, list[str]] | None:
+    """{job name: its failed steps' names} of run rid, read through gh; None when they cannot be read or the run lists
+    no job."""
+    try:
+        jobs = (gh_json(red_repo_of(d), "run", "view", str(rid), "--json", "jobs") or {}).get("jobs") or []
+    except (Exception, SystemExit):
+        return None
+    if not jobs:
+        return None
+    return {str(j.get("name")): _failed_step_names(j) for j in jobs if j.get("conclusion") in FIX_STEP_FAILED}
+
+
+def _run_step_record(d: dict[str, Any], rid: Any) -> dict[str, list[str]] | None:
+    """The failed steps of run rid by job: kept (reds/runsteps/<run id>.json: a finished run's steps never change), else
+    read once through gh and kept; None when they cannot be read."""
+    path = reds_dir("runsteps", f"{rid}.json")
+    rec: Any = read_record(path)
+    if rec is None:
+        rec = _run_step_failures(d, rid)
+        if rec is not None:
+            with suppress(OSError):
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                write_json(path, rec)
+    return rec  # type: ignore[no-any-return]
+
+
 def red_failed_steps(d: dict[str, Any]) -> list[str]:
-    """The steps that failed in red d's jobs on its newest run (by name): its `steps`, else read once through gh and
-    kept (reds/runsteps/<run id>.json: a finished run's steps never change); [] when they cannot be read."""
+    """The steps that failed in red d's jobs on its newest run (by name): its `steps`, else the run's record
+    (_run_step_record); [] when they cannot be read."""
     if d.get("steps"):
         return sorted(map(str, d["steps"]))
     rid = (d.get("last_run") or {}).get("databaseId")
-    if not rid:
-        return []
-    path = reds_dir("runsteps", f"{rid}.json")
-    rec = read_record(path)
+    rec = _run_step_record(d, rid) if rid else None
     if rec is None:
-        try:
-            jobs = (gh_json(red_repo_of(d), "run", "view", str(rid), "--json", "jobs") or {}).get("jobs") or []
-        except (Exception, SystemExit):
-            return []
-        if not jobs:
-            return []
-        rec = {str(j.get("name")): [str(s.get("name")) for s in j.get("steps") or []
-                                    if s.get("conclusion") in FIX_STEP_FAILED and s.get("name")]
-               for j in jobs if j.get("conclusion") in FIX_STEP_FAILED}
-        with suppress(OSError):
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            write_json(path, rec)
-    names = {str(j) for j in d.get("jobs") or [d.get("job")] if j}
-    return sorted({s for j, ss in rec.items() if j in names for s in ss or []})
+        return []
+    names = set(red_job_names(d))
+    return sorted({s for j in names for s in rec.get(j) or []})
 
 
 def red_workflow_file(repo: str, sha: str, d: dict[str, Any], files: list[str]) -> tuple[str, str] | None:
