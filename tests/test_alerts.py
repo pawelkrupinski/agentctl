@@ -399,8 +399,8 @@ class ClearedOwnerAlertTest(AlertBase):
                                 "decision", "session x")
         t = A.epoch_now() + 8 * 86400
         for n in range(2):  # the reconciler's weekly escalation, one issue a pass
-            self.assertTrue(A.tick_issues(self.st, now_=t + n * 3600))
             A.Clock().sleep(1)  # the escalated one re-enters `open` later than the other, which is the next one due
+            self.assertTrue(A.tick_issues(self.st, now_=t + n * 3600))
         A.project_events(self.st)
         alerts = {e.get("item"): e["id"] for e in self.unread("owner")}
         self.assertIn(f"issue:{it['id']}", alerts, alerts)
