@@ -83,6 +83,22 @@ class LandHoldRaceTest(unittest.TestCase):
         self.assertEqual([e["kind"] for e in moves].count("hold.held"), 2,
                          "the second holder extended it")
 
+    def test_a_holder_whose_read_went_stale_extends_the_hold_in_force(self):
+        """The other holder's own move (the hold's expiry) lands between this holder's read and its write: the version
+        it read is stale, so it reads again and extends -- it did not die on StaleVersion."""
+        first = A.land_hold_set(self.st, 3600, "first", "h0")
+        real = self.st.open_singleton
+
+        def read_then_the_other_moves(*a, **k):
+            got = real(*a, **k)
+            cur = self.st.item("hold", got[0]["id"])
+            self.st.update_item("hold", cur["id"], cur["version"], {})
+            return got
+        self.st.open_singleton = read_then_the_other_moves
+        again = A.land_hold_set(self.st, 7200, "second", "h1")
+        self.assertEqual(again["id"], first["id"])
+        self.assertEqual(again["data"]["by"], "h1")
+
     def test_an_expired_hold_is_no_hold_in_force(self):
         it = A.land_hold_set(self.st, 60, "short", "me")
         self.st.update_item("hold", it["id"], it["version"], {})

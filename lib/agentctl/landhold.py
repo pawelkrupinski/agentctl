@@ -48,10 +48,24 @@ def land_hold_set(st: Any, secs: int, why: str | None, by: str) -> Any:
         st.transition("hold", it["id"], "held", it["version"], deadline_s=secs,
                       event={"cause": "owner", "text": f"land hold {it['id']} by {by} for {secs // 60} min: {why or 'no reason given'}"})
     else:
-        st.transition("hold", it["id"], "held", it["version"], data=data, deadline_s=secs,
-                      event={"cause": "owner", "text": f"land hold {it['id']} extended by {by}: {why or 'no reason given'}",
-                             "dedupe": f"hold:{it['id']}:extend:{it['version'] + 1}"})
+        extend_hold(st, it, data, secs, by, why)
     return st.item("hold", it["id"])
+
+
+def extend_hold(st: Any, it: dict[str, Any], data: dict[str, Any], secs: int, by: str, why: str | None) -> None:
+    """Extend the hold in force. The other holder's own move (it made the hold and gave it its expiry) may land between
+    this read and the write: the version is then stale, so read it again (2026-11-26: a suite under load lost the
+    second holder's extension, test_seq_atomic)."""
+    for attempt in range(3):
+        try:
+            st.transition("hold", it["id"], "held", it["version"], data=data, deadline_s=secs,
+                          event={"cause": "owner", "text": f"land hold {it['id']} extended by {by}: {why or 'no reason given'}",
+                                 "dedupe": f"hold:{it['id']}:extend:{it['version'] + 1}"})
+            return
+        except StaleVersion:
+            if attempt == 2:
+                raise
+            it = st.item("hold", it["id"])
 
 
 def land_hold_release(st: Any, by: str) -> list[str]:
