@@ -10,6 +10,7 @@ from agentctl.clock import epoch_now
 import time
 from typing import Any, Callable
 from agentctl.core import env_num, state_root
+from agentctl.statefile import json_object
 from agentctl.offers import OfferTable
 from agentctl.statemachines import (
     ARCHIVE, IllegalTransition, MACHINES, StaleVersion, StateSpec, TerminalState, change_exit_event, machine_state)
@@ -18,12 +19,6 @@ from agentctl.statemachines import (
 # ---------------------------------------------------------------- the store (design §3, §6; phase 1 step 1)
 # ONE sqlite database at the state root ($AGENTCTL_STATE_ROOT/store.db, WAL, BEGIN IMMEDIATE for writers): leases now;
 # items, events and offers as the later steps move into it. Its clock is the only clock leases use.
-def _meta(row: Any) -> dict[str, Any]:
-    """A lease row's meta object: NULL, '' and '{}' all read as {}."""
-    meta: dict[str, Any] = json.loads(row["meta"] or "{}")
-    return meta
-
-
 class LeaseLost(RuntimeError):
     """A lease this process held is gone (expired and taken, past its max hold, or released): stop its work."""
 
@@ -176,7 +171,7 @@ class Store(OfferTable):
             if progress == row["progress"]:
                 c.execute("COMMIT")
                 return "no_progress"
-            meta = _meta(row)
+            meta = json_object(row["meta"])
             if note is not None:
                 meta["note"] = note
             c.execute("UPDATE leases SET progress=?, renewed_at=?, expires_at=?, meta=? WHERE name=?",
@@ -192,9 +187,8 @@ class Store(OfferTable):
         try:
             row = self._row(c, name)
             if row and row["epoch"] == epoch and row["secret"] == secret:
-                meta = _meta(row)
-                meta["note"] = note
-                c.execute("UPDATE leases SET meta=? WHERE name=? AND epoch=?", (json.dumps(meta), name, epoch))
+                meta = json.dumps({**json_object(row["meta"]), "note": note})
+                c.execute("UPDATE leases SET meta=? WHERE name=? AND epoch=?", (meta, name, epoch))
         finally:
             c.close()
 
@@ -206,7 +200,7 @@ class Store(OfferTable):
             row = self._row(c, name)
             ok = bool(row and row["epoch"] == epoch and row["secret"] == secret and row["holder"])
             if ok:
-                meta = _meta(row)
+                meta = json_object(row["meta"])
                 if outcome is not None:
                     meta.update(outcome=outcome, notes=notes or "", released_at=self.clock())
                 c.execute("UPDATE leases SET holder='', expires_at=?, meta=? WHERE name=?",
@@ -225,7 +219,7 @@ class Store(OfferTable):
             row = self._row(c, name)
             live = bool(row and row["holder"] and row["expires_at"] > self.clock())
             if live:
-                meta = _meta(row)
+                meta = json_object(row["meta"])
                 meta.update(outcome=outcome, revoked=True, released_at=self.clock())
                 c.execute("UPDATE leases SET holder='', expires_at=?, meta=? WHERE name=?",
                           (self.clock(), json.dumps(meta), name))
@@ -242,7 +236,7 @@ class Store(OfferTable):
             row = self._row(c, name)
             if row and row["epoch"] == epoch and row["secret"] == secret:
                 c.execute("UPDATE leases SET meta=? WHERE name=? AND epoch=?",
-                          (json.dumps({**_meta(row), **meta}), name, epoch))
+                          (json.dumps({**json_object(row["meta"]), **meta}), name, epoch))
             c.execute("COMMIT")
         finally:
             c.close()
@@ -260,7 +254,7 @@ class Store(OfferTable):
         if not r:
             return None
         d = dict(r)
-        d["data"] = json.loads(d["data"] or "{}")
+        d["data"] = json_object(d["data"])
         return d
 
     def item(self, typ, iid):
@@ -423,7 +417,7 @@ class Store(OfferTable):
             for r in c.execute(sql, params):
                 d = dict(r)
                 for k in ("audience", "refs"):
-                    d[k] = json.loads(d[k] or "{}")
+                    d[k] = json_object(d[k])
                 out.append(d)
             return out
         finally:
@@ -445,7 +439,7 @@ class Store(OfferTable):
         try:
             c.execute("BEGIN IMMEDIATE")
             for r in c.execute("SELECT * FROM leases WHERE expires_at < ?", (cut,)).fetchall():
-                meta = _meta(r)
+                meta = json_object(r["meta"])
                 self._insert_event(c, self.clock(), "lease.archived", "lease", r["name"], None, None, "info", {},
                                    f"{r['name']} epoch {r['epoch']}: {meta.get('outcome') or 'lapsed'}",
                                    {"holder": r["holder"], "epoch": r["epoch"], "acquired_at": r["acquired_at"],

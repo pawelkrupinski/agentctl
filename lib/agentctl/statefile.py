@@ -21,6 +21,12 @@ def read_record(path: str, default: Any = None) -> Any:
         return default
 
 
+def json_object(text: str | None) -> dict[str, Any]:
+    """The JSON object in a stored text column: NULL, '' and '{}' all read as {} (a lease's meta, an item's data)."""
+    obj: dict[str, Any] = json.loads(text or "{}")
+    return obj
+
+
 def read_text_or(path: str, default: str) -> str:
     """The text at path, or default when it cannot be read (OSError only: missing, unreadable, a directory)."""
     try:

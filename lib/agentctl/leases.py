@@ -4,9 +4,9 @@
 from agentctl.clock import epoch_now
 import os
 from typing import Any, Optional
-import json
 import re
 from agentctl.core import process_cache
+from agentctl.statefile import json_object
 from agentctl.timefmt import ts
 from agentctl.store import LeaseLost
 from agentctl.procs import socket_host
@@ -74,15 +74,14 @@ def lease_live(name: str, st: Any) -> dict[str, Any] | None:
     r: dict[str, Any] | None = st.get(name)
     if lease_is_live(r, st.clock()):
         assert r is not None
-        r["meta"] = json.loads(r["meta"] or "{}")
+        r["meta"] = json_object(r["meta"])
         return r
     return None
 
 
 def lease_meta(row: Optional[dict[str, Any]]) -> dict[str, Any]:
     try:
-        meta: dict[str, Any] = json.loads((row or {}).get("meta") or "{}")
-        return meta
+        return json_object((row or {}).get("meta"))
     except ValueError:
         return {}
 
@@ -146,7 +145,7 @@ def _lease_recent(r: dict[str, Any], now_: float) -> bool:
 
 
 def _lease_line(r: dict[str, Any], now_: float) -> str:
-    meta = json.loads(r["meta"] or "{}")
+    meta = json_object(r["meta"])
     return (f"{r['name']}  {'LIVE' if lease_is_live(r, now_) else 'free'}  {r['holder'] or '-'}  epoch {r['epoch']}  "
             f"expires in {int(r['expires_at'] - now_)} s  max {int(r['max_until'] - now_)} s"
             + (f"  -- {meta.get('note')}" if meta.get("note") else ""))
