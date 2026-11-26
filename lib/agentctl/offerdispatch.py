@@ -7,7 +7,7 @@ from agentctl.repos import red_repo_clone, red_repo_of
 from agentctl.procs import socket_host
 from agentctl.fixersession import claude_trust_gap
 from agentctl.dispatchblock import cached_dispatch_blocker
-from agentctl.leases import lease_meta
+from agentctl.leases import LeaseKinds, lease_meta
 from agentctl.owners import OWNER_TTL, owner_alive, owner_lease
 from agentctl.red import RED_CLAIM_MAX, RED_CLAIM_TTL, RED_FIXER_MAX, RED_FIXER_TTL
 from agentctl.redseen import KIND_ORDER
@@ -113,7 +113,7 @@ def join_family_fixer(store: Any, off: Any, pic: Any, fam: str, holder: Any, t: 
     family's too while its owner is not running (never a second session beside a live holder). A claim's red is a claim
     of the same worktree (renewed by its activity, red_renew_holders), a fixer's a sibling; the holder's note is about
     its own red, never the joined one's."""
-    claim = lease_meta(holder).get("kind") == "claim"
+    claim = LeaseKinds.is_claim(holder)
     took = store.take(off["id"], holder["holder"], *((RED_CLAIM_TTL, RED_CLAIM_MAX) if claim else
                                                      (RED_FIXER_TTL, RED_FIXER_MAX)),
                       meta={**lease_meta(holder), "family": fam, "outcome": None, "note": None, "notes": None,

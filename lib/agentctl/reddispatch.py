@@ -19,7 +19,7 @@ from agentctl.redrepos import red_owner_only, red_repo_note
 from agentctl.redfamilies import red_identity
 from agentctl.statemachines import StaleVersion
 from agentctl.redrecord import RED_JOIN_IDLE, RED_TERMINAL, lease_is_live, red_active, red_names, red_what
-from agentctl.leases import lease_meta
+from agentctl.leases import LeaseKinds, lease_meta
 from agentctl.land import spawn_land
 from agentctl.redreplay import agentctl_revert_fix_replay
 from agentctl.fixerland import red_dispatch
@@ -96,10 +96,9 @@ def red_owned_idle(store: Any, row: dict[str, Any], t: float) -> str | None:
 def red_holder_idle(store: Any, row: dict[str, Any], t: float) -> str | None:
     """The release outcome of a live red lease that shows no progress on its red (a joined one's, an owner-held
     one's), else None."""
-    kind = lease_meta(row).get("kind")
-    if kind in ("claim", "sibling"):
+    if LeaseKinds.is_joined(row):
         return red_joined_idle(store, row, t)
-    return red_owned_idle(store, row, t) if kind == "owned" else None
+    return red_owned_idle(store, row, t) if LeaseKinds.is_owned(row) else None
 
 
 def _joined_progress(it: Any, d: dict[str, Any], m: dict[str, Any]) -> str | None:
@@ -145,9 +144,9 @@ def red_joined_idle(store, row, t):
 
 def _renew_target(store: Any, row: Any, m: Any, t: Any) -> Any:
     """(mark, ttl) a live claim or sibling row renews with, or None: another kind, or a sibling revoked here."""
-    if m.get("kind") == "claim":
+    if LeaseKinds.is_claim(row):
         return red_wt_mark(m.get("worktree")), m.get("ttl") or RED_CLAIM_TTL
-    if m.get("kind") != "sibling":
+    if LeaseKinds.of(row) != LeaseKinds.SIBLING:
         return None
     prim = store.get(m.get("primary") or "")  # held by its run's fixer: lives exactly as long as that fixer's own lease
     if not lease_is_live(prim, t) or prim["holder"] != row["holder"]:
@@ -177,7 +176,7 @@ def red_fixers_alive(store, t):
     """One row per live FIXER (a fixer holding several reds' leases counts once)."""
     out = {}
     for r in store.list("red/"):
-        if lease_is_live(r, t) and lease_meta(r).get("kind") in ("fixer", "sibling", "owned"):
+        if lease_is_live(r, t) and LeaseKinds.is_session(r):
             out.setdefault(r["holder"], r)
     return list(out.values())
 
@@ -246,11 +245,6 @@ def red_capacity(store, waited, t, alive=None):
     return False, head + eta
 
 
-def _fixer_or_claim(m: Any) -> Any:
-    """A lease meta of a dispatched fixer, or of a claim made inside one."""
-    return m.get("kind") == "fixer" or (m.get("kind") == "claim" and bool(m.get("fixer")))
-
-
 def red_family_holder(store, fam, t, active=None):
     """The live primary lease on a red of queue family fam, or None: a fixer's own (not a sibling), or a CLAIM made
     inside a dispatched fixer (`red claim <M>` there: its record on the lease, 2026-11-07 -- the dispatcher started a
@@ -260,8 +254,7 @@ def red_family_holder(store, fam, t, active=None):
         return None
     active = active if active is not None else red_active(store)
     for row in store.list("red/"):
-        m = lease_meta(row)
-        if not lease_is_live(row, t) or not _fixer_or_claim(m):
+        if not lease_is_live(row, t) or not LeaseKinds.holds_family(row):
             continue
         it = active.get(row["name"].split("/", 1)[1])
         if it and red_queue_family(it["data"]) == fam:

@@ -72,7 +72,8 @@ class LeaseHold:
 def lease_live(name: str, st: Any) -> dict[str, Any] | None:
     """The live lease `name` (its row, meta decoded), or None."""
     r: dict[str, Any] | None = st.get(name)
-    if r and r["holder"] and r["expires_at"] > st.clock():
+    if lease_is_live(r, st.clock()):
+        assert r is not None
         r["meta"] = json.loads(r["meta"] or "{}")
         return r
     return None
@@ -84,6 +85,38 @@ def lease_meta(row: Optional[dict[str, Any]]) -> dict[str, Any]:
         return meta
     except ValueError:
         return {}
+
+
+class LeaseKinds:
+    """WHICH KINDS OF A `red/` LEASE COUNT AS WHAT (the lease meta's `kind`): the one place the filters read it."""
+    FIXER, SIBLING, CLAIM, OWNED = "fixer", "sibling", "claim", "owned"
+    SESSIONS = (FIXER, SIBLING, OWNED)  # a session agentctl runs (or an owner's), working a red
+    JOINED = (CLAIM, SIBLING)  # a red joined to its family holder's lease: released when it shows no progress
+
+    @staticmethod
+    def of(row: Optional[dict[str, Any]]) -> Any:
+        return lease_meta(row).get("kind")
+
+    @classmethod
+    def is_session(cls, row: Optional[dict[str, Any]]) -> bool:
+        return cls.of(row) in cls.SESSIONS
+
+    @classmethod
+    def is_joined(cls, row: Optional[dict[str, Any]]) -> bool:
+        return cls.of(row) in cls.JOINED
+
+    @classmethod
+    def is_owned(cls, row: Optional[dict[str, Any]]) -> bool:
+        return cls.of(row) == cls.OWNED
+
+    @classmethod
+    def is_claim(cls, row: Optional[dict[str, Any]]) -> bool:
+        return cls.of(row) == cls.CLAIM
+
+    @classmethod
+    def holds_family(cls, row: Optional[dict[str, Any]]) -> bool:
+        """A dispatched fixer's own lease, or a CLAIM made inside one (never an interactive session's)."""
+        return cls.of(row) == cls.FIXER or (cls.is_claim(row) and bool(lease_meta(row).get("fixer")))
 
 
 def block_lease(key: Optional[str] = None, cause: Optional[str] = None) -> str:
@@ -106,18 +139,14 @@ def red_block_of(it: dict[str, Any], store: Any) -> Optional[dict[str, Any]]:
 LEASE_LIST_RECENT = 3600         # `lease list` shows the live leases and those free for less than this (--all: every one)
 
 
-def _lease_is_live(r: dict[str, Any], now_: float) -> bool:
-    return bool(r["holder"] and r["expires_at"] > now_)
-
-
 def _lease_recent(r: dict[str, Any], now_: float) -> bool:
     """Live, or free for no longer than LEASE_LIST_RECENT."""
-    return _lease_is_live(r, now_) or now_ - r["expires_at"] <= LEASE_LIST_RECENT
+    return lease_is_live(r, now_) or now_ - r["expires_at"] <= LEASE_LIST_RECENT
 
 
 def _lease_line(r: dict[str, Any], now_: float) -> str:
     meta = json.loads(r["meta"] or "{}")
-    return (f"{r['name']}  {'LIVE' if _lease_is_live(r, now_) else 'free'}  {r['holder'] or '-'}  epoch {r['epoch']}  "
+    return (f"{r['name']}  {'LIVE' if lease_is_live(r, now_) else 'free'}  {r['holder'] or '-'}  epoch {r['epoch']}  "
             f"expires in {int(r['expires_at'] - now_)} s  max {int(r['max_until'] - now_)} s"
             + (f"  -- {meta.get('note')}" if meta.get("note") else ""))
 

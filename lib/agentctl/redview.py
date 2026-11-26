@@ -10,7 +10,7 @@ from agentctl.core import env_num, state_root, tilde
 from agentctl.cistate import snapshot_gate_reds
 from agentctl.dispatchblock import short_flow
 from agentctl.redrecord import RED_RECURRING, red_active, red_lease, red_names
-from agentctl.leases import lease_meta, red_block_of
+from agentctl.leases import LeaseKinds, lease_meta, red_block_of
 from agentctl.redfixread import FIX_OPEN
 from agentctl.redfixes import red_refuted
 from agentctl.owners import owner_record_path
@@ -55,7 +55,7 @@ def red_view(store, it, t=None):
 def red_lease_lapses(row: dict[str, Any], d: dict[str, Any], t: float) -> float:
     """When red d's live lease row lapses with no progress: its expiry -- or, held by an owner (renewed by its beat), its
     RED_HELD_IDLE past the red's own progress (reddispatch.py)."""
-    if lease_meta(row).get("kind") == "owned":
+    if LeaseKinds.is_owned(row):
         return max(float(row.get("acquired_at") or t), red_owned_progress_at(row, d)) + float(env_num(
             "AGENTCTL_RED_HELD_IDLE", RED_HELD_IDLE))
     return float(row.get("expires_at") or t)

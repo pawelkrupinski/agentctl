@@ -10,7 +10,7 @@ from agentctl.timefmt import ts
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.procs import safe_cwd
 from agentctl.repos import RED_PRIMARY, movies_repo_path, red_repo_of, repo_path_for, scan_repo_for
-from agentctl.leases import lease_meta, red_block_of
+from agentctl.leases import LeaseKinds, lease_meta, red_block_of
 from agentctl.fixerrecords import fixer_session_path, own_fixer_record_path, record_session_is
 from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.allowedpaths import allowed_dir
@@ -69,7 +69,7 @@ def red_noted(store: Any, items: list[Any], note: str) -> None:
     """A note on reds held by the fixer: progress on each joined to its lease or in its owner's hand (reddispatch.py)."""
     for it in items:
         row = store.get(red_lease(it["data"]["key"]))
-        if lease_meta(row).get("joined_at") or lease_meta(row).get("kind") == "owned":
+        if lease_meta(row).get("joined_at") or LeaseKinds.is_owned(row):
             red_joined_progress(store, row, f"note: {note}")
 
 
