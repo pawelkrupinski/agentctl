@@ -163,37 +163,48 @@ def branch_base(branch, run):
     return m.group(1) if m else run.get("headSha")
 
 
-def owner_of(repo, branch, run):
-    """The owner record of a branch run, matched after the fact (and recorded) when nobody recorded one."""
+def rematch_gone_owner(repo, branch, run, rec):
+    """The record of a worktree that took over a branch run whose owner `rec` is gone (its worktree removed / pid dead):
+    a live worktree holding its commit, recorded in place of the dead one; None when nobody holds it."""
     rid = run.get("databaseId")
-    rec = dispatch_for(branch, rid)
-    if rec and owner_gone(rec):  # its worktree removed / pid dead: a live worktree holding its commit takes it over
-        base = branch_base(branch, run)
-        wt = repo and base and commit_on_main(repo, base) is False and worktree_holding(repo, base)  # main's are everywhere
-        if wt:  # another worktree, or the same one outliving its agent's process: the worktree owns it now
-            new = {"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "worktree": wt, "sha": base,
-                   "purpose": f"re-matched: its owner {owner_text(rec)} is gone", "source": "matched", "at": ts(),
-                   "epoch": epoch_now()}
-            for key in ([dispatch_key(None, rid)] if rid else []) + [dispatch_key(branch)]:  # REPLACED, not merged:
-                if key == dispatch_key(branch) or os.path.exists(dispatches_dir(f"{key}.json")):  # no dead pid stays
-                    write_json(dispatches_dir(f"{key}.json"), new)
-            return new
-        return rec  # nobody holds it: orphan_why closes it, naming the gone owner
-    if rec:
-        return rec
-    key = dispatch_key(branch)
-    old = read_record(dispatches_dir(f"{key}.json")) or {}
-    if old.get("source") == "unmatched" and epoch_now() - float(old.get("epoch") or 0) < OWNER_REMATCH:
+    base = branch_base(branch, run)
+    wt = repo and base and commit_on_main(repo, base) is False and worktree_holding(repo, base)  # main's are everywhere
+    if not wt:
         return None
+    # another worktree, or the same one outliving its agent's process: the worktree owns it now
+    new = {"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "worktree": wt, "sha": base,
+           "purpose": f"re-matched: its owner {owner_text(rec)} is gone", "source": "matched", "at": ts(),
+           "epoch": epoch_now()}
+    for key in ([dispatch_key(None, rid)] if rid else []) + [dispatch_key(branch)]:  # REPLACED, not merged:
+        if key == dispatch_key(branch) or os.path.exists(dispatches_dir(f"{key}.json")):  # no dead pid stays
+            write_json(dispatches_dir(f"{key}.json"), new)
+    return new
+
+
+def holder_of_branch(repo, branch, base):
+    """(worktree, how) that holds a branch run nobody recorded: a check/ branch's queue entry, else the worktree holding
+    its commit; (None, None) when nobody does."""
     wt, how = None, None
     if branch.startswith("check/"):
         # the lane and mode prefixes off (remote_check: check/red-<...>; remote_mode_prefix: check/fast-<id>,
         # check/verify-<sha>-<id>): the entry's own id
         wt, how = (queue_entry_worktree(re.sub(r"^(red-)?(fast-|verify(areas)?-[0-9a-f]{40}-)?", "", branch[len("check/"):])),
                    "its queue entry")
-    base = branch_base(branch, run)
     if not wt and repo and base:
         wt, how = worktree_holding(repo, base), f"the worktree that holds {base[:9]}"
+    return wt, how
+
+
+def match_unrecorded(repo, branch, run):
+    """The owner record of a branch run nobody recorded: matched after the fact and recorded, else an `unmatched` mark
+    (None; not tried again for OWNER_REMATCH)."""
+    rid = run.get("databaseId")
+    key = dispatch_key(branch)
+    old = read_record(dispatches_dir(f"{key}.json")) or {}
+    if old.get("source") == "unmatched" and epoch_now() - float(old.get("epoch") or 0) < OWNER_REMATCH:
+        return None
+    base = branch_base(branch, run)
+    wt, how = holder_of_branch(repo, branch, base)
     if not wt:
         save_dispatch({"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "source": "unmatched",
                        "at": ts(), "epoch": epoch_now()}, key)
@@ -201,6 +212,14 @@ def owner_of(repo, branch, run):
     return save_dispatch({"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "worktree": wt,
                           "sha": base, "purpose": f"matched by branch name ({how})", "source": "matched",
                           "at": ts(), "epoch": epoch_now()}, key)
+
+
+def owner_of(repo, branch, run):
+    """The owner record of a branch run, matched after the fact (and recorded) when nobody recorded one."""
+    rec = dispatch_for(branch, run.get("databaseId"))
+    if rec and owner_gone(rec):  # its worktree removed / pid dead: a live worktree holding its commit takes it over
+        return rematch_gone_owner(repo, branch, run, rec) or rec  # nobody holds it: orphan_why closes it, naming the gone owner
+    return rec or match_unrecorded(repo, branch, run)
 
 
 def owner_gone(rec):
@@ -288,6 +307,45 @@ def orphaned_red(store, o_r, runs):
     return None
 
 
+def finished_runs(runs_for, b, out):
+    """The runs of branch b when every one finished, else None (the branch is not swept); runs that could not be listed
+    are said in `out`."""
+    try:
+        runs = runs_for(b)
+    except (Exception, SystemExit) as e:
+        out.append(f"  branch {b}: its runs unread ({str(e)[:100]}), kept")
+        return None
+    return None if any(r.get("status") != "completed" for r in runs) else runs
+
+
+def gone_owner_what(repo, o_r, store, b, sha, runs):
+    """What says branch b (head sha, its finished runs) has no owner left -- the owner gone, or its red closed as an
+    orphan -- else None."""
+    rec = owner_of(repo, b, (runs or [{}])[0] | {"headSha": sha}) if runs else dispatch_for(b)
+    gone = owner_gone(rec)
+    orphan = None if gone or rec else orphaned_red(store, o_r, runs)
+    if not gone and not orphan:
+        return None
+    return (f"owner {owner_text(rec)} gone" if gone else f"its red closed as an orphan ({orphan})") \
+        + f", {len(runs)} run(s) finished"
+
+
+def sweep_gone_branch(repo, o_r, b, sha, what, dry, out):
+    """Say what happens to a branch whose owner is gone: measure/* ones are deleted (the standing OK: a finished
+    measure/* branch), the rest are listed."""
+    if not b.startswith("measure/"):
+        out.append(f"  OWNER GONE branch {b} {sha[:10]}: {what} (listed, kept)")
+    elif dry:
+        out.append(f"  would delete OWNER GONE branch {b} {sha[:10]}: {what}")
+    else:
+        try:
+            delete_remote_branch(repo, o_r, b, sha)
+            log_deletion("remote-branch", o_r, b, sha, f"sweep: {what}")
+            out.append(f"  deleted OWNER GONE branch {b} {sha[:10]}: {what}")
+        except Exception as e:
+            out.append(f"  OWNER GONE branch {b} not deleted: {e}")
+
+
 def orphan_branches(repo, o_r, dry, out, store, runs_for=None):
     """The sweep's part: remote tracked branches whose owner is gone (worktree removed or pid dead), or whose branch red
     closed as an orphan (no owner at all), and whose runs all finished. measure/* ones are deleted (the standing OK: a
@@ -296,36 +354,14 @@ def orphan_branches(repo, o_r, dry, out, store, runs_for=None):
     runs_for = runs_for or (lambda b: gh_json(o_r, "run", "list", "--branch", b, "--limit", "20", "--json", RUN_FIELDS))
     recorded = {r.get("branch") for r in dispatch_records() if r.get("branch")}
     found = []
-    st = store
     for line in git(repo, "ls-remote", "--heads", remote(), check=False).stdout.splitlines():
         sha, ref = line.split()
         b = ref.removeprefix("refs/heads/")
         if not tracked_branch(b, recorded) or b in SWEEP_KEEP_REMOTE:
             continue
-        try:
-            runs = runs_for(b)
-        except (Exception, SystemExit) as e:
-            out.append(f"  branch {b}: its runs unread ({str(e)[:100]}), kept")
-            continue
-        if any(r.get("status") != "completed" for r in runs):
-            continue
-        rec = owner_of(repo, b, (runs or [{}])[0] | {"headSha": sha}) if runs else dispatch_for(b)
-        gone = owner_gone(rec)
-        orphan = None if gone or rec else orphaned_red(st, o_r, runs)
-        if not gone and not orphan:
-            continue
-        found.append(b)
-        what = (f"owner {owner_text(rec)} gone" if gone else f"its red closed as an orphan ({orphan})") \
-            + f", {len(runs)} run(s) finished"
-        if not b.startswith("measure/"):
-            out.append(f"  OWNER GONE branch {b} {sha[:10]}: {what} (listed, kept)")
-        elif dry:
-            out.append(f"  would delete OWNER GONE branch {b} {sha[:10]}: {what}")
-        else:
-            try:
-                delete_remote_branch(repo, o_r, b, sha)
-                log_deletion("remote-branch", o_r, b, sha, f"sweep: {what}")
-                out.append(f"  deleted OWNER GONE branch {b} {sha[:10]}: {what}")
-            except Exception as e:
-                out.append(f"  OWNER GONE branch {b} not deleted: {e}")
+        runs = finished_runs(runs_for, b, out)
+        what = runs is not None and gone_owner_what(repo, o_r, store, b, sha, runs)
+        if what:
+            found.append(b)
+            sweep_gone_branch(repo, o_r, b, sha, what, dry, out)
     return found
