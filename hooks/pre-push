@@ -60,6 +60,19 @@ except Exception: print(0)' 2>/dev/null)
         tail -2 "$tmp/stress" >&2
       fi
     fi
+    # THE END-TO-END LAYER (tests/e2e/run.py, the owner 2026-11-27): the real store server, reconciler tick, sync and
+    # laptop CLI against a real git remote and a stub GitHub, one temp root per scenario, ~2 min; the scenarios run
+    # under the step's ticket.
+    if [ $rc -eq 0 ] && [ -f "$tmp/tree/tests/e2e/run.py" ]; then
+      (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-e2e --cores 4 --run 420 --} python3 tests/e2e/run.py >"$tmp/e2e" 2>&1); st=$?
+      if [ $st -ne 0 ]; then
+        tail -60 "$tmp/e2e" >&2
+        refuse $st "the e2e layer" "the e2e layer fails on $lsha (tests/e2e/run.py; fix forward)"
+        rc=1
+      else
+        tail -2 "$tmp/e2e" >&2
+      fi
+    fi
     # THE SIMULATOR GATE (tests/sim_gate.py): no invariant kind's violations rise against the remote's main, and no
     # invariant changes beside the code it measures. Against the remote's sha when this clone has it, else alone. Its
     # chunks run under the step's ticket (THE GOVERNED FAN-OUT); the 1220 s bound starts at the grant.

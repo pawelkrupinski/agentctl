@@ -38,6 +38,24 @@ jobs:
           python3 --version
           timeout -s KILL 480 python3 tests/run.py -j 4 --timeout 60 --suite-timeout 420 --durations 15 \
             --shard ${{ matrix.shard }}/2
+  # THE END-TO-END LAYER (tests/e2e/run.py, 2026-11-27): the real store server, reconciler, sync and CLI together, a
+  # stub GitHub; the skew scenarios unpack older revisions from the history (fetch-depth 0)
+  e2e:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: End-to-end scenarios on Python ${{ matrix.python }}
+        run: timeout -s KILL 480 python3 tests/e2e/run.py -j 4
   # THE SIMULATOR GATE (tests/sim_gate.py): the queue simulator's fixed scenarios, every invariant kind's violations
   # against tests/sim-invariants.tsv and the push's base (no rise, no invariant changed beside the code it measures).
   sim-gate:

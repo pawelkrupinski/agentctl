@@ -71,7 +71,7 @@ class GovStepTest(unittest.TestCase):
     def test_the_hook_runs_every_step_through_it_with_no_kill_bound_that_counts_the_wait(self):
         hook = open(os.path.join(ROOT, "hooks", "pre-push")).read()
         self.assertNotIn("timeout --foreground", hook)
-        for job in ("prepush-suite", "prepush-stress", "prepush-gate"):
+        for job in ("prepush-suite", "prepush-stress", "prepush-e2e", "prepush-gate"):
             self.assertIn(f"--job {job} ", hook)
         self.assertIn("governor busy", hook)
 
