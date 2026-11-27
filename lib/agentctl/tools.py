@@ -11,7 +11,6 @@ from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, ZERO, err, git, git_ok, remote, scratch
 from agentctl.timefmt import ts
-from agentctl.trailers import trailer_format
 from agentctl.forge import GH_CLI
 from agentctl.land import SDKMAN_BINS, tool_env
 from agentctl.storetoken import secrets_bin
@@ -266,7 +265,7 @@ def declared_retirements(repo, mb, head):
     """Paths named by a `Retires: <path>` trailer (final trailer block) of a commit in mb..head AND absent at head:
     a declared deletion is the author's call, not a squash undoing main. Undeclared or still-present files don't count."""
     paths = set()
-    for body in git(repo, "log", f"--format={trailer_format(('Retires',), unfold=True, one_line=False)}%x00", f"{mb}..{head}").split("\0"):
+    for body in git(repo, "log", "--format=%(trailers:key=Retires,valueonly,unfold)%x00", f"{mb}..{head}").split("\0"):
         paths.update(l.strip() for l in body.splitlines() if l.strip())
     return {p for p in paths if git(repo, "cat-file", "-e", f"{head}:{p}", check=False).returncode != 0}
 

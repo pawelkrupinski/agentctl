@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import re
-from typing import Any
+from typing import Any, Iterator
 from agentctl.procrunner import process_runner
 from agentctl.timefmt import iso_epoch
 from agentctl.forge import forge_argv, forge_env
@@ -35,10 +35,10 @@ def _in_step_header(header: Any, job: Any, line: Any) -> Any:
     return True
 
 
-def log_entries(log_text):
+def log_entries(log_text: str | None) -> Iterator[tuple[str, str]]:
     """(job, line) of a `gh run view --log` / `--log-failed` output (job<TAB>step<TAB>line, or bare lines: job `?`),
     timestamps and colours off, blank lines and the runner's step-script headers (above) left out."""
-    header = {}
+    header: dict[str, int] = {}
     for raw in (log_text or "").splitlines():
         parts = raw.split("\t", 2)
         job, line = (parts[0], parts[2]) if len(parts) == 3 else ("?", raw)

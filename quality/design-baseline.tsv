@@ -74,7 +74,7 @@ effect	lib/agentctl/issues.py	1
 effect	lib/agentctl/jvmreap.py	3
 effect	lib/agentctl/land.py	2
 effect	lib/agentctl/lander.py	1
-effect	lib/agentctl/landhold.py	1
+effect	lib/agentctl/landhold.py	2
 effect	lib/agentctl/landqueue.py	1
 effect	lib/agentctl/laptoprole.py	1
 effect	lib/agentctl/launchd.py	1
@@ -88,7 +88,6 @@ effect	lib/agentctl/ownerwrapper.py	2
 effect	lib/agentctl/processorlink.py	1
 effect	lib/agentctl/procs.py	1
 effect	lib/agentctl/procwatch.py	1
-effect	lib/agentctl/queue.py	1
 effect	lib/agentctl/queuebatch.py	1
 effect	lib/agentctl/queueenter.py	1
 effect	lib/agentctl/queueuntil.py	1
@@ -211,11 +210,11 @@ fanout	lib/agentctl/inboxcli.py	11
 fanout	lib/agentctl/inboxentry.py	10
 fanout	lib/agentctl/invariants.py	20
 fanout	lib/agentctl/land.py	11
-fanout	lib/agentctl/landdryrun.py	21
+fanout	lib/agentctl/landdryrun.py	22
 fanout	lib/agentctl/lander.py	12
 fanout	lib/agentctl/landqueue.py	26
 fanout	lib/agentctl/landwatch.py	10
-fanout	lib/agentctl/localrecheck.py	15
+fanout	lib/agentctl/localrecheck.py	16
 fanout	lib/agentctl/maintain.py	16
 fanout	lib/agentctl/netwatch.py	12
 fanout	lib/agentctl/offerdispatch.py	15
@@ -232,7 +231,7 @@ fanout	lib/agentctl/queuebatch.py	21
 fanout	lib/agentctl/queuecheck.py	17
 fanout	lib/agentctl/queueclose.py	23
 fanout	lib/agentctl/queuediff.py	21
-fanout	lib/agentctl/queueenter.py	27
+fanout	lib/agentctl/queueenter.py	28
 fanout	lib/agentctl/queuepush.py	17
 fanout	lib/agentctl/queuesubmit.py	11
 fanout	lib/agentctl/recovery.py	15

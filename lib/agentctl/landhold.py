@@ -100,7 +100,7 @@ def tick_land_hold(st: Any) -> list[str]:
     return []
 
 
-def land_holds(st):
+def land_holds(st: Any) -> list[dict[str, Any]]:
     return st.items("hold", ["held"])
 
 
@@ -137,5 +137,5 @@ def hold_text(h: Any, t: float | None = None) -> str:
             f"by {d.get('by') or '?'}" + (f": {d['why']}" if d.get("why") else "") + ")")
 
 
-def hold_row(it):
+def hold_row(it: dict[str, Any] | None) -> dict[str, Any] | None:
     return {"id": it["id"], "until": it["deadline"], "by": it["data"].get("by"), "why": it["data"].get("why")} if it else None

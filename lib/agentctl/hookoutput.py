@@ -61,7 +61,8 @@ def _scalatest_failure(texts: list[str], i: int, test: str) -> str:
         if not detail:
             break
         message.append(detail.group(1))
-    return ": ".join(x for x in ((_failed_suites(texts) or [above])[0], test, " ".join(message)) if x)
+    suites: list[str | None] = [*_failed_suites(texts)] or [above]
+    return ": ".join(x for x in (suites[0], test, " ".join(message)) if x)
 
 
 def _unittest_failure(texts: list[str], i: int, test: str) -> str:
@@ -82,7 +83,8 @@ def runner_failure(texts: list[str]) -> Optional[str]:
 
 def _failed_step_details(lines: list[str]) -> dict[str, list[str]]:
     """{step: its detail lines (the 4-space indent stripped)} of each `precheck <step> FAIL`."""
-    details, step = {}, None
+    details: dict[str, list[str]] = {}
+    step: str | None = None
     for line in lines:
         m = PRECHECK_STEP_FAIL.match(line)
         if m:
@@ -178,9 +180,10 @@ def jobs_of_out(out: Optional[str]) -> dict[str, list[str]]:
     return {j: ls for j, ls in jobs.items() if ls or j != "checks"}
 
 
-def check_failures(out):
+def check_failures(out: str | None) -> dict[str, set[str]]:
     """{failed check: {normalized failure lines}} of a hook run's output."""
-    fails, seg = {}, []
+    fails: dict[str, set[str]] = {}
+    seg: list[str] = []
     for raw in (out or "").splitlines():
         line = ANSI.sub("", raw)
         m = HOOK_STATUS.search(line)
@@ -193,7 +196,7 @@ def check_failures(out):
     return fails
 
 
-def check_passes(out):
+def check_passes(out: str | None) -> set[str]:
     return {m.group(1) for m in (HOOK_STATUS.search(ANSI.sub("", l)) for l in (out or "").splitlines())
             if m and m.group(2) == "ok"}
 
