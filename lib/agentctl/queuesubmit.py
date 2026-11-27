@@ -27,8 +27,16 @@ from typing import Any, Optional
 _last_ref_sweep = [0.0]
 
 
+HOOK_CAPABILITIES = "scripts/hooks/pre-push-capabilities"  # movies' versioned list, one capability a line (# comments)
+LAND_REFS = "land-refs"  # the pre-push hook checks nothing on a refs/heads/land/ ref
+
+
 def land_refs_supported(repo):
-    """The repository's hook at origin/main checks nothing on a land/ ref (else the push would run its full checks)."""
+    """The repository's hook at origin/main checks nothing on a land/ ref (else the push would run its full checks): it
+    says so in its capabilities file; a revision before that file is read as its hook's text always was."""
+    listed = git(repo, "show", f"{remote()}/main:{HOOK_CAPABILITIES}", check=False)
+    if listed.returncode == 0:
+        return LAND_REFS in {x.strip() for x in listed.stdout.splitlines() if x.strip() and not x.lstrip().startswith("#")}
     hook = git(repo, "show", f"{remote()}/main:scripts/hooks/pre-push", check=False).stdout
     return "refs/heads/land/" in hook
 

@@ -1593,8 +1593,8 @@ The owner: "agents never wait on a land". In movies (a repo whose hook can check
 3. writes the change as a `change` item in state `queued` (re-landing from the same worktree and branch SUPERSEDES the
    older item: `SUPERSEDED <old> by <new>` to the inbox, its executor stopped), with its LANDER (the session, subagent,
    transcript, worktree, branch) and each commit's keys -- what "blame" reverts and revives;
-4. pushes the change to `refs/heads/land/<id>` on GitHub (bounded; movies' hook checks nothing on a `land/` ref and
-   no workflow triggers on one), so the change lives on the remote, not only in your worktree;
+4. pushes the change to `refs/heads/land/<id>` on GitHub (bounded; movies' hook checks nothing on a `land/` ref -- it says so as `land-refs` in
+   `scripts/hooks/pre-push-capabilities`, else its hook text is read -- and no workflow triggers on one), so the change lives on the remote, not only in your worktree;
 5. prints `QUEUED <id> (<sha>, n ahead): ...; not on main yet: END YOUR TURN; its verdict comes to agentctl inbox`
    and exits 0. The line names no verdict but QUEUED (2026-11-16: its old "LANDED / WAITING / NOT LANDED goes to the
    inbox" tail read as LANDED to a watcher matching the word); a red fixer's land ends it "this land now waits for its
