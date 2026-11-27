@@ -55,6 +55,7 @@ INVARIANT_KINDS = {
     "IG": "every dispatched escalation ends cleared or handed to the owner within its budget",
     "IL": "a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer",
     "IS": "a change reads one state whichever reader asks: its entry's status is its item's state after every tick",
+    "IC": "the item carries the record: an open change's item holds its entry but its status after every tick",
 }
 MAIN_FAILS_LINE = "[info] - main already fails *** FAILED ***"  # the test the open gate red's run fails (main_fails)
 VIOLATIONS_MAX = 50  # lines one scenario keeps in the gate's count mode
@@ -1437,6 +1438,7 @@ class Sim:
         if self.launch_deaths:
             self.check_launch_deaths()
         self.check_invariants(before, reds)
+        self.check_records()
         self.tick += 1
         self.clock[0] += TICK
 
@@ -1596,6 +1598,18 @@ class Sim:
         commit naming no red waits, so a change with one commit that does not is no fix of the red)."""
         ch = self.by_eid.get(eid)
         return bool(ch) and all(self.patches[p].fixes & known for p in ch.patches)
+
+    def check_records(self):
+        """C. THE ITEM CARRIES THE RECORD (docs/design/one-change-model.md, step 3): after every tick an open change's
+        item holds its entry, every key but its status, under waitingdir.RECORD_KEY."""
+        st = self.store
+        for e in A.waiting_entries(self.d, open_only=False):
+            eid = e["id"]
+            if A.entry_final(e.get("status")):
+                continue
+            it = st.item("change", eid)
+            if it is not None and (it.get("data") or {}).get("record") != {k: v for k, v in e.items() if k != "status"}:
+                self.violate("IC", f"change {eid} ({e.get('status')}): its item's record is not its entry")
 
     def check_hold_invariants(self, st, entries):
         """(b) EVERY CHANGE PAST ITS DEADLINE HAS A RECORDED HOLD, (c) NO CHANGE IS SILENT: every held change's
