@@ -18,6 +18,8 @@ BEFORE_ROUND_16 = {
     "maint": 61, "orphanreap": 35, "projector": 6, "queueclose": 88, "queueslots": 10, "recordingpins": 0, "redclaim": 23,
     "redhold": 25, "remotejobs": 4, "remotestore": 0, "statuspage": 9, "syncsteps": 10, "waiting": 19,
 }
+# a module folded into one of them brings its own (R2's pure moves, 2026-11-26): its count before the fold
+FOLDED_IN = {"redclaim": {"redownerpush": 17}}
 
 
 def bare_any(path):
@@ -34,7 +36,8 @@ def bare_any(path):
 
 class NoGamedAnyTest(unittest.TestCase):
     def test_round_16_modules_gain_no_bare_any(self):
-        rose = {m: (bare_any(os.path.join(LIB, m + ".py")), was) for m, was in BEFORE_ROUND_16.items()
+        before = {m: was + sum(FOLDED_IN.get(m, {}).values()) for m, was in BEFORE_ROUND_16.items()}
+        rose = {m: (bare_any(os.path.join(LIB, m + ".py")), was) for m, was in before.items()
                 if bare_any(os.path.join(LIB, m + ".py")) > was}
         self.assertEqual({}, rose, "a bare `Any` annotation added to lower the mypy count: give the real type, or none")
 
