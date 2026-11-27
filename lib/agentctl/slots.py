@@ -19,7 +19,7 @@ from agentctl.timefmt import ts
 from agentctl.netretry import net_run
 from agentctl.networksignatures import TRANSIENT_PUSH, is_transient_network
 from agentctl.repos import precheck_hook, waiting_supported
-from agentctl.waitingdir import save_entry, waiting_entries, waiting_state
+from agentctl.waitingdir import ChangeRecords, waiting_entries, waiting_state
 from agentctl.lander import commit_keys, lander_note_direct
 from agentctl.gating import mark_gate_dirty
 from agentctl.leases import lock_note
@@ -454,7 +454,7 @@ def join(st, repo, log_path, a, head):
         e = {"id": eid, "seq": seq, "worktree": repo, "branch": branch, "head": head, "commits": commits,
              "fixes": sorted(fixes_of(repo, commits, st)), "status": "waiting", "created": ts(), "tip": head,
              "follow": bool(getattr(a, "follow", False))}
-        save_entry(d, e)
+        ChangeRecords(st, d).save(e)
     print(note_waiting(d, log_path, head, e["id"]), flush=True)
     a.waiting = e
     spawn_waiting_processor(repo)

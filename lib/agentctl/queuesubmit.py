@@ -14,7 +14,7 @@ from agentctl.netretry import TransientNetwork, net_retry
 from agentctl.networksignatures import credential_failure, is_transient_network, redact_credentials
 from agentctl.store import StoreUnavailable
 from agentctl.selfcode import TOOL_PATH
-from agentctl.waitingdir import entry_final, save_entry, waiting_entries
+from agentctl.waitingdir import entry_final, waiting_entries
 from agentctl.land import push_bounds, run_watched, tool_env
 from agentctl.owned import backoff
 from agentctl.waiting import tail_of
@@ -379,9 +379,10 @@ def await_queued(eid, clock, store):
     return 1
 
 
-def submit_ref(repo, d, e, to_server=False):
-    """Push the change to refs/heads/land/<entry> (bounded); the entry records it. Never fatal in phase 1 (the queue does
-    not need it); in phase 2 (to_server: ci-runner fetches the change from it) the caller refuses without it."""
+def submit_ref(repo, d, e):
+    """Push the change to refs/heads/land/<entry> (bounded); e records it (`ref`, else `push_error`), its caller saves
+    it. Never fatal in phase 1 (the queue does not need it); in phase 2 (ci-runner fetches the change from it) the
+    caller refuses without it."""
     if not land_refs_supported(repo):
         e["push_error"] = f"not pushed: {remote()}/main's scripts/hooks/pre-push takes no refs/heads/land/ ref"
         return None
@@ -399,8 +400,6 @@ def submit_ref(repo, d, e, to_server=False):
         rc, out = 1, str(ex)
     if rc == 0:
         e["ref"] = ref
-        if not to_server:
-            save_entry(d, e)
         return ref
     e["push_error"] = tail_of(out or "", 2).strip()[:300]
     err(f"submit: could not push {ref} ({e['push_error'][:160]}); the change is queued all the same")

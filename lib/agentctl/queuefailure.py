@@ -9,7 +9,7 @@ from agentctl.statefile import read_record, write_json
 from agentctl.core import err, reds_dir, slug
 from agentctl.classify import ANSI, norm_line
 from agentctl.repos import gated_repo
-from agentctl.waitingdir import save_entry, waiting_entries
+from agentctl.waitingdir import ChangeRecords, waiting_entries
 from agentctl.wait import fetch_failed_log, log_entries
 from agentctl.ciwhy import gate_runs
 from agentctl.land import HOOK_STATUS
@@ -233,7 +233,7 @@ def head_only(keys: dict[str, str], known: dict[str, str], own_paths: Optional[s
     return sorted(n for k, n in keys.items() if k not in known and n not in unrun), unrun
 
 
-def judge_failure(repo: str, d: str, e: Entry, base: str, out: Optional[str], now: float,
+def judge_failure(st: Any, repo: str, d: str, e: Entry, base: str, out: Optional[str], now: float,
                   own_paths: Optional[set[str]] = None) -> tuple[str, Any]:
     """('base', {key: where}) when every failing job's tests fail on the base too; ('unrun', [names]) when what fails
     only on the head is script tests its base never ran (A TEST ITS BASE NEVER RAN IS NOBODY'S YET; own_paths: the
@@ -242,7 +242,7 @@ def judge_failure(repo: str, d: str, e: Entry, base: str, out: Optional[str], no
     jobs = head_failure_jobs(repo, e, out)
     keys, unjudged = failure_keys(jobs)
     e["failed_on"] = {"base": base, "head": e.get("head"), "keys": sorted(keys), "at": now}
-    save_entry(d, e)
+    ChangeRecords(st, d).save(e)
     if CHECK_TIMEOUT.search(out or ""):  # checks it never reached are unjudged: never a base verdict
         return "head", sorted(keys.values()) + ["the checks' time cap"]
     if not keys:

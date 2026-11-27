@@ -10,7 +10,7 @@ from agentctl.timefmt import parse_time, ts
 from agentctl.govknobs import QUEUE_POOL, knob_check_lease_ttl, knob_check_trees
 from agentctl.core import err, git
 from agentctl.causes import checked_cause, reject_cause, reject_class
-from agentctl.waitingdir import save_entry, waiting_state, wlog
+from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
 from agentctl.worktrees import mark_internal
 from agentctl.lander import lander_fields
 from agentctl.leases import LeaseHold, lease_live
@@ -159,7 +159,7 @@ def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any]
     if machine_state("change", cur["state"]).terminal and cur["state"] != to:  # decided already: its decision stands
         why = (cur.get("data") or {}).get("why")
         e.update(status=cur["state"], **({"why": why} if why else {}))
-    save_entry(d, e)
+    ChangeRecords(st, d).save(e)
 
 
 def _move_item(st: Any, cid: str, cur: dict[str, Any], to: str, data: Any, event: dict[str, Any] | None, cause: str,

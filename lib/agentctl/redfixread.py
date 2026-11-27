@@ -15,10 +15,11 @@ from agentctl.repos import red_repo_of
 from agentctl.workflows import fix_workflow_jobs
 from agentctl.clones import fetch_main
 from agentctl.ciruns import ci_runs
+from agentctl.statemachines import open_states
 
 
 # -- fixes on their way: Fixes-Red changes in the queue, and Fixes-Red commits landed on main
-FIX_OPEN = ("queued", "checking", "checked", "waiting", "joined", "pushing")
+FIX_OPEN = tuple(open_states("change"))  # an entry of any other status (an old `joined`) is decided
 
 
 # THE FIXES ARE READ FROM MAIN AS IT IS (2026-11-12, Record scrape fixtures #181, red 58f3db9e8a3d): the reconciler's

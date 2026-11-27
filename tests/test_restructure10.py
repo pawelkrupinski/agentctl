@@ -244,13 +244,13 @@ class ApplyEntryTest(unittest.TestCase):
         case.fake("wlog", lambda rng, d, line: None)
         case.fake("save_entry", lambda rng, d, entry: None)
         case.fake("remote", lambda rng: "origin")
-        return ("/d", "/wt", e, "base0", r.choice([True, False]), autoresolve)
+        return (None, "/d", "/wt", e, "base0", r.choice([True, False]), autoresolve)
 
     def test_apply_entry(self):
         def run(A):
             def apply(*args):
                 result = A.apply_entry(*args)
-                return result, args[2]
+                return result, args[3]
             return apply
         check(self, "apply_entry", self.build, run, 6000)
 

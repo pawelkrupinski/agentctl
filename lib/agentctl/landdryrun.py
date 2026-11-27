@@ -10,7 +10,7 @@ from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.networksignatures import network_failure
 from agentctl.repos import batching, precheck_hook, waiting_supported
-from agentctl.waitingdir import waiting_state
+from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.worktrees import mark_internal
 from agentctl.leases import lock_note
 from agentctl.land import REDGATE, TUNNEL_TROUBLE, run_watched, stall_reason, tool_env
@@ -151,7 +151,8 @@ def network_requeue(repo, head, out, log_path, clock, store, a=None):
     if host_role() == "sync":  # ONE QUEUE: ci-runner's (its checks run there, its own network)
         return submit_to_server(repo, d, change_fields(repo, f"{remote()}/main", head, a, store), store, note=f" after {why}")
     e, _ahead = queue_change(store, d, change_fields(repo, f"{remote()}/main", head, a, store))
-    submit_ref(repo, d, e)
+    if submit_ref(repo, d, e):
+        ChangeRecords(store, d).save(e)
     requeue_infra(store, d, e, why, clock.time(), reason=NETWORK_REASON, detail=out, repo=repo)
     e = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or e
     left = max(0, int((float(e.get("retry_after") or clock.time()) - clock.time()) // 60))

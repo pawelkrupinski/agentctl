@@ -14,7 +14,7 @@ from agentctl.clock import Clock
 from agentctl.landstate import UNKNOWN, LandState, landed_state
 from agentctl.core import fmt_age, git_ok, host_role, process_cache, remote
 from agentctl.repos import movies_repo_path, precheck_hook, waiting_supported
-from agentctl.waitingdir import drop_entry, entry_final, save_entry, waiting_entries, waiting_state, wlog
+from agentctl.waitingdir import ChangeRecords, drop_entry, entry_final, waiting_entries, waiting_state, wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_write
 from agentctl.clones import clone_shared
@@ -139,14 +139,14 @@ def probe_change_source(a, store):
 def _migrate_landed(st: Any, d: Any, e: Any, via: Any) -> str:
     """Entry e's commits are on main (via): it is LANDED, here and in the store. The line saying so."""
     e.update(status="landed", landed_sha=via, decided=ts(), why="its commits are on main (by content)")
-    save_entry(d, e)
+    ChangeRecords(st, d).save(e)
     close_item_landed(st, e["id"], "its commits are on main (by content)", via)
     return f"{e['id']}: its commits are on main (by content): landed"
 
 
 def _migration_failure(repo: Any, st: Any, d: Any, e: Any) -> Any:
     """Entry e pushed to refs/heads/land/<id> and submitted to ci-runner's queue: why it could not be (None: moved)."""
-    if not submit_ref(repo, d, e, to_server=True):
+    if not submit_ref(repo, d, e):
         return f"could not push refs/heads/land/{e['id']}"
     try:
         st.submit({**{k: e.get(k) for k in SUBMIT_FIELDS}, "id": e["id"]})
@@ -159,7 +159,7 @@ def _tell_stranded(d: Any, e: Any, line: str) -> None:
     """The unmoved entry's author hears of it once an hour."""
     if epoch_now() - float(e.get("migrate_told_at") or 0) > 3600:
         e["migrate_told_at"] = epoch_now()
-        save_entry(d, e)
+        ChangeRecords(None, d).save(e)  # the laptop's outbox: no item
         inbox_write("land", line, [line], [], 1, cwd=e.get("worktree") or safe_cwd())
 
 
@@ -248,7 +248,7 @@ def _record_regen_step(st: Any, d: Any, e: Any, it: Any, step: Any, t: Any, wait
     """The recovery's step (its update, event and text) kept on the entry and on the change's item, and said."""
     update, ev, text = step
     e["retry_after"] = t + wait
-    save_entry(d, e)
+    ChangeRecords(st, d).save(e)
     with suppress(StaleVersion):  # recorded on the entry; the item catches up next tick
         if update:
             st.update_item("change", e["id"], it["version"], update)
@@ -329,7 +329,7 @@ def _check_entry(st: Any, repo: str, d: str, e: dict[str, Any], i: int, clock: C
     if ended is not None:
         return ended
     e["tip"] = head
-    save_entry(d, e)
+    ChangeRecords(st, d).save(e)
     commits, reds = waiting_commits(tree, base, head), gate_reds(repo) if waiting_supported(repo) else set()
     if tip_refused(st, repo, d, e, tree, commits, base):
         return 1

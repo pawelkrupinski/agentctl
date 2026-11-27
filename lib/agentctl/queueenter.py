@@ -13,7 +13,7 @@ from agentctl.core import (
     NO_SIGN, branch_of, err, fmt_age, git, git_ok, host_role, process_cache, remote, scratch)
 from agentctl.policy import policy_blocks
 from agentctl.trailers import do_not_land, held_commit
-from agentctl.waitingdir import waiting_state
+from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.storetoken import no_vault
 from agentctl.lander import commit_keys, lander_record
 from agentctl.inboxentry import inbox_write
@@ -63,7 +63,7 @@ def submit_to_server(repo, d, fields, store, note="", after_queued=None, waits=F
     waits for the verdict itself (a red fixer's, fixer_land)."""
     head = fields["head"]
     e = {**fields, "id": f"{stamp('entry')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
-    if not submit_ref(repo, d, e, to_server=True):
+    if not submit_ref(repo, d, e):
         print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
               f"{push_failure_why(e.get('push_error'))}: land again")
         return 1
@@ -141,7 +141,8 @@ def queue_here(repo: Any, main_ref: Any, head: Any, d: Any, a: Any, store: Any, 
     """Queue the change in this checkout's own store (no server): QUEUED line, its processor started. Returns 0."""
     fields = change_fields(repo, main_ref, head, a, store)
     e, ahead = queue_change(store, d, fields)
-    submit_ref(repo, d, e)
+    if submit_ref(repo, d, e):
+        ChangeRecords(store, d).save(e)
     print(f"QUEUED {e['id']} ({head[:10]}{f', {ahead} ahead' if ahead > 0 else ''}): its checks run in the "
           f"background; {queued_tail(waits)}", flush=True)
     after_queued(e["id"])

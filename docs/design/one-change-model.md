@@ -83,6 +83,14 @@ copies converge.
    the item's data too (`update_item`, the item created first when absent), so the item holds everything the file
    holds. Additive (rule 2). An invariant in the simulator: after every tick, an open change's item data equals its
    entry (but `status`), and its state equals the entry's status.
+   As built: THE writer of an entry is `waitingdir.ChangeRecords(store, d).save(e)` (every former `save_entry` call
+   site); it writes the file, then the entry but its status under ONE added key, `record`, with `Store.merge_item` (a
+   merge that bumps no version and writes no event: no writer's compare-and-set is disturbed; server-only, no API
+   call). One key rather than the entry's keys spread over the item: about 20 keys share a name with the item's own
+   (`why` truncated, `fixes` only when not empty, the verdict keys a store-only writer sets), and a stale entry must
+   not overwrite them. The laptop's outbox (a remote store, or none) writes the file alone. The projector gives an
+   open entry's item its record when the item is made after the entry, and catches any write that missed it; a change
+   decided before this step has no record (readers fall back, rule 2). Sim invariant IC.
 4. **Readers move to the item**, module by module (`changes.records(st)` instead of `waiting_entries(d)`), the
    batch, the tick and the checker last. Each move is a pure read swap (the record is the same dict) proved by the
    tightened invariant and the module's tests.

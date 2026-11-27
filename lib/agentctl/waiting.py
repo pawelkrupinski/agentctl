@@ -9,7 +9,7 @@ from agentctl.timefmt import ts
 from agentctl.statefile import read_record, note_failure
 from agentctl.repos import server_repo
 from agentctl.trailers import trailer_values
-from agentctl.waitingdir import save_entry, waiting_entries, waiting_state, wlog
+from agentctl.waitingdir import ChangeRecords, waiting_entries, waiting_state, wlog
 from agentctl.owned import cancel_run
 from agentctl.queueslots import entry_owned, queue_verdict, set_change
 from agentctl.conflicts import pick
@@ -105,12 +105,12 @@ def dropped_on_main(wt: Any, dropped: Any, base: Any, first: bool) -> Any:
             if (v and git(wt, "merge-base", "--is-ancestor", v, base, check=False).returncode == 0) or (not v and first)]
 
 
-def drop_landed(d: Any, e: dict[str, Any], on_main: Any) -> Any:
+def drop_landed(st: Any, d: Any, e: dict[str, Any], on_main: Any) -> Any:
     """The entry without its commits main carries (`dropped` keeps them); ('landed', via) when nothing is left of it."""
     gone = {c for c, _v in on_main}
     e["commits"] = [c for c in e["commits"] if c not in gone]
     e.setdefault("dropped", []).extend([[c, v] for c, v in on_main])
-    save_entry(d, e)
+    ChangeRecords(st, d).save(e)
     wlog(d, f"{e['id']}: {len(on_main)} commit(s) already on {remote()}/main, dropped: "
             + ", ".join(f"{c[:10]} (via {v[:10] if v else 'an empty pick'})" for c, v in on_main))
     if not e["commits"]:
@@ -118,7 +118,7 @@ def drop_landed(d: Any, e: dict[str, Any], on_main: Any) -> Any:
     return None
 
 
-def apply_entry(d, wt, e, base, regen: bool = True, autoresolve: bool = False):
+def apply_entry(st, d, wt, e, base, regen: bool = True, autoresolve: bool = False):
     """Pick the entry's commits onto wt's HEAD (base, or base plus earlier entries): ('ok', None), ('conflict', files),
     ('landed', via) or ('duplicate', via). A commit already on MAIN (base's history) is dropped from the entry for good
     (a partly landed entry keeps only the rest); one only an earlier entry carries is left out of this build alone (that
@@ -133,14 +133,14 @@ def apply_entry(d, wt, e, base, regen: bool = True, autoresolve: bool = False):
         return "conflict", conflict
     if not dropped:
         return "ok", None
-    return _after_drops(d, wt, e, base, first, dropped)
+    return _after_drops(st, d, wt, e, base, first, dropped)
 
 
-def _after_drops(d, wt, e, base, first, dropped):
+def _after_drops(st, d, wt, e, base, first, dropped):
     """apply_entry's verdict when some commits were dropped: 'landed' (nothing left of it on main), 'duplicate' (all of
     it on an earlier entry), else 'ok' with the rest."""
     on_main = dropped_on_main(wt, dropped, base, first)
-    landed = drop_landed(d, e, on_main) if on_main else None
+    landed = drop_landed(st, d, e, on_main) if on_main else None
     if landed:
         return landed
     if not [c for c in e["commits"] if c not in {x for x, _v in dropped}]:  # all of it is on an earlier entry

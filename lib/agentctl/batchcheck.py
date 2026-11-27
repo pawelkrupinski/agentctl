@@ -14,7 +14,7 @@ from agentctl.core import err, git, git_ok, slug, state_root
 from agentctl.leases import LeaseHold
 from agentctl.classify import INFRA_LOG, names_failing_test
 from agentctl.forge import forge_env
-from agentctl.waitingdir import save_entry, waiting_state, wlog
+from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
 from agentctl.land import REDGATE, run_watched, tool_env
 from agentctl.queuefailure import CHECK_TIMEOUT, judge_failure
 from agentctl.queueslots import queue_verdict, tree_slot
@@ -35,7 +35,7 @@ def red_prechecked(d, st, it, members, tip, base, how, failed=None):
     failed for as they are (not pre-checked again until either changes)."""
     for e in members:
         e.update(prechecked=it["id"], checked_base=base)
-        save_entry(d, e)
+        ChangeRecords(st, d).save(e)
     pre = {"members": [e["id"] for e in members], "base": base, "tip": tip} if members else None
     batch_move(st, it, "blocked-red", {"prechecked": pre, "precheck_failed": failed}, cause="gate-red",
                text=f"batch {it['id']}: {how}" + (f": pre-checked {len(members)} change(s) as one at {tip[:10]}"
@@ -124,7 +124,7 @@ def batch_drift_split(repo: str, d: str, st: Any, it: dict[str, Any], members: l
         return 0
     for e in ident:
         e["drift_split"] = bid
-        save_entry(d, e)
+        ChangeRecords(st, d).save(e)
     batch_move(st, it, "assembling", text=f"batch {bid}: its drift check is red with {len(ident)} identity-model "
                                           f"changes in it: split, one identity change per batch")
     return 1
@@ -226,7 +226,7 @@ class BatchCheck:
         return [self.base] + [e["id"] for e in self.members]
 
     def own_failure(self, bad: dict[str, Any], cout: str) -> bool:
-        return culprit_own_failure(self.repo, self.d, bad, self.base, cout, self.clock.time())
+        return culprit_own_failure(self.st, self.repo, self.d, bad, self.base, cout, self.clock.time())
 
     def before(self, culprit: int) -> tuple[list[dict[str, Any]], Optional[str]]:
         """The members before the culprit and the tip they end at."""
@@ -264,7 +264,7 @@ class BatchCheck:
         """A culprit not shown to be at fault: held to its own check, the batch's auto-resolution named when it is the suspect."""
         bad["batch_alone"] = "resolve" if resolved else "regen" if regenerated else self.bid
         bad.pop("autoresolved", None)
-        save_entry(self.d, bad)
+        ChangeRecords(self.st, self.d).save(bad)
         said = (f"batch {self.bid}: {bad['id']}'s prefix fails, but not shown to be by its own fault"
                 + (f" (its {', '.join(regenerated)} resolved in the batch)" if regenerated else "")
                 + (f" -- the batch's AUTO-RESOLUTION of {', '.join(m['file'] for m in resolved)} is the culprit "
@@ -342,11 +342,11 @@ def batch_infra_failure(out):
     return hit.strip()[:160] if hit and not names_failing_test(lines) else None
 
 
-def culprit_own_failure(repo, d, e, base, out, now):
+def culprit_own_failure(st, repo, d, e, base, out, now):
     """Whether a backlog batch's confirmed culprit failed by its own fault, as a change's own check judges it
     (judge_failure): no infra failure, no time cap, a failing test that main's red runs and the queue's record do not
     share."""
     if INFRA_CHECK_FAILURE.search(out or "") or CHECK_TIMEOUT.search(out or ""):
         return False
     paths = change_paths_of(repo, e)
-    return judge_failure(repo, d, e, base, out, now, None if paths is None else set(paths))[0] == "head"
+    return judge_failure(st, repo, d, e, base, out, now, None if paths is None else set(paths))[0] == "head"

@@ -251,7 +251,7 @@ class AssembleTest(unittest.TestCase):
         entries = [{"id": f"e{i}", "commits": [f"c{i}"], "base": "b"} for i in range(r.randint(0, 5))]
         case.fake("git", lambda rng, wt, *a, **k: proc(rng, "", rng.choice([0, 1])) if "check" in k else f"tip{rng.randint(0, 9)}\n")
 
-        def apply_entry(rng, d, wt, e, base, autoresolve=False):
+        def apply_entry(rng, st, d, wt, e, base, autoresolve=False):
             how = rng.choice(["ok", "ok", "conflict", "landed", "duplicate"])
             if how == "conflict":
                 return how, rng.choice([["a.py"], ["a.py (generated: x)", "b"], []])
@@ -660,14 +660,14 @@ class ApplyEntryTest(unittest.TestCase):
         case.fake("pick", pick)
         case.fake("wlog", lambda rng, d, m: None)
         case.fake("dropped_on_main", lambda rng, wt, dropped, base, first: rng.choice([[], [("c0", "v")]]))
-        case.fake("drop_landed", lambda rng, d, e, on_main: rng.choice([None, ("landed", "sha")]))
+        case.fake("drop_landed", lambda rng, st, d, e, on_main: rng.choice([None, ("landed", "sha")]))
         e = {"id": "e1", "commits": commits, "autoresolved": "old", "regenerated": ["z"], "provisional": ["q"]}
-        return ("/d", "/wt", e, "base", r.random() < 0.5, r.random() < 0.5)
+        return (None, "/d", "/wt", e, "base", r.random() < 0.5, r.random() < 0.5)
 
     def test_apply_entry(self):
         def run(A):
-            def go(d, wt, e, base, regen, autoresolve):
-                return A.apply_entry(d, wt, e, base, regen, autoresolve), e
+            def go(st, d, wt, e, base, regen, autoresolve):
+                return A.apply_entry(st, d, wt, e, base, regen, autoresolve), e
             return go
         check(self, "apply_entry", self.build, run, 4000)
 

@@ -87,7 +87,7 @@ class ChangePush:
 
     def _rebased(self, moved: str) -> Optional[str]:
         conflicts: list[str] = []  # no regen command under the landing lock: a generated file's conflict is a new round's
-        new_head, via = rebase_in_tree(self.d, self.tree, self.e, moved, regen=False, conflicts=conflicts)
+        new_head, via = rebase_in_tree(self.st, self.d, self.tree, self.e, moved, regen=False, conflicts=conflicts)
         if via:
             already_landed(self.st, self.d, self.e, via if via != "an equivalent commit" else None)
             return "landed"
@@ -295,13 +295,13 @@ def generated_round(tree: str, conflicts: List[str], base: str, moved: str,
     return ("under regenerated files it changes too", owed) if owed else None
 
 
-def rebase_in_tree(d: str, tree: str, e: Entry, base: str, regen: bool = True,
+def rebase_in_tree(st: Any, d: str, tree: str, e: Entry, base: str, regen: bool = True,
                    conflicts: Optional[list[str]] = None) -> tuple[Optional[str], Optional[str]]:
     """The entry's commits on base, in the tree: (head, None); (None, None) on a conflict (aborted; its files appended
     to `conflicts`); (None, via) when every commit is on base already (dropped: LANDED via that commit, never an empty
     push). regen False: a conflict in a generated file is left a conflict (waiting.py conflict_resolve)."""
     git(tree, "checkout", "-q", "--force", "--detach", base)
-    how, x = apply_entry(d, tree, e, base, regen=regen)
+    how, x = apply_entry(st, d, tree, e, base, regen=regen)
     if how == "conflict":
         if conflicts is not None:
             conflicts.extend(x or [])

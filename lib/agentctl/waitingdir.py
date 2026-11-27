@@ -11,7 +11,7 @@ from agentctl.causes import entry_cause
 from agentctl.core import git, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.statemachines import MACHINES
+from agentctl.statemachines import open_states
 
 
 # ---------------------------------------------------------------- waiting: production changes held while main is red
@@ -53,7 +53,7 @@ def waiting_entries(d: str, open_only: bool = True) -> list[dict[str, Any]]:
 
 # AN ENTRY IS OPEN ONLY IN AN OPEN CHANGE STATE (docs/design/one-change-model.md, rule 4): any other status -- a
 # terminal state, or one an older revision wrote and no change state is (`joined`, `migrated`) -- is decided.
-ENTRY_OPEN = tuple(name for name, spec in MACHINES["change"].items() if not spec.terminal)
+ENTRY_OPEN = tuple(open_states("change"))
 
 
 def entry_final(status: Any) -> bool:
@@ -72,6 +72,35 @@ def save_entry(d: str, e: dict[str, Any]) -> None:
     if e.get("status") and e.get("status") != disk.get("status"):  # its status moved: an event (filelog.py)
         note_event("entry", str(e["id"]), disk.get("status"), str(e["status"]),
                    entry_cause(str(e["status"]), str(e.get("why") or "")), detail=e.get("why"))
+
+
+# THE ITEM CARRIES THE RECORD (docs/design/one-change-model.md, step 3): every entry the queue writes is written to its
+# change item's data too, whole but for its status (the item's state), under RECORD_KEY -- one added key, so an older
+# revision reading the item sees the keys it knew (the design's rule 2). The copy is merged without a new version
+# (Store.merge_item): no writer's compare-and-set is disturbed by it. The file is still the record the queue reads.
+RECORD_KEY = "record"
+
+
+def entry_record(e: dict[str, Any]) -> dict[str, Any]:
+    """Entry e as its change item carries it: every key but its status."""
+    return {k: v for k, v in e.items() if k != "status"}
+
+
+class ChangeRecords:
+    """THE WRITER OF A CHANGE'S ENTRY: its file (save_entry) and its change item's copy of it. store: the queue's own
+    (the server's local database, needs_token False), or None for the laptop's OUTBOX (a `land --follow` while main is
+    red, slots.join: no item until ci-runner takes it, and its store is remote)."""
+
+    def __init__(self, store: Any, d: str) -> None:
+        self.store = store if store is not None and not store.needs_token else None
+        self.d = d
+
+    def save(self, e: dict[str, Any]) -> None:
+        """Entry e written (save_entry's race rule applies), then its item's copy; a change with no item yet gets its
+        copy when the projector creates it (projector.project_changes)."""
+        save_entry(self.d, e)
+        if self.store is not None:
+            self.store.merge_item("change", str(e["id"]), {RECORD_KEY: entry_record(e)})
 
 
 def drop_entry(d: str, eid: str) -> None:

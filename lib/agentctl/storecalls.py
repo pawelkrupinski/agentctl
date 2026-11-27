@@ -68,8 +68,9 @@ STORE_CALLS = (
     StoreCall("derived_check_runs", "", READ, 2),
 )
 
-# Store's public methods no client calls: the server's own (its tick, its API's contact clock, the connection)
-SERVER_ONLY = ("backfill", "backfill_check_runs", "contact", "db", "prepare")
+# Store's public methods no client calls: the server's own (its tick, its API's contact clock, the connection, the
+# queue's copy of its entries on their change items: merge_item)
+SERVER_ONLY = ("backfill", "backfill_check_runs", "contact", "db", "merge_item", "prepare")
 
 STORE_API_VERSION = max(c.since for c in STORE_CALLS)
 

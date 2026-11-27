@@ -20,7 +20,7 @@ from agentctl.eventrows import legacy_cause
 from agentctl.store import Store, store_errors
 from agentctl.repos import server_repo
 from agentctl.trailers import do_not_land
-from agentctl.waitingdir import save_entry, waiting_entries, waiting_state
+from agentctl.waitingdir import ChangeRecords, waiting_entries, waiting_state
 from agentctl.redrecord import red_lease
 from agentctl.queueslots import entry_queued_since
 from agentctl.conflicts import CONFLICT_PLACE_KEPT
@@ -133,7 +133,7 @@ def queue_change(st, d, fields, entry_id=None):
         if bounced:  # A RESOLVED CONFLICT KEEPS ITS PLACE -- and its queue age (the store item's submitted_at)
             e.update(seq=bounced["seq"], requeued_from=bounced["id"],
                      queued_since=entry_queued_since(bounced) or entry_queued_since(e))
-        save_entry(d, e)
+        ChangeRecords(st, d).save(e)
         supersede_older(st, d, e)
     return e, max(len(queued_entries(d)) - 1, 0)
 

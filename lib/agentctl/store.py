@@ -216,6 +216,21 @@ class Store(OfferTable):
         finally:
             c.close()
 
+    def merge_item(self, typ: str, iid: str, data: dict[str, Any]) -> dict[str, Any] | None:
+        """Merge data into an existing item WITHOUT a new version: no state, entered_at or deadline change, no event, so
+        no writer's compare-and-set is disturbed -- the queue's copy of a change's entry (waitingdir.ChangeRecords,
+        docs/design/one-change-model.md step 3). The item as merged; None when there is no such item."""
+        c = self.db()
+        try:
+            c.execute("BEGIN IMMEDIATE")
+            cur = self._item(c, typ, iid)
+            if cur:
+                c.execute("UPDATE items SET data=? WHERE type=? AND id=?", (json.dumps({**cur["data"], **data}), typ, iid))
+            c.execute("COMMIT")
+            return self._item(c, typ, iid) if cur else None
+        finally:
+            c.close()
+
     def mark_notified(self, seq):
         c = self.db()
         try:

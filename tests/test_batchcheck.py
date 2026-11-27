@@ -7,6 +7,7 @@ import copy
 import importlib
 import os
 import sys
+import types
 import unittest
 from unittest import mock
 
@@ -71,6 +72,7 @@ def run_check_batch(module, script):
         log.append(f"batch_check {tree} {base} {tip} {cls} {depth} {runs} {range_base}")
         return next(checks)
 
+    save = record("save", show=lambda d, e: sorted(e.items()))
     patches = {
         "waiting_state": lambda repo: ("D", "CLONE", "W"),
         "LeaseHold": lambda name, ttl, mx, store=None: FakeHold(log, name, script.get("lease", True)),
@@ -82,9 +84,9 @@ def run_check_batch(module, script):
         "batch_drift_split": lambda repo, d, st, it, mem, tree, out: log.append(f"drift_split {out!r}") or 1,
         "bisect": lambda repo, d, mem, base, tree, clock, st, depth, runs, failed, range_base=None, cls=None:
             log.append(f"bisect {depth} {failed!r} {range_base} {cls}") or script["bisect"],
-        "culprit_own_failure": lambda repo, d, e, base, out, now: log.append(f"own {e['id']} {out!r} {now}") or script["own"],
+        "culprit_own_failure": lambda st, repo, d, e, base, out, now: log.append(f"own {e['id']} {out!r} {now}") or script["own"],
         "queue_verdict": record("verdict", show=lambda st, d, e, kind, text, lines: (e["id"], kind, text, lines)),
-        "save_entry": record("save", show=lambda d, e: sorted(e.items())),
+        "ChangeRecords": lambda st, d: types.SimpleNamespace(save=lambda e, d=d: save(d, e)),
         "wlog": record("wlog", show=lambda d, text: text),
         "batch_fail": record("fail", show=lambda st, d, it, why, n=0: (why, n)),
         "red_prechecked": record("prechecked", show=lambda d, st, it, mem, tip, base, how, failed=None:

@@ -6,7 +6,7 @@ from typing import Any, Optional
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.holdgraph import HOLDER_IN_FLIGHT, cycle_breaker, cycle_text, hold_cycles, hold_record, recorded_hold_edges
 from agentctl.core import fmt_age
-from agentctl.waitingdir import save_entry, wlog
+from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.policy import HOLDS, hold_kind
 from agentctl.queueknobs import knob_change_hold_max, knob_hold_idle_ttl, knob_unheld_grace
 
@@ -44,7 +44,7 @@ def break_hold_cycles(st: Any, d: Any, todo: Any) -> Any:
 def break_cycle_at(st: Any, d: Any, e: Any, it: Any, blocker: Any, text: Any) -> None:
     """Change e lets go of its wait on blocker for good (cycle_ignore), the cycle said on its item and in the log."""
     e["cycle_ignore"] = sorted(set(e.get("cycle_ignore") or []) | {blocker})
-    save_entry(d, e)
+    ChangeRecords(st, d).save(e)
     wlog(d, text)
     try:
         st.transition("change", e["id"], it["state"], it["version"], data={"cycle": text, "hold": None},
@@ -72,7 +72,7 @@ def idle_hold_expired(st: Any, e: Any, o: Any, t: float) -> bool:
 def expire_idle_hold(st: Any, d: Any, e: Any, o: Any, t: float) -> str:
     """Change e lets go of its hold on idle entry o for good (hold_expired), said once on its item and in the log."""
     e["hold_expired"] = sorted(set(e.get("hold_expired") or []) | {o["id"]})
-    save_entry(d, e)
+    ChangeRecords(st, d).save(e)
     text = (f"{e['id']}: its hold on {o['id']} ({o.get('status')}, not being checked) expired after "
             f"{fmt_age(knob_hold_idle_ttl())}: it goes on without waiting for it (should {o['id']} land first and "
             "the two conflict, rebase onto it)")

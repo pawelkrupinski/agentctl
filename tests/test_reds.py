@@ -630,8 +630,6 @@ class FixTest(RedsBase):
         d = A.waiting_state(self.r.path)[0]
         e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": name, "branch": name, "head": head or tip, "commits": [head or tip],
                                   "fixes": ["20"]})
-        e["status"] = "joined"
-        A.save_entry(d, e)
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": name, "head": head or tip,
                                                             "submitted_at": self.t[0]})
         self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": tip}, event={"cause": "agent"})

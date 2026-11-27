@@ -11,7 +11,7 @@ from agentctl.procrunner import process_runner
 from agentctl.core import err, git, host_role, remote
 from agentctl.timefmt import ts
 from agentctl.repos import precheck_hook
-from agentctl.waitingdir import save_entry, wlog
+from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.land import run_watched, tool_env
 from agentctl.queueslots import queue_verdict
 from agentctl.conditions import condition_item_of, open_condition, run_probe
@@ -33,7 +33,7 @@ def assemble(st, repo, d, wt, entries, base, alone: bool = False, autoresolve: b
     git(wt, "checkout", "-q", "--force", "--detach", base)
     kept = []
     for e in entries:
-        how, x = apply_entry(d, wt, e, base, autoresolve=autoresolve)
+        how, x = apply_entry(st, d, wt, e, base, autoresolve=autoresolve)
         if how == "conflict":
             _drop_conflicting(st, d, wt, e, base, x, alone, autoresolve)
         elif how == "landed":  # all of it reached main meanwhile: LANDED, and nothing of it is pushed again
@@ -42,7 +42,7 @@ def assemble(st, repo, d, wt, entries, base, alone: bool = False, autoresolve: b
             _supersede_duplicate(st, d, wt, e, x, kept)
         else:
             e["tip"] = git(wt, "rev-parse", "HEAD").strip()  # its tip IN THE BATCH: bisect and the push read it from disk
-            save_entry(d, e)
+            ChangeRecords(st, d).save(e)
             kept.append(e)
     return kept
 
@@ -53,7 +53,7 @@ def _drop_conflicting(st, d, wt, e, base, files, alone, autoresolve) -> None:
     if alone:
         e["batch_alone"] = "regen" if any(" (generated: " in f for f in files) else "resolve" if autoresolve \
             else "conflict"
-        save_entry(d, e)
+        ChangeRecords(st, d).save(e)
         wlog(d, f"{e['id']}: does not apply in the backlog batch (conflicts in: {', '.join(files)}): checked alone")
         return
     # policy: no-longer-applies

@@ -10,7 +10,7 @@ from agentctl.core import git, git_ok, remote
 from agentctl.classify import network_only
 from agentctl.networksignatures import network_failure
 from agentctl.repos import precheck_hook
-from agentctl.waitingdir import save_entry, wlog
+from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.clones import fetch_main, note_clone_suspect
 from agentctl.policy import policy_blocks
 from agentctl.queueslots import check_tree, queue_verdict, set_change
@@ -134,10 +134,10 @@ def round_head(st: Any, d: str, e: dict[str, Any], repo: str, i: int, base: str,
     e.pop("remote", None)
     e.pop("remote_run", None)
     e["round_since"] = ts()
-    save_entry(d, e)
+    ChangeRecords(st, d).save(e)
     tree = check_tree(repo, i, base)
     conflicts: list[Any] = []
-    head, via = rebase_in_tree(d, tree, e, base, conflicts=conflicts)
+    head, via = rebase_in_tree(st, d, tree, e, base, conflicts=conflicts)
     return tree, head, via, base, conflicts
 
 
@@ -238,7 +238,7 @@ def judge_check_failure(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any
                         where: str, now: float) -> tuple[int | None, str, Any]:
     """Failed checks judged: the change's own failure rejects it (1; a provisional one waits for its regen), one only
     as its base fails too waits behind that red (known_red)."""
-    side, what = judge_failure(repo, d, e, base, out, now, own_paths(tree, base, e))
+    side, what = judge_failure(st, repo, d, e, base, out, now, own_paths(tree, base, e))
     timed_out = bool(CHECK_TIMEOUT.search(out or ""))
     if side == "head" and e.get("provisional") and not timed_out:
         return regen_hold(st, d, e, tree, keys_text(what), out), where, None  # A ROW ONLY A REGEN DECIDES IS NO BOUNCE

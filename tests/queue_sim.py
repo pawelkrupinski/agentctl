@@ -510,7 +510,7 @@ class Sim:
         return sorted({p for pid in self.patches_of(y) - self.patches_of(x) for p in self.patches[pid].paths})
 
     # ---------------------------------------------------------------- the fakes
-    def apply_entry(self, d, wt, e, base, regen=True, autoresolve=False):
+    def apply_entry(self, st, d, wt, e, base, regen=True, autoresolve=False):
         wt = os.path.realpath(wt)
         head = self.heads[wt]
         on_base, on_head = self.patches_of(base), self.patches_of(head)
@@ -547,7 +547,7 @@ class Sim:
         if gone:
             dropped = {c for c, _v in gone}
             e["commits"] = [c for c in e["commits"] if c not in dropped]
-            A.save_entry(d, e)
+            A.ChangeRecords(st, d).save(e)
             if not e["commits"]:
                 return "landed", gone[-1][1]
         if dup and len(dup) == len(e["commits"]):

@@ -11,7 +11,7 @@ from agentctl.core import git, host_role, process_cache, remote, spawn_detached
 from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
 from agentctl.policy import HOLDS
-from agentctl.waitingdir import save_entry, waiting_entries, wlog
+from agentctl.waitingdir import ChangeRecords, waiting_entries, wlog
 from agentctl.storetoken import detached_env
 from agentctl.land import run_watched, tool_env
 from agentctl.queueslots import checker_alive, set_change
@@ -271,7 +271,7 @@ def tell_conflict(st: Any, d: Any, e: Any, o: Any, conflict: Any, waits: bool, r
         except StaleVersion:
             return None
     e["conflict_told"] = o["id"]
-    save_entry(d, e)
+    ChangeRecords(st, d).save(e)
     wlog(d, text)
     return text
 
@@ -338,7 +338,7 @@ def run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, s
     decision 1; the reconciler is ci-runner's, the laptop runs no checks since its tick went), else in the tree,
     admitted by the governor. ok None: stalled."""
     got = remote_entry_checks(repo, d, e, tree, base, head, mode, cls, clock, st, own)
-    return got if got is not None else local_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path)
+    return got if got is not None else local_entry_checks(st, repo, d, e, tree, base, head, mode, cls, log_path)
 
 
 def remote_entry_checks(repo: Any, d: Any, e: Any, tree: Any, base: Any, head: Any, mode: Any, cls: Any, clock: Any, st: Any,
@@ -362,7 +362,7 @@ def remote_entry_checks(repo: Any, d: Any, e: Any, tree: Any, base: Any, head: A
     return None
 
 
-def local_entry_checks(repo: Any, d: Any, e: Any, tree: Any, base: Any, head: Any, mode: Any, cls: Any, log_path: Any) -> Any:
+def local_entry_checks(st: Any, repo: Any, d: Any, e: Any, tree: Any, base: Any, head: Any, mode: Any, cls: Any, log_path: Any) -> Any:
     """run_entry_checks' answer from the pre-push hook in the tree, admitted by the governor."""
     # the range through the remote's ref (origin/main is `base` now, fetched just before): the hook finds the remote, and
     # with it the forge's red gate, from it -- given bare shas it fell back to the wrong forge: the gate unread
@@ -370,11 +370,11 @@ def local_entry_checks(repo: Any, d: Any, e: Any, tree: Any, base: Any, head: An
     if mode == VERIFY_MODE:  # the combined tree: what landed since the full check and the change, together
         rng = f"{e.get('full_base') or base}..{head}"
     e["waiting_on"] = "the governor (a check slot)"
-    save_entry(d, e)
+    ChangeRecords(st, d).save(e)
     try:
         with check_slot(repo, f"queued {e['id']} {head[:10]}", cls) as slot:
             e["waiting_on"] = None
-            save_entry(d, e)
+            ChangeRecords(st, d).save(e)
             rc, out = run_watched([os.path.join(tree, "scripts", "hooks", "pre-push"), mode, rng], tree,
                                   slot.env(tool_env()), log_path, "checks", sampler=slot.sample)
             slot.done(rc, out)

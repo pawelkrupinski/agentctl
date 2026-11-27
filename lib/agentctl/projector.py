@@ -13,12 +13,12 @@ from contextlib import suppress
 from agentctl.core import attempt, err
 from agentctl.timefmt import iso_at
 from agentctl.notifyurl import notification_url
-from agentctl.waitingdir import waiting_entries, wlog
+from agentctl.waitingdir import RECORD_KEY, entry_final, entry_record, waiting_entries, wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_dir, inbox_kind
 from agentctl.notifier import notify, notify_cause, notify_fix
 from agentctl.statemachines import StaleVersion, TerminalState, change_state_of, machine_state
-from agentctl.store import LEASE_ARCHIVE_AFTER
+from agentctl.store import LEASE_ARCHIVE_AFTER, Store
 from agentctl.queueslots import change_item_fields
 from agentctl.redask import ask_interval
 from agentctl.alerts import alert_write
@@ -28,7 +28,8 @@ from agentctl.blameknobs import knob_ask_remind_max
 
 def project_changes(d, store):
     """Each queue entry's change item: created in its state, moved (a transition, with its event) when the entry's
-    status moved. Returns the items."""
+    status moved, and an open entry's copy on it (waitingdir.RECORD_KEY) made current -- the copy a change gets when
+    its item is made after its entry, and of any write that missed it. Returns the items."""
     st = store
     out = []
     for e in waiting_entries(d, open_only=False):
@@ -44,8 +45,16 @@ def project_changes(d, store):
             with suppress(StaleVersion, TerminalState):
                 st.transition("change", e["id"], state, cur["version"], event=event)
             cur = st.item("change", e["id"])
-        out.append(cur)
+        out.append(_carry_record(st, e, cur))
     return out
+
+
+def _carry_record(st: Store, e: dict[str, Any], cur: dict[str, Any]) -> dict[str, Any]:
+    """Open entry e's copy on its item (cur) made current (waitingdir.RECORD_KEY); a decided one's is left as it was
+    last written. The item as it now is."""
+    if entry_final(e.get("status")) or (cur.get("data") or {}).get(RECORD_KEY) == entry_record(e):
+        return cur
+    return st.merge_item("change", e["id"], {RECORD_KEY: entry_record(e)}) or cur
 
 
 # ---------------------------------------------------------------- events -> the inbox (design §8.2; phase 1 step 7)

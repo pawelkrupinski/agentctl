@@ -6,7 +6,7 @@ from agentctl.statemachines import machine_state
 from agentctl.timefmt import ts
 from agentctl.core import err, git, remote
 from agentctl.leases import lease_live
-from agentctl.waitingdir import save_entry, waiting_entries
+from agentctl.waitingdir import ChangeRecords, waiting_entries
 from agentctl.queueslots import check_tree, check_tree_slot, set_change
 from agentctl.queue import land_hold
 from agentctl.queuerecheck import queued_entries, recheck_logged
@@ -243,7 +243,7 @@ def batch_left_alone(tick: BatchTick, asm: Any) -> list[str]:
     for e in asm.kept:
         if e.get("status") == "checked" and asm.tips.get(e["id"]):
             e["tip"] = asm.tips[e["id"]]
-            save_entry(tick.d, e)
+            ChangeRecords(tick.st, tick.d).save(e)
     it = tick.it
     batch_move(tick.st, it, "landed", {"members": []}, text=f"batch {it['id']}: no {batch_kind(it)} left to form")
     return [f"batch {it['id']}: no {batch_kind(it)} left to form"]
@@ -255,7 +255,7 @@ def batch_kept_on_precheck(tick: BatchTick, asm: Any, why: str) -> list[str]:
     moved = (it["data"].get("prechecked") or {}).get("base") != asm.base
     for e in kept if moved else ():  # MINIMAL RECHECKS' log, as a lone change's (land status, kept_verdicts)
         e["rechecks"] = recheck_logged(e, "kept", why, asm.base, tick.t)
-        save_entry(tick.d, e)
+        ChangeRecords(tick.st, tick.d).save(e)
     batch_move(st, it, "checking", {"members": [e["id"] for e in kept], "tip": asm.tip, "base": asm.base, "tree": asm.i,
                                     "cls": "check", "depth": "fast"}, text=f"batch {it['id']}: {why}")
     batch_move(st, st.item("batch", it["id"]), "pushing", {"kept": why},

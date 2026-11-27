@@ -10,7 +10,7 @@ from agentctl.leasetable import LeaseLost
 from agentctl.core import err, fmt_age, git, host_role, remote, slug
 from agentctl.networksignatures import check_push_failure, credential_failure
 from agentctl.forge import api, forge_actions_run, forge_actions_runs, forge_delete_branch, forge_find_run
-from agentctl.waitingdir import save_entry, waiting_state, wlog
+from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
 from agentctl.procs import Terminated
 from agentctl.wait import fetch_failed_log, job_log_lines, relevant_lines
 from agentctl.leases import lock_beat
@@ -204,7 +204,7 @@ def save_remote(d, e, rem, st):
     else:
         e.pop("remote_run", None)
     if d and e.get("seq") is not None:
-        save_entry(d, e)
+        ChangeRecords(st, d).save(e)
     remote_mirror(e.get("id"), rem, st)
 
 
