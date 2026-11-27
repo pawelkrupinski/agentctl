@@ -11,7 +11,7 @@ I6	15	05a372a3ac10	0	no change lost (entries and items agree, LANDED is on main,
 I7	15	db5db048cf78	0	exactly one agentctl.landing record per decided change
 I8	12	9f0595efef32	0	a change that no longer applies was told at queue time and never checked meanwhile
 I9	12	a1b6e5bd2eda	0	no full recheck for a file overlap with a change open when it was queued
-I10	18	e912afada561	0	no change held behind a queued one for generated files alone
+I10	19	84ed670c05dd	0	no change held behind a queued one for generated files alone
 I11	12	30b929559e98	0	no unverified combined tree reaches main
 Ib	14	695a9c4b70a0	0	every queued or checked change past its deadline has a recorded hold
 Ic	14	695a9c4b70a0	0	no change past its deadline is silent in `land status`
@@ -21,7 +21,7 @@ IW	10	88dc06d1bde3	0	a red fix of an open gate red the store names never waits f
 IK	2	88dc06d1bde3	0	a tools-only change failing only as the open gate red fails never waits for green past N ticks
 IR	9	4f2b7ba39b9c	0	the queue never lands on a red gate a production commit naming no run of the open red
 IH	7	8cd173358f51	0	two holders reading no hold at once make exactly one hold, both report it and both moves are said
-IT	7	e912afada561	0	no overlap hold outlives its TTL while its holder is not in flight
+IT	8	84ed670c05dd	0	no overlap hold outlives its TTL while its holder is not in flight
 IE	5	c432b52f0639	0	never two escalation fixers of one kind, nor more than the cap in all
 IO	5	c432b52f0639	0	an owner-only escalation kind never dispatches
 IG	5	c432b52f0639	0	every dispatched escalation ends cleared or handed to the owner within its budget
