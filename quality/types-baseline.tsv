@@ -4,7 +4,7 @@
 limit	mypy-errors	0
 mypy-errors	alertprobe	20
 mypy-errors	alertroute	29
-mypy-errors	alerts	59
+mypy-errors	alerts	53
 mypy-errors	ask	29
 mypy-errors	batch	31
 mypy-errors	batchcheck	29
@@ -59,6 +59,7 @@ mypy-errors	hostsleep	6
 mypy-errors	identitychange	8
 mypy-errors	inbox	14
 mypy-errors	inboxcli	17
+mypy-errors	inboxwait	6
 mypy-errors	invariants	30
 mypy-errors	issues	12
 mypy-errors	joblog	46

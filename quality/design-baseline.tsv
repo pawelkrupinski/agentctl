@@ -45,7 +45,6 @@ effect	devtools/selfpush.py	2
 effect	devtools/stats.py	1
 effect	devtools/vendor.py	1
 effect	lib/agentctl/actors.py	1
-effect	lib/agentctl/alerts.py	1
 effect	lib/agentctl/allowedpaths.py	1
 effect	lib/agentctl/ask.py	1
 effect	lib/agentctl/blamerecords.py	1
@@ -70,6 +69,7 @@ effect	lib/agentctl/govtickets.py	1
 effect	lib/agentctl/hostsleep.py	1
 effect	lib/agentctl/inboxcli.py	1
 effect	lib/agentctl/inboxentry.py	1
+effect	lib/agentctl/inboxwait.py	1
 effect	lib/agentctl/issues.py	1
 effect	lib/agentctl/jvmreap.py	3
 effect	lib/agentctl/land.py	2

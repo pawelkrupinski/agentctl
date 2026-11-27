@@ -35,7 +35,7 @@ MODULES = ("procrunner", "escalationtable", "psparse", "govpool", "usage", "stat
            "redwaits", "queuecheck", "queueclose", "superseded", "park", "redcrash", "reddispatch", "fixerlife",
            "owner", "ask", "ownerwrapper", "offerdispatch", "redview", "cireport", "watchtick", "recovery",
            "netwatch", "tools", "redlease", "redpending", "redstep", "redhold", "queuepush", "orphans", "orphanpass",
-           "batchpush", "batchcheck", "batchtick", "invariants", "watchdog", "landqueue", "inboxcli", "status",
-           "statuspage", "redtick", "gatepublish", "serversteps", "redcli", "syncsteps", "processor", "processstore",
-           "changesubmit", "queueenter", "landdryrun", "slots", "cliparser", "storemetrics", "storeapi", "storecmd",
-           "ciwhycmd", "logrotate", "maintain", "cli")
+           "batchpush", "batchcheck", "batchtick", "invariants", "watchdog", "landqueue", "redtick", "gatepublish",
+           "serversteps", "processstore", "changesubmit", "storemetrics", "storeapi", "storecmd", "ciwhycmd",
+           "logrotate", "maintain", "inboxwait", "inboxcli", "status", "statuspage", "redcli", "syncsteps",
+           "processor", "queueenter", "landdryrun", "slots", "cliparser", "cli")
