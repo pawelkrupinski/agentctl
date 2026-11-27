@@ -25,7 +25,7 @@ from agentctl.launchd import launch_agents_dir
 from agentctl.beats import beat_age, write_beat
 from agentctl.fixerblockers import shutil_which
 from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
-from agentctl.upkeep import rotate_logs
+from agentctl.logrotate import rotate_logs
 from agentctl.orphanpass import orphan_duty
 from agentctl.tickknobs import knob_cache_expire_days, knob_sweep_hour
 

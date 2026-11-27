@@ -74,6 +74,7 @@ mypy-errors	leases	1
 mypy-errors	live	33
 mypy-errors	livestream	38
 mypy-errors	localrecheck	34
+mypy-errors	logrotate	5
 mypy-errors	maint	27
 mypy-errors	maintain	8
 mypy-errors	netwatch	16
@@ -175,7 +176,7 @@ mypy-errors	timefmt	1
 mypy-errors	tools	55
 mypy-errors	trailers	2
 mypy-errors	tunnel	3
-mypy-errors	upkeep	12
+mypy-errors	upkeep	7
 mypy-errors	wait	46
 mypy-errors	waiting	24
 mypy-errors	watchdog	16
