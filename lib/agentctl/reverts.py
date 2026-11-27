@@ -1,6 +1,7 @@
 # agentctl, part `reverts`: a reverted change gets back to the agent that wrote it.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.ancestry import is_ancestor
 from agentctl.clock import epoch_now
 import os
 import re
@@ -190,7 +191,7 @@ class RevertTick:
 
     def read(self, main: str, cur_key: str, cur: Any) -> None:
         """Scan since the cursor `cur` (None: the lookback) to `main`, then move the cursor."""
-        if cur and not git_ok(self.repo, "merge-base", "--is-ancestor", cur, main):
+        if cur and not is_ancestor(self.repo, cur, main):
             cur = None  # main rewritten under the cursor: read the lookback again (items dedupe)
         commits = revert_scan(self.repo, cur, main, self.t)
         if commits is not None:

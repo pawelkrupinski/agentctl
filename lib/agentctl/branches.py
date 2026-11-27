@@ -1,6 +1,7 @@
 # agentctl, part `branches`: branch runs: their inputs against main's, their state, branch reds and their route; `agentctl dispatch`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.ancestry import commit_known
 from agentctl.clock import epoch_now
 import datetime as dt
 import json
@@ -87,7 +88,7 @@ def predicts_main(repo, base, main_run, inputs, main_inputs):
     """(predicts, why not / '') for a failed branch run."""
     if not repo or not base:
         return False, "its commit is unknown here"
-    if not git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}"):
+    if not commit_known(repo, base):
         return False, f"its commit {base[:9]} is not here"
     if not merged_reason(repo, base, f"refs/remotes/{remote()}/main"):
         return False, f"its commit {base[:9]} is not on main"

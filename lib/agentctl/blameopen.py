@@ -4,6 +4,7 @@
 import os
 import re
 from typing import Any
+from agentctl.ancestry import commit_known, is_ancestor
 from agentctl.core import git, git_ok, remote
 from agentctl.repos import RED_PRIMARY
 from agentctl.workflows import job_inner
@@ -117,10 +118,9 @@ def streak_boundary(ob: Any) -> Any:
 
 def blame_range(repo: Any, base: Any, head: Any) -> None:
     """Raises NoBlame unless the range base..head can be read in the clone (fetching main once when head is missing)."""
-    if not base or not head or not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
+    if not base or not head or not commit_known(repo, head):
         git(repo, "fetch", "--quiet", remote(), "main", check=False)
-    if not base or not head or not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}") \
-            or not git_ok(repo, "merge-base", "--is-ancestor", base, head):
+    if not base or not head or not commit_known(repo, head) or not is_ancestor(repo, base, head):
         raise NoBlame(f"the range {str(base)[:10]}..{str(head)[:10]} cannot be read here")
 
 

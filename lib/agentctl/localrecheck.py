@@ -5,6 +5,7 @@ import contextlib
 import os
 import re
 import time
+from agentctl.ancestry import commit_known
 from agentctl.clock import wall_epoch
 from agentctl.filelock import FileLock
 from typing import Any
@@ -157,7 +158,7 @@ def _recheck_base(repo):
     changed since (shellcheck fails only on warnings a change ADDS, so against an empty base the whole tree would
     count). Unknown to this clone: a commit on the empty tree."""
     firsts = [str(c.get("first_main") or "") for c in (local_red().get("checks") or {}).values()]
-    old_main = next((f for f in firsts if f and git_ok(repo, "cat-file", "-e", f"{f}^{{commit}}")), "")
+    old_main = next((f for f in firsts if f and commit_known(repo, f)), "")
     if old_main:
         return old_main
     empty = git(repo, "hash-object", "-t", "tree", "-w", "--stdin", input="").strip()

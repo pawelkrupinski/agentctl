@@ -1,6 +1,7 @@
 # agentctl, part `redauthors`: a red's authors: the commits it holds, who landed them, whether their sessions are still at work
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.ancestry import commit_known
 from agentctl.clock import wall_epoch
 import os
 import re
@@ -24,14 +25,14 @@ def _green_older_than(runs: Any, rid: Any) -> Any:
 def _green_before(repo: Any, u: Any) -> Any:
     """The head sha of the first completed green run of u's workflow older than u's run, when the clone has its commit."""
     green = _green_older_than(u.get("runs") or [], u["run"].get("databaseId") or 0)
-    return green["headSha"] if green and git_ok(repo, "cat-file", "-e", f"{green['headSha']}^{{commit}}") else None
+    return green["headSha"] if green and commit_known(repo, green['headSha']) else None
 
 
 def red_commits(repo, u, limit=30):
     """The commits of the red run since the workflow's last green run on main (newest first); just its head when the
     range cannot be read here."""
     red = u["run"].get("headSha")
-    if not repo or not red or not git_ok(repo, "cat-file", "-e", f"{red}^{{commit}}"):
+    if not repo or not red or not commit_known(repo, red):
         return [red] if red else []
     green = _green_before(repo, u)
     if green:

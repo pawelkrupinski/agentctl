@@ -3,6 +3,7 @@
 
 import os
 from typing import Any, Optional
+from agentctl.ancestry import commit_known
 from agentctl.timefmt import ts
 from agentctl.core import git, git_ok, remote
 from agentctl.repos import precheck_hook
@@ -85,7 +86,7 @@ class BatchPush:
             self.say("assembling", f"{', '.join(gone)} left it (decided) during its check: assembled again without")
             return f"batch {self.bid}: {len(gone)} member(s) gone"
         lock_note(f"push of the batch {self.tip[:10]}")
-        if not os.path.isdir(self.tree) or not git_ok(self.tree, "cat-file", "-e", f"{self.tip}^{{commit}}"):
+        if not os.path.isdir(self.tree) or not commit_known(self.tree, self.tip):
             self.say("assembling", "its tree is gone: assembled again")
             return f"batch {self.bid}: tree gone"
         return None

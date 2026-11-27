@@ -3,6 +3,7 @@
 
 import os
 from typing import Any, List, Optional, Tuple
+from agentctl.ancestry import commit_known
 from agentctl.core import git, git_ok, remote
 from agentctl.networksignatures import TRANSIENT_PUSH
 from agentctl.repos import precheck_hook, waiting_supported
@@ -277,7 +278,7 @@ def check_tree_for_push(repo: str, e: Entry, i: Any) -> str:
     """Tree i (the one the change was checked in, or the push tree) at the change's tip, made when it is missing."""
     _d, clone, _w = waiting_state(repo)
     tree = f"{clone}-wt-check-{i}"
-    if not os.path.isdir(tree) or not git_ok(tree, "cat-file", "-e", f"{e['tip']}^{{commit}}"):
+    if not os.path.isdir(tree) or not commit_known(tree, e['tip']):
         tree = check_tree(repo, i, e["tip"])
     git(tree, "checkout", "-q", "--force", "--detach", e["tip"], check=False)
     return tree

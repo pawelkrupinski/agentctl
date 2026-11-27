@@ -1,6 +1,7 @@
 # agentctl, part `queueenter`: entering the land queue: enqueue, the server submit, the precheck and land-until-done
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.ancestry import is_ancestor
 from agentctl.ids import stamp
 from agentctl.clock import epoch_now
 import argparse
@@ -398,7 +399,7 @@ def land_before_queue(repo, head):
     except subprocess.TimeoutExpired:
         err(f"{LAND_BEFORE_QUEUE}: timed out; the change lands as it was")
     now = git(repo, "rev-parse", "HEAD").strip()
-    if now != head and git(repo, "merge-base", "--is-ancestor", head, now, check=False).returncode != 0:
+    if now != head and not is_ancestor(repo, head, now):
         err(f"{LAND_BEFORE_QUEUE}: left HEAD off the change ({now[:10]}): put back on {head[:10]}")
         if branch:
             git(repo, "checkout", "-q", "--force", branch)

@@ -2,6 +2,7 @@
 # and everything red on main (red_observe) with main's own local-checks red (reds/local.json)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.ancestry import commit_known
 from agentctl.statemachines import is_terminal
 from agentctl.clock import wall_epoch
 import os
@@ -172,7 +173,7 @@ def unkicked_push(repo: Any) -> tuple[str, float] | None:
 
 def touches_suite_paths(repo: Any, base: Any, head: str, paths_file: str, matcher: str) -> bool:
     """Is `base` (the suite's newest main run's commit, known in this clone) .. head a change to the suite's paths?"""
-    return bool(base) and git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}") \
+    return bool(base) and commit_known(repo, base) \
         and convergence_relevant(repo, base, head, paths_file, matcher) is True
 
 
