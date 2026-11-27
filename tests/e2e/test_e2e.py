@@ -1,7 +1,7 @@
 """THE END-TO-END SCENARIOS (the owner, 2026-11-27): the real store server, the real reconciler tick and sync, the laptop's
 real CLI and a real git remote, together (tests/e2e/e2e_harness.py); GitHub is the stub (tests/e2e/ghstub.py). Each
 scenario is one test, and each FAILS when its behaviour is broken (tests/e2e/mutations.py proves it per scenario)."""
-import os, shutil, socket, subprocess, sys, tarfile, io, threading, time, unittest
+import io, os, re, shutil, socket, subprocess, sys, tarfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -77,6 +77,8 @@ class HappyPathTest(E2ETest):
                 self.assertTrue(e["actor"], f"a move with no actor: {e}")
         r = self.w.sync()
         self.assertEqual(r.returncode, 0, r.stderr[-3000:])
+        self.assertEqual([ln for ln in r.stderr.splitlines() if re.match(r"agentctl: [\w ]+ failed: ", ln)], [],
+                         "every step of the sync ran (a machine without the claude CLI included)")
         landed = [i for i in self.w.inbox() if i.get("kind") == "LANDED"]
         self.assertEqual(len(landed), 1, self.w.inbox())
         self.assertEqual(landed[0].get("cwd"), wt, "the verdict names the agent's worktree")

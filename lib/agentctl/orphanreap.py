@@ -248,6 +248,8 @@ def bg_reap_spent(t):
     if on_ci_runner():
         return []
     cli = claude_cli()
+    if cli is None:  # no claude CLI here, so no session to stop (2026-11-27, the e2e sync: bg_rows ran `None agents`,
+        return []    # its TypeError failed the whole claims step and dropped the orphans revoked before it)
     rows = bg_rows(cli)
     if rows is None:
         return []
