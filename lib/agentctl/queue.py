@@ -8,7 +8,7 @@ import subprocess
 import time
 from typing import Any, Iterable
 from agentctl.procrunner import process_runner
-from agentctl.core import err, fmt_age, git, git_ok, host_role
+from agentctl.core import err, fmt_age, git, git_ok, host_role, commit_known
 from agentctl.timefmt import iso_at
 from agentctl.statefile import read_text_or
 from agentctl.networksignatures import credential_failure, redact_credentials
@@ -17,7 +17,7 @@ from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.land import tool_env
 from agentctl.queueslots import set_change
 from agentctl.conditions import open_condition, run_probe
-from agentctl.statemachines import StaleVersion, TerminalState, change_event
+from agentctl.statemachines import change_event
 from agentctl.queueknobs import knob_infra_same_max
 
 
@@ -355,7 +355,7 @@ def verify_areas_supported(tree):
 
 def selection_at(tree, rev, tip, paths):
     """hook_selection at rev, read in tree (checked out at tip, and back at tip after); None when rev is unknown."""
-    if not rev or not git_ok(tree, "cat-file", "-e", f"{rev}^{{commit}}"):
+    if not rev or not commit_known(tree, rev):
         return None
     if rev == tip:
         return hook_selection(tree, paths)

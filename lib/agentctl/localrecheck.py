@@ -10,11 +10,10 @@ from agentctl.statefile import mtime, read_record, read_text_or, unlink_file, wr
 from agentctl.clock import wall_epoch
 from agentctl.filelock import FileLock
 from agentctl.timefmt import ts
-from agentctl.core import _bounded, err, git, git_ok, pid_alive, reds_dir, remote, tilde
+from agentctl.core import _bounded, err, git, pid_alive, reds_dir, remote, tilde, commit_known
 from agentctl.repos import precheck_hook
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.fixerrecords import fixer_records
-from agentctl.classify import ANSI, STRONG, norm_line
 from agentctl.waitingdir import waiting_state
 from agentctl.inboxentry import inbox_write
 from agentctl.worktrees import mark_internal, worktrees
@@ -22,7 +21,7 @@ from agentctl.land import run_watched, tool_env
 from agentctl.checkslot import check_slot
 from agentctl.cleanup import close_worktree
 from agentctl.redseen import local_red, local_stale
-from agentctl.hookoutput import HOOK_STATUS, check_failures, check_passes
+from agentctl.hookoutput import check_failures, check_passes
 
 
 def write_baseline_out(main, out) -> None:
@@ -138,7 +137,7 @@ def _recheck_base(repo):
     changed since (shellcheck fails only on warnings a change ADDS, so against an empty base the whole tree would
     count). Unknown to this clone: a commit on the empty tree."""
     firsts = [str(c.get("first_main") or "") for c in (local_red().get("checks") or {}).values()]
-    old_main = next((f for f in firsts if f and git_ok(repo, "cat-file", "-e", f"{f}^{{commit}}")), "")
+    old_main = next((f for f in firsts if f and commit_known(repo, f)), "")
     if old_main:
         return old_main
     empty = git(repo, "hash-object", "-t", "tree", "-w", "--stdin", input="").strip()

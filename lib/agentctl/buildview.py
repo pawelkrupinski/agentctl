@@ -4,7 +4,7 @@
 import os
 import re
 from typing import Any
-from agentctl.core import git, git_ok
+from agentctl.core import git, commit_known
 
 
 # ---------------------------------------------------------------- THE BUILD AS A CHANGE'S MODULES SEE IT
@@ -355,7 +355,7 @@ def build_view_change(tree, full_tip, tip, paths, selection):
     at full_tip and at tip; else why not, in words (THE VIEW above)."""
     if any(BUILD_VIEW_PATHS.match(p) for p in paths):
         return "the change itself changes the build"
-    if not full_tip or not git_ok(tree, "cat-file", "-e", f"{full_tip}^{{commit}}"):
+    if not full_tip or not commit_known(tree, full_tip):
         return "the tip of its full check is unknown"
     now = read_build(tree, tip)
     if now is None:

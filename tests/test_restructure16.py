@@ -250,6 +250,7 @@ class AssembleTest(unittest.TestCase):
         r = case.rng
         entries = [{"id": f"e{i}", "commits": [f"c{i}"], "base": "b"} for i in range(r.randint(0, 5))]
         case.fake("git", lambda rng, wt, *a, **k: proc(rng, "", rng.choice([0, 1])) if "check" in k else f"tip{rng.randint(0, 9)}\n")
+        case.fake("git_ok", lambda rng, wt, *a: "--is-ancestor" in a and rng.choice([0, 1]) < 0)  # the ancestor test, once `git`'s fake (a draw, never "yes")
 
         def apply_entry(rng, st, d, wt, e, base, autoresolve=False):
             how = rng.choice(["ok", "ok", "conflict", "landed", "duplicate"])

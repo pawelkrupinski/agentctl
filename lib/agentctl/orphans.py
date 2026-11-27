@@ -8,7 +8,7 @@ import os
 import re
 from contextlib import suppress
 from agentctl.landstate import landed_state
-from agentctl.core import attempt, branch_of, git_ok, hashlib_sha1, remote
+from agentctl.core import attempt, branch_of, hashlib_sha1, remote, commit_known
 from agentctl.procrunner import process_runner
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import do_not_land, held_commit
@@ -232,7 +232,7 @@ def orphan_covered_by(wt: str, items: dict[str, Any]) -> Optional[str]:
     """The id of an open change item whose head carries every commit of the orphan (by patch or content), else None."""
     for it in items.get("open") or []:
         head = (it.get("data") or {}).get("head")
-        if not head or not git_ok(wt, "cat-file", "-e", f"{head}^{{commit}}"):
+        if not head or not commit_known(wt, head):
             continue
         if landed_state(wt, head, "HEAD").landed:  # unknown (git cannot compare): not covered
             found: str = it["id"]

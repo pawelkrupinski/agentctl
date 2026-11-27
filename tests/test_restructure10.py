@@ -235,6 +235,7 @@ class ApplyEntryTest(unittest.TestCase):
                 dropped.append(("extra" * 3, via(rng)))
             return rng.choice([None, None, None, ["f.py"], ["f.py", "g.tsv (generated: no regen)"]])
         case.fake("pick", pick)
+        case.fake("git_ok", lambda rng, repo, *a: rng.choice([0, 1]) == 0)  # the ancestor test, once drawn from `git`'s fake
 
         def git_(rng, repo, *a, **k):
             if "rev-parse" in a:

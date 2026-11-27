@@ -9,8 +9,8 @@ from typing import Any, Callable, Sequence
 from contextlib import suppress
 from agentctl.filelog import drain_event_log
 from agentctl.core import (
-    NoToken, err, git, git_ok, process_cache, reap_children, reds_dir, remote, run_bounded,
-    spawn_detached, state_root)
+    is_ancestor, NoToken, err, git, process_cache, reap_children, reds_dir, remote, run_bounded, spawn_detached,
+    state_root)
 from agentctl.statefile import read_record, write_json
 from agentctl.selfcode import TOOL_PATH
 from agentctl.procs import safe_cwd
@@ -233,7 +233,7 @@ def root_checkout_ff(repo):
     ref = f"refs/remotes/{remote()}/main"
     head = git(repo, "rev-parse", "HEAD", check=False).stdout.strip()
     main = git(repo, "rev-parse", "-q", "--verify", ref, check=False).stdout.strip()
-    if not main or main == head or not git_ok(repo, "merge-base", "--is-ancestor", head, main):
+    if not main or main == head or not is_ancestor(repo, head, main):
         return []
     r = git(repo, "merge", "--ff-only", "-q", ref, check=False)
     if r.returncode:

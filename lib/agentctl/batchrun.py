@@ -8,7 +8,7 @@ import subprocess
 from typing import Any
 from agentctl.statefile import read_text_or
 from agentctl.procrunner import process_runner
-from agentctl.core import err, git, host_role, remote
+from agentctl.core import err, git, host_role, remote, is_ancestor
 from agentctl.timefmt import ts
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import ChangeRecords, wlog
@@ -65,8 +65,7 @@ def _drop_conflicting(st, d, wt, e, base, files, alone, autoresolve) -> None:
 
 def _supersede_duplicate(st, d, wt, e, twin_tip, kept) -> None:
     """Entry e carries the very same change as an earlier kept entry (the one whose tip is twin_tip's descendant)."""
-    owner = next((k for k in kept if twin_tip and git(wt, "merge-base", "--is-ancestor", twin_tip, k["tip"],
-                                                      check=False).returncode == 0), None)
+    owner = next((k for k in kept if twin_tip and is_ancestor(wt, twin_tip, k["tip"])), None)
     supersede(st, d, e, owner["id"] if owner else "an earlier entry",
               "the same change already waits" + (f" as {owner['id']}" if owner else ""))
 

@@ -11,7 +11,7 @@ from agentctl.timefmt import ts
 from agentctl.statemachines import StaleVersion, TerminalState, machine_state, open_items
 from agentctl.clock import Clock
 from agentctl.landstate import UNKNOWN, LandState, landed_state
-from agentctl.core import fmt_age, git_ok, host_role, process_cache, remote
+from agentctl.core import fmt_age, host_role, process_cache, remote, commit_known
 from agentctl.repos import movies_repo_path, precheck_hook, waiting_supported
 from agentctl.waitingdir import ChangeRecords, drop_entry, entry_final, waiting_state, wlog
 from agentctl.procs import safe_cwd
@@ -44,7 +44,7 @@ def change_state(repo, head, commits = None):
     from the first one's parent, and `via` is the main commit carrying it. A change without a head is UNKNOWN."""
     if not head:
         return LandState(UNKNOWN)
-    after = f"{commits[0]}^" if commits and git_ok(repo, "cat-file", "-e", f"{commits[0]}^^{{commit}}") else None
+    after = f"{commits[0]}^" if commits and commit_known(repo, f"{commits[0]}^") else None
     return landed_state(repo, f"refs/remotes/{remote()}/main", head, after=after, with_via=True)
 
 

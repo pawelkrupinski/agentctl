@@ -9,7 +9,7 @@ import os
 import re
 import subprocess
 from typing import Iterator
-from agentctl.core import err, git, git_ok, process_cache, remote, state_root
+from agentctl.core import err, git, process_cache, remote, state_root, commit_known
 from agentctl.fixchange import fixes_named
 from agentctl.redfixes import commit_fixes
 from agentctl.procrunner import process_runner
@@ -53,7 +53,7 @@ _production: dict[str, bool] = process_cache({})  # sha -> whether it touches a 
 
 def fetch_entry_commits(repo: str, e: dict[str, Any], want: str | None = None) -> None:
     """The entry's commits into this clone, fetched from refs/heads/land/<id> when it has not `want` (its head)."""
-    if not git_ok(repo, "cat-file", "-e", f"{want or e.get('head')}^{{commit}}"):
+    if not commit_known(repo, want or e.get('head')):
         git(repo, "fetch", "--quiet", remote(), f"refs/heads/land/{e['id']}", check=False)
 
 

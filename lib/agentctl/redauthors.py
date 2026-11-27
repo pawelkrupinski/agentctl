@@ -5,7 +5,7 @@ from agentctl.clock import wall_epoch
 import os
 import re
 from typing import Any
-from agentctl.core import attempt, err, git, git_ok
+from agentctl.core import attempt, err, git, commit_known
 from agentctl.allowedpaths import allowed_path
 from agentctl.procs import lsof_cwds, proc_alive, ps
 from agentctl.inboxentry import inbox_entries
@@ -24,14 +24,14 @@ def _green_older_than(runs: Any, rid: Any) -> Any:
 def _green_before(repo: Any, u: Any) -> Any:
     """The head sha of the first completed green run of u's workflow older than u's run, when the clone has its commit."""
     green = _green_older_than(u.get("runs") or [], u["run"].get("databaseId") or 0)
-    return green["headSha"] if green and git_ok(repo, "cat-file", "-e", f"{green['headSha']}^{{commit}}") else None
+    return green["headSha"] if green and commit_known(repo, green['headSha']) else None
 
 
 def red_commits(repo, u, limit=30):
     """The commits of the red run since the workflow's last green run on main (newest first); just its head when the
     range cannot be read here."""
     red = u["run"].get("headSha")
-    if not repo or not red or not git_ok(repo, "cat-file", "-e", f"{red}^{{commit}}"):
+    if not repo or not red or not commit_known(repo, red):
         return [red] if red else []
     green = _green_before(repo, u)
     if green:

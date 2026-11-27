@@ -16,8 +16,7 @@ import subprocess
 import time
 from agentctl.procrunner import process_runner
 from agentctl.core import (
-    GIT_NET_SSH, HOME, PROTECTED_BRANCHES, err, git, git_ok, remote, run_cmd, slug,
-    state_root)
+    commit_known, GIT_NET_SSH, HOME, PROTECTED_BRANCHES, err, git, remote, run_cmd, slug, state_root)
 from agentctl.timefmt import now, ts
 from agentctl.forge import forge_branches
 from agentctl.procs import PROC_ROOT, process_cwds, ps
@@ -369,9 +368,9 @@ class RepoSweep:
 
     def remote_branch(self, b: str, sha: str) -> None:
         repo, out = self.repo, self.out
-        if not git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
+        if not commit_known(repo, sha):
             git(repo, "fetch", "--quiet", remote(), b, check=False)
-        why = git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}") and merged_reason(repo, sha, self.main)
+        why = commit_known(repo, sha) and merged_reason(repo, sha, self.main)
         if not why:
             t = int(git(repo, "log", "-1", "--format=%ct", sha, check=False).stdout.strip() or self.now_)
             out.append(f"  unmerged remote branch {b}: tip {sha[:10]}, {int((self.now_ - t) / 86400)} d old (listed, kept)")

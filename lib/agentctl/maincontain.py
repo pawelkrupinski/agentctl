@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now
-from agentctl.core import attempt, git, git_ok, process_cache, remote
+from agentctl.core import attempt, git, git_ok, process_cache, remote, commit_known, is_ancestor
 from agentctl.clones import fetch_main
 from agentctl.forge import gh_json
 from agentctl.landstate import landed_state
@@ -50,14 +50,14 @@ class MainContainment:
     def _git_contains(self, repo: str, sha: str) -> bool | None:
         if not git_ok(repo, "rev-parse", "--verify", "-q", main_ref()):
             return None
-        if git_ok(repo, "merge-base", "--is-ancestor", sha, main_ref()):
+        if is_ancestor(repo, sha, main_ref()):
             return True
         if epoch_now() - _fetched.get((repo, sha), 0) < RED_MAIN_REFETCH:
             return False
         _fetched[(repo, sha)] = epoch_now()
         if not fetch_main(repo)[0]:
             return None
-        return git_ok(repo, "merge-base", "--is-ancestor", sha, main_ref())
+        return is_ancestor(repo, sha, main_ref())
 
     def _api_contains(self, o_r: str, sha: str) -> bool | None:
         got = _api_seen.get((o_r, sha))
@@ -77,7 +77,7 @@ class MainContainment:
         on, repo = self.contains(sha), self.repo
         if on is not False or not repo or not sha:
             return on
-        if not git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
+        if not commit_known(repo, sha):
             return False  # main fetched (contains) and no such commit: on no main
         state = attempt(lambda: landed_state(repo, main_ref(), sha), None, catch=(Exception, SystemExit))
         return None if state is None or state.unknown else state.landed
@@ -93,7 +93,7 @@ class MainContainment:
             return sha
         if on:
             return sha
-        if not git_ok(self.repo, "cat-file", "-e", f"{sha}^{{commit}}"):
+        if not commit_known(self.repo, sha):
             return None
         key = (self.repo, sha, git(self.repo, "rev-parse", main_ref(), check=False).stdout.strip())
         if key not in _carried:

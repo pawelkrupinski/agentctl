@@ -196,6 +196,16 @@ def git_ok(repo: str, *args: str) -> bool:
         return False
 
 
+def is_ancestor(repo: str, ancestor: str | None, descendant: str | None) -> bool:
+    """Whether `descendant` (a commit or ref) contains `ancestor`: git's own test, False when either is unknown here."""
+    return git_ok(repo, "merge-base", "--is-ancestor", str(ancestor), str(descendant))
+
+
+def commit_known(repo: str, rev: str | None) -> bool:
+    """Whether `rev` names a commit this clone holds (ONE existence check: no fetch)."""
+    return git_ok(repo, "cat-file", "-e", f"{rev}^{{commit}}")
+
+
 # IS IT LANDED: ONE ANSWER (2026-10-30: movies-wt-identity-impact's 67c68416e escalated UNLANDED ORPHAN three days
 # after it landed as 2883073d1 -- same subject, author and author date, the same +/- lines, but main had since changed
 # the lines AROUND them, so its patch-id (context included) differed and `git cherry` said "+"). A commit is on main

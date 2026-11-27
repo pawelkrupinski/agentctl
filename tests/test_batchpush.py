@@ -84,7 +84,7 @@ def run_push(module, script):
         patches = {
             "batch_members": lambda st, d_, it: members, "tree_slot": lambda st, d_, i: Slot(),
             "waiting_state": lambda repo: (d, clone, "w"), "land_lock_if_free": lock, "git": git,
-            "git_ok": lambda *a: script.get("tree_commit", True), "remote": lambda: "origin",
+            "commit_known": lambda *a: script.get("tree_commit", True), "remote": lambda: "origin",
             "lock_note": rec("lock_note"), "tool_env": lambda: {"T": "1"}, "precheck_hook": lambda tree: "HOOK",
             "range_paths": rec("range_paths", "paths"), "hook_query": rec("hook_query", lambda *a: script.get("skip")),
             "set_change": rec("set_change", lambda st, d_, e, to, event=None, cause=None: None),

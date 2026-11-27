@@ -11,7 +11,7 @@ from agentctl.statemachines import machine_state
 from agentctl.clock import epoch_now
 from agentctl.ids import stamp
 from agentctl.queueknobs import knob_land_before_queue_seconds, knob_max_foreign, knob_until_done_deadline
-from agentctl.core import NO_SIGN, branch_of, err, fmt_age, git, git_ok, host_role, process_cache, remote, scratch
+from agentctl.core import NO_SIGN, branch_of, err, fmt_age, git, git_ok, host_role, process_cache, remote, scratch, is_ancestor
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.landstate import landed_state
 from agentctl.policy import policy_blocks
@@ -399,7 +399,7 @@ def land_before_queue(repo, head):
     except subprocess.TimeoutExpired:
         err(f"{LAND_BEFORE_QUEUE}: timed out; the change lands as it was")
     now = git(repo, "rev-parse", "HEAD").strip()
-    if now != head and git(repo, "merge-base", "--is-ancestor", head, now, check=False).returncode != 0:
+    if now != head and not is_ancestor(repo, head, now):
         err(f"{LAND_BEFORE_QUEUE}: left HEAD off the change ({now[:10]}): put back on {head[:10]}")
         if branch:
             git(repo, "checkout", "-q", "--force", branch)

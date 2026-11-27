@@ -9,7 +9,7 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.core import err, git, git_ok, process_cache, reds_dir, remote
+from agentctl.core import err, git, git_ok, process_cache, reds_dir, remote, commit_known
 from agentctl.statefile import read_record, write_json
 from agentctl.repos import red_repo_of
 from agentctl.trailers import commit_trailer_values
@@ -40,7 +40,7 @@ def _snapshot_heads(snap: Any) -> Any:
 def _missing_heads(repo: Any, snap: Any) -> Any:
     """The head commits of the snapshot's main runs that the clone lacks."""
     heads = _snapshot_heads(snap)
-    return frozenset(h for h in heads if h and not git_ok(repo, "cat-file", "-e", f"{h}^{{commit}}"))
+    return frozenset(h for h in heads if h and not commit_known(repo, h))
 
 
 def red_main_current(repo, snap):

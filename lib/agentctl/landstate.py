@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 
-from agentctl.core import cherry_landed, git
+from agentctl.core import cherry_landed, git, commit_known, is_ancestor
 from agentctl.patches import equivalent_on
 
 
@@ -45,9 +45,9 @@ def landed_state(repo: str, main: str, head: str = "HEAD", *, after: Optional[st
     patch-equivalent, else a content twin on main). `after`: only the commits after it count (git cherry's limit).
     UNKNOWN when the head is no commit here or git cherry cannot compare; a caller decides what that means for it,
     and says so."""
-    if git(repo, "cat-file", "-e", f"{head}^{{commit}}", check=False).returncode != 0:
+    if not commit_known(repo, head):
         return LandState(UNKNOWN)
-    if git(repo, "merge-base", "--is-ancestor", head, main, check=False).returncode == 0:
+    if is_ancestor(repo, head, main):
         return LandState(LANDED, "ancestor", via=head if with_via else None)
     commits, left = cherry_landed(repo, main, head, *((after,) if after else ()))
     if commits is None or left is None:

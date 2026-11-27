@@ -7,7 +7,7 @@ import os
 from typing import Any
 import re
 from agentctl.statefile import read_record, write_json, note_failure
-from agentctl.core import attempt, err, git, git_ok, process_cache, reds_dir, remote
+from agentctl.core import attempt, err, git, process_cache, reds_dir, remote, commit_known
 from agentctl.trailers import trailer_format, trailer_values
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_names, red_what
@@ -103,7 +103,7 @@ def fix_reaches_red(repo, sha, d):
     path, cache = fix_cache(sha)
     k = f"red:{d['key']}"
     if k not in cache:
-        if not git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
+        if not commit_known(repo, sha):
             return True  # a commit this clone lacks: unsure counts (and is not cached)
         verdict = fix_red_verdict(repo, sha, d, fix_changed(repo, sha))
         fix_cache_put(path, cache, {k: verdict})  # kept for the next tick; this one's answer is the verdict itself

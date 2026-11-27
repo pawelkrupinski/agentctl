@@ -11,7 +11,7 @@ import time
 import urllib.parse
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import dispatches_dir, err, git_ok, remote, slug
+from agentctl.core import dispatches_dir, err, remote, slug, commit_known
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json, unlink_file
 from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, api, forge_argv, forge_env, gh_json
@@ -87,7 +87,7 @@ def predicts_main(repo, base, main_run, inputs, main_inputs):
     """(predicts, why not / '') for a failed branch run."""
     if not repo or not base:
         return False, "its commit is unknown here"
-    if not git_ok(repo, "cat-file", "-e", f"{base}^{{commit}}"):
+    if not commit_known(repo, base):
         return False, f"its commit {base[:9]} is not here"
     if not merged_reason(repo, base, f"refs/remotes/{remote()}/main"):
         return False, f"its commit {base[:9]} is not on main"

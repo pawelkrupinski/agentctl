@@ -3,7 +3,7 @@
 
 import os
 from agentctl.clock import epoch_now
-from agentctl.core import git, git_ok, remote
+from agentctl.core import git, remote, commit_known, is_ancestor
 
 
 def contains_local(repo: str, sha: str, head: str | None) -> bool | None:
@@ -12,9 +12,9 @@ def contains_local(repo: str, sha: str, head: str | None) -> bool | None:
         return None
     if head == sha:
         return True
-    if not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
+    if not commit_known(repo, head):
         return None
-    return git_ok(repo, "merge-base", "--is-ancestor", sha, head)
+    return is_ancestor(repo, sha, head)
 
 
 def last_fetch(repo: str) -> float:
@@ -34,6 +34,6 @@ def contains(repo: str, sha: str, head: str | None, refetch_after: float) -> boo
         return False
     if head == sha:
         return True
-    if not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}") and epoch_now() - last_fetch(repo) >= refetch_after:
+    if not commit_known(repo, head) and epoch_now() - last_fetch(repo) >= refetch_after:
         git(repo, "fetch", "--quiet", remote(), "main", check=False)
-    return git_ok(repo, "merge-base", "--is-ancestor", sha, head)
+    return is_ancestor(repo, sha, head)

@@ -7,7 +7,7 @@ import re
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.core import fmt_age, git, git_ok, remote, tilde
+from agentctl.core import fmt_age, git, remote, tilde, is_ancestor
 from agentctl.timefmt import ts
 from agentctl.store import StoreUnavailable
 from agentctl.repos import RED_PRIMARY
@@ -190,7 +190,7 @@ class RevertTick:
 
     def read(self, main: str, cur_key: str, cur: Any) -> None:
         """Scan since the cursor `cur` (None: the lookback) to `main`, then move the cursor."""
-        if cur and not git_ok(self.repo, "merge-base", "--is-ancestor", cur, main):
+        if cur and not is_ancestor(self.repo, cur, main):
             cur = None  # main rewritten under the cursor: read the lookback again (items dedupe)
         commits = revert_scan(self.repo, cur, main, self.t)
         if commits is not None:
