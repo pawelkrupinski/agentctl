@@ -594,7 +594,7 @@ class CachedGateTest(CiWhyTest):
         A.publish_gate_summary("a/b", "gate UNREAD (x)")
         self.assertFalse(os.path.exists(self.gs))
         A.publish_gate_summary("a/b", "gate green")
-        self.assertEqual(A.cached_gate_summary("a/b")[0], "gate green")
+        self.assertEqual(A.gate_summary_line(A.state_read().get("summary") or {}, "a/b")[1], "gate green")
         self.assertEqual(sorted(os.listdir(os.path.dirname(self.gs))), ["state.json", "state.json.lock"])
 
     def test_processor_publishes_the_gate(self):
@@ -607,4 +607,4 @@ class CachedGateTest(CiWhyTest):
         self.scenario([])
         A._last_gate_publish[0] = 0
         A.maybe_publish_gate(clone, A.CurrentStore(A.process_store))
-        self.assertTrue(A.cached_gate_summary(A.slug(clone))[0] or os.path.exists(self.gs))
+        self.assertTrue(A.gate_summary_line(A.state_read().get("summary") or {}, A.slug(clone))[1] or os.path.exists(self.gs))

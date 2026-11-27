@@ -96,7 +96,7 @@ def _refusal_told(a: Any, verdict: Any, lines: Any) -> Any:
 def _cancel_refused(a: Any, store: Any, lines: Any, last: Any) -> Any:
     """The precheck refused change a.entry (`last`: its closing line): cancel it and tell its author. Exit code 1 when
     the verdict is NOT LANDED or the cancel failed, 0 when the change was decided already."""
-    cancel = argparse.Namespace(wcmd="cancel", repo=a.repo, entry=a.entry, renamed=True, hold_for=None, hold_why=None)
+    cancel = argparse.Namespace(wcmd="cancel", repo=a.repo, entry=a.entry, hold_for=None, hold_why=None)
     # NOT LANDED only when the cancel took: the landing check runs alongside and may have decided first (review
     # 2026-11-07: a change that LANDED was told NOT LANDED, "its queue entry is cancelled").
     try:
