@@ -10,7 +10,7 @@ from agentctl.timefmt import ts
 from agentctl.govknobs import QUEUE_POOL, knob_check_lease_ttl, knob_check_trees
 from agentctl.core import err, git
 from agentctl.causes import checked_cause, reject_cause, reject_class
-from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
+from agentctl.waitingdir import RECORD_KEY, ChangeRecords, entry_record, waiting_state, wlog
 from agentctl.worktrees import mark_internal
 from agentctl.leases import LeaseHold, lease_live
 from agentctl.land import tool_env
@@ -119,17 +119,16 @@ def _item_data(cur, to, data, fields):
 def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any] | None = None,
                event: dict[str, Any] | None = None, *, cause: str, detail: str | None = None,
                **fields: Any) -> None:
-    """THE writer of a change's state: its item (transition + event) and its entry's status, together. An item decided
-    already (by a writer of the item alone: a cancel through the store, a stranded supersede) keeps its decision, and
-    the entry takes it: one state whichever reader asks (tests/queue_sim.py IS). cause: why it moved, one of
-    causes.CAUSES (a keyword every caller names: tests/test_causes.py); detail: a short qualifier."""
+    """THE writer of a change's state: ONE transition of its item carrying its record (state + data + event), then
+    its entry's file as the item's cache (docs/design/one-change-model.md, step 5). An item decided already (by a
+    writer of the item alone: a cancel through the store, a stranded supersede) keeps its decision, and the entry takes
+    it: one state whichever reader asks (tests/queue_sim.py IS). cause: why it moved, one of causes.CAUSES (a keyword
+    every caller names: tests/test_causes.py); detail: a short qualifier."""
     cur = st.put_item("change", e["id"], change_state_of(e.get("status")) or "queued", change_item_fields(e))
-    cur = _move_item(st, e["id"], cur, to, _item_data(cur, to, data, fields), event, cause, detail)
     e.update(status=to, **fields)
-    if machine_state("change", cur["state"]).terminal and cur["state"] != to:  # decided already: its decision stands
-        why = (cur.get("data") or {}).get("why")
-        e.update(status=cur["state"], **({"why": why} if why else {}))
-    ChangeRecords(st, d).save(e)
+    data = {**(_item_data(cur, to, data, fields) or {}), RECORD_KEY: entry_record(e)}
+    _move_item(st, e["id"], cur, to, data, event, cause, detail)
+    ChangeRecords(st, d).save(e)  # a decided item's decision taken, its record merged if the move did not carry it
 
 
 def _move_item(st: Any, cid: str, cur: dict[str, Any], to: str, data: Any, event: dict[str, Any] | None, cause: str,

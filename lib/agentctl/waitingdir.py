@@ -11,7 +11,7 @@ from agentctl.causes import entry_cause
 from agentctl.core import git, state_root
 from agentctl.timefmt import parse_time, ts
 from agentctl.statefile import read_record, write_json
-from agentctl.statemachines import change_state_of, open_states
+from agentctl.statemachines import change_state_of, machine_state, open_states
 
 
 # ---------------------------------------------------------------- waiting: production changes held while main is red
@@ -78,7 +78,8 @@ def save_entry(d: str, e: dict[str, Any]) -> None:
 # whole but for its status (the item's state), under RECORD_KEY -- one added key, so an older revision reading the item
 # sees the keys it knew (the design's rule 2). The copy is merged without a new version (Store.merge_item): no writer's
 # compare-and-set is disturbed by it. Since step 4 the queue READS its changes from the items (ChangeRecords' readers);
-# the file is still written (rule 3: a rollback finds it current).
+# since step 5 every writer writes the item FIRST and the file after it, as the item's cache (rule 3: a rollback finds
+# it current).
 RECORD_KEY = "record"
 QUEUED = ("queued", "checking", "checked", "pushing")  # the states of a change in the land queue (not waiting for green)
 
@@ -110,19 +111,27 @@ class ChangeRecords:
         self.d = d
 
     def save(self, e: dict[str, Any]) -> None:
-        """Entry e written: its item first (created, carrying it, when the store has none: a new change is a change
-        for every reader at once), then its file (save_entry's race rule applies), then its item's copy."""
-        if self.store is not None:
-            self._open(e)
-        save_entry(self.d, e)
-        if self.store is not None:
-            self.store.merge_item("change", str(e["id"]), {RECORD_KEY: entry_record(e)})
+        """Change e written: THE ITEM FIRST (docs/design/one-change-model.md, step 5) -- created carrying its record when
+        the store has none, else its record merged, e first taking a decision its item already holds (THE RACE RULE is
+        the item's: a writer of a stale copy never reopens a decided change) -- then its file, a cache of the item for a
+        rollback (the design's rule 3), in the item's state. The outbox (no local store): the file alone."""
+        cur = self._carry(e) if self.store is not None else None
+        save_entry(self.d, e if cur is None else {**e, "status": cur["state"]})
 
-    def _open(self, e: dict[str, Any]) -> None:
-        state = change_state_of(e.get("status"))
-        if state and self.store.item("change", str(e["id"])) is None:
-            self.store.put_item("change", str(e["id"]), state,
-                                {**new_change_data(self.store, e), RECORD_KEY: entry_record(e)})
+    def _carry(self, e: dict[str, Any]) -> dict[str, Any] | None:
+        """Change e's item made current with e's record (created when absent); None when e has no item and no change
+        state to make one in (a retired status an older revision wrote)."""
+        cur: dict[str, Any] | None = self.store.item("change", str(e["id"]))
+        if cur is None:
+            state = change_state_of(e.get("status"))
+            if not state:
+                return None
+            cur = self.store.put_item("change", str(e["id"]), state,
+                                      {**new_change_data(self.store, e), RECORD_KEY: entry_record(e)})
+        take_decision(e, cur)
+        if (cur.get("data") or {}).get(RECORD_KEY) != entry_record(e):
+            cur = self.store.merge_item("change", str(e["id"]), {RECORD_KEY: entry_record(e)}) or cur
+        return cur
 
     def every(self) -> list[dict[str, Any]]:
         """Every change of the queue that has its record, as its entry, in seq order (one with no seq last). A change
@@ -163,6 +172,17 @@ class ChangeRecords:
         if self.store.meta_get(key) is None:
             self.store.meta_set(key, drawn_max(waiting_entries(self.d, open_only=False) + self.every()))
         return int(self.store.next_seq(key))
+
+
+DECISION_KEYS = ("why", "landed_sha", "superseded_by")  # what a decided item says of its decision (queueslots._item_data)
+
+
+def take_decision(e: dict[str, Any], cur: dict[str, Any]) -> None:
+    """Entry e takes the decision its change item cur already holds (a writer of the item alone decided it: a cancel
+    through the store, a stranded supersede, a close by content): its state and what its data says of it."""
+    if machine_state("change", cur["state"]).terminal and e.get("status") != cur["state"]:
+        data = cur.get("data") or {}
+        e.update(status=cur["state"], **{k: data[k] for k in DECISION_KEYS if data.get(k)})
 
 
 def change_record_of(it: dict[str, Any]) -> dict[str, Any]:

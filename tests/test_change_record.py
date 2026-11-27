@@ -50,14 +50,63 @@ class ChangeRecordsTest(Base):
         self.assertEqual(rec, {"id": "e1", "seq": 1, "worktree": "/wt", "head": "a" * 40, "tip": "t1", "rounds": 2})
         self.assertEqual(A.read_record(os.path.join(self.d, "entries", "e1.json"))["tip"], "t1")
 
-    def test_the_record_keeps_the_race_rule_a_decided_entry_on_disk_stands(self):
+    def test_the_race_rule_is_the_items_a_stale_copy_never_reopens_a_decided_change(self):
+        """STEP 5: a writer of a stale copy (the checker's save racing a supersede, audit S2) meets the ITEM's decision,
+        whatever the file says: the item keeps it, the record and the file take it, and so does the copy."""
         self.st.put_item("change", "e1", "queued")
         recs = A.ChangeRecords(self.st, self.d)
-        recs.save(self.entry("rejected", why="NOT LANDED: x", decided="t"))
-        recs.save(self.entry("checking", tip="t2"))  # a racing writer's stale copy
-        rec = self.st.item("change", "e1")["data"]["record"]
-        self.assertEqual((rec["why"], rec["tip"]), ("NOT LANDED: x", "t2"))
-        self.assertEqual(rec, A.entry_record(A.read_record(os.path.join(self.d, "entries", "e1.json"))))
+        recs.save(self.entry(tip="t1"))
+        it = self.st.item("change", "e1")
+        self.st.transition("change", "e1", "cancelled", it["version"], data={"why": "cancelled: by agent"},
+                           event={"cause": "agent"})  # a writer of the item alone
+        stale = self.entry("checking", tip="t2")
+        recs.save(stale)
+        it = self.st.item("change", "e1")
+        self.assertEqual((it["state"], it["data"]["record"]["why"], it["data"]["record"]["tip"]),
+                         ("cancelled", "cancelled: by agent", "t2"))
+        self.assertEqual(stale["status"], "cancelled")
+        disk = A.read_record(os.path.join(self.d, "entries", "e1.json"))
+        self.assertEqual((disk["status"], A.entry_record(disk)), ("cancelled", it["data"]["record"]))
+
+    def test_the_item_is_written_first_a_failed_file_write_leaves_it_current(self):
+        """STEP 5: the item, then its file (a cache): a file that cannot be written leaves the item current."""
+        self.st.put_item("change", "e1", "queued")
+        real = A.write_json
+
+        def full_disk(path, obj):
+            raise OSError("no space left on device")
+        A.write_json = full_disk
+        try:
+            with self.assertRaises(OSError):
+                A.ChangeRecords(self.st, self.d).save(self.entry(tip="t1"))
+        finally:
+            A.write_json = real
+        self.assertEqual(self.st.item("change", "e1")["data"]["record"]["tip"], "t1")
+
+    def test_the_file_is_the_items_cache_in_the_items_state(self):
+        """STEP 5: a copy read before the item moved on writes its keys, never its stale status: the file says the
+        item's state (the projector, reading it, moves nothing back)."""
+        e, _ = A.queue_change(self.st, self.d, {"worktree": "/wt", "head": "a" * 40, "commits": ["a" * 40]})
+        copy = dict(e)
+        A.set_change(self.st, self.d, e, "checking", cause="check-running")
+        copy["tip"] = "t9"
+        A.ChangeRecords(self.st, self.d).save(copy)  # its status still `queued`
+        A.project_changes(self.d, self.st)
+        it = self.st.item("change", e["id"])
+        self.assertEqual((it["state"], it["data"]["record"]["tip"]), ("checking", "t9"))
+        self.assertEqual(A.read_record(os.path.join(self.d, "entries", f"{e['id']}.json"))["status"], "checking")
+
+    def test_a_move_is_one_transition_carrying_the_record(self):
+        """STEP 5: set_change moves the item and its record in ONE store write (no separate merge of the record)."""
+        e, _ = A.queue_change(self.st, self.d, {"worktree": "/wt", "head": "a" * 40, "commits": ["a" * 40]})
+        real = self.st.merge_item
+        self.st.merge_item = lambda *a, **k: self.fail("the record was merged after the move, not carried by it")
+        try:
+            A.set_change(self.st, self.d, e, "checking", cause="check-running", tip="t3")
+        finally:
+            self.st.merge_item = real
+        it = self.st.item("change", e["id"])
+        self.assertEqual((it["state"], it["data"]["record"]["tip"]), ("checking", "t3"))
 
     def test_the_outbox_and_a_remote_store_write_the_file_alone(self):
         class Remote:

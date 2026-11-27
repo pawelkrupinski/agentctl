@@ -118,6 +118,12 @@ copies converge.
    their store argument in step 6), `runowners.queue_entry_worktree`, and the projector (it goes in step 6).
 5. **Writers write the item first, the file as a cache** (rule 3): `save_entry` stays only as the write-through;
    `set_change` is one transition carrying the record.
+   As built: `ChangeRecords.save` makes the item current first (created carrying its record, else its record merged)
+   and writes the file after it, IN THE ITEM'S STATE: a copy read before the item moved on writes its keys, never its
+   stale status (before, the projector then moved the item back to that status). THE RACE RULE IS THE ITEM'S
+   (`take_decision`): a writer of a stale copy meets a decision the item holds -- its state, `why`, `landed_sha`,
+   `superseded_by` -- whatever the file says. `set_change` is ONE transition carrying the record in its data; the
+   save after it merges nothing unless the item was decided already.
 6. **The files go** (after a release of step 5 on ci-runner): `save_entry`, `waiting_entries`, `queued_entries`,
    `ENTRY_FINAL`, the projector's `project_changes`, `change_item_fields`, `entry_created_at`,
    `entry_queued_since`, `_landed_fields`, `_item_data` and the entries directory on the server (kept read-only one
