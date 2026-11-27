@@ -113,7 +113,7 @@ FIXER_LAND_WATCH_EVERY = 60
 # ratchets in the pre-push hook recompute them over the tree they check, so a combined tree's right content is "the
 # rows regenerated over it" -- and two changes touching DISJOINT rows do not conflict at all. A repo registers them in
 # red-repos.json (`generated`: {paths, regen: its own --update command, timeout}); a registered file is
-# - NO OVERLAP: the hold (OVERLAPPING CHANGES ARE CHECKED AS ONE, queuebatch.py), backlog-batch membership, the conflict a
+# - NO OVERLAP: the hold (OVERLAPPING CHANGES ARE CHECKED AS ONE, overlapcheck.py), backlog-batch membership, the conflict a
 #   queued change is told of, `no longer applies on main` and the push's full-recheck rule all leave it out -- a
 #   source both change (TestWiring.scala) still holds the younger (ONLY A VOIDED CHECK HOLDS, below);
 # - RESOLVED, when a rebase, a batch's assembly or land's own rebase conflicts in it: its rows merged three-way (each

@@ -1825,7 +1825,7 @@ The reconciler then takes it, a step per tick:
   (<state>): both change <file>`). A lap of `queued`'s 15-min deadline is a QUIET re-deadline (severity info, no level
   up, no notification, and NO INBOX ENTRY: the lap's event names no audience, so the projector writes none -- on
   2026-11-19 movies-fix-replay's held laps reached the inbox every 15 min, 93 of the day's 442 entries) while that
-  hold is live; it escalates only when the hold is stuck (queuebatch.py
+  hold is live; it escalates only when the hold is stuck (overlapcheck.py
   `change_hold_stuck`): nothing named holds it past `$AGENTCTL_UNHELD_GRACE` (10 min in its state: a change just
   checked or queued has no hold until the next tick pushes, starts or holds it -- 2026-11-23, py-restore-corpus read
   `nothing holds it, yet it has not pushed` by W1 in the 40 s before its push), its blocking change is gone, or it is older than
@@ -1838,7 +1838,7 @@ The reconciler then takes it, a step per tick:
   overlap with others is read from its own commits. A HOLD CYCLE IS BROKEN, NEVER WAITED OUT: each tick finds every
   cycle among the recorded holds, its oldest change (lowest seq) drops its wait for good (`cycle_ignore`) and `status`
   shows `HOLD CYCLE ...` on it. A HELD VERIFICATION HOLDS NOTHING: a verify round held behind another change holds no
-  younger push and no backlog batch. holdgraph.py, queuebatch.py `break_hold_cycles`, `change_waits`; tests:
+  younger push and no backlog batch. holdgraph.py, overlapcheck.py `break_hold_cycles`, `change_waits`; tests:
   tests/test_hold_graph.py. The watchdog tells one notification per episode (a subject: the change it names) per 6 h
   (`AGENTCTL_WATCHDOG_RETELL`), and the tick's rederive lap never clears a hold between two readings.
 - **AN IDLE HOLDER'S HOLD EXPIRES (2026-11-26; 11-23..25: 631 `STUCK: held for over 6 h` laps of four changes, each
@@ -1864,7 +1864,7 @@ The reconciler then takes it, a step per tick:
   A WAITING CHANGE HOLDS NOTHING IT ASSEMBLES WITH (2026-11-20, Main #2716: metrics-packages and phase7-houses sat
   `held: its check waits for movies-misc-cx (waiting)` -- held until green, behind a change that lands only at green):
   the younger is checked now and meets it in the batch at green; only a conflicting one waits (told `CONFLICTS`).
-  `land cancel` clears every hold naming the cancelled change (`clear_holds_on`). queuebatch.py `overlap_hold`,
+  `land cancel` clears every hold naming the cancelled change (`clear_holds_on`). overlapcheck.py `overlap_hold`,
   `pair_conflict`, `hold_for_overlap`; tests: `tests/test_backlog_batch.py` OverlapTest, `tests/test_queue_sim.py`
   CollisionTest (the three collisions of 2026-11-17 replayed: no check spent on a change that could not land, no full
   recheck).
@@ -1932,7 +1932,7 @@ The reconciler then takes it, a step per tick:
   \`...\`, this change \`...\``) and the fix (`Fix now: \`cd <worktree> && git rebase <older's branch>\`, resolve
   those hunks, \`~/bin/agentctl land\``). Batch size: `$AGENTCTL_BACKLOG_BATCH_MAX` stays 8 -- over the 7-day replay
   (3 seeds a day, 591 landings) a cap of 4, 8, 16 and 32 ran 1252, 1256, 1255 and 1255 checks, median 4 ticks each,
-  p90 11, 10, 10, 10: batches seldom reach 8, so a bigger cap buys nothing measurable. queuebatch.py `overlap_of`,
+  p90 11, 10, 10, 10: batches seldom reach 8, so a bigger cap buys nothing measurable. overlapcheck.py `overlap_of`,
   `pair_resolvable`, `conflict_hunks`; tests: `tests/test_batch_tiers.py`, `tests/test_queue_sim.py` BatchTiersSimTest.
 - **SNAPSHOTS ARE REGENERATED, NEVER MERGED (2026-11-21 ~07:40Z: split-shared-js `held: its check waits for
   scrapers-2`, both changing movies' page snapshots expected-{index,warszawa-index,wroclaw-index}.html).** A snapshot
@@ -1968,7 +1968,7 @@ The reconciler then takes it, a step per tick:
   `explained`, `regen_base`; tests: `tests/test_derived.py` (two lanes each regenerating the catalogue land in one
   check, main's page the generator's output over the merged tree).
   **A CHANGE RE-APPLIED ONTO MAIN IS JUDGED BY ITS OWN COMMITS (2026-11-23: dispatch-py and title-trace-py, stacked on
-  kick-convergence's branch, refused `no longer applies` the moment kick landed).** The queue-time check (queuebatch.py
+  kick-convergence's branch, refused `no longer applies` the moment kick landed).** The queue-time check (overlapcheck.py
   `main_conflict`) merged the change's head with main's: commits main carries under new shas (a stacked change's landed
   parent) read as an add/add source conflict. A conflict there is now judged again as the rebase picks it: the
   change's commits main lacks (patch-equivalent ones dropped, as `pick_commits` drops them), each merged onto the last
@@ -1984,7 +1984,7 @@ The reconciler then takes it, a step per tick:
   over the combined tree (`main moved under regenerated files it changes too (...)`), never git's merge pushed. On the
   server role too (2026-11-23, the 22-change deadlock on ci-runner): A DERIVED FILE IS REGENERATED WHERE THE COMBINE
   HAPPENS -- its cheap command (no JVM) runs on every role, agentctl's interpreter on PATH (generated.py `regen_runs`,
-  `regen_env`). queuebatch.py `ordered_overlap`,
+  `regen_env`). overlapcheck.py `ordered_overlap`,
   generated.py `derived`, `regen_owed`, queuediff.py `generated_round`. **A hand-written file both sides only add to
   (scripts/hooks/lint-registry.tsv rows, a skill's bullets) still holds behind a check in flight**, by decision: two
   QUEUED changes adding to it already meet in one batch (tier 3; a `*.md` is union-merged), but with the older in
@@ -2024,7 +2024,7 @@ The reconciler then takes it, a step per tick:
   the six baseline lanes of 2026-11-19 (20 seeds, 4 trees): held, 40 checks, mean 5.4 ticks to land, p90 7; unheld,
   108 checks, mean 5.8, p90 9 (the younger's check, made beside the older, is voided by its landing) -- and leaves
   migration-classes.tsv, docs/tools.md and convergence-paths.txt free. Replaces A GENERATED OVERLAP WAITS FOR A CHECK
-  IN FLIGHT (2026-11-21). generated.py `order_sensitive`, `without_derived`; repos.py `generated_order`; queuebatch.py
+  IN FLIGHT (2026-11-21). generated.py `order_sensitive`, `without_derived`; repos.py `generated_order`; overlapcheck.py
   `ordered_overlap`, `held_files`, `conflicting`, `overlap_hold`; tests: `tests/test_conflict_holds.py` (lanes sharing only
   undeclared generated files with a check in flight: one batch, one check, one push; py-scalafix checked alone beside
   a check in flight; a real conflict still held, naming the source alone; a source edited apart still held),

@@ -79,7 +79,7 @@ def redact_credentials(text: object) -> str:
 
 
 def check_push_failure(branch: str, stderr: object, host: str) -> str:
-    """A failed check-branch push's text, its LAST line the reason the re-queue names (queuebatch reads the last line).
+    """A failed check-branch push's text, its LAST line the reason the re-queue names (entrychecks reads the last line).
     A credential failure says so with what the helper printed (2026-11-22: `fatal: could not read User` alone hid the
     helper's own traceback, `ModuleNotFoundError: No module named 'agentctl'`, for hours). Redacted (CREDENTIAL_TEXT)."""
     text = redact_credentials(stderr).strip()

@@ -10,7 +10,7 @@
 # executor starting, a push under way): it needs no decision. tests/test_policy.py fails any hold kind, queue reject or
 # batch reject in lib/agentctl/ that names no row here, and any row nothing uses.
 #
-# HOLDS: every kind of recorded hold (queuebatch.py note_hold) -- its `land status` label, the longest it may last before it
+# HOLDS: every kind of recorded hold (overlapcheck.py note_hold) -- its `land status` label, the longest it may last before it
 # is STUCK, and what the tick does then (its recovery). note_hold refuses an unknown kind, change_hold_stuck reads the
 # bound, and the change tick runs the recovery: no hold outlives its bound in silence.
 

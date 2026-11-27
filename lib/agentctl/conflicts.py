@@ -45,7 +45,7 @@ def union_resolve(wt, files=None):
 
 
 # A SOURCE CONFLICT IS RESOLVED IN THE BATCH WHEN BOTH SIDES ONLY ADD (the owner, 2026-11-21: "make agentctl batch even
-# more, merge / fix conflicts"). Tier 3 of THE BATCH TIERS (queuebatch.py): a real source two queued changes conflict in --
+# more, merge / fix conflicts"). Tier 3 of THE BATCH TIERS (overlapcheck.py): a real source two queued changes conflict in --
 # both appended a test case, both added an import, both added a row to a hand-written Scala table -- is resolved on
 # the combined tree, hunk by hunk over `git merge-file --diff3`: a hunk is taken when, past the lines both sides wrote
 # the same (their common prefix and suffix, which must account for every base line of the hunk), what is left on each

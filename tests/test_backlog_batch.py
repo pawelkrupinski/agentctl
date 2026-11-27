@@ -642,7 +642,7 @@ class PushBatchTest(test_queue.QueueTest):
 
 
 class OverlapTest(BacklogBatchTest):
-    """OVERLAPPING CHANGES ARE CHECKED AS ONE (queuebatch.py; the coordinator, 2026-11-18: B1 against the CI-workflows change,
+    """OVERLAPPING CHANGES ARE CHECKED AS ONE (overlapcheck.py; the coordinator, 2026-11-18: B1 against the CI-workflows change,
     the scraper catalog against the scrapers refactor, the cycle-breaking change against both -- each checked alone,
     then NOT LANDED "no longer applies", a rebase and a full recheck)."""
 

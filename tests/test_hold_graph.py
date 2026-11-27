@@ -101,7 +101,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertEqual(self.drive_to_rest([el, ek, eg]), {el: "landed", ek: "landed", eg: "landed"})
 
     def test_a_verification_held_behind_another_change_holds_no_push_and_no_batch(self):
-        """A HELD VERIFICATION HOLDS NOTHING (queuebatch.py; `batch: 0` on 2026-11-23): landing's verify round waits
+        """A HELD VERIFICATION HOLDS NOTHING (overlapcheck.py; `batch: 0` on 2026-11-23): landing's verify round waits
         behind an older change in flight it overlaps, so it verifies nothing now -- gitops' checked push goes, and
         two queued lanes form their backlog batch meanwhile."""
         wo = self.r.worktree("wt-older", branch="older")

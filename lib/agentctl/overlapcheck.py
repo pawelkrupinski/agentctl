@@ -37,7 +37,7 @@ from agentctl.redseen import gate_reds
 # the hold to the next waiting change. A younger change that ASSEMBLES with a waiting one (git merge-tree clean) is
 # checked on main now and, waiting too, meets it in the batch at green, assembled in order. Only one that cannot be
 # assembled with it waits (its author told: CONFLICTS -- a check of it is spent on a tree that cannot land), and a red
-# fix never does. queuebatch.py overlap_hold, pair_conflict; tests: tests/test_queue_sim.py CollisionTest (the three
+# fix never does. overlapcheck.py overlap_hold, pair_conflict; tests: tests/test_queue_sim.py CollisionTest (the three
 # collisions of 2026-11-17 replayed), tests/test_backlog_batch.py OverlapTest.
 OVERLAP_OLDER = ("queued", "checking", "checked", "pushing", "waiting")
 

@@ -230,7 +230,7 @@ def _unheld_issue_text(tag: Any, it: Any, d: Any, t: Any) -> Any:
     return (f"{tag} change {it['id']} ({d.get('worktree')}) is {it['state']} "
             f"{fmt_age(t - float(it.get('entered_at') or t))}, past its deadline, and nothing recorded why it waits "
             f"(kind: {k.get('priority') or '?'}{'; ' + kind_text(k) if kind_text(k) else ''}). Every wait records "
-            "its hold (queuebatch.py note_hold); find the path that held it silently in a ~/bin-wt-<name> worktree, "
+            "its hold (overlapcheck.py note_hold); find the path that held it silently in a ~/bin-wt-<name> worktree, "
             "test-first in tests/queue_sim.py, and close this issue with the fix's sha. "
             f"`agentctl land status`; the change's events: `agentctl store events change {it['id']}`")
 

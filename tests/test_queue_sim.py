@@ -74,7 +74,7 @@ class ProfileSeedsTest(unittest.TestCase):
 # THE CHAOS PROFILE: reds, breaking changes, conflicts, infra failures and outside pushes several times as often, many
 # changes sharing files. Its fixed seeds (one check tree): 121, a member superseded while its batch checked was pushed
 # with it (A DECIDED MEMBER IS NEVER PUSHED, batch.py); 36 and 52, a change that no longer applied on main waited for a
-# tree before it was told (main_conflict, queuebatch.py).
+# tree before it was told (main_conflict, overlapcheck.py).
 CHAOS = {"red": 0.08, "bad": 0.3, "conflict": 0.3, "infra": 0.08, "outside": 0.1, "shared_path": 0.4, "outside_red": 0}
 
 
@@ -134,7 +134,7 @@ class GeneratedOverlapTest(unittest.TestCase):
 
     def test_the_baseline_queue_of_2026_11_19_holds_only_on_test_wiring_or_behind_a_check_in_flight(self):
         """Behind a QUEUED change, only the TestWiring.scala overlap holds; a generated overlap waits only for a check
-        already in flight (A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT, queuebatch.py; invariant I10 holds the rest)."""
+        already in flight (A GENERATED OVERLAP WAITS FOR A CHECK IN FLIGHT, overlapcheck.py; invariant I10 holds the rest)."""
         for sim in self.run_seeds(range(4)):
             label = {c.eid: c.label for c in sim.changes}
             held = {(label[eid], label.get(b), f) for eid, hs in sim.holds.items() for _t, k, b, f in hs if k == "overlap"}
@@ -174,7 +174,7 @@ class GeneratedOverlapTest(unittest.TestCase):
 
 
 class BatchTiersSimTest(unittest.TestCase):
-    """THE BATCH TIERS (queuebatch.py; the owner, 2026-11-21): the two holds of 2026-11-21 replayed over the real queue code
+    """THE BATCH TIERS (overlapcheck.py; the owner, 2026-11-21): the two holds of 2026-11-21 replayed over the real queue code
     (queue_sim.HOLDS_2026_11_21), before (`before_tiers`: snapshots unregistered, no source resolution) and after."""
 
     def run_seeds(self, script, seeds=range(4), **profile):
@@ -201,7 +201,7 @@ class BatchTiersSimTest(unittest.TestCase):
 
     def test_as_observed_the_younger_two_wait_for_the_check_in_flight_and_meet_in_the_next_batch(self):
         """The younger two queued while the older two checked in a batch (as on 2026-11-21): A GENERATED OVERLAP
-        WAITS FOR A CHECK IN FLIGHT (queuebatch.py) -- checked beside it, split-shared-js's check was voided by the older
+        WAITS FOR A CHECK IN FLIGHT (overlapcheck.py) -- checked beside it, split-shared-js's check was voided by the older
         landing (100 checks over 20 seeds, against 40 held, the median the same) -- and the two meet in one batch."""
         for before, sim in zip(self.run_seeds(queue_sim.HOLDS_2026_11_21_IN_FLIGHT, before_tiers=True),
                                self.run_seeds(queue_sim.HOLDS_2026_11_21_IN_FLIGHT)):

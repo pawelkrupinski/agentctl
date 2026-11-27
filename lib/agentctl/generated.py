@@ -186,7 +186,7 @@ def regen_only(g: Optional[Dict[str, Any]]) -> bool:
 
 def derived(g: Optional[Dict[str, Any]]) -> bool:
     """Whether a registry entry is a DERIVED file (`merge: derived`): regenerated over whatever tree it lands in, so it
-    holds no change behind another (A DERIVED FILE HOLDS NOTHING, queuebatch.py)."""
+    holds no change behind another (A DERIVED FILE HOLDS NOTHING, overlapcheck.py)."""
     return bool(g) and g.get("merge") == "derived"
 
 
@@ -251,7 +251,7 @@ def block_merge(base: str, ours: str, theirs: str, block: List[str]) -> Optional
 def regen_owed(wt: str, base: str, moved: str, head: Optional[str]) -> List[str]:
     """The files a push of the change moved..head (rebased by git alone onto main, which moved base..moved) owes a
     regeneration of: the regenerated-only ones (a snapshot, a DERIVED file) both main's move and the change change --
-    git's line merge of them, clean or not, is no tree's output (A DERIVED FILE HOLDS NOTHING, queuebatch.py) -- those
+    git's line merge of them, clean or not, is no tree's output (A DERIVED FILE HOLDS NOTHING, overlapcheck.py) -- those
     whose command runs here (regen_runs: a derived file's on every role)."""
     if not head:
         return []
