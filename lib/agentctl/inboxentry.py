@@ -73,64 +73,80 @@ def inbox_kind(verdict: Any, final: bool = True) -> str:
     return "OTHER"
 
 
-# THE INBOX WRITER SEAM: an entry built here is routed and merged by the alert model (alerts.py alert_write, which reads
-# the store, the reds and their owners: far above this module), wired at the composition root (cli). Unwired -- a
-# module loaded on its own -- nothing is written (review 2026-11-26: it was written as a plain file, a second write
-# path with no routing and no merge): a RuntimeError says the root was skipped.
-_inbox_writers: list[Callable[[dict[str, Any]], Any]] = []
-
-
-# The time an entry is stamped with is the process's clock, wired beside the writer (the wall's until wired).
-_inbox_times: list[Callable[[], float]] = [epoch_now]
-_inbox_seq = itertools.count()  # a clock that stands still (a test's) must not give two entries one id
-
-
-def wire_inbox_writer(writer: Callable[[dict[str, Any]], Any], now: Callable[[], float] = epoch_now) -> None:
-    _inbox_writers[:] = [writer]
-    _inbox_times[:] = [now]
-
-
-def write_inbox_entry(rec: dict[str, Any]) -> Any:
-    """rec into the inbox through the wired writer: the id of the entry that carries it (its opening an event of the
-    offline log, filelog.py). RuntimeError when no writer is wired (the composition root, cli, was skipped)."""
-    if not _inbox_writers:
-        raise RuntimeError(f"no inbox writer wired (cli.wire_collaborators): entry {rec['id']} not written")
-    got = _inbox_writers[0](rec)
-    note_event("inbox", str(got or rec["id"]), None, "unread", "notified", at=rec.get("at"), detail=rec.get("kind"),
-               text=str(rec.get("verdict") or "")[:160], key="opened")
-    return got
-
-
 def claude_pid_env() -> int | None:
     """$CLAUDE_PID as a number, or None when unset or not one."""
     pid = os.environ.get("CLAUDE_PID") or ""
     return int(pid) if pid.isdigit() else None
 
 
+_inbox_seq = itertools.count()  # a clock that stands still (a test's) must not give two entries one id
+
+
+class InboxWriter:
+    """THE INBOX WRITER: an entry built here is routed and merged by the alert model (`route`: alerts.py alert_write,
+    which reads the store, the reds and their owners -- far above this module) and stamped with `now`, the process's
+    clock. cli, the composition root, builds the one a process uses: the process's Context carries it (`ctx.inbox`), and
+    wire_inbox_writer makes it the one inbox_write reaches for the writers no context reaches yet. Unrouted -- a module
+    loaded on its own -- nothing is written (review 2026-11-26: it was written as a plain file, a second write path with
+    no routing and no merge): a RuntimeError says the root was skipped."""
+
+    def __init__(self, route: Callable[[dict[str, Any]], Any] | None, now: Callable[[], float]) -> None:
+        self.route, self.now = route, now
+
+    def deliver(self, rec: dict[str, Any]) -> Any:
+        """rec into the inbox through the route: the id of the entry that carries it (its opening an event of the
+        offline log, filelog.py). RuntimeError when there is no route (the composition root, cli, was skipped)."""
+        if self.route is None:
+            raise RuntimeError(f"no inbox writer wired (cli.wire_collaborators): entry {rec['id']} not written")
+        got = self.route(rec)
+        note_event("inbox", str(got or rec["id"]), None, "unread", "notified", at=rec.get("at"), detail=rec.get("kind"),
+                   text=str(rec.get("verdict") or "")[:160], key="opened")
+        return got
+
+    def write(self, command: str, verdict: Any, verdicts: Any, tail: Any, exit_code: Any, final: bool = True,
+              cwd: str | None = None, reply: bool = False, item: Any = None) -> Any:
+        """One inbox entry, written atomically; returns its id (None when the inbox cannot be written: never fatal).
+        A CONDITION_KINDS entry only from open_condition (conditions.py: the route refuses it otherwise);
+        reply=True: a command's own verdict to the agent that ran it (with_inbox), not a standing condition. item: the
+        alert model's item (alerts.py; derived from the verdict when None). Routed and merged by the route (alerts'
+        alert_write): the id returned is the entry that carries it (its item's live alert when one is unread)."""
+        now = dt.datetime.fromtimestamp(self.now(), dt.timezone.utc)
+        eid = (f"{stamp('event', now.timestamp())}-{os.getpid()}-{next(_inbox_seq):06d}-{re.sub(r'[^a-z]+', '-', command)}"
+               + ("" if final else "-waiting"))
+        here = safe_cwd()
+        rec = {"id": eid, "time": iso_at(now.timestamp()), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],
+               "cwd": cwd or here, "pid": os.getpid(), "final": final, "exit": exit_code, "verdict": verdict,
+               "kind": inbox_kind(verdict, final),
+               "owner": caller_owner(here),
+               "claude_pid": claude_pid_env(),
+               "agent": agent_name(), "verdicts": verdicts, "tail": tail, "reply": bool(reply)}
+        if item:
+            rec["alert_item"] = item
+        try:
+            return self.deliver(rec)
+        except OSError as e:
+            err(f"could not write the inbox entry ({e})")
+            return None
+
+
+# The process's inbox writer, for a writer no context reaches: unrouted, stamped by the process's clock, until wired.
+_process_inbox: list[InboxWriter] = [InboxWriter(None, epoch_now)]
+
+
+def wire_inbox_writer(inbox: InboxWriter) -> None:
+    _process_inbox[:] = [inbox]
+
+
+def write_inbox_entry(rec: dict[str, Any]) -> Any:
+    """rec into the inbox through the process's writer (InboxWriter.deliver)."""
+    return _process_inbox[0].deliver(rec)
+
+
 def inbox_write(command: str, verdict: Any, verdicts: Any, tail: Any, exit_code: Any, final: bool = True,
                 cwd: str | None = None, reply: bool = False, item: Any = None) -> Any:
-    """One inbox entry, written atomically; returns its id (None when the inbox cannot be written: never fatal).
-    A CONDITION_KINDS entry only from open_condition (conditions.py: the wired writer refuses it otherwise);
-    reply=True: a command's own verdict to the agent that ran it (with_inbox), not a standing condition. item: the alert
-    model's item (alerts.py; derived from the verdict when None). Routed and merged by the wired writer (alerts'
-    alert_write): the id returned is the entry that carries it (its item's live alert when one is unread)."""
-    now = dt.datetime.fromtimestamp(_inbox_times[0](), dt.timezone.utc)
-    eid = (f"{stamp('event', now.timestamp())}-{os.getpid()}-{next(_inbox_seq):06d}-{re.sub(r'[^a-z]+', '-', command)}"
-           + ("" if final else "-waiting"))
-    here = safe_cwd()
-    rec = {"id": eid, "time": iso_at(now.timestamp()), "at": now.timestamp(), "command": command, "argv": sys.argv[1:],
-           "cwd": cwd or here, "pid": os.getpid(), "final": final, "exit": exit_code, "verdict": verdict,
-           "kind": inbox_kind(verdict, final),
-           "owner": caller_owner(here),
-           "claude_pid": claude_pid_env(),
-           "agent": agent_name(), "verdicts": verdicts, "tail": tail, "reply": bool(reply)}
-    if item:
-        rec["alert_item"] = item
-    try:
-        return write_inbox_entry(rec)
-    except OSError as e:
-        err(f"could not write the inbox entry ({e})")
-        return None
+    """One inbox entry through the process's writer (InboxWriter.write)."""
+    return _process_inbox[0].write(command, verdict, verdicts, tail, exit_code, final=final, cwd=cwd, reply=reply,
+                                   item=item)
 
 
 def inbox_entries() -> list[dict[str, Any]]:

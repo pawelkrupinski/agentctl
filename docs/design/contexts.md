@@ -20,6 +20,13 @@ Its fields join as the locators go, one push each:
 | the process runner | `procrunner.wire_runner` / `process_runner()` | 1,439 functions: nearly everything, through `core.git` |
 | the clock | `clock.wire_clock` / `epoch_now()` | 1,120 functions |
 
+The owner's option 1 (2026-11-27): `clock: Clock`, `runner: ProcessRunner` and `inbox: InboxWriter` joined the
+context, the same objects cli wires into the three locators, read as `ctx.clock.time()`, `ctx.runner.run(...)` and
+`ctx.inbox.write(...)` ONLY where a function or class already holds `ctx`; no context was threaded anywhere new. The
+locators stay for every other reader, and `tests/test_no_service_locators.py` freezes their ambient readers (modules,
+top-level definitions) in READER_CEILINGS, which only fall: the clock 88 / 128, the runner 40 / 55, the inbox writer
+32 / 39. A test's context (`tests/harness.py context_with`) reads whatever the test wired or faked, at each call.
+
 The store, the condition registry and an explicit `clock` stay their own parameters where they are already passed
 (830 functions take a store). Folding them into the context is a later cleanup, made where a function is changed
 anyway, never in a sweep.
@@ -56,4 +63,6 @@ explicit: removing `runs`'s locator raises 40 modules' fan-out by one (+51 in al
 falls back where the context replaces an ambient import: `clock` (`epoch_now()`), `procrunner` (`process_runner()`)
 and `inboxentry` (`inbox_write`). Of the 79 modules importing `epoch_now` alone from `clock`, only 5 read it nowhere
 but in a function holding `ctx` today. So this fall needs the runner and clock fields, whose readers cover nearly
-every module.
+every module. Option 1 took what lay inside `ctx` already: 22 clock reads, 1 runner read, 7 inbox writes; 10
+modules lost an ambient import and the fan-out total fell 1,577 -> 1,560 (94 -> 93 rows), short of 70161bf's 1,526: the
+rest of the fall needs `ctx` threaded to the readers outside it (option 2).

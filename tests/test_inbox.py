@@ -88,9 +88,9 @@ class InboxTest(unittest.TestCase):
     def test_entries_stay_in_write_order_when_the_sequence_passes_ten_under_a_standing_clock(self):
         # the id's sequence was unpadded: "-10-" sorted before "-9-", so the final verdict read before its WAITING line
         # whenever a worker process had written 9 entries before this one (a flake that moved with the test partition)
-        saved_times, saved_seq = list(A._inbox_times), A._inbox_seq
-        self.addCleanup(lambda: (A._inbox_times.__setitem__(slice(None), saved_times), setattr(A, "_inbox_seq", saved_seq)))
-        A._inbox_times[:] = [lambda: 1_800_000_000.0]
+        saved_inbox, saved_seq = list(A._process_inbox), A._inbox_seq
+        self.addCleanup(lambda: (A._process_inbox.__setitem__(slice(None), saved_inbox), setattr(A, "_inbox_seq", saved_seq)))
+        A._process_inbox[:] = [A.InboxWriter(saved_inbox[0].route, lambda: 1_800_000_000.0)]
         A._inbox_seq = __import__("itertools").count(9)
 
         def handler(a):
@@ -136,18 +136,18 @@ class InboxTest(unittest.TestCase):
         seen, saved_write = [], A.alert_write
         A.alert_write = lambda rec, st: seen.append((rec["verdict"], st))
         try:
-            A._inbox_writers[0]({"verdict": "routed"})
+            A._process_inbox[0].route({"verdict": "routed"})
         finally:
             A.alert_write = saved_write
         self.assertEqual([v for v, _st in seen], ["routed"], "the root's writer is the alert model's")
         self.assertIsNotNone(seen[0][1], "with the process's store")
-        saved = list(A._inbox_writers)
-        A._inbox_writers[:] = []
+        saved = list(A._process_inbox)
+        A._process_inbox[:] = [A.InboxWriter(None, A.epoch_now)]
         try:
             with self.assertRaisesRegex(RuntimeError, "no inbox writer wired"):
                 A.inbox_write("wait", "run o/r#1: success", [], [], 0)
         finally:
-            A._inbox_writers[:] = saved
+            A._process_inbox[:] = saved
         self.assertEqual(self.entries(), [])
 
     def test_an_entry_is_stamped_by_the_clock_the_composition_root_wired(self):

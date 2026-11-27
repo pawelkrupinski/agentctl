@@ -7,7 +7,6 @@ from agentctl.context import Context
 from agentctl.timefmt import iso_at, parse_time, ts
 from agentctl.core import fmt_age
 from agentctl.workflows import LOCAL_FLOW
-from agentctl.inboxentry import inbox_write
 from agentctl.redrepos import verify_dispatchable
 from agentctl.onmain import contains_local
 from agentctl.redrecord import RED_RECURRING, lease_is_live, red_lease, red_what
@@ -87,7 +86,7 @@ class FixPending:
 
     def fix_ok(self, line: str, close: bool = True, stop: tuple[str, str] | None = None) -> list[str]:
         """FIX OK: the red is verified and the owner told."""
-        inbox_write("red", line, [line], [], 0)
+        self.ctx.inbox.write("red", line, [line], [], 0)
         if close:
             self.store.close_offer(f"red:{self.it['id']}", "verified")
         if stop:
@@ -209,7 +208,7 @@ class FixPending:
                                      f"{fmt_age(t - red_fix_since(it))} after it was filed")
         if t >= it["deadline"]:  # the owner has not pushed yet, or no gate run has decided since: said again
             line = f"RED OWNER PUSH WAITING: {self.what}: `! {f.get('cmd')}` ({fmt_age(t - red_fix_since(it))} since filed)"
-            inbox_write("red", line, [line], [], 1)
+            self.ctx.inbox.write("red", line, [line], [], 1)
             red_move(self.store, it, "fix-pending", line, severity="escalate")
             return [line]
         return []
@@ -412,7 +411,7 @@ class FixPending:
             return [line]
         line2 = (f"RED REVERT REFUTED: {self.what}: reverting {sha[:10]} did not clear it, so its change was not "
                  "the culprit: it is relanded (its revert reverted) and the red goes to the normal fixer")
-        inbox_write("red", line2, [line2], [], 1)
+        self.ctx.inbox.write("red", line2, [line2], [], 1)
         return [f"{line}\n{line2}"]
 
     def run_before_fix(self) -> list[str] | None:

@@ -15,7 +15,7 @@ from agentctl.timefmt import age_since
 from agentctl.ghapp import cmd_github_app
 from agentctl.config import cmd_config
 from agentctl.actors import process_actor
-from agentctl.inboxentry import wire_inbox_writer
+from agentctl.inboxentry import InboxWriter, wire_inbox_writer
 from agentctl.hookoutput import check_failures
 from agentctl.inbox import inbox_command, with_inbox
 from agentctl.conditionregistry import ConditionRegistry
@@ -86,17 +86,19 @@ def condition_registry(clock: Clock, store: Any, ctx: Context) -> ConditionRegis
         {"clear_hold": recover_clear_hold, "tunnel_reset": recover_tunnel_reset, "clear_flag": recover_clear_flag})
 
 
-def process_context(clock: Clock) -> Context:
+def process_context(clock: Clock, runner: ProcessRunner, inbox: InboxWriter) -> Context:
     """The process's Context (docs/design/contexts.md): its one CI runs reader (CiRuns: what was read of GitHub's runs
-    and jobs), new for each main, and the clock main wired."""
-    return Context(runs=CiRuns(), clock=clock)
+    and jobs), new for each main, and the clock, process runner and inbox writer main wired."""
+    return Context(runs=CiRuns(), clock=clock, runner=runner, inbox=inbox)
 
 
-def wire_collaborators(clock: Clock, store: Any) -> None:
+def wire_collaborators(clock: Clock, store: Any) -> InboxWriter:
     """The process's clock and the inbox writer, wired with main's; at import, with the wall's clock and the process's
-    store, for a use before any main."""
+    store, for a use before any main. Returns the inbox writer wired (main's context carries it)."""
     wire_clock(clock)
-    wire_inbox_writer(condition_guarded(lambda rec: alert_write(rec, store)), clock.time)
+    inbox = InboxWriter(condition_guarded(lambda rec: alert_write(rec, store)), clock.time)
+    wire_inbox_writer(inbox)
+    return inbox
 
 
 wire_collaborators(Clock(), CurrentStore(process_store))
@@ -123,9 +125,10 @@ def main(argv: list[str] | None = None, clock: Clock | None = None, runner: Proc
     args = sys.argv[1:] if argv is None else argv
     store = store if store is not None else CurrentStore(
         partial(process_store, waited_on=True) if waited_on(args) else process_store, clock.time, actor=process_actor(args))
-    wire_collaborators(clock, store)
-    wire_runner(runner or ProcessRunner())
-    ctx = process_context(clock)
+    inbox = wire_collaborators(clock, store)
+    runner = runner or ProcessRunner()
+    wire_runner(runner)
+    ctx = process_context(clock, runner, inbox)
     registry = condition_registry(clock, store, ctx)
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:
         return selftest(ctx)

@@ -139,7 +139,7 @@ state	lib/agentctl/ghtally.py	1
 state	lib/agentctl/gov.py	1
 state	lib/agentctl/hostsleep.py	1
 state	lib/agentctl/identitychange.py	1
-state	lib/agentctl/inboxentry.py	2
+state	lib/agentctl/inboxentry.py	1
 state	lib/agentctl/land.py	1
 state	lib/agentctl/landedchange.py	1
 state	lib/agentctl/lander.py	1
@@ -238,7 +238,7 @@ fanout	lib/agentctl/queuepush.py	19
 fanout	lib/agentctl/queuesubmit.py	11
 fanout	lib/agentctl/recovery.py	13
 fanout	lib/agentctl/redblock.py	14
-fanout	lib/agentctl/redclaim.py	19
+fanout	lib/agentctl/redclaim.py	18
 fanout	lib/agentctl/redcli.py	30
 fanout	lib/agentctl/redcrash.py	19
 fanout	lib/agentctl/reddispatch.py	20
@@ -248,13 +248,13 @@ fanout	lib/agentctl/redhold.py	21
 fanout	lib/agentctl/redland.py	12
 fanout	lib/agentctl/redlease.py	18
 fanout	lib/agentctl/redopen.py	21
-fanout	lib/agentctl/redpending.py	22
+fanout	lib/agentctl/redpending.py	21
 fanout	lib/agentctl/redrecord.py	11
 fanout	lib/agentctl/redseen.py	16
-fanout	lib/agentctl/redstep.py	22
+fanout	lib/agentctl/redstep.py	21
 fanout	lib/agentctl/redtick.py	30
 fanout	lib/agentctl/redvault.py	19
-fanout	lib/agentctl/redverify.py	17
+fanout	lib/agentctl/redverify.py	16
 fanout	lib/agentctl/redview.py	19
 fanout	lib/agentctl/redwaits.py	13
 fanout	lib/agentctl/remote.py	14
@@ -262,7 +262,7 @@ fanout	lib/agentctl/runowners.py	11
 fanout	lib/agentctl/runsigs.py	10
 fanout	lib/agentctl/serverclone.py	11
 fanout	lib/agentctl/serversteps.py	26
-fanout	lib/agentctl/slots.py	28
+fanout	lib/agentctl/slots.py	27
 fanout	lib/agentctl/status.py	36
 fanout	lib/agentctl/statusagents.py	12
 fanout	lib/agentctl/statuspage.py	14

@@ -192,9 +192,29 @@ class WiredClock:
         return self._wired().sleep(secs)
 
 
+class WiredRunner:
+    """The case's process runner: whatever runner the test has wired (procrunner.wire_runner: the real one, a
+    FakeRunner), asked at each call, as every ambient `process_runner()` reader asks it."""
+
+    def run(self, argv, **kw):
+        return sys.modules["agentctl.procrunner"].process_runner().run(argv, **kw)
+
+    def popen(self, argv, **kw):
+        return sys.modules["agentctl.procrunner"].process_runner().popen(argv, **kw)
+
+
+class WiredInbox:
+    """The case's inbox writer: inboxentry's inbox_write, looked up at each call, so what a test wired or faked
+    (`A.inbox_write = ...`) takes a context writer's entries as it takes every ambient writer's."""
+
+    def write(self, *args, **kw):
+        return sys.modules["agentctl.inboxentry"].inbox_write(*args, **kw)
+
+
 def context_with(runs):
     """A Context over `runs` (a test's own CI reader, or a fake of it) and the case's wired collaborators."""
-    return sys.modules["agentctl.context"].Context(runs=runs, clock=WiredClock())
+    return sys.modules["agentctl.context"].Context(runs=runs, clock=WiredClock(), runner=WiredRunner(),
+                                                   inbox=WiredInbox())
 
 
 def case_context():

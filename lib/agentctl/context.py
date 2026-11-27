@@ -6,12 +6,17 @@
 from dataclasses import dataclass
 from agentctl.ciruns import CiRuns
 from agentctl.clock import Clock
+from agentctl.procrunner import ProcessRunner
+from agentctl.inboxentry import InboxWriter
 
 
 @dataclass(frozen=True)
 class Context:
     """The collaborators a call tree reaches that are no parameter of their own: runs, the process's one reader of CI
     runs and jobs (what it read is kept for the process: every reader in a tick or a command sees one listing); clock,
-    the process's clock (the one clock.wire_clock wires for the readers no context reaches yet)."""
+    the process's clock, runner, its process runner, and inbox, its inbox writer (the ones clock.wire_clock,
+    procrunner.wire_runner and inboxentry.wire_inbox_writer wire for the readers no context reaches yet)."""
     runs: CiRuns
     clock: Clock
+    runner: ProcessRunner
+    inbox: InboxWriter

@@ -21,7 +21,6 @@ from agentctl.red import RED_CLAIM_MAX, RED_CLAIM_TTL, red_move
 from agentctl.redseen import red_obs_of_units
 from agentctl.redblock import red_run_units
 from agentctl.redopen import red_attach_obs, red_open
-from agentctl.inboxentry import inbox_write
 from agentctl.fixerland import unlanded_commits
 
 
@@ -292,5 +291,5 @@ def red_owner_push(store: Any, o_r: Any, target: Any, note: Any = "", wt: Any = 
         red_move(store, cur, "fix-pending", line, data={"fix": {"status": "owner", "entry": f"owner-push:{branch}",
                                                                 "sha": head, "at": t, "worktree": wt, "cmd": cmd,
                                                                 "note": note, "verify_since": t}})
-    inbox_write("red", line, [line], [], 1, cwd=wt)
+    ctx.inbox.write("red", line, [line], [], 1, cwd=wt)
     return 0, [line, f"BLOCKED ON OWNER: {cmd}"]

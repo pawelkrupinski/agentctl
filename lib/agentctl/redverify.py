@@ -9,7 +9,6 @@ from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.statefile import read_record
 from agentctl.core import err, git, pct, reds_dir, remote
 from agentctl.trailers import trailer_format, trailer_values
-from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_what
 from agentctl.red import red_move
 from agentctl.workflowcron import cron_next, workflow_crons
@@ -122,7 +121,7 @@ def red_main_verify(store: Any, it: Any, repo: Any, o_r: Any, t: Any, *, ctx: Co
     store.update_item("red", it["id"], it["version"], {"main_verify": {"at": t, "main": main, "reach": reach,
                                                                        "verify": line}})
     out = f"{red_what(d)}: main moved since its run ({len(shas)} commit(s), {reach[:10]} reaching its job): {line}"
-    inbox_write("red", out, [out], [], 0)
+    ctx.inbox.write("red", out, [out], [], 0)
     return [out]
 
 
@@ -156,7 +155,7 @@ def red_flake_check(store: Any, it: Any, snap: Any, repo: Any, facts: Any, *, ct
     flake = red_open(store, ob, None, store.clock())
     line = (f"RED FLAKE: {red_what(d)} passed on #{last.get('number')} and no commit between can have fixed it: a flake "
             "-- make it deterministic (never rerun to green); it stays a red until a fix lands")
-    inbox_write("red", line, [line], [d.get("line") or ""], 1)
+    ctx.inbox.write("red", line, [line], [d.get("line") or ""], 1)
     return [line] + ([f"opened flake {flake['id']}"] if flake else [])
 
 

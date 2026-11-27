@@ -103,7 +103,7 @@ class TimeoutAndClockTest(unittest.TestCase):
                 A.main(["ci-why", "--help"], clock=FakeClock(harness._REAL_TIME["time"]() - 1000))  # wires, then argparse exits
         res = self.outcome(body)
         self.assertEqual((res.failures, res.errors), ([], []))
-        stamped = A._inbox_times[0]()
+        stamped = A._process_inbox[0].now()
         self.assertLess(abs(stamped - harness.default_clock().time()), 60, "the inbox still reads the finished test's clock")
 
     def test_a_thread_left_running_fails_the_test_that_started_it(self):

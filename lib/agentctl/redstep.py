@@ -9,7 +9,6 @@ from agentctl.timefmt import iso_at, ts
 from agentctl.core import attempt, fmt_age
 from agentctl.repos import red_repo_of
 from agentctl.redretired import red_retired
-from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import lease_is_live, red_lease, red_what
 from agentctl.leases import block_lease, lease_meta, red_block_of
 from agentctl.redfixes import red_fix_of, red_run_on_way
@@ -102,7 +101,7 @@ class RedStep:
         if not proof:
             return None
         line = f"FIX OK: {red_what(d)}: {proof}"
-        inbox_write("red", line, [line], [], 0)
+        self.ctx.inbox.write("red", line, [line], [], 0)
         self.store.close_offer(f"red:{self.it['id']}", "verified")
         red_stop_holder(self.store, self.key, "its callers' runs prove it fixed", "red verified")
         red_move(self.store, self.it, "verified", line,
