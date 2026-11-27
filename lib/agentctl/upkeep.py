@@ -10,7 +10,7 @@ import os
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, Callable
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME, _bounded, err, reds_dir, run_bounded, state_root, tilde
 from agentctl.timefmt import ts
@@ -37,12 +37,15 @@ def probe_disk_free(a):
     return free >= floor, f"{free:.1f} GB free on {a.get('path') or HOME}"
 
 
-def probe_run_queue(a, load_averages, cores):
+def probe_run_queue(a: dict[str, Any], load_averages: Callable[[], Any], cores: Callable[[], int]) -> tuple[bool | None, str]:
     """The run queue (5-min load) is under `factor` x the cores: false while it is over it."""
     queues, n = load_averages(), cores()
     if not queues:
         return None, "the load average is unreadable"
     return queues[1] <= float(a["factor"]) * n, f"run queue {queues[0]:.0f} (5-min {queues[1]:.0f}) on {n} cores"
+
+
+run_queue_check = partial(probe_run_queue, load_averages=run_queues, cores=machine_cores)  # the registry's check of the kind
 
 
 def close_finished_fixer_trees(st):

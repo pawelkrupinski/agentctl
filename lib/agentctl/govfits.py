@@ -134,8 +134,9 @@ def _cpu_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: Any
     """The cores: PAUSED while starved (gov_capacity: resumes by itself, no one acts), else held while the cores it asks
     for would pass the load factor."""
     cap = gov_capacity(tickets, m)
-    if cap["state"] == "starved" and runq_oversubscribed(*(cap.get("queues") or (None, None)), cap["cores"]):
-        return False, (f"starved: run queue {cap['queues'][0]:.0f} (5-min {cap['queues'][1]:.0f}) on {cap['cores']} cores, "
+    queues = cap.get("queues") or (None, None)
+    if cap["state"] == "starved" and runq_oversubscribed(queues[0], queues[1], cap["cores"]):
+        return False, (f"starved: run queue {queues[0]:.0f} (5-min {queues[1]:.0f}) on {cap['cores']} cores, "
                        f"{cap['busy']:.1f} busy (pauses over {RUNQ_STARVED:g}x sustained)"), False
     if cap["state"] == "starved":
         return False, (f"starved: {cap['busy']:.1f} of {cap['cores']} cores busy (pauses over "

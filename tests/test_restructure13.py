@@ -229,6 +229,7 @@ class PressureReadingTest(unittest.TestCase):
         case.fake("gov_busy_cores", lambda rng: rng.choice([0.5, 3, 7.25]))
         case.fake("machine_cores", lambda rng: rng.choice([8, 18]))
         case.fake("run_queue", lambda rng, passed=None: rng.choice([None, 2, 9]))
+        case.fake("run_queues", lambda rng: rng.choice([None, (2, 3), (9, 40)]))
         case.fake("machine_fixed", lambda rng: maybe(rng, {"free_pct": rng.choice([5, 60, None]), "level": rng.choice([1, 4, None]),
                                                            "swap_used_mb": rng.choice([0, 2048.5, None])}, 0.5))
         case.fake("read_meminfo", lambda rng: rng.choice([{}, {"MemTotal": 1000, "MemAvailable": 333}, {"MemTotal": 1000, "SwapTotal": 4096, "SwapFree": 1024},

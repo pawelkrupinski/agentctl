@@ -54,11 +54,11 @@ mypy-errors	gating	29
 mypy-errors	generated	21
 mypy-errors	generatedregen	14
 mypy-errors	ghapp	34
-mypy-errors	gov	24
+mypy-errors	gov	22
 mypy-errors	govbudget	12
-mypy-errors	govcmd	28
+mypy-errors	govcmd	27
 mypy-errors	govfits	11
-mypy-errors	govroute	9
+mypy-errors	govroute	8
 mypy-errors	govusage	6
 mypy-errors	hostsleep	6
 mypy-errors	identitychange	8

@@ -71,7 +71,7 @@ GOV_EVICT_IDLE = 60     # a kept server unused this long (seconds) may be evicte
 GOV_REPORT = 600
 
 
-def gov_machine():
+def gov_machine() -> dict[str, Any]:
     """{free, pressure, load1, cores, queues (1- and 5-min load), laptop}: live memory and CPU, and why the laptop is under pressure (laptop_pressure
     without the load: each class has its own) ($AGENTCTL_GOV_PRESSURE_PROBE / _LOAD_PROBE: the tests')."""
     load1, _cpu, pressure, _swap = machine_sample()

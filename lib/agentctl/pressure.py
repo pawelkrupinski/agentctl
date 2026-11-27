@@ -167,7 +167,7 @@ def pressure_summary(r=None):
     swap = "swap ?" if r.get("swap_mb") is None else (
         f"swap {r['swap_mb'] / 1024:.1f} GB ({round((r.get('swap_growth_mb') or 0) / 1024, 1) + 0.0:+.1f} GB in "
         f"{(r.get('swap_span') or 0) / 60:.0f} min)")
-    queue = "" if r.get("runq") is None else f", load {r['runq']:.0f}/{r['cores']} (run queue, 5-min {q(r.get('runq5'), '{:.0f}')})"
+    queue = "" if r.get("runq") is None else f", load {r['runq']:.0f}/{r['cores']} (run queue, 5-min {'?' if r.get('runq5') is None else format(r['runq5'], '.0f')})"
     return f"memory {q(r.get('free_pct'))}% free, level {lvl}, busy {q(r.get('load1'), '{:.1f}')}/{r['cores']} cores{queue}, {swap}"
 
 
