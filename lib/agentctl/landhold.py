@@ -129,7 +129,7 @@ def expire_land_hold(st: Any, it: dict[str, Any]) -> None:
         pass
 
 
-def hold_text(h: Any, t: float | None = None) -> str:
+def hold_text(h: Any) -> str:
     """`HELD until HH:MM (by, why)` for a hold row ({deadline, data} or the snapshot's {until, by, why})."""
     until = h.get("until") or h.get("deadline")
     d = h.get("data") or h

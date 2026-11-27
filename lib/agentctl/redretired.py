@@ -90,6 +90,7 @@ def retire_jobs(o_r, rid, *, ctx):
 
 def retire_newest(runs: CiRuns, o_r: str, path: str) -> dict[str, Any] | None:
     """The newest run on main of the workflow file (its created_at and head_sha), or None: read through `runs`."""
+    # listing: the newest run of the file on main; none listed (a file not on main yet) is no newest, the red run itself stands
     listed = runs.main_runs(o_r, os.path.basename(path), 1, fresh_for=600)
     return {"created_at": listed[0].get("createdAt"), "head_sha": listed[0].get("headSha")} if listed else None
 

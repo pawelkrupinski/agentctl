@@ -33,7 +33,7 @@ GETTERS = {
 # locator -> (modules, functions) reading it ambiently: frozen ceilings, which only fall (2026-11-27: the Context fold,
 # docs/design/contexts.md -- every reader holding a `ctx` reads its field instead)
 READER_CEILINGS = {
-    "clock.wire_clock": (88, 128),
+    "clock.wire_clock": (88, 127),
     "procrunner.wire_runner": (40, 55),
     "inboxentry.wire_inbox_writer": (32, 39),
 }
