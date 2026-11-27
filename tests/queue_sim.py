@@ -1,6 +1,6 @@
 """THE QUEUE SIMULATOR (the owner, 2026-11-18): a deterministic, seeded simulation of the land queue over the REAL queue,
 batch and push code -- tick_changes, tick_batch / batch_step, check_entry / _check_entry, check_batch and bisect,
-push_change / _push_change, push_batch_item, backlog_reconcile, project_changes, close_landed_changes, queue_change,
+push_change / _push_change, push_batch_item, backlog_reconcile, close_landed_changes, queue_change,
 the store with its items, leases and events -- with only the world around them faked, at the seams the other tests
 fake too:
 
@@ -35,7 +35,7 @@ INVARIANT_KINDS = {
     "I3": "a red fix is never behind a batch or a non-red change (its own tree, started and pushed when it may go)",
     "I4": "a batch reaches landed, bisecting or held within its bound",
     "I5": "the oldest change lands within a bound when nothing fails",
-    "I6": "no change lost (entries and items agree, LANDED is on main, every change decided after the drain)",
+    "I6": "no change lost (every item one of the queue's, LANDED is on main, every change decided after the drain)",
     "I7": "exactly one agentctl.landing record per decided change",
     "I8": "a change that no longer applies was told at queue time and never checked meanwhile",
     "I9": "no full recheck for a file overlap with a change open when it was queued",
@@ -54,8 +54,8 @@ INVARIANT_KINDS = {
     "IO": "an owner-only escalation kind never dispatches",
     "IG": "every dispatched escalation ends cleared or handed to the owner within its budget",
     "IL": "a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer",
-    "IS": "a change reads one state whichever reader asks: its entry's status is its item's state after every tick",
-    "IC": "the item carries the record: an open change's item holds its entry but its status after every tick",
+    "IS": "a change reads one state whichever reader asks: the queue's view says its item's state, no record a status of its own",
+    "IC": "the item carries the record: an open change's item holds its whole record (id, seq, worktree, head, commits)",
 }
 MAIN_FAILS_LINE = "[info] - main already fails *** FAILED ***"  # the test the open gate red's run fails (main_fails)
 VIOLATIONS_MAX = 50  # lines one scenario keeps in the gate's count mode
@@ -814,7 +814,7 @@ class Sim:
              "spawn_executor", "spawn_batch_executor", "precheck_hook", "verify_areas_supported", "remote_matches",
              "remote_checks_supported", "slug", "cancel_entry_remote", "stats_post", "check_runs_of", "gate_runs_pass",
              "clone_shared", "spawn_waiting_processor", "offer_token", "tool_env", "stats_echo", "pair_conflict", "pair_resolvable",
-             "own_commits_conflict", "recheck_reason", "waiting_entries", "process_start", "code_version", "dt", "own_diff_changed")
+             "own_commits_conflict", "recheck_reason", "process_start", "code_version", "dt", "own_diff_changed")
 
     def install(self):
         import contextlib
@@ -896,33 +896,6 @@ class Sim:
         A.own_commits_conflict = self.own_commits_conflict
         A.process_start = lambda pid: ""  # Owned's `ps` per record: no process of the simulation is one
         A.code_version = lambda path=None: "sim"
-        parsed = {}
-
-        def waiting_entries(d, open_only=True):
-            """waiting.py's, each entry file parsed once per version on disk (its mtime and size): most of a seed's time
-            was these reads."""
-            out = []
-            with os.scandir(os.path.join(d, "entries")) as it:
-                for de in it:
-                    if not de.name.endswith(".json"):
-                        continue
-                    stv = de.stat()
-                    key = (stv.st_mtime_ns, stv.st_size, stv.st_ino)
-                    hit = parsed.get(de.path)
-                    if not hit or hit[0] != key:
-                        try:
-                            with open(de.path) as f:
-                                hit = parsed[de.path] = (key, f.read())
-                        except OSError:
-                            continue
-                    try:
-                        e = json.loads(hit[1])
-                    except ValueError:
-                        continue
-                    if not open_only or e.get("status") == "waiting":
-                        out.append(e)
-            return sorted(out, key=lambda e: e["seq"])
-        A.waiting_entries = waiting_entries
         real_recheck = self.saved["recheck_reason"]
 
         def recheck_reason(tree, base, moved, tip, change_paths, full_tip=None):
@@ -1143,11 +1116,16 @@ class Sim:
             A.cmd_waiting(argparse.Namespace(wcmd="cancel", repo=self.repo, entry=ch.eid, renamed=True, hold_for=None,
                                              hold_why=None), *on_clock(self.sim_clock))  # a cancel never waits
 
+    def records(self):
+        """The queue's changes, as its readers see them (waitingdir.ChangeRecords: each change item's record, its state
+        as its status): since docs/design/one-change-model.md's step 6 the only record of a change."""
+        return A.ChangeRecords(self.store, self.d).every()
+
     def entry_by_id(self, eid):
-        return A.read_record(os.path.join(self.d, "entries", f"{eid}.json"))
+        return A.ChangeRecords(self.store, self.d).get(eid)
 
     def entry(self, ch):
-        return A.read_record(os.path.join(self.d, "entries", f"{ch.eid}.json")) if ch.eid else None
+        return self.entry_by_id(ch.eid) if ch.eid else None
 
     # ---------------------------------------------------------------- the forge
     def open_red(self, item=False, older_known=True):
@@ -1348,7 +1326,7 @@ class Sim:
         if self.tick >= self.drain_from and self.reds and self.red_clears_at is None:
             self.red_clears_at = self.tick + 1  # the drain: the gate goes green
         if self.tick >= self.drain_from:  # and every red outside it no open fix is on its way for clears (a later run)
-            named = {str(f) for e in A.waiting_entries(self.d, open_only=False) if not A.entry_final(e.get("status"))
+            named = {str(f) for e in self.records() if not A.entry_final(e.get("status"))
                      for f in e.get("fixes") or []}
             for name in set(self.outside) - named:
                 self.outside_clears.setdefault(name, self.tick + 1)
@@ -1399,11 +1377,9 @@ class Sim:
         for t in list(self.tasks):
             if not t.done and t.due is not None and t.due <= self.tick:
                 t.step()
-        before = {e["id"]: dict(e) for e in A.waiting_entries(self.d, open_only=False) if e.get("status") in A.QUEUED}
+        before = {e["id"]: dict(e) for e in self.records() if e.get("status") in A.QUEUED}
         self.open_before = set(self.reds) | set(self.outside)
-        self.known_entries = {e["id"] for e in A.waiting_entries(self.d, open_only=False)}
         reds = set(self.reds)
-        A.project_changes(self.d, self.store)
         A.close_landed_changes(self.repo, self.sim_clock, self.store, self.d)
         for x in A.tick_changes(self.repo, self.d, *on_clock(self.sim_clock)):
             A.wlog(self.d, f"tick {self.tick}: {x}")
@@ -1465,7 +1441,7 @@ class Sim:
         return self
 
     def quiet(self):
-        return not self.reds and not self.outside and not [e for e in A.waiting_entries(self.d, open_only=False)
+        return not self.reds and not self.outside and not [e for e in self.records()
                                       if not A.entry_final(e.get("status"))] and not self.arrivals \
             and not (self.escalations and self.escalations.open())
 
@@ -1487,7 +1463,7 @@ class Sim:
         # 2. NEVER TWO PUSHES OF ONE CHANGE: forge_push (a patch twice on main)
         # 3. A RED FIX IS NEVER BEHIND A BATCH OR A NON-RED CHANGE -- (a) a fix of ANY open red, the gate's or one
         # outside it (08010c): its KIND, as the queue classifies it (changekind.py)
-        entries = {e["id"]: e for e in A.waiting_entries(self.d, open_only=False)}
+        entries = {e["id"]: e for e in self.records()}
         redfix_holder = A.lease_live(f"slot/check/{os.path.basename(self.d.rstrip('/'))}/{A.RED_FIX_TREE}", self.store)
         # the simulation's own truth, never the classifier under test: its Fixes-Red names a red open before and after
         # this tick (the gate's episode, or one outside the gate)
@@ -1560,27 +1536,18 @@ class Sim:
                     self.violate("I5", f"change {ch.eid} ({ch.kind}) unlanded {self.tick - ch.arrived} ticks after it arrived "
                                  f"with nothing failing (bound {bound})")
                     break
-        # 6. NO CHANGE LOST: every entry has its item, every item its entry, and they agree on decided states
+        # 6. NO CHANGE LOST: every change item is one of the queue's (carries its record): none stranded
+        for it in items:
+            if it["id"] not in entries:
+                self.violate("I6", f"item {it['id']} ({it['state']}) has no record in the queue: stranded")
+        # S. ONE STATE PER CHANGE (docs/design/one-change-model.md): the item's state is the change's only state -- no
+        # record carries a status of its own, and the queue's view of every change says its item's state
         by_id = {it["id"]: it for it in items}
         for eid, e in entries.items():
             it = by_id.get(eid)
-            if it is None:
-                if eid in self.known_entries:  # one written this tick gets its item at the next projection
-                    self.violate("I6", f"entry {eid} ({e.get('status')}) has no store item")
-                continue
-            if A.entry_final(e.get("status")) and not A.machine_state("change", it["state"]).terminal:
-                self.violate("I6", f"entry {eid} is {e['status']} but its item is {it['state']}")
-            if A.machine_state("change", it["state"]).terminal and not A.entry_final(e.get("status")) \
-                    and A.change_state_of(e.get("status")) != it["state"]:
-                self.violate("I6", f"item {eid} is {it['state']} but its entry is {e.get('status')}")
-        for it in items:
-            if it["id"] not in entries:
-                self.violate("I6", f"item {it['id']} ({it['state']}) has no queue entry: stranded")
-        # S. ONE STATE PER CHANGE (docs/design/one-change-model.md): the entry and the item a change has both say the same
-        for eid, e in entries.items():
-            it = by_id.get(eid)
-            if it is not None and A.change_state_of(e.get("status")) != it["state"]:
-                self.violate("IS", f"change {eid}: its entry says {e.get('status')}, its item {it['state']}")
+            if it is None or "status" in (it.get("data") or {}).get("record", {}) or e.get("status") != it["state"]:
+                self.violate("IS", f"change {eid}: the queue reads {e.get('status')}, its item "
+                                   f"{it['state'] if it else 'none'}")
         for ch in self.changes:
             e = self.entry(ch)
             if e and e.get("status") == "landed":
@@ -1600,16 +1567,16 @@ class Sim:
         return bool(ch) and all(self.patches[p].fixes & known for p in ch.patches)
 
     def check_records(self):
-        """C. THE ITEM CARRIES THE RECORD (docs/design/one-change-model.md, step 3): after every tick an open change's
-        item holds its entry, every key but its status, under waitingdir.RECORD_KEY."""
-        st = self.store
-        for e in A.waiting_entries(self.d, open_only=False):
-            eid = e["id"]
-            if A.entry_final(e.get("status")):
+        """C. THE ITEM CARRIES THE RECORD (docs/design/one-change-model.md): after every tick an open change's item
+        carries its whole record -- its id, its number, where it is from and what it lands (worktree, head, commits) --
+        under waitingdir.RECORD_KEY."""
+        for it in self.store.items("change"):
+            rec = (it.get("data") or {}).get("record")
+            if A.machine_state("change", it["state"]).terminal:
                 continue
-            it = st.item("change", eid)
-            if it is not None and (it.get("data") or {}).get("record") != {k: v for k, v in e.items() if k != "status"}:
-                self.violate("IC", f"change {eid} ({e.get('status')}): its item's record is not its entry")
+            missing = [k for k in ("id", "seq", "worktree", "head", "commits") if not (rec or {}).get(k)]
+            if missing:
+                self.violate("IC", f"change {it['id']} ({it['state']}): its record lacks {missing}")
 
     def check_hold_invariants(self, st, entries):
         """(b) EVERY CHANGE PAST ITS DEADLINE HAS A RECORDED HOLD, (c) NO CHANGE IS SILENT: every held change's
