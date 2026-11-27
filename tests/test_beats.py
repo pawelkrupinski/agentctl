@@ -18,7 +18,8 @@ class BeatAgeTest(unittest.TestCase):
             warnings.simplefilter("always")
             A.beat_age("beats-test")
             gc.collect()
-        self.assertEqual([w for w in seen if issubclass(w.category, ResourceWarning)], [])
+        # the beat's own file: gc.collect() also finalizes what ANOTHER test of this worker left open (a socket, 2026-11-28)
+        self.assertEqual([w for w in seen if issubclass(w.category, ResourceWarning) and "beats-test" in str(w.message)], [])
 
 
 if __name__ == "__main__":
