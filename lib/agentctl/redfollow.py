@@ -2,11 +2,11 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-from agentctl.core import remote
-from agentctl.onmain import landed_state
-from agentctl.fixchange import CHANGE_ENDED, red_change
-from agentctl.queuesubmit import entry_id_age
+from agentctl.ids import entry_id_age
 from agentctl.redknobs import knob_red_fix_requeue_grace
+from agentctl.core import remote
+from agentctl.fixchange import CHANGE_ENDED, red_change
+from agentctl.onmain import landed_state
 
 
 # A FOLLOWED FIX IS A LATER CHANGE (2026-11-19, Alert backtest #4, 5254bffda9d2): its fix ...-8b34c0 was cancelled and

@@ -116,7 +116,7 @@ mypy-errors	queuefailure	4
 mypy-errors	queuepush	42
 mypy-errors	queuerecheck	43
 mypy-errors	queueslots	15
-mypy-errors	queuesubmit	29
+mypy-errors	queuesubmit	27
 mypy-errors	queueuntil	10
 mypy-errors	recordingpins	30
 mypy-errors	recovery	25
@@ -132,7 +132,7 @@ mypy-errors	redearly	8
 mypy-errors	redfixcheck	18
 mypy-errors	redfixes	25
 mypy-errors	redfixread	8
-mypy-errors	redfollow	4
+mypy-errors	redfollow	3
 mypy-errors	redhold	27
 mypy-errors	redland	14
 mypy-errors	redlease	25

@@ -31,3 +31,9 @@ def entry_stamp_epoch(eid: str) -> float | None:
         return float(calendar.timegm(time.strptime(eid[:ENTRY_STAMP_LEN], STAMP_FORMATS["entry"])))
     except (ValueError, OverflowError):
         return None
+
+
+def entry_id_age(eid: str, t: float) -> float | None:
+    """Seconds since the entry id's YYYYMMDD-HHMMSS stamp (UTC), or None when the id carries none."""
+    at = entry_stamp_epoch(eid)
+    return None if at is None else t - at

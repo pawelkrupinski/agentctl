@@ -1,10 +1,8 @@
 # agentctl, part `queuesubmit`: submitting a change: by ref, without the vault, the queued line, the fast precheck, a red fix's land.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.ids import entry_stamp_epoch
 from agentctl.clock import epoch_now
 import os
-import re
 import subprocess
 import sys
 import time
@@ -21,6 +19,7 @@ from agentctl.waiting import tail_of
 from agentctl.statemachines import MACHINES, StaleVersion, machine_state
 from agentctl.queueknobs import (
     knob_fixer_land_wait, knob_land_ref_sweep, knob_land_ref_unknown_age, knob_note_precheck_wait)
+from agentctl.ids import entry_id_age
 
 
 _last_ref_sweep = [0.0]
@@ -45,12 +44,6 @@ def push_failure_why(text: object) -> str:
     else:
         whose = "not the vault's: no push reads it"
     return f"git said `{said[:240]}` -- {whose}"
-
-
-def entry_id_age(eid, t):
-    """Seconds since the entry id's YYYYMMDD-HHMMSS stamp (UTC), or None when the id carries none."""
-    at = entry_stamp_epoch(eid)
-    return None if at is None else t - at
 
 
 def _ref_sweep_due(t: float) -> bool:
