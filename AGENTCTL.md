@@ -2140,6 +2140,23 @@ hook runs), verifies with `merge-base --is-ancestor` or `git cherry`, and prints
 
 Use it for every push to main. Don't use it for `measure/` branches: `identity-measure` pushes those itself.
 
+**CRASH_LOOP: a fixer crash-looping at launch is an escalation (2026-11-27, the transition analysis' item 6).** The
+server's tick (`crash loops`, crashloop.py) reads the fixer LAUNCH RECORDS -- a red's history (each dispatched lease's
+start, `started`, and end) and an escalation's tries (`escalation.tries` on its condition) -- and a subject whose newest
+`$AGENTCTL_CRASH_LOOP_LAUNCHES` (3) launches each died within `$AGENTCTL_CRASH_LOOP_QUICK` (120 s) of starting with no
+result, of ONE cause (redcrash.py `launch_cause`), opens ONE condition `CRASH_LOOP` (key `crash-loop-red-<id>` /
+`crash-loop-condition-<id>`), its text the cause, its `evidence` each launch's end, lifetime, log and last words.
+`escalationtable` routes it: an owner-only cause (the vault, Touch ID, a credential: `OWNER_SIGNALS`) is the owner's --
+the condition's one inbox entry is his ask --, any other goes to an Opus agent whose brief carries the evidence and the
+history. WHILE IT IS OPEN THAT FIXER IS NOT LAUNCHED AGAIN: both dispatchers ask `crash_loop_hold` first (the offer
+says `held: its fixer crash-loops at launch (condition ...)`). Its probe (`fixer_crash_loop`) closes it when the subject
+clears (a red decided, an escalation closed or handed to the owner), a launch lives past 120 s, agentctl's code changed
+since it opened (a fix deployed) or the red was offered again after it (its block lifted) -- each letting ONE launch
+through: one dying the same way opens it again at once (the meta mark `crash_loop:<subject>` holds the newest launch
+it opened for), so a loop costs one launch per fix or answer, never a storm. A CRASH_LOOP condition's own fixer is no
+subject: its two tries end at the owner. The red ladder's own breaker (e01f564: the red's harness or vault block) is
+unchanged beside it. The relaunch hold is agent-proposed (it holds fixer launches, no change): the owner's to confirm.
+
 #### the queue simulator: the queue's invariants under random load (the owner, 2026-11-18)
 
 `tests/queue_sim.py` simulates the land queue, deterministically per seed, over the REAL queue, batch and push code

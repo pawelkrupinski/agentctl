@@ -13,7 +13,7 @@
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
 
 TO_AGENT, TO_OWNER = "agent", "owner-only"
 ESCALATION_FIXERS = 2           # escalation fixers alive at once, every kind together (the red fixers' cap is apart)
@@ -101,11 +101,34 @@ DISPATCH_TABLE: dict[str, EscalationRoute] = {
     "CLONE": agent_route("a clone on ci-runner is unhealthy: find why its heal does not repair it"),
     "UNKNOWN": agent_route("the reconciler cannot read the gate: find why the read fails and fix it", "opus",
                            owner_when=r"token unavailable|NO READ ACCESS"),
+    "CRASH_LOOP": agent_route("a fixer crash-loops at launch: every launch died within seconds of starting of one cause "
+                              "(the evidence below: each launch's end and log). Find why the launch dies -- the wrapper, "
+                              "`claude --bg`, its environment, the worktree -- and fix that harness code (an owner-only "
+                              "cause, the vault or a credential, is never yours: say BLOCKED ON OWNER)", "opus"),
     "NETWORK": owner_route("irreversible", "the laptop's network or the tunnel is out: an outage no agent can "
                                            "reach past"),
     "UNLANDED_ORPHAN": owner_route("policy-no-rule", "an orphaned worktree whose own orphan fixer already ran: "
                                                      "keeping or dropping its commits is the owner's"),
 }
+
+# THE FIXER CRASH LOOP (crashloop.py): its condition's kind and key per subject (`red:<id>`, `condition:<id>`), and the
+# hold both dispatchers ask before they launch that subject's fixer again -- here, below both, so it is ONE rule
+CRASH_LOOP_KIND = "CRASH_LOOP"
+
+
+def crash_loop_key(subject: str) -> str:
+    return "crash-loop-" + re.sub(r"[^\w.-]+", "-", subject)
+
+
+def crash_loop_hold(open_conditions: list[dict[str, Any]], subject: str) -> Optional[str]:
+    """Why the subject's fixer is not launched now -- its CRASH_LOOP condition (an item) is open -- or None."""
+    key = crash_loop_key(subject)
+    for it in open_conditions:
+        d = it.get("data") or {}
+        if d.get("kind") == CRASH_LOOP_KIND and d.get("key") == key and it.get("state", "open") == "open":
+            return f"held: its fixer crash-loops at launch (condition {it['id']}): {str(d.get('text'))[:160]}"
+    return None
+
 
 INVARIANT_ID = re.compile(r"INVARIANT (W\w+)")
 

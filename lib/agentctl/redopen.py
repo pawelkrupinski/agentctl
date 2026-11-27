@@ -322,7 +322,8 @@ def red_history(row, t):
         notes = "\n".join(tail_lines(log, 4))
     return {"at": iso_at(t), "holder": row.get("holder") if row else None, "outcome": m.get("outcome") or "lease expired",
             "notes": notes[:600], "session": m.get("session"),
-            "worktree": wt, "log": log, "dispatched": m.get("kind") in ("fixer", "owned")}
+            "worktree": wt, "log": log, "dispatched": m.get("kind") in ("fixer", "owned"),
+            "started": row.get("acquired_at") if row else None}  # its lease's start: how long it lived (crashloop.py)
 
 
 def _callable_only_outside_red(d: dict[str, Any], snap: Any, repo: Any) -> bool:

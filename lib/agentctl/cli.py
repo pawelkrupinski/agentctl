@@ -26,6 +26,8 @@ from agentctl.serverclone import probe_clone_health
 from agentctl.owned import cmd_wait, restart_gate
 from agentctl.maint import cmd_orphans
 from agentctl.queuestall import probe_queue_moving
+from agentctl.crashloop import probe_fixer_crash_loop
+from agentctl.selfcode import code_version
 from agentctl.store import CurrentStore
 from agentctl.timelinecmd import cmd_analyze, cmd_history
 from agentctl.ciruns import CiRuns
@@ -82,7 +84,8 @@ def condition_registry(clock: Clock, store: Any, ctx: Context) -> ConditionRegis
          partial(probe_orphan_landed, store=store), partial(probe_invariant, clock=clock, st=store, ctx=ctx),
          partial(probe_change_source, store=store), partial(probe_push_credential, st=store),
          partial(probe_infra_requeue, st=store), partial(probe_red_newer_verdict, store=store),
-         partial(probe_queue_moving, store=store, now=clock.time)],
+         partial(probe_queue_moving, store=store, now=clock.time),
+         partial(probe_fixer_crash_loop, store=store, code=code_version)],
         {"clear_hold": recover_clear_hold, "tunnel_reset": recover_tunnel_reset, "clear_flag": recover_clear_flag})
 
 

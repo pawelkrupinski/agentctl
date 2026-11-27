@@ -24,7 +24,7 @@
 
 from typing import Any, Callable, Optional, Protocol
 from agentctl.escalationtable import (
-    ESCALATION_FIXERS, RETRY_BACKOFF, TO_AGENT, EscalationRoute, escalation_kind, escalation_route)
+    ESCALATION_FIXERS, RETRY_BACKOFF, TO_AGENT, EscalationRoute, crash_loop_hold, escalation_kind, escalation_route)
 from agentctl.statefile import json_object
 from agentctl.statemachines import StaleVersion
 from agentctl.filelog import file_event, note_events
@@ -299,7 +299,7 @@ def dispatch_offers(store: Any, t: float, launcher: EscalationLauncher, conditio
         it = conditions.get(off["item"].split(":", 1)[1])
         if it is None:
             continue
-        why = offer_waits(store, t, launcher, off, escalation_route(it["data"]), blocker)
+        why = offer_waits(store, t, launcher, off, escalation_route(it["data"]), blocker, list(conditions.values()))
         if why:
             if why != off.get("reason"):
                 store.offer_reason(off["id"], why)
@@ -309,14 +309,17 @@ def dispatch_offers(store: Any, t: float, launcher: EscalationLauncher, conditio
 
 
 def offer_waits(store: Any, t: float, launcher: EscalationLauncher, off: dict[str, Any], route: EscalationRoute,
-                blocker: Optional[str]) -> Optional[str]:
-    """Why the offer cannot be taken now -- dispatch blocked, its backoff, its kind's fixer, the cap, its repo -- or
-    None."""
+                blocker: Optional[str], conditions: list[dict[str, Any]]) -> Optional[str]:
+    """Why the offer cannot be taken now -- dispatch blocked, its fixer crash-looping (its CRASH_LOOP condition among
+    the open `conditions`), its backoff, its kind's fixer, the cap, its repo -- or None."""
     pic, kind = off.get("picture") or {}, off["tier"]
     lease = store.get(LEASE_PREFIX + kind)
     alive = len(live_fixers(store, t))
     if blocker:
         return blocker
+    crash_loop = crash_loop_hold(conditions, off["item"])
+    if crash_loop:
+        return crash_loop
     if float(pic.get("next_after") or 0) > t:
         return f"try {pic.get('try')} backs off for {int(float(pic['next_after']) - t) // 60 + 1} min"
     if fixer_live(lease, t):
@@ -395,6 +398,7 @@ def escalation_brief(store: Any, route: EscalationRoute, kind: str, it: dict[str
         f"ITS PROBE: {(d.get('probe') or {}).get('kind')} {(d.get('probe') or {}).get('args')}; last result: "
         f"{d.get('last_result')}",
         "EARLIER TRIES:\n" + (tried or "  none"),
+        *(["ITS EVIDENCE:\n" + "\n".join(f"  {x}" for x in d["evidence"])] if d.get("evidence") else []),
         f"ITS HISTORY (`~/bin/agentctl history {cid}` for the whole timeline):\n"
         + ("\n".join(condition_history(store, cid)) or "  none"),
         f"YOUR TASK: {route.task} Find the root cause, fix it with its test, land it, and check the condition "

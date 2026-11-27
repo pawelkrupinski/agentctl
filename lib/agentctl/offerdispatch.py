@@ -14,6 +14,7 @@ from agentctl.redseen import KIND_ORDER
 from agentctl.redopen import red_family_tell
 from agentctl.redcrash import red_queue_family
 from agentctl.blame import blame_waiting
+from agentctl.escalationtable import crash_loop_hold
 from agentctl.ownerleases import family_owned, owner_hand, owner_holder
 from agentctl.owner import OWNER_MAX, owner_spawn, owner_still_ending
 from agentctl.reddispatch import (
@@ -126,10 +127,13 @@ def join_family_fixer(store: Any, off: Any, pic: Any, fam: str, holder: Any, t: 
 
 
 def offer_waits_why(store: Any, t: float, off: Any, pic: Any, item: Any, blocker: Any) -> Any:
-    """Why the offer cannot be taken now -- offered to its author, its culprit's blame, the backoff, dispatch blocked, the
-    cap -- or None when a fixer may start."""
+    """Why the offer cannot be taken now -- its fixer crash-looping, offered to its author, its culprit's blame, the
+    backoff, dispatch blocked, the cap -- or None when a fixer may start."""
     after = float(item["data"].get("dispatch_after") or 0)
     cap_why = offer_capacity_why(store, t, off, pic)
+    crash_loop = crash_loop_hold(store.items("condition", ["open"]), off["item"])
+    if crash_loop:  # ITS FIXER CRASH-LOOPS AT LAUNCH (crashloop.py): not launched again while its condition is open
+        return crash_loop
     if off["tier"] == "author":
         return f"offered to its author ({tilde(str((pic.get('author') or {}).get('worktree') or '?'))})"
     if off["tier"] == "blame":
