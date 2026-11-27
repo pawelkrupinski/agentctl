@@ -19,7 +19,10 @@ mypy-errors	blamerecords	17
 mypy-errors	branches	66
 mypy-errors	buildview	16
 mypy-errors	changekind	19
+mypy-errors	changelap	2
+mypy-errors	changerows	1
 mypy-errors	changesubmit	12
+mypy-errors	checkround	6
 mypy-errors	checkslot	24
 mypy-errors	cireport	37
 mypy-errors	cistate	1
@@ -66,6 +69,7 @@ mypy-errors	joblog	41
 mypy-errors	jvmreap	7
 mypy-errors	land	24
 mypy-errors	landdryrun	31
+mypy-errors	landedchange	10
 mypy-errors	lander	32
 mypy-errors	landhold	4
 mypy-errors	landqueue	5
@@ -103,7 +107,6 @@ mypy-errors	queue	23
 mypy-errors	queuebatch	38
 mypy-errors	queuebatchsel	19
 mypy-errors	queuecheck	28
-mypy-errors	queueclose	19
 mypy-errors	queuediff	29
 mypy-errors	queueenter	72
 mypy-errors	queuefailure	4

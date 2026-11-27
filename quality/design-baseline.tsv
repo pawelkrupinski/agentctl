@@ -142,6 +142,7 @@ state	lib/agentctl/hostsleep.py	1
 state	lib/agentctl/identitychange.py	1
 state	lib/agentctl/inboxentry.py	2
 state	lib/agentctl/land.py	1
+state	lib/agentctl/landedchange.py	1
 state	lib/agentctl/lander.py	1
 state	lib/agentctl/laptoprole.py	1
 state	lib/agentctl/leases.py	1
@@ -155,7 +156,6 @@ state	lib/agentctl/policy.py	1
 state	lib/agentctl/processor.py	1
 state	lib/agentctl/procrunner.py	1
 state	lib/agentctl/queuebatch.py	2
-state	lib/agentctl/queueclose.py	1
 state	lib/agentctl/queueenter.py	1
 state	lib/agentctl/queuerecheck.py	1
 state	lib/agentctl/queuesubmit.py	1
@@ -193,6 +193,7 @@ fanout	lib/agentctl/blame.py	13
 fanout	lib/agentctl/blamerecords.py	16
 fanout	lib/agentctl/branches.py	18
 fanout	lib/agentctl/changesubmit.py	11
+fanout	lib/agentctl/checkround.py	14
 fanout	lib/agentctl/checkslot.py	11
 fanout	lib/agentctl/cireport.py	24
 fanout	lib/agentctl/cleanup.py	14
@@ -208,11 +209,12 @@ fanout	lib/agentctl/gov.py	20
 fanout	lib/agentctl/govcmd.py	11
 fanout	lib/agentctl/inboxcli.py	11
 fanout	lib/agentctl/inboxentry.py	10
-fanout	lib/agentctl/invariants.py	20
+fanout	lib/agentctl/invariants.py	21
 fanout	lib/agentctl/land.py	11
 fanout	lib/agentctl/landdryrun.py	22
+fanout	lib/agentctl/landedchange.py	12
 fanout	lib/agentctl/lander.py	12
-fanout	lib/agentctl/landqueue.py	26
+fanout	lib/agentctl/landqueue.py	27
 fanout	lib/agentctl/landwatch.py	10
 fanout	lib/agentctl/localrecheck.py	16
 fanout	lib/agentctl/maintain.py	16
@@ -229,7 +231,6 @@ fanout	lib/agentctl/projector.py	14
 fanout	lib/agentctl/queue.py	11
 fanout	lib/agentctl/queuebatch.py	21
 fanout	lib/agentctl/queuecheck.py	17
-fanout	lib/agentctl/queueclose.py	23
 fanout	lib/agentctl/queuediff.py	21
 fanout	lib/agentctl/queueenter.py	28
 fanout	lib/agentctl/queuepush.py	17

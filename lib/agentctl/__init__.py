@@ -32,10 +32,10 @@ MODULES = ("procrunner", "escalationtable", "psparse", "govpool", "usage", "stat
            "cleanuppass", "upkeep", "remote", "branches", "batchrun", "redseen", "reduntracked", "redblock",
            "cliops", "localrecheck", "queuebatch", "queuediff", "queuebatchsel", "batch", "workflowdispatch",
            "redopen", "redearly", "redclaim", "redverify", "blamerecords", "redvault", "blame", "redwaits",
-           "queuecheck", "queueclose", "superseded", "park", "redcrash", "reddispatch", "fixerlife", "owner", "ask",
-           "ownerwrapper", "offerdispatch", "redview", "cireport", "watchtick", "recovery", "netwatch", "tools",
-           "redlease", "redpending", "redstep", "redhold", "queuepush", "orphans", "orphanpass", "batchpush",
-           "batchcheck", "batchtick", "invariants", "watchdog", "landqueue", "redtick", "gatepublish", "serversteps",
-           "changesubmit", "storemetrics", "storeapi", "storecmd", "ciwhycmd", "maintain", "inboxwait", "inboxcli",
-           "status", "statuspage", "redcli", "syncsteps", "processor", "queueenter", "landdryrun", "slots",
-           "cliparser", "cli")
+           "queuecheck", "redcrash", "reddispatch", "fixerlife", "owner", "ask", "ownerwrapper", "offerdispatch",
+           "redview", "cireport", "watchtick", "recovery", "netwatch", "tools", "redlease", "redpending", "redstep",
+           "redhold", "redtick", "gatepublish", "changesubmit", "storemetrics", "storeapi", "storecmd", "ciwhycmd",
+           "inboxwait", "inboxcli", "landedchange", "superseded", "park", "orphans", "orphanpass", "maintain",
+           "status", "statuspage", "redcli", "syncsteps", "changerows", "invariants", "watchdog", "changelap",
+           "queuepush", "batchpush", "batchcheck", "batchtick", "serversteps", "checkround", "landqueue",
+           "processor", "queueenter", "landdryrun", "slots", "cliparser", "cli")

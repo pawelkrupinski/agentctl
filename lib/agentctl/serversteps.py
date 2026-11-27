@@ -2,33 +2,32 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, Callable, Sequence
-from agentctl.timelinecmd import timeline_step
-from agentctl.remote import remote_run_jobs
-from agentctl.filelog import drain_event_log
-from agentctl.core import slug
-from agentctl.inboxentry import inbox_write
-from agentctl.queuestall import queue_stall_step
-from agentctl.core import reap_children
-from agentctl.waitingdir import wlog
-from agentctl.clones import heal_enabled
-from agentctl.cistate import snapshot_gate_reds
 from agentctl.statemachines import StaleVersion, TerminalState, machine_state
 from agentctl.clock import Clock
-from agentctl.reverts import tick_reverts
+from agentctl.core import reap_children, slug
+from agentctl.clones import heal_enabled
+from agentctl.filelog import drain_event_log
+from agentctl.waitingdir import wlog
+from agentctl.inboxentry import inbox_write
+from agentctl.cistate import snapshot_gate_reds
 from agentctl.conditions import maybe_recovery_tick
-from agentctl.issues import tick_issues
-from agentctl.queuesubmit import sweep_land_refs
 from agentctl.serverclone import clone_heal_tick
-from agentctl.landhold import tick_land_hold
-from agentctl.projector import maybe_archive_leases
+from agentctl.queuestall import queue_stall_step
 from agentctl.stats import maybe_stats_pass
-from agentctl.queueclose import close_landed_changes, stranded_changes
+from agentctl.timelinecmd import timeline_step
+from agentctl.landhold import tick_land_hold
+from agentctl.reverts import tick_reverts
+from agentctl.issues import tick_issues
+from agentctl.projector import maybe_archive_leases
+from agentctl.queuesubmit import sweep_land_refs
+from agentctl.remote import remote_run_jobs
+from agentctl.batch import say_batch
 from agentctl.watchtick import tick_watches
 from agentctl.queuepush import tick_changes
-from agentctl.batch import say_batch
+from agentctl.batchtick import tick_batch
 from agentctl.redtick import maybe_red_tick
 from agentctl.gatepublish import maybe_publish_gate
-from agentctl.batchtick import tick_batch
+from agentctl.landedchange import close_landed_changes, stranded_changes
 
 
 def gate_is_red_now() -> bool:

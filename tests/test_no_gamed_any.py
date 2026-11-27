@@ -15,7 +15,7 @@ LIB = os.path.join(os.path.dirname(HERE), "lib", "agentctl")
 # the bare-`Any` parameters and returns of each module round 16 touched, as they were before it
 BEFORE_ROUND_16 = {
     "batchrun": 4, "buildview": 6, "gating": 11, "issues": 6, "land": 32, "laptoprole": 5, "live": 4, "localrecheck": 2,
-    "maint": 61, "orphanreap": 35, "projector": 6, "queueclose": 88, "queueslots": 10, "recordingpins": 0, "redclaim": 23,
+    "maint": 61, "orphanreap": 35, "projector": 6, "landedchange": 23, "changerows": 1, "changelap": 53, "checkround": 11, "queueslots": 10, "recordingpins": 0, "redclaim": 23,
     "redhold": 25, "remotejobs": 4, "remotestore": 0, "statuspage": 9, "syncsteps": 10, "waiting": 19,
 }
 # a module folded into one of them brings its own (R2's pure moves, 2026-11-26): its count before the fold

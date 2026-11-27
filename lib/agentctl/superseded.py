@@ -1,21 +1,21 @@
 # agentctl, part `superseded`: a worktree superseded by its successor: the marks, the successor's state, closing it, `agentctl supersede`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import argparse
-from typing import Any
 import os
-from agentctl.core import PROTECTED_BRANCHES, attempt, git, remote, tilde
-from agentctl.onmain import landed_state
-from agentctl.timefmt import ts
+from typing import Any
 from agentctl.statefile import read_record, write_json
+from agentctl.statemachines import machine_state
+from agentctl.clock import epoch_now
+from agentctl.timefmt import ts
+from agentctl.core import PROTECTED_BRANCHES, attempt, git, remote, tilde
 from agentctl.procs import process_cwds
 from agentctl.inboxentry import inbox_write
-from agentctl.worktrees import worktrees
 from agentctl.deletions import log_deletion
 from agentctl.conditions import recovery_dir
-from agentctl.queueclose import change_state
-from agentctl.statemachines import machine_state
+from agentctl.onmain import landed_state
+from agentctl.worktrees import worktrees
+from agentctl.landedchange import change_state
 
 
 # SUPERSEDED (the owner, 2026-10-31: movies-wt-ci-1/2/3 and -review were carried into ci-5 on 2026-10-30 -- rebased

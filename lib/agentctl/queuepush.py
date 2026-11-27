@@ -12,6 +12,7 @@ from agentctl.core import attempt, host_role, remote
 from agentctl.policy import policy_blocks
 from agentctl.waitingdir import ChangeRecords, change_item_fields
 from agentctl.queuehold import break_hold_cycles, expire_idle_hold, idle_hold_expired, note_hold
+from agentctl.batchitem import current_batch
 from agentctl.conflicts import conflict_cause, conflict_paths
 from agentctl.queueslots import check_tree_slot, checker_alive, queue_verdict, set_change
 from agentctl.queue import requeue_infra
@@ -22,9 +23,8 @@ from agentctl.redseen import gate_reds
 from agentctl.queuebatch import (
     OverlapHold, _behind_said, hold_for_overlap, main_conflict, overlap_hold, spawn_executor)
 from agentctl.queuediff import push_change
-from agentctl.queueclose import lap_change_deadline, regen_hold_overdue
-from agentctl.batchitem import current_batch
 from agentctl.queuebatchsel import backlog_held, push_held
+from agentctl.changelap import lap_change_deadline, regen_hold_overdue
 
 
 # THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16, workermem: fully checked by 09:15, then its combined tree verified

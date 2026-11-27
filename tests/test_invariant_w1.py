@@ -135,7 +135,7 @@ class InvariantW1Test(unittest.TestCase):
         self.assertEqual(run(module, dict(rows=[("c1", "checked", 19)]))[0][0], False)  # no creation read: the queue age
 
     def test_a_change_item_carries_its_entry_creation_beside_the_queue_age_it_inherited(self):
-        from agentctl.queueclose import _change_row
+        from agentctl.changerows import _change_row
         from agentctl.queueslots import change_item_fields
         e = {"id": "x", "created": "2026-11-25T22:17:40Z", "queued_since": 1000.0}
         data = change_item_fields(e)
