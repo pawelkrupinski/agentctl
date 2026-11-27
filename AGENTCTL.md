@@ -3273,6 +3273,8 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `contact_gap` | `AGENTCTL_CONTACT_GAP` | `120` | s of a machine's silence before its leases' clocks pause |
 | `contact_pause_max` | `AGENTCTL_CONTACT_PAUSE_MAX` | `43200` | s a silent machine's leases are paused at most |
 | `context_fresh` | `AGENTCTL_CONTEXT_FRESH` | `300000` | tokens: a session whose last turn's context is past this is not resumed but started fresh |
+| `crash_loop_launches` | `AGENTCTL_CRASH_LOOP_LAUNCHES` | `3` | $AGENTCTL_CRASH_LOOP_LAUNCHES: launches in a row dying quickly of one cause open CRASH_LOOP (crashloop.py) |
+| `crash_loop_quick` | `AGENTCTL_CRASH_LOOP_QUICK` | `120` | $AGENTCTL_CRASH_LOOP_QUICK: s a launch ending this soon after its start never got going |
 | `disk_min_gb` | `AGENTCTL_DISK_MIN_GB` | `50` | the Data volume's free space below which the upkeep runs at once, then WD opens |
 | `disk_path` | `AGENTCTL_DISK_PATH` | - | the path whose free space the disk checks read (default: the home directory) |
 | `dispatch_dir` | `AGENTCTL_DISPATCH_DIR` | - | the dispatches' directory (default beside the reds') |

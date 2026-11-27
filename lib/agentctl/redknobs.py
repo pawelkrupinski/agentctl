@@ -24,6 +24,8 @@ RED_RENEW_EVERY = 60         # a fixer's wrapper renews its lease this often
 # RED_CRASH_BLOCK_MAX (offered again, the streak counted afresh from crash_loop.mark). A launch with a result (LANDED,
 # NOT LANDED, GAVE UP, BLOCKED ON OWNER, DIAGNOSED, a refuted fix) ends the streak; a release by hand is no launch.
 RED_CRASH_LOOP = 3                 # $AGENTCTL_RED_CRASH_LOOP
+CRASH_LOOP_LAUNCHES = 3            # $AGENTCTL_CRASH_LOOP_LAUNCHES: launches in a row dying quickly of one cause open CRASH_LOOP (crashloop.py)
+CRASH_LOOP_QUICK = 120             # $AGENTCTL_CRASH_LOOP_QUICK: s a launch ending this soon after its start never got going
 
 
 RED_CRASH_BLOCK_MAX = 24 * 3600    # $AGENTCTL_RED_CRASH_BLOCK_MAX
@@ -58,6 +60,14 @@ RED_ORPHAN_GRACE = 5 * 60    # an ended session's turn still held this long is o
 
 def knob_red_crash_loop() -> float:
     return env_num("AGENTCTL_RED_CRASH_LOOP", RED_CRASH_LOOP)
+
+
+def knob_crash_loop_launches() -> int:
+    return int(env_num("AGENTCTL_CRASH_LOOP_LAUNCHES", CRASH_LOOP_LAUNCHES))
+
+
+def knob_crash_loop_quick() -> float:
+    return env_num("AGENTCTL_CRASH_LOOP_QUICK", CRASH_LOOP_QUICK)
 
 
 def knob_red_orphan_grace() -> float:

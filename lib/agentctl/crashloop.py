@@ -22,24 +22,14 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Optional
 
-from agentctl.knobread import env_num
+from agentctl.redknobs import CRASH_LOOP_LAUNCHES, CRASH_LOOP_QUICK, knob_crash_loop_launches, knob_crash_loop_quick
 from agentctl.timefmt import iso_epoch
 from agentctl.statemachines import machine_state
 from agentctl.conditions import open_condition, run_probe
 from agentctl.escalationtable import CRASH_LOOP_KIND, OWNER_SIGNALS, crash_loop_key
 from agentctl.redcrash import RED_CRASH_OUTCOME, launch_cause, launch_neutral
 
-CRASH_LOOP_LAUNCHES = 3   # launches in a row dying quickly of one cause ($AGENTCTL_CRASH_LOOP_LAUNCHES)
-CRASH_LOOP_QUICK = 120    # s: a launch ending this soon after its start never got going ($AGENTCTL_CRASH_LOOP_QUICK)
 EVIDENCE_LINES = 40       # lines of launch evidence the condition keeps for its agent's brief
-
-
-def knob_crash_loop_launches() -> int:
-    return int(env_num("AGENTCTL_CRASH_LOOP_LAUNCHES", CRASH_LOOP_LAUNCHES))
-
-
-def knob_crash_loop_quick() -> float:
-    return env_num("AGENTCTL_CRASH_LOOP_QUICK", CRASH_LOOP_QUICK)
 
 
 @dataclass(frozen=True)
