@@ -54,7 +54,7 @@ STATUS_PAGE_HOSTS = (STATUS_PAGE_HOST, "127.0.0.1", "localhost")
 def cmd_status(a, store, *, ctx):
     if getattr(a, "open", False):
         return status_page_open()
-    t = epoch_now()
+    t = ctx.clock.time()
     h = status_header(t, probes=False)
     if a.line:  # THE STATUS LINE IS THE SNAPSHOT ALONE: no store RPC, no network (2026-11-22: 2-4.6 s, "gate ?")
         print(h["line"])

@@ -3,7 +3,6 @@
 
 from agentctl.context import Context
 from agentctl.statemachines import is_terminal
-from agentctl.clock import epoch_now
 import json
 import time
 from typing import Any
@@ -89,7 +88,7 @@ def _completed_green(runs: Any) -> Any:
 
 def workflow_ever_green(store, o_r, workflow, runs=(), now_=None, *, ctx):
     """True when workflow has had a green run on main, False when GitHub says it never had, None when unread."""
-    t = now_ if now_ is not None else epoch_now()
+    t = now_ if now_ is not None else ctx.clock.time()
     if workflow in (ever_green_record(store).get(o_r) or {}).get("flows", {}):
         return True
     green = _completed_green(runs)
@@ -149,7 +148,7 @@ def _job_green_in_runs(store: Any, o_r: Any, workflow: Any, job: Any, cands: lis
 def job_ever_green(store, o_r, workflow, job, runs=(), now_=None, *, ctx):
     """True when job of (ever green) workflow concluded success in a run on main; False when it did in none of the runs
     read -- at least one green run among them, every green one read; None (unknown, tracked) otherwise."""
-    t = now_ if now_ is not None else epoch_now()
+    t = now_ if now_ is not None else ctx.clock.time()
     known = ((ever_green_record(store).get(o_r) or {}).get("jobs") or {}).get(workflow) or {}
     if any(job_matches(k, job) for k in known):
         return True

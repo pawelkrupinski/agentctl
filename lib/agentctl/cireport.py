@@ -2,7 +2,6 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.context import Context
-from agentctl.clock import epoch_now
 from typing import Any, Optional
 from agentctl.core import err, remote
 from agentctl.forge import RED_CONCLUSIONS, is_cancelled
@@ -308,7 +307,7 @@ def ci_state_refresh(o_r: str, write: bool = True, store: Any = None, *, ctx: Co
     later), return it. Raises when the gate cannot be read (nothing is written: the old snapshot ages out). store: the
     change items a check/ branch run's owner is read from (none: matched by the worktree holding its commit)."""
     gate = gate_runs(o_r, ctx=ctx)
-    snap = {"at": epoch_now(), "repo": o_r, "outside_error": None, "outside": [],
+    snap = {"at": ctx.clock.time(), "repo": o_r, "outside_error": None, "outside": [],
             "gate": gate_snap_rows(o_r, gate, ctx=ctx)}
     if gated_repo(o_r):
         snap.update(outside_snap(o_r, ctx=ctx))

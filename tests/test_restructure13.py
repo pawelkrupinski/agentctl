@@ -7,7 +7,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
-from harness import case_context  # noqa: E402
+from harness import case_context, context_with  # noqa: E402
 from golden_cases import Probe, check as _check  # noqa: E402
 from test_restructure12 import NOW, maybe, printing  # noqa: E402
 
@@ -155,7 +155,7 @@ class OutsideGateTest(unittest.TestCase):
         # own _flow_runs, keyed by file alone); a None was "never listed"
         runs = A.CiRuns()
         runs._listed.update({("o/r", f, 30, None): v for f, v in mem.items() if v[1] is not None})
-        self.ctx = A.Context(runs=runs)
+        self.ctx = context_with(runs)
 
         def kept():
             listed = {k[1]: v for k, v in runs._listed.items() if k[0] == "o/r" and k[2:] == (30, None)}

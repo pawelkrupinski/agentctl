@@ -173,10 +173,34 @@ def _install_default_clock():
 _CASE_CONTEXT = []
 
 
+class WiredClock:
+    """The case's clock: whatever clock the test has wired (clock.wire_clock: the default test clock, a FakeClock it
+    wired, a simulation's), read at each call, so a context reader sees the time every ambient `epoch_now()` reader
+    does -- a test wiring its clock after its context was made included."""
+
+    @staticmethod
+    def _wired():
+        return sys.modules["agentctl.clock"]._PROCESS_CLOCK[0]
+
+    def time(self):
+        return sys.modules["agentctl.clock"].epoch_now()
+
+    def monotonic(self):
+        return self._wired().monotonic()
+
+    def sleep(self, secs):
+        return self._wired().sleep(secs)
+
+
+def context_with(runs):
+    """A Context over `runs` (a test's own CI reader, or a fake of it) and the case's wired collaborators."""
+    return sys.modules["agentctl.context"].Context(runs=runs, clock=WiredClock())
+
+
 def case_context():
     """The running test's Context (made on first ask)."""
     if not _CASE_CONTEXT:
-        _CASE_CONTEXT.append(sys.modules["agentctl.context"].Context(runs=sys.modules["agentctl.ciruns"].CiRuns()))
+        _CASE_CONTEXT.append(context_with(sys.modules["agentctl.ciruns"].CiRuns()))
     return _CASE_CONTEXT[0]
 
 

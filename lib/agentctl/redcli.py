@@ -422,7 +422,7 @@ def owner_context_lines(o: dict[str, Any]) -> list[str]:
 
 def red_status_text(store: Any, verbose: bool = False, *, ctx: Context) -> str:
     """`agentctl red status`'s text, from the status model (its reds, families and dispatcher sections)."""
-    t = store.clock() if hasattr(store, "clock") else epoch_now()
+    t = store.clock() if hasattr(store, "clock") else ctx.clock.time()
     try:
         stalled = red_fix_liveness(store, t, ctx=ctx)
     except (Exception, SystemExit):
@@ -433,13 +433,13 @@ def red_status_text(store: Any, verbose: bool = False, *, ctx: Context) -> str:
 
 def write_red_status_snapshot(store: Any, *, ctx: Context) -> None:
     """The sync's step: the rendered red status, for `red status` to print at once."""
-    write_json(red_status_snapshot_path(), {"at": epoch_now(), "text": red_status_text(store or status_store(), ctx=ctx)})
+    write_json(red_status_snapshot_path(), {"at": ctx.clock.time(), "text": red_status_text(store or status_store(), ctx=ctx)})
 
 
 def red_status(store: Any, verbose: bool = False, live: bool = False, *, ctx: Context) -> int:
     """`agentctl red status`: the sync's fresh snapshot, else read now."""
     snap = {} if verbose or live else (read_record(red_status_snapshot_path()) or {})
-    age = epoch_now() - float(snap.get("at") or 0)
+    age = ctx.clock.time() - float(snap.get("at") or 0)
     if snap.get("text") and 0 <= age <= RED_STATUS_FRESH:
         print(f"{snap['text']}\n(as of {age:.0f} s ago: the sync's snapshot; `agentctl red status --live` reads the store)")
         return 0

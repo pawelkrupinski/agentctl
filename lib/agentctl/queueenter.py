@@ -9,7 +9,6 @@ from typing import Any
 from agentctl.context import Context
 from agentctl.procrunner import process_runner
 from agentctl.statemachines import machine_state
-from agentctl.clock import epoch_now
 from agentctl.ids import stamp
 from agentctl.queueknobs import knob_land_before_queue_seconds, knob_max_foreign, knob_until_done_deadline
 from agentctl.core import NO_SIGN, branch_of, err, fmt_age, git, git_ok, host_role, process_cache, remote, scratch, is_ancestor
@@ -120,11 +119,11 @@ def cmd_land_precheck(a, store, *, ctx):
     """The detached half of start_fast_precheck: run the repo's precheck, and on a refusal cancel the queued change."""
     # Its own process group, ended WHOLE at the bound (review 2026-11-07: subprocess.run killed only the script, so what
     # it started -- sbt, a test JVM -- lived on, and kept the output pipe, and so this wait, open): run_watched.
-    t0 = epoch_now()
+    t0 = ctx.clock.time()
     rc, out = run_watched([os.path.join(a.repo, FAST_PRECHECK), "--base", a.base, "--head", a.head], a.repo, None,
                           os.path.join(scratch(), f"agentctl-precheck-{a.entry}"), "precheck",
                           stall=FAST_PRECHECK_BOUND, wall=FAST_PRECHECK_BOUND)
-    note_precheck(a.entry, epoch_now() - t0, rc, out, store)
+    note_precheck(a.entry, ctx.clock.time() - t0, rc, out, store)
     if rc is None:
         print(f"{out or ''}PRECHECK UNCHECKED: past its {FAST_PRECHECK_BOUND} s bound, ended with its children: "
               "could not check, its landing check judges it", flush=True)

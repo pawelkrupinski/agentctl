@@ -7,7 +7,7 @@ import argparse, json, os, shutil, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
-from harness import case_context  # noqa: E402
+from harness import case_context, context_with  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from test_red import run, MOVIES  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
@@ -188,7 +188,7 @@ class TickTest(RedReposBase):
             def main_runs(self, o_r, wfile, limit=30, status=None, fresh_for=0):
                 return [{"databaseId": 100 if o_r == MOVIES else 200, "number": 5, "status": "completed",
                          "conclusion": "failure", "workflowName": "Main", "headSha": sha}]
-        ctx = A.Context(runs=Runs())
+        ctx = context_with(Runs())
         try:
             A.red_gate_flows = lambda o_r: [("Main", "main.yml")]
             A.red_open_flows = lambda o_r, store: seen.append(A.resolve_run(MOVIES, "5", ctx=ctx)[1]["databaseId"]) or []

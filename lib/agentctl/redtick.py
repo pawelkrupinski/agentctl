@@ -160,7 +160,7 @@ def red_tick_repo(repo, store, registry, snap=None, dispatch=False, *, ctx):
     if not gated_repo(o_r):
         return []
     with _red_lock:
-        _last_red_tick[0] = epoch_now()
+        _last_red_tick[0] = ctx.clock.time()
         recheck_local(repo, wait=False)
         acts = red_tick(store, o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch, registry=registry, ctx=ctx)
     for line in acts:
@@ -201,7 +201,7 @@ def red_gate_snap(o_r, store, *, ctx):
             r = None
         if r:
             latest[wf] = {k: r.get(k) for k in fields}
-    return {"at": epoch_now(), "repo": o_r, "outside": [], "outside_error": None,
+    return {"at": ctx.clock.time(), "repo": o_r, "outside": [], "outside_error": None,
             "gate": gate_snap_rows(o_r, gate, ctx=ctx),
             "latest": latest}
 
@@ -247,9 +247,9 @@ def red_tick_others(store, registry, now_=None, dispatch=False, force=True, *, c
     this machine's when there is one (Fixes-Red trailers, authors); without one (ci-runner) its reds open and clear
     by its gate runs alone."""
     acts = []
-    if not force and epoch_now() - _last_others_tick[0] < knob_red_others_every():
+    if not force and ctx.clock.time() - _last_others_tick[0] < knob_red_others_every():
         return acts
-    _last_others_tick[0] = epoch_now()
+    _last_others_tick[0] = ctx.clock.time()
     unread = []
     for c in red_repos():
         o_r = c["repo"]
@@ -285,7 +285,7 @@ def red_others_skipped(o_r, why, now_=None):
 
 def maybe_red_tick(repo, store, registry, *, ctx):
     """At most every RED_TICK_INTERVAL s, from the processor's duties. Bounded; never fatal."""
-    if epoch_now() - _last_red_tick[0] < knob_red_tick():
+    if ctx.clock.time() - _last_red_tick[0] < knob_red_tick():
         return
 
     def work():

@@ -1,7 +1,6 @@
 # agentctl, part `changekind`: THE CHANGE CLASSIFIER -- what kind of change a queued change is, decided in one place.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 from typing import Any
 from contextlib import contextmanager, suppress
 from collections.abc import Iterator
@@ -148,7 +147,7 @@ def classify_change(e, facts, t=None, repo=None, store=None, *, ctx):
     RED-LANDING RULE's (redland.may_land_on_red): with repo, read from the entry's commits' counting trailers. repo: also
     ask whether a queued change is an identity change (batch.identity_change, cached per entry and head) when nothing
     else already keeps it out of a backlog batch; otherwise `identity` is None (unasked)."""
-    t = t if t is not None else epoch_now()
+    t = t if t is not None else ctx.clock.time()
     landing = may_land_on_red(facts, e, repo, store=store, ctx=ctx)
     names, reds = landing.names, list(landing.reds)
     red_fix, gate_fix = landing.red_fix, landing.gate_fix

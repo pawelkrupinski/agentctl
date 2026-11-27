@@ -10,7 +10,7 @@ import sys
 import time
 from typing import Any, Callable
 from agentctl.procrunner import ProcessRunner, wire_runner
-from agentctl.clock import Clock, epoch_now, wire_clock
+from agentctl.clock import Clock, wire_clock
 from agentctl.timefmt import age_since
 from agentctl.ghapp import cmd_github_app
 from agentctl.config import cmd_config
@@ -86,10 +86,10 @@ def condition_registry(clock: Clock, store: Any, ctx: Context) -> ConditionRegis
         {"clear_hold": recover_clear_hold, "tunnel_reset": recover_tunnel_reset, "clear_flag": recover_clear_flag})
 
 
-def process_context() -> Context:
+def process_context(clock: Clock) -> Context:
     """The process's Context (docs/design/contexts.md): its one CI runs reader (CiRuns: what was read of GitHub's runs
-    and jobs), new for each main."""
-    return Context(runs=CiRuns())
+    and jobs), new for each main, and the clock main wired."""
+    return Context(runs=CiRuns(), clock=clock)
 
 
 def wire_collaborators(clock: Clock, store: Any) -> None:
@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None, clock: Clock | None = None, runner: Proc
         partial(process_store, waited_on=True) if waited_on(args) else process_store, clock.time, actor=process_actor(args))
     wire_collaborators(clock, store)
     wire_runner(runner or ProcessRunner())
-    ctx = process_context()
+    ctx = process_context(clock)
     registry = condition_registry(clock, store, ctx)
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:
         return selftest(ctx)
@@ -142,7 +142,7 @@ def main(argv: list[str] | None = None, clock: Clock | None = None, runner: Proc
 def selftest(ctx: Context) -> int:
     """Fast smoke check of the code a service would re-exec onto: the parser builds, the failure parsers and the
     snapshot readers work on fixtures, a fixture gate reads green."""
-    snap = {"at": epoch_now(), "repo": "x/y", "outside_error": None, "outside": [],
+    snap = {"at": ctx.clock.time(), "repo": "x/y", "outside_error": None, "outside": [],
             "gate": [{"name": "Main", "decided": {"databaseId": 1, "number": 1, "status": "completed",
                                                   "conclusion": "success"}, "newer": None, "since": None, "count": 0,
                       "runs": []}]}

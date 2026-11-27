@@ -8,7 +8,7 @@ from functools import partial
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
-from harness import case_context  # noqa: E402
+from harness import case_context, context_with  # noqa: E402
 from golden_cases import Probe, check  # noqa: E402
 
 
@@ -427,7 +427,7 @@ class SmallOnesTest(unittest.TestCase):
         def build(case):
             r = case.rng
             case.fake("env_num", lambda rng, name, default: rng.choice([10, 100]))
-            ctx[:] = [A.Context(runs=types.SimpleNamespace(main_runs=case.recorded("main_runs", lambda rng, o_r, wfile: [wfile])))]
+            ctx[:] = [context_with(types.SimpleNamespace(main_runs=case.recorded("main_runs", lambda rng, o_r, wfile: [wfile])))]
             run = lambda rng: maybe(rng, {"databaseId": rng.randint(1, 3), "status": rng.choice(["completed", "queued"]),  # noqa: E731
                                           "updatedAt": "t", "conclusion": rng.choice(["success", "failure"])}, 0.7)
             case.fake("pick_main_run", lambda rng, repo, sha, runs: run(rng))

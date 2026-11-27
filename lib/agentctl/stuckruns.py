@@ -2,7 +2,6 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.context import Context
-from agentctl.clock import epoch_now
 import time
 from typing import Any, Callable
 from agentctl.timefmt import parse_time
@@ -84,7 +83,7 @@ def stuck_runs(lists: dict[str, Any], now_: float | None = None, o_r: Any = None
     behind a measurement holding every `measure` slot was called a stuck red): a run whose unfinished jobs all wait,
     only on labels whose every runner is up with all slots busy, carries `queued`; one waiting on a run it dispatched,
     `waits_on`. Neither is a red."""
-    t = now_ if now_ is not None else epoch_now()
+    t = now_ if now_ is not None else ctx.clock.time()
     jobs_of = jobs_of or (lambda r: run_jobs(o_r, r, ctx=ctx))
     if history_of is None and o_r:
         history_of = lambda name: stuck_history(o_r, name, ctx=ctx)  # noqa: E731

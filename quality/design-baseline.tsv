@@ -195,7 +195,7 @@ fanout	lib/agentctl/branches.py	18
 fanout	lib/agentctl/changesubmit.py	11
 fanout	lib/agentctl/checkround.py	15
 fanout	lib/agentctl/checkslot.py	11
-fanout	lib/agentctl/cireport.py	24
+fanout	lib/agentctl/cireport.py	23
 fanout	lib/agentctl/cleanup.py	14
 fanout	lib/agentctl/cli.py	55
 fanout	lib/agentctl/cliparser.py	10
@@ -233,7 +233,7 @@ fanout	lib/agentctl/projector.py	15
 fanout	lib/agentctl/queue.py	12
 fanout	lib/agentctl/queuecheck.py	18
 fanout	lib/agentctl/queuediff.py	22
-fanout	lib/agentctl/queueenter.py	29
+fanout	lib/agentctl/queueenter.py	28
 fanout	lib/agentctl/queuepush.py	19
 fanout	lib/agentctl/queuesubmit.py	11
 fanout	lib/agentctl/recovery.py	13
@@ -253,7 +253,6 @@ fanout	lib/agentctl/redrecord.py	11
 fanout	lib/agentctl/redseen.py	16
 fanout	lib/agentctl/redstep.py	22
 fanout	lib/agentctl/redtick.py	30
-fanout	lib/agentctl/reduntracked.py	10
 fanout	lib/agentctl/redvault.py	19
 fanout	lib/agentctl/redverify.py	17
 fanout	lib/agentctl/redview.py	19

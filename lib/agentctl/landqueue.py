@@ -106,7 +106,7 @@ def land_status_command(a: argparse.Namespace, repo: str, d: str, st: Any, *, ct
     """`land status [<id>]`: one change, open or decided (A VERDICT IS DURABLE), else the whole queue."""
     try:  # the store's reads are bounded (cli waited_on): one that does not answer fails the command fast, saying which
         if getattr(a, "entry", None):
-            return land_status_entry(st, a.entry, epoch_now())
+            return land_status_entry(st, a.entry, ctx.clock.time())
         # ONE QUEUE: the store's change items, on either host
         rows = change_rows(st)
     except StoreUnavailable as e:
@@ -125,7 +125,7 @@ def land_status_command(a: argparse.Namespace, repo: str, d: str, st: Any, *, ct
     print(f"changes: {len(rows)}")
     in_batch = batch_row_ids(bt, rows)
     for r in rows:
-        print(land_status_line(r, bt, in_batch, epoch_now()))
+        print(land_status_line(r, bt, in_batch, ctx.clock.time()))
     land_status_tail(d, rows)
     return 0
 

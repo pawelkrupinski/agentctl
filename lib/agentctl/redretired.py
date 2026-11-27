@@ -312,7 +312,7 @@ class RetiredRun:
 
     def stale(self, cpath: Any, ctext: Any) -> Any:
         """"stale: ..." when the workflow made no run on main for RED_STALE_DAYS while main moved, else None."""
-        t = self.now if self.now is not None else epoch_now()
+        t = self.now if self.now is not None else self.ctx.clock.time()
         if workflow_triggers(ctext) == {"workflow_call"}:
             return None
         newest = retire_newest(self.o_r, cpath) or self.r
@@ -361,13 +361,13 @@ def red_run_retired(o_r, workflow, run, jobs=None, now=None, *, ctx):
     rid = (run or {}).get("databaseId") or (run or {}).get("id")
     if not rid or not workflow:
         return None
-    if _retire_cache.get(("fail", o_r)) and epoch_now() - _retire_cache[("fail", o_r)][0] < RETIRE_FAIL_TTL:
+    if _retire_cache.get(("fail", o_r)) and ctx.clock.time() - _retire_cache[("fail", o_r)][0] < RETIRE_FAIL_TTL:
         return None
     try:
         return RetiredRun(o_r, workflow, run, rid, jobs, now, ctx=ctx).why()
     except (Exception, SystemExit) as e:
         _retire_fail(o_r)  # silent (the status line and ci-why call this): the red stays, the reason kept for a look
-        _retire_cache[("why", o_r)] = (epoch_now(), f"{workflow} #{(run or {}).get('number')}: {str(e)[:200]}")
+        _retire_cache[("why", o_r)] = (ctx.clock.time(), f"{workflow} #{(run or {}).get('number')}: {str(e)[:200]}")
         return None
 
 
