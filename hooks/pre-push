@@ -25,7 +25,10 @@ while read -r _lref lsha _rref _rsha; do
   wall=$(python3 -c 'import json, os, sys
 try: print(float(json.load(open(os.path.expanduser("~/.cache/agentctl-tests/suite-wall.json")))["wall"]))
 except Exception: print(0)' 2>/dev/null)
-  bound=$(awk -v l="${load:-0}" -v c="$cores" -v w="${wall:-0}" 'BEGIN { f = (c > 0) ? l / c : 1; if (f < 1) f = 1; if (f > 4) f = 4;
+  # THE FACTOR COUNTS THE SUITE'S OWN WORKERS (2026-11-27: 48f4bd1 refused as SUITE TIMEOUT at 560 s, none failing: the
+  # load sampled before the suite, 17.6 on 18 cores, gave 1x, and its 8 workers then put ~26 threads on 18 cores)
+  jobs=8
+  bound=$(awk -v l="${load:-0}" -v j="$jobs" -v c="$cores" -v w="${wall:-0}" 'BEGIN { f = (c > 0) ? (l + j) / c : 1; if (f < 1) f = 1; if (f > 4) f = 4;
                                                      b = 1.5 * w; if (b < 280) b = 280; printf "%d", b * f }')
   # EVERY STEP RUNS UNDER devtools/govstep.py (2026-11-26: the stress lane's 300 s kill bound counted a 686 s wait for
   # cores, and a push was refused with no test failing): it takes the step's governor ticket, waiting at most
@@ -41,7 +44,7 @@ except Exception: print(0)' 2>/dev/null)
   }
   per_test=$(awk -v b="$bound" 'BEGIN { printf "%d", 60 * b / 280 }')
   [ -f "$tmp/tree/devtools/govstep.py" ] || gstep=""  # a pushed tree older than the tool
-  (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-suite --cores 8 --run $((bound + 120)) --} python3 tests/run.py --suite-timeout "$bound" --timeout "$per_test" >"$tmp/out" 2>&1); st=$?
+  (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-suite --cores $jobs --run $((bound + 120)) --} python3 tests/run.py -j "$jobs" --suite-timeout "$bound" --timeout "$per_test" >"$tmp/out" 2>&1); st=$?
   if [ $st -ne 0 ]; then
     tail -40 "$tmp/out" >&2
     refuse $st "the suite" "the suite fails on $lsha (fix forward; never --no-verify)"

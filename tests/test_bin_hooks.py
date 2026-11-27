@@ -53,8 +53,8 @@ class BinPrePushHookTest(unittest.TestCase):
     def test_the_suites_bound_grows_with_the_laptops_load(self):
         """2026-11-21: two pushes of d2be9d3 were refused as SUITE TIMEOUT after 280 s with no test failing (1005, then
         1522 of 1755 run) while other agents' what-ifs held the laptop at load 30 on 18 cores. The bound scales with
-        load per core (1x to 4x), and the per-test timeout with it (2026-11-22: queue_sim's mutation 1 timed out at load
-        290 and refused a push with nothing wrong)."""
+        load per core, the suite's own workers counted (1x to 4x), and the per-test timeout with it (2026-11-22:
+        queue_sim's mutation 1 timed out at load 290 and refused a push with nothing wrong)."""
         with tempfile.TemporaryDirectory() as tmp:
             repo = os.path.join(tmp, "repo")
             os.makedirs(os.path.join(repo, "tests"))
@@ -67,13 +67,38 @@ class BinPrePushHookTest(unittest.TestCase):
             sha = git(repo, "rev-parse", "HEAD")
             home = os.path.join(tmp, "home")  # no suite-wall.json: the base is the 280 s floor, not this machine's last run
             os.makedirs(home)
-            for load, want, per_test in (("9.0", "280", "60"), ("36.0", "560", "120"), ("200", "1120", "240")):
+            for load, want, per_test in (("9.0", "280", "60"), ("36.0", "684", "146"), ("200", "1120", "240")):
                 env = dict(ENV, HOME=home, AGENTCTL_PREPUSH_LOAD=load, AGENTCTL_PREPUSH_CORES="18")
                 p = subprocess.run(["sh", HOOK, "origin", "x"], cwd=repo, input=f"refs/heads/main {sha} refs/heads/main "
                                    f"{'0' * 39}1\n", capture_output=True, text=True, env=env, timeout=60)
                 self.assertEqual(p.returncode, 0, p.stderr)
-                self.assertEqual(open(mark).read(), f"--suite-timeout {want} --timeout {per_test}", load)
+                self.assertEqual(open(mark).read(), f"-j 8 --suite-timeout {want} --timeout {per_test}", load)
 
+
+    @unittest.skipUnless(TIMEOUT, "no GNU timeout on this machine: the hook cannot run here")
+    def test_the_suites_load_factor_counts_its_own_workers(self):
+        """2026-11-27: 48f4bd1 (a vendor sync) was refused as SUITE TIMEOUT at 560 s (1413 tests run, none failing):
+        the load sampled before the suite, 17.6 on 18 cores, gave the factor 1, and the suite's own 8 workers then put
+        ~26 runnable threads on 18 cores. The factor is (load + the suite's 8 workers) / cores."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = os.path.join(tmp, "repo")
+            os.makedirs(os.path.join(repo, "tests"))
+            mark = os.path.join(tmp, "argv")
+            with open(os.path.join(repo, "tests", "run.py"), "w") as f:
+                f.write(f"import sys\nopen({mark!r}, 'w').write(' '.join(sys.argv[1:]))\nprint('OK')\n")
+            git(tmp, "init", "-q", repo)
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "base")
+            sha = git(repo, "rev-parse", "HEAD")
+            home = os.path.join(tmp, "home")
+            os.makedirs(os.path.join(home, ".cache", "agentctl-tests"))
+            with open(os.path.join(home, ".cache", "agentctl-tests", "suite-wall.json"), "w") as f:
+                f.write('{"wall": 373.9}')
+            env = dict(ENV, HOME=home, AGENTCTL_PREPUSH_LOAD="17.6", AGENTCTL_PREPUSH_CORES="18")
+            p = subprocess.run(["sh", HOOK, "origin", "x"], cwd=repo, input=f"refs/heads/main {sha} refs/heads/main "
+                               f"{'0' * 39}1\n", capture_output=True, text=True, env=env, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertEqual(open(mark).read(), "-j 8 --suite-timeout 797 --timeout 170")
 
     @unittest.skipUnless(TIMEOUT, "no GNU timeout on this machine: the hook cannot run here")
     def test_the_suites_bound_is_never_below_one_and_a_half_of_its_last_full_run(self):
@@ -95,12 +120,12 @@ class BinPrePushHookTest(unittest.TestCase):
             os.makedirs(os.path.join(home, ".cache", "agentctl-tests"))
             with open(os.path.join(home, ".cache", "agentctl-tests", "suite-wall.json"), "w") as f:
                 f.write('{"wall": 400.0}')
-            for load, want, per_test in (("9.0", "600", "128"), ("36.0", "1200", "257")):
+            for load, want, per_test in (("9.0", "600", "128"), ("36.0", "1466", "314")):
                 env = dict(ENV, HOME=home, AGENTCTL_PREPUSH_LOAD=load, AGENTCTL_PREPUSH_CORES="18")
                 p = subprocess.run(["sh", HOOK, "origin", "x"], cwd=repo, input=f"refs/heads/main {sha} refs/heads/main "
                                    f"{'0' * 39}1\n", capture_output=True, text=True, env=env, timeout=60)
                 self.assertEqual(p.returncode, 0, p.stderr)
-                self.assertEqual(open(mark).read(), f"--suite-timeout {want} --timeout {per_test}", load)
+                self.assertEqual(open(mark).read(), f"-j 8 --suite-timeout {want} --timeout {per_test}", load)
 
     @unittest.skipUnless(TIMEOUT, "no GNU timeout on this machine: the hook cannot run here")
     def test_the_ratchets_refuse_and_a_missing_tool_blocks(self):
