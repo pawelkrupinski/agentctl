@@ -255,7 +255,7 @@ class LaptopPressureTest(unittest.TestCase):
     def test_summary_shows_every_number(self):
         r = self.read()
         self.assertEqual(A.pressure_summary(r),
-                         "memory 58% free, level 1 (normal), load 5.0/14 cores, swap 17.7 GB (+0.0 GB in 0 min)")
+                         "memory 58% free, level 1 (normal), busy 5.0/14 cores, swap 17.7 GB (+0.0 GB in 0 min)")
         self.assertIn("swap 17.6 GB (-0.1 GB in 1 min)", A.pressure_summary(self.read(used=18_024.8, now_=1060.0)))
         self.assertIn("swap 17.7 GB (+0.0 GB in 2 min)", A.pressure_summary(self.read(used=18_100.0, now_=1120.0)))
 
