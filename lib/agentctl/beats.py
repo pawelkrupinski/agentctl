@@ -22,6 +22,7 @@ def write_beat(name: str) -> None:
 
 def beat_age(name):
     try:
-        return epoch_now() - float(open(beat_path(name)).read().split()[0])
+        with open(beat_path(name)) as f:
+            return epoch_now() - float(f.read().split()[0])
     except (OSError, ValueError, IndexError):
         return None

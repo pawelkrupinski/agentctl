@@ -4,7 +4,7 @@
 # EVERY UNIT OF TIME IS ATTRIBUTABLE (the owner, 2026-11-26, after the transition analysis found 90% of `checking`, 94%
 # of `waiting` and 100% of `cancelled` events carrying no reason but free text): every move of an item between two
 # states says WHY in one word of CAUSES (store.py refuses a move without one: a programming error, caught by
-# tests/test_causes.py over every call site) and WHO in `actor` (actor_of: the reconciler, a session or agent, the
+# tests/test_causes.py over every call site) and WHO in `actor` (actors.process_actor: the reconciler, a session or agent, the
 # owner). The free text stays the event's text; `detail` holds a short machine-readable qualifier when the cause alone
 # is not enough (the gate run, the holder's id, the failing step). A reject's class (infra | test | policy) is judged
 # once, at reject time, by reject_cause, from the same signatures ci-why's job classifier reads (classify.py).
@@ -44,7 +44,7 @@ CAUSES = {
     "governor": "the governor held, admitted or evicted it (its memory, cores or a class's cap)",
     "work-ended": "the work holding it ended (a governor ticket released)",
     "notified": "an inbox entry was written for it",
-    "unattributed": "a legacy client that sent no cause (server.py's shim); never written by this code",
+    "unattributed": "a legacy client that sent no cause (eventrows.legacy_cause); never written by this code",
 }
 
 # the cause of a change's move by the state it took, where no writer named one: a laptop outbox entry's event
