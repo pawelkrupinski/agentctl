@@ -2,7 +2,7 @@
 
 Before redland.py, three copies decided it: waiting.must_wait_why (per commit: every production commit's COUNTING
 `Fixes-Red:` must name a run of the gate's red or of an open gate red the store holds), changekind.classify_change's
-red_fix / gate_fix (per entry: the names recorded at submission against the queue facts), and queueclose.check_entry's
+red_fix / gate_fix (per entry: the names recorded at submission against the queue facts), and checkround.check_entry's
 red-fix tree guard (`bool(e.get("fixes")) and ... ["red_fix"]`); gov.gov_class_of reads the commits' counting fixes
 through the classifier. They diverged once (batch #124, 2026-11-25). MATRIX is what every copy answered before the
 consolidation, for each (gate, store, change) of the seeded matrix; the test holds the one rule to it, but for the
@@ -69,7 +69,7 @@ def decisions(test, gate, store_kind, change):
     facts = A.queue_facts(reds, st)
     k = A.classify_change(entry, facts, 0, "/repo", st)
     may = not reds or A.must_wait_why("/repo", shas, reds, st) is None
-    tree = A.may_land_on_red(facts, entry, "/repo", store=st).red_fix  # queueclose.check_entry's guard
+    tree = A.may_land_on_red(facts, entry, "/repo", store=st).red_fix  # checkround.check_entry's guard
     return (may, k["red_fix"], k["gate_fix"], tree, A.gov_class_of("/repo", shas, reds, st))
 
 

@@ -44,7 +44,7 @@ def _conflict_rejected_at(last: Any) -> Any:
 
 def conflict_bounced(every, e, now_=None):
     """The newest entry of e's worktree and branch, when it was rejected for a conflict within CONFLICT_PLACE_KEPT s
-    (and nothing of that source was queued since), or is still held for its regeneration (queueclose.py regen_hold): the
+    (and nothing of that source was queued since), or is still held for its regeneration (changelap.py regen_hold): the
     place e takes. None otherwise."""
     mine = [x for x in every if x["id"] != e["id"] and same_change_source(x, e["worktree"], e.get("branch"))]
     last = max(mine, key=lambda x: x["seq"], default=None)

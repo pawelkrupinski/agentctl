@@ -120,7 +120,7 @@ class W1Judge:
 
     def _progressing(self, age: float, it: dict[str, Any]) -> bool:
         """A change with no complaint is let go within the hard bound, and past it when a hold recovers itself (a REGEN
-        NEEDED hold: its own recovery escalates it once, queueclose.py regen_hold_overdue)."""
+        NEEDED hold: its own recovery escalates it once, changelap.py regen_hold_overdue)."""
         return age < W1_HARD_FACTOR * self.lim + (self.red_since or 0) or \
             bool(it and hold_recovers_itself(change_hold_visible(self.st, it, {}, self.t)))
 

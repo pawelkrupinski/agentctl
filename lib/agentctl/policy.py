@@ -148,7 +148,7 @@ class HoldKind:
 # gone, a batch over: the hold describes a world that moved), `escalate` says it to its author and the watchdog (the
 # wait is real, its holder's own machine is late), `requeue` puts the change back in the queue (a push that never ended),
 # `recover` -- the hold's own recovery, run by the change tick at its bound and never a stuck lap: a REGEN NEEDED hold
-# overdue runs the regeneration again and, still held, tells the owner once (queueclose.py regen_hold_overdue; the owner,
+# overdue runs the regeneration again and, still held, tells the owner once (changelap.py regen_hold_overdue; the owner,
 # 2026-11-20: "drop the reject").
 HOLDS = {h.kind: h for h in (
     HoldKind("trees", "trees", "every check tree is busy", 6 * 3600, "escalate", red_fix_ok=True),

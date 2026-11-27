@@ -106,7 +106,7 @@ class ChangeRecords:
     """THE RECORD OF A QUEUE'S CHANGES: its writer and its readers. store: the queue's own (the server's local
     database, needs_token False): the changes are its change items, each read as the entry it carries (RECORD_KEY)
     with the item's state as its status. None (or a remote store) for the laptop's OUTBOX (a `land
-    --follow` while main is red, slots.join: no item until ci-runner takes it, queueclose.migrate_local_queue drains
+    --follow` while main is red, slots.join: no item until ci-runner takes it, landedchange.migrate_local_queue drains
     it): the entry files alone."""
 
     def __init__(self, store: Any, d: str) -> None:
@@ -199,7 +199,7 @@ def drawn_max(entries: list[dict[str, Any]]) -> int:
 
 
 def drop_entry(d: str, eid: str) -> None:
-    """The entry's file removed: the laptop outbox's, once ci-runner's store took the change (queueclose.py
+    """The entry's file removed: the laptop outbox's, once ci-runner's store took the change (landedchange.py
     migrate_local_queue)."""
     with suppress(FileNotFoundError):
         os.remove(os.path.join(d, "entries", f"{eid}.json"))

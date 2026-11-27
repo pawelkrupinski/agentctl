@@ -1888,7 +1888,7 @@ The reconciler then takes it, a step per tick:
   and when the hold still stands `$AGENTCTL_REGEN_RECOVERY_WAIT` (2 h) later (the laptop or its JVM unreachable, the
   regen failing) it escalates ONCE to the owner (`REGEN HELD <id>: ...`, what is held and why, whether the laptop
   answered); the change stays held in its place. Its hold kind's recovery is `recover`: never a stuck lap, nor W1.
-  queueclose.py `regen_hold_overdue`, syncsteps.py `answer_regen_holds`. queueclose.py `conflict_cause`,
+  changelap.py `regen_hold_overdue`, syncsteps.py `answer_regen_holds`. conflicts.py `conflict_cause`,
   `regen_hold`, changesubmit.py `conflict_bounced`, `queue_change`; tests: `tests/test_generated.py`.
 - **GENERATED FILES ARE NO OVERLAP (2026-11-19 ~06:05Z: six movies changes -- agreement, f2, datalayer3, resolver2-b1,
   enrichment2, resolver2 -- each `held: its check waits for <prev>` because each edits coupling-baseline.tsv: every

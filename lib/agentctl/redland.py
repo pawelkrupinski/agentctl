@@ -27,7 +27,7 @@ from agentctl.land import tool_env
 # ONE RULE (2026-11-26; batch #124's deadlock of 2026-11-25 was two of its copies disagreeing). Three copies decided it:
 # waiting.must_wait_why (per commit: every production commit's COUNTING `Fixes-Red:` names a run of the gate's red or
 # of an open gate red the store holds), changekind.classify_change's red_fix / gate_fix (per entry: the names recorded
-# at submission) and queueclose.check_entry's red-fix tree guard; gov.gov_class_of read the commits' counting fixes
+# at submission) and checkround.check_entry's red-fix tree guard; gov.gov_class_of read the commits' counting fixes
 # through the classifier. Characterised over a seeded matrix (tests/test_red_landing.py), they disagreed in two ways,
 # resolved here:
 #  - A CHANGE THAT MAY NOT LAND ON RED IS NO GATE FIX. One fix commit beside a production commit naming no red (or a

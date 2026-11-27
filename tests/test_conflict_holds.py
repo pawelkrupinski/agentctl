@@ -158,7 +158,7 @@ class ConflictHoldTest(test_derived.DerivedTest):
         self.assertEqual(A.stuck_recovery({**hold, "kind": "trees"}, "held for over 6 h"), "escalate")
 
     def test_a_quietly_held_changes_laps_thin_out_with_its_age(self):
-        """A LIVE HOLD'S LAPS THIN OUT (queueclose.py; the analysis' item 10: 1,074 quiet `held:` laps, one every
+        """A LIVE HOLD'S LAPS THIN OUT (changelap.py; the analysis' item 10: 1,074 quiet `held:` laps, one every
         15 min): a quiet lap's next deadline is the change's age in its state, capped at 2 h."""
         st = A.CurrentStore(A.process_store)
         st.put_item("change", "c-held", "queued", {"worktree": "/w", "hold": {"kind": "trees", "since": A.epoch_now(),

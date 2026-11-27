@@ -1,5 +1,5 @@
 """IS THIS CHANGE LANDED: ONE ANSWER (landed_state), whose three outcomes every caller handles. Six readers asked it their
-own way (land.landed, queueclose.change_landed, cleanup's closing, fixerland.unlanded_commits, park, worktrees'
+own way (land.landed, landedchange.change_state, cleanup's closing, fixerland.unlanded_commits, park, worktrees'
 merged_reason, superseded's successor check) and disagreed on "git cannot tell": one read it as not landed, one as
 landed, one kept the work. Pinned here: each outcome through each reader, and the choice made for unknown."""
 import os, sys, unittest

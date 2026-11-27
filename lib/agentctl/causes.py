@@ -52,7 +52,7 @@ CAUSES = {
 PROJECTED_CAUSE = {"queued": "submitted", "checking": "check-running", "checked": "check-passed", "waiting": "gate-red",
                    "pushing": "pushing", "landed": "landed", "superseded": "superseded", "cancelled": "agent"}
 
-# the cause of a held change's reminder (a self-move: queueclose.py's laps), by its hold's kind (policy.py HOLDS)
+# the cause of a held change's reminder (a self-move: changelap.py's laps), by its hold's kind (policy.py HOLDS)
 HOLD_CAUSE = {"trees": "check-slot", "starting": "check-slot", "governor": "check-slot", "older-batch": "check-slot",
               "push": "lock-wait", "retry": "check-failed-infra", "regen": "regen-hold", "stacked": "overlap-hold",
               "overlap": "overlap-hold", "verify": "overlap-hold", "batch": "batch", "backlog-batch": "batch",
