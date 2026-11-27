@@ -8,7 +8,8 @@ import time
 from contextlib import suppress
 from typing import Any
 from agentctl.core import attempt
-from agentctl.inboxentry import CONDITION_KINDS, INBOX_COMMANDS, inbox_kind
+from agentctl.conditions import CONDITION_KINDS
+from agentctl.inboxentry import INBOX_COMMANDS, inbox_kind
 from agentctl.redrepos import red_family
 from agentctl.statemachines import machine_state
 from agentctl.redrecord import lease_is_live, red_lease

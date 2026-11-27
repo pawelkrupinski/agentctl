@@ -8,7 +8,7 @@ from agentctl.core import remote
 from agentctl.landstate import landed_state
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record
-from agentctl.inboxentry import CONDITION_KINDS
+from agentctl.conditions import CONDITION_KINDS
 from agentctl.fixersession import TRUST_ASK_PREFIX, claude_trust_gap
 from agentctl.cistate import state_path
 from agentctl.statemachines import MACHINES, machine_state

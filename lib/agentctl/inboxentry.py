@@ -1,4 +1,4 @@
-# agentctl, part `inboxentry`: the inbox's entries: its directory, the kinds a verdict names, who wrote it, the condition kinds only open_condition writes, and inbox_write, which hands a built entry to the writer the composition root wired (the alert router).
+# agentctl, part `inboxentry`: the inbox entry: its directory, the kinds a verdict names, who wrote it, and inbox_write, which hands a built entry to the writer the composition root wired (the alert router).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.filelog import note_event
@@ -110,12 +110,10 @@ def claude_pid_env() -> int | None:
 def inbox_write(command: str, verdict: Any, verdicts: Any, tail: Any, exit_code: Any, final: bool = True,
                 cwd: str | None = None, reply: bool = False, item: Any = None) -> Any:
     """One inbox entry, written atomically; returns its id (None when the inbox cannot be written: never fatal).
-    A CONDITION_KINDS entry only from open_condition (ConditionBypass otherwise: it would have no probe to clear it);
+    A CONDITION_KINDS entry only from open_condition (conditions.py: the wired writer refuses it otherwise);
     reply=True: a command's own verdict to the agent that ran it (with_inbox), not a standing condition. item: the alert
     model's item (alerts.py; derived from the verdict when None). Routed and merged by the wired writer (alerts'
     alert_write): the id returned is the entry that carries it (its item's live alert when one is unread)."""
-    if final and not reply and not _OPENING[0] and inbox_kind(verdict, final) in CONDITION_KINDS:
-        raise ConditionBypass(f"a {inbox_kind(verdict, final)} inbox entry outside open_condition: {str(verdict)[:160]}")
     now = dt.datetime.fromtimestamp(_inbox_times[0](), dt.timezone.utc)
     eid = (f"{stamp('event', now.timestamp())}-{os.getpid()}-{next(_inbox_seq):06d}-{re.sub(r'[^a-z]+', '-', command)}"
            + ("" if final else "-waiting"))
@@ -148,25 +146,3 @@ def inbox_entries() -> list[dict[str, Any]]:
     return sorted(out, key=lambda r: (r.get("at") or 0, r["id"]))
 
 
-# ---------------------------------------------------------------- recovery: every non-green condition clears itself
-# The owner (2026-10-28): "make this self-recover", "i want a general solution. recovery mechanism", "the way it got
-# red / blocked i want it to go green as well", "structural". ONE registry, one JSON per open CONDITION in
-# recovery_dir(). Every non-green state the status line or the inbox shows -- an escalation-kind inbox entry
-# (CONDITION_KINDS: RED UNCLAIMED / BUDGET / ESCALATE, RED BLOCKED ON OWNER, STALLED, UNKNOWN, NETWORK), an owner block
-# (`red block`), the gate UNREAD, an infra NOT LANDED -- is opened by open_condition(kind, text, probe, on_recover) and
-# ONLY there: inbox_write refuses those kinds anywhere else (ConditionBypass), a blocked claim cannot be written outside
-# it, and test_recovery's lint fails on a bypass in the source.
-# THE RULE: the probe is the check that found the problem -- a FAILED ProbeResult, which only run_probe makes -- so the
-# check that turned it red is the check that turns it green. The duties thread re-runs each open condition's probe
-# (recovery_tick; per-condition backoff; never `secrets`). When it passes the condition closes itself: its inbox entries
-# are acked, the gate is marked dirty, the status line refreshes, its on_recover actions run (release a block and
-# dispatch the red's workflow to verify it, kick the tunnel, land a change again), and one RECOVERED note is written.
-# Nobody acks a solved problem. `agentctl recover status` lists the open conditions.
-CONDITION_KINDS = ("INVARIANT", "UNLANDED_ORPHAN", "STALLED", "UNKNOWN", "NETWORK")
-
-
-_OPENING = [0]  # > 0 inside open_condition: the one place a condition-kind inbox entry or a block may be written
-
-
-class ConditionBypass(RuntimeError):
-    """A non-green condition written without open_condition (and so without a probe that can clear it): a bug."""

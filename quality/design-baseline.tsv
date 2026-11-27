@@ -128,7 +128,7 @@ state	lib/agentctl/ciruns.py	1
 state	lib/agentctl/ciwhy.py	1
 state	lib/agentctl/clock.py	1
 state	lib/agentctl/clones.py	1
-state	lib/agentctl/conditions.py	3
+state	lib/agentctl/conditions.py	4
 state	lib/agentctl/configfile.py	2
 state	lib/agentctl/core.py	4
 state	lib/agentctl/fixerblockers.py	1
@@ -183,7 +183,7 @@ import-io	devtools/mkmodule.py	6
 import-io	devtools/movedefs.py	5
 import-io	devtools/selfpush.py	1
 import-io	quality/tools.py	1
-fanout	lib/agentctl/alertprobe.py	13
+fanout	lib/agentctl/alertprobe.py	12
 fanout	lib/agentctl/ask.py	11
 fanout	lib/agentctl/batch.py	19
 fanout	lib/agentctl/batchcheck.py	17

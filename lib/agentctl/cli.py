@@ -28,7 +28,7 @@ from agentctl.store import CurrentStore
 from agentctl.leases import cmd_lease
 from agentctl.reverts import cmd_revert
 from agentctl.cleanup import cmd_sweep
-from agentctl.conditions import cmd_recover, wire_probes, wire_recover_actions
+from agentctl.conditions import cmd_recover, condition_guarded, wire_probes, wire_recover_actions
 from agentctl.upkeep import probe_disk_free
 from agentctl.queue import probe_infra_requeue, probe_push_credential
 from agentctl.issues import cmd_issue
@@ -93,7 +93,7 @@ def wire_collaborators(clock: Clock, store: Any) -> None:
                  "infra_requeue": lambda a: probe_infra_requeue(a, store),
                  "red_newer_verdict": lambda a: probe_red_newer_verdict(a, store),
                  "queue_moving": lambda a: probe_queue_moving(store, clock.time())})
-    wire_inbox_writer(lambda rec: alert_write(rec, store), clock.time)
+    wire_inbox_writer(condition_guarded(lambda rec: alert_write(rec, store)), clock.time)
     wire_token_missing_note(lambda ns, why: token_unavailable_note(ns, why, store))
 
 

@@ -246,6 +246,23 @@ class NoBypassTest(RegistryBase):
         self.assertTrue(A.inbox_write("land", "WATCH UNKNOWN: a command's own verdict", [], [], 2, reply=True))
         self.assertTrue(A.inbox_write("land", "NOT LANDED: the pre-push checks failed", [], [], 1))
 
+    def test_the_guard_stands_in_front_of_the_writer_it_wraps(self):
+        """The rule lives in conditions, not in the entry builder: the wrapped writer never sees a bypass."""
+        seen = []
+        write = A.condition_guarded(lambda rec: seen.append(rec["verdict"]) or rec["id"])
+        entry = {"id": "e1", "final": True, "reply": False, "kind": "STALLED", "verdict": "STALLED: x"}
+        with self.assertRaises(A.ConditionBypass):
+            write(entry)
+        self.assertEqual(seen, [])
+        A._OPENING[0] += 1
+        try:
+            self.assertEqual(write(entry), "e1")
+        finally:
+            A._OPENING[0] -= 1
+        self.assertEqual(write({**entry, "reply": True}), "e1")
+        self.assertEqual(write({**entry, "kind": "LANDED"}), "e1")
+        self.assertEqual(seen, ["STALLED: x"] * 3)
+
     def test_lint_no_condition_written_around_the_registry(self):
         """The source: an inbox_write whose verdict is a condition kind, a blocked red_claim, a ProbeResult or an
         open_condition without a probe argument, anywhere but the registry's own functions, fails this test."""
