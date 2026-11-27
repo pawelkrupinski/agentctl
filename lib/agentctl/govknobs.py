@@ -204,6 +204,7 @@ LAPTOP_LOAD = 2.0             # holds other work while the 1-min load is over th
 GOV_POOL_SHARE = 0.5  # of the machine's cores, the widest one pool is granted ($AGENTCTL_GOV_POOL_SHARE)
 
 
+RED_STARVED_CAP = 2  # red fixes running at once while the CPU is starved (a fix is small, their number is not)
 SUITE_CAP = 2  # agentctl's own test-suite runs at once ($AGENTCTL_SUITE_CAP): more agents queue, never pile up
 
 

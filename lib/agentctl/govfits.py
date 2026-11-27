@@ -11,7 +11,7 @@ from agentctl.machine import machine_cores
 from agentctl.govtickets import gov_dir, gov_log, gov_tickets
 from agentctl.govbudget import checks_cap, gov_budget
 from agentctl.pressure import gov_busy_cores
-from agentctl.govknobs import knob_gov_cpu_factor, knob_laptop_load
+from agentctl.govknobs import RED_STARVED_CAP, knob_gov_cpu_factor, knob_laptop_load
 from agentctl.govknobs import (
     knob_gov_pool_share, knob_gov_free_need_gb, knob_gov_reserve_gb, knob_gov_resume, knob_gov_spare, knob_gov_starved, knob_suite_cap)
 
@@ -166,11 +166,19 @@ def gov_grant(cores: float, floor: float | None, cap: dict[str, Any]) -> float:
 GOV_REFUSALS = (_suite_refusal, _check_cap_refusal, _budget_refusal, _free_memory_refusal, _pressure_refusal, _cpu_refusal)
 
 
+def _red_verdict(tickets: Any, m: Any) -> Any:
+    """Red goes whatever the memory, but while the CPU is starved (gov_capacity) at most RED_STARVED_CAP red fixes run."""
+    reds = sum(1 for t in tickets if t.get("class") == "red")
+    if reds >= RED_STARVED_CAP and gov_capacity(tickets, m)["state"] == "starved":
+        return False, f"starved: {reds} red fix(es) already running (at most {RED_STARVED_CAP} while starved)", False
+    return True, None, False
+
+
 def gov_fits(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any = "job", cores: Any = 0.0) -> Any:
     """(True, None, False) when work of class cls expecting `mem` GB and `cores` cores may start now; else (False, why,
     on_memory). Red: always."""
-    if cls == "red":  # nothing stops a gate fix, ever
-        return True, None, False
+    if cls == "red":  # a gate fix waits for no budget or pressure; only a starved CPU bounds how many run at once
+        return _red_verdict(tickets, m)
     for refusal in GOV_REFUSALS:
         verdict = refusal(cls, mem, tickets, m, kind, cores)
         if verdict:

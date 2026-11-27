@@ -138,6 +138,18 @@ class GovernorTest(unittest.TestCase):
         self.machine(100, 20)
         self.assertEqual(A.gov_capacity(tickets=[], m=self.m18())["state"], "ok", "a burst: the 5-min load is low")
 
+    def test_red_fixes_are_admitted_under_starvation_but_only_two_at_once(self):
+        """A fixer is small but unbounded in number: under a starved run queue (busy 13.6/18, queue 100) the first
+        RED_STARVED_CAP red fixes go, a third waits for one to end; unstarved, red is never counted."""
+        self.set_busy(13.6)
+        self.machine(100, 100)
+        self.assertIsNotNone(self.admit("red", 1))
+        self.assertIsNotNone(self.admit("red", 1))
+        self.assertIsNone(self.admit("red", 1), "a third red fix while starved waits")
+        self.machine(10, 10)
+        self.set_busy(2)
+        self.assertIsNotNone(self.admit("red", 1), "not starved: red never waits")
+
     def test_pause_when_starved_resume_below_the_low_mark(self):
         """The owner, 2026-11-19: "if cpu is starved then pause until we have enough resources and resume when we have
         too much". Work waits once the cores busy pass 1.0x the machine's and goes again only under 0.8x (hysteresis:
