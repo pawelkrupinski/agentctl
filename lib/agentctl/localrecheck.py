@@ -14,7 +14,6 @@ from agentctl.core import _bounded, err, git, git_ok, pid_alive, reds_dir, remot
 from agentctl.repos import precheck_hook
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.fixerrecords import fixer_records
-from agentctl.ancestry import commit_known
 from agentctl.classify import ANSI, STRONG, norm_line
 from agentctl.waitingdir import waiting_state
 from agentctl.inboxentry import inbox_write
