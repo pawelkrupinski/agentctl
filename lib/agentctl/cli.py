@@ -42,7 +42,7 @@ from agentctl.gov import cmd_suite
 from agentctl.govcmd import cmd_checks, cmd_gov
 from agentctl.cleanup import cmd_sweep
 from agentctl.cleanuppass import cmd_cleanup
-from agentctl.upkeep import probe_disk_free, run_queue_check
+from agentctl.upkeep import probe_disk_free, probe_run_queue
 from agentctl.branches import cmd_dispatch
 from agentctl.localrecheck import recheck_local
 from agentctl.redwaits import probe_quota_reset
@@ -77,7 +77,7 @@ def condition_registry(clock: Clock, store: Any, ctx: Context) -> ConditionRegis
     them (the watchdog's invariants, a change's source, a red's newer run, the queue's movement), the context into
     those reading CI runs, and the recovery actions."""
     return ConditionRegistry(
-        [probe_disk_free, run_queue_check, partial(probe_quota_reset, ctx=ctx), probe_waiting_ok, probe_workflow_green, probe_http, probe_tcp, probe_route,
+        [probe_disk_free, probe_run_queue, partial(probe_quota_reset, ctx=ctx), probe_waiting_ok, probe_workflow_green, probe_http, probe_tcp, probe_route,
          probe_tunnel, probe_gate_read, probe_token, probe_git_fetch, probe_clone_health, probe_red_read,
          partial(probe_orphan_landed, store=store), partial(probe_invariant, clock=clock, st=store, ctx=ctx),
          partial(probe_change_source, store=store), partial(probe_push_credential, st=store),
