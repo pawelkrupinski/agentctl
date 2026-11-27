@@ -19,7 +19,7 @@ fake too:
 
 After every tick the invariants (Sim.check_invariants) are asserted; a violation names the seed, the tick and what.
 """
-import hashlib, json, os, random, re, shutil, subprocess, sys, tempfile, threading, types
+import functools, hashlib, json, os, random, re, shutil, subprocess, sys, tempfile, threading, types
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -56,6 +56,8 @@ INVARIANT_KINDS = {
     "IO": "an owner-only escalation kind never dispatches",
     "IG": "every dispatched escalation ends cleared or handed to the owner within its budget",
     "IL": "a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer",
+    "IN": "no relaunch storm: a fixer whose CRASH_LOOP condition is open is never launched",
+    "IQ": "every crash loop reaches the owner or clears within its escalation budget",
     "IS": "a change reads one state whichever reader asks: the queue's view says its item's state, no record a status of its own",
     "IC": "the item carries the record: an open change's item holds its whole record (id, seq, worktree, head, commits)",
 }
@@ -390,6 +392,8 @@ class Sim:
         self.autoresolved = []  # entry ids a batch's assembly auto-resolved a source conflict of (THE BATCH TIERS)
         self.escalations = None  # the escalation world (SimEscalations), made by the first `escalate` arrival
         self.launch_deaths = {}  # red key -> {"owner": the cause is the vault's, "said": IL was reported}
+        self.crash_loops = {}  # red key -> the CRASH_LOOP world's record (crash_loop_arrives)
+        self.crash_loop_conditions = {}  # CRASH_LOOP condition id -> {"opened": tick, "route": its route, "said": IQ}
 
     # ---------------------------------------------------------------- the model's git
     def anc(self, sha):
@@ -1077,6 +1081,9 @@ class Sim:
             if spec.get("kind") == "launch-deaths":
                 self.launch_deaths_arrive(spec)
                 continue
+            if spec.get("kind") == "crash-loop":
+                self.crash_loop_arrives(spec)
+                continue
             if spec.get("kind") == "learn-run":
                 self.name_older_run()
                 continue
@@ -1236,8 +1243,12 @@ class Sim:
     def launch_deaths_arrive(self, spec):
         """A red whose fixers die at launch, one `cause` per launch (a list: one each): the real red_lease_ended reads each
         death off the simulation's store and clock, as the red tick does for a dead wrapper's lease."""
-        st, key = A.process_store(), spec["key"]
-        causes = spec["causes"]
+        self.die_at_launch(spec["key"], spec["causes"])
+        self.launch_deaths[spec["key"]] = {"same": len(set(spec["causes"])) == 1, "said": False}
+
+    def die_at_launch(self, key, causes):
+        """A red put in the store and its fixers' deaths at launch, one per cause, read by the real red_lease_ended."""
+        st = A.process_store()
         it = st.put_item("red", key, "leased", {"key": key, "workflow": "Sim workflow", "job": "j", "kind": "test", "line": "x",
                                                 "gate": False, "red_kind": "outside", "runs": ["1"], "attempts": 0,
                                                 "history": [], "tier": "fresh", "last_run": {"number": 1, "databaseId": 1}})
@@ -1250,7 +1261,6 @@ class Sim:
             if it["state"] != "leased":
                 it = A.red_move(st, it, "leased", "taken again")
             A.red_lease_ended(st, it, st.get(A.red_lease(key)), None, self.clock[0], ctx=case_context())
-        self.launch_deaths[key] = {"same": len(set(causes)) == 1, "said": False}
 
     def check_launch_deaths(self):
         """L. IL: the launches of a red all died at launch of one cause: the red waits blocked (on the vault's lease for an
@@ -1261,6 +1271,73 @@ class Sim:
             if x["same"] and not x["said"] and it["state"] != "blocked-external":
                 x["said"] = True
                 self.violate("IL", f"red {key}: every fixer launch died of one cause, yet the red is {it['state']}")
+
+    def crash_loop_arrives(self, spec):
+        """A red whose fixers keep dying at launch of one cause (crashloop.py): three deaths now, then -- each time its block
+        lifts (`lift_every` ticks after, `lifts` times: the owner's answer or the block's bound) -- every launch the REAL
+        red dispatcher's offer check lets through dies the same way. The escalation world takes the CRASH_LOOP condition's
+        agent (it never clears it: the harness stays broken in the simulation)."""
+        if self.escalations is None:
+            self.escalations = SimEscalations(self)
+        self.die_at_launch(spec["key"], [spec["cause"]] * 3)
+        self.crash_loops[spec["key"]] = {"cause": spec["cause"], "lift_every": spec.get("lift_every", 6),
+                                         "lifts": spec.get("lifts", 1), "since": self.tick, "launches": 0}
+
+    def crash_loop_check(self):
+        """The registry's probe_fixer_crash_loop, its store and code bound (the simulation's code never changes)."""
+        return functools.partial(A.probe_fixer_crash_loop, store=A.process_store(), code=lambda: "sim-code")
+
+    def crash_loop_tick(self):
+        """The server tick's crash-loop step, each crash-looping red's block lifted on its schedule, the red dispatcher's
+        real offer check (offerdispatch.offer_waits_why) asked for each of its offers -- a launch it lets through dies --,
+        the open CRASH_LOOP conditions re-probed; then IN and IQ."""
+        st, check = A.process_store(), self.crash_loop_check()
+        A.crash_loop_step(st, check)
+        for key, x in self.crash_loops.items():
+            it = st.item("red", key)
+            if it["state"] == "blocked-external" and x["lifts"] and self.tick - x["since"] >= x["lift_every"]:
+                x["lifts"], x["since"] = x["lifts"] - 1, self.tick
+                A.red_offer(st, it, "sim: its block lifted")
+            for off in [o for o in st.offers("fixer") if o["item"] == f"red:{key}"]:
+                it = st.item("red", key)
+                if A.offer_waits_why(st, self.clock[0], off, off["picture"], it, None) is None:
+                    self.crash_loop_launch(st, key, off, x)
+        for c in [c for c in A.open_conditions(st) if c["kind"] == "CRASH_LOOP"]:
+            self.crash_loop_conditions.setdefault(c["id"], {"opened": self.tick, "route": A.escalation_route(c),
+                                                            "said": False})
+            self.escalations.adopt(c)
+            r = A.run_probe(check, c["probe"]["args"])
+            if r.ok:
+                A.close_condition(c, r, st, registry(A))
+        self.check_crash_loops(st)
+
+    def crash_loop_launch(self, st, key, off, x):
+        """One fixer the dispatcher let through, dying at launch of the red's cause (IN: never while its loop is open)."""
+        x["launches"] += 1
+        if any(c["kind"] == "CRASH_LOOP" and c.get("subject") == f"red:{key}" for c in A.open_conditions(st)):
+            self.violate("IN", f"red {key}: a fixer launched while its CRASH_LOOP condition is open")
+        took = st.take(off["id"], f"laptop:fixer:red-{key}-relaunch-{x['launches']}", A.RED_FIXER_TTL, A.RED_FIXER_MAX,
+                       meta={"kind": "fixer", "worktree": f"/w/{key}-r{x['launches']}"})
+        if not took or "epoch" not in took:
+            return
+        st.release(A.red_lease(key), took["epoch"], took["secret"],
+                   outcome="ended with no LANDED / GAVE UP (session s: blocked)", notes=x["cause"])
+        it = st.item("red", key)
+        if it["state"] != "leased":
+            it = A.red_move(st, it, "leased", "taken again")
+        A.red_lease_ended(st, it, st.get(A.red_lease(key)), None, self.clock[0], ctx=case_context())
+
+    def check_crash_loops(self, st):
+        """IQ: every CRASH_LOOP condition is the owner's at once (an owner-only route: its inbox entry is his ask), or
+        closed, or handed to the owner by its agents' spent tries, within its route's escalation budget."""
+        for cid, x in self.crash_loop_conditions.items():
+            it = st.item("condition", cid)
+            settled = x["route"].mode != A.TO_AGENT or it["state"] == "closed" \
+                or bool(((it.get("data") or {}).get("escalation") or {}).get("owner_told"))
+            budget = self.escalations.budget(x["route"]) + x["route"].after
+            if not settled and not x["said"] and (self.tick - x["opened"]) * TICK > budget:
+                x["said"] = True
+                self.violate("IQ", f"CRASH_LOOP {cid} neither cleared nor the owner's {self.tick - x['opened']} ticks on")
 
     def check_escalations(self):
         """E. THE ESCALATION DISPATCHER'S INVARIANTS, by the simulation's own truth (the sessions it ran):
@@ -1413,6 +1490,8 @@ class Sim:
         if self.escalations:
             self.escalations.tick()
             self.check_escalations()
+        if self.crash_loops:
+            self.crash_loop_tick()
         if self.launch_deaths:
             self.check_launch_deaths()
         self.check_invariants(before, reds)
@@ -1445,7 +1524,16 @@ class Sim:
     def quiet(self):
         return not self.reds and not self.outside and not [e for e in self.records()
                                       if not A.entry_final(e.get("status"))] and not self.arrivals \
-            and not (self.escalations and self.escalations.open())
+            and not (self.escalations and self.escalations.open()) and not self.crash_loops_pending()
+
+    def crash_loops_pending(self):
+        """A crash-looping red still to have its block lifted, or offered within CRASH_LOOP_WATCH ticks of its lift: its
+        launch backoffs run out in that window, so a relaunch the hold should stop would be seen (IN)."""
+        st = A.process_store()
+        offered = {o["item"] for o in st.offers("fixer")}
+        return any((x["lifts"] and st.item("red", key)["state"] == "blocked-external")
+                   or (f"red:{key}" in offered and self.tick - x["since"] < CRASH_LOOP_WATCH)
+                   for key, x in self.crash_loops.items())
 
     # ---------------------------------------------------------------- the invariants
     def check_invariants(self, before, reds):
@@ -1900,6 +1988,14 @@ class SimEscalations:
                                 "owner": bool(spec.get("owner")),
                                 "first_dispatch": None, "tries": 0}
 
+    def adopt(self, c):
+        """A condition opened by agentctl itself (a CRASH_LOOP), its agent scripted to fail: the harness stays broken."""
+        key = c["key"]
+        if key not in self.conditions or self.conditions[key]["id"] != c["id"]:
+            self.conditions[key] = {"id": c["id"], "kind": A.escalation_kind(c), "route": A.escalation_route(c),
+                                    "agent": "fails", "clears_on": 99, "owner": A.escalation_route(c).mode != A.TO_AGENT,
+                                    "first_dispatch": None, "tries": 0}
+
     def budget(self, route):
         """The longest a dispatched escalation may take to end: every try's wall time and lease, every backoff, and a
         few ticks of slack."""
@@ -1983,6 +2079,17 @@ CRASH_LOOPS = [
     (0, {"kind": "launch-deaths", "key": "loop-vault", "causes": ["waiting for Touch ID: secrets unlock movies"] * 3}),
     (1, {"kind": "launch-deaths", "key": "loop-same", "causes": ["claude: model overloaded"] * 3}),
     (2, {"kind": "launch-deaths", "key": "loop-mixed", "causes": ["claude: model overloaded", "disk full", "bad config"]}),
+    (0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
+]
+# THE CRASH LOOP AS A CONDITION (2026-11-27, crashloop.py): reds whose fixers keep dying at launch -- of one harness
+# cause (an Opus agent's, which never clears it), of the vault (the owner's) -- each block lifted once: IN (no relaunch
+# while the CRASH_LOOP condition is open: the one launch the lift lets through, then held), IQ (every loop the owner's
+# or cleared in budget)
+CRASH_LOOP_WATCH = 150  # ticks a lifted red is watched for relaunches (its NOT STARTED backoffs: 10 min doubling)
+CRASH_LOOPS_HELD = [
+    (0, {"kind": "crash-loop", "key": "held-harness", "cause": "claude: model overloaded", "lift_every": 5}),
+    (1, {"kind": "crash-loop", "key": "held-vault", "cause": "waiting for Touch ID: secrets unlock movies",
+         "lift_every": 7}),
     (0, {"label": "a", "worktree": "a", "paths": ["web/src/main/A.scala"]}),
 ]
 # the repo untrusted for the first 40 ticks: NOT DISPATCHABLE, no try counted, dispatched once trusted

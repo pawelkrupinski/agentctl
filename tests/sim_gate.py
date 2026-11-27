@@ -87,6 +87,8 @@ def scenarios():
             for s in range(2)]
     # v9 (2026-11-26): fixers dying at launch -- of the vault, of one other cause, of a different cause each time (IL)
     out += [(f"crash-loops-{s}", {"seed": s, "calm": True, "trees": 2, "script": "CRASH_LOOPS"}) for s in range(4)]
+    # v11 (2026-11-27): the crash loop as a condition -- reds whose fixers keep dying at launch, blocks lifted (IN, IQ)
+    out += [(f"crash-loops-held-{s}", {"seed": s, "calm": True, "trees": 2, "script": "CRASH_LOOPS_HELD"}) for s in range(4)]
     # v10 (2026-11-26): tools-only changes failing only as the gate red fails land on it, production ones wait (IK, IR)
     out += [(f"known-red-tools-{s}", {"seed": s, "calm": True, "trees": 2, "script": "KNOWN_RED_TOOLS"}) for s in range(4)]
     return out

@@ -349,6 +349,30 @@ class CrashLoopsTest(unittest.TestCase):
         self.assertIn("IL", {k for sim in self.run_all() for k in sim.kinds_seen})
 
 
+class CrashLoopsHeldTest(unittest.TestCase):
+    """THE CRASH LOOP AS A CONDITION (queue_sim.CRASH_LOOPS_HELD, 2026-11-27): reds whose fixers keep dying at launch, of a
+    harness cause and of the vault, each block lifted once -- IN (never launched while the CRASH_LOOP condition is
+    open: the one launch the lift lets through, then held -- no storm) and IQ (every loop the owner's or cleared within its budget) hold; IN catches
+    the dispatcher's hold undone."""
+
+    def run_all(self):
+        return [queue_sim.Sim(seed, calm=True, trees=2, script=list(queue_sim.CRASH_LOOPS_HELD)).run(stop=False)
+                for seed in range(2)]
+
+    def test_in_and_iq_hold_one_launch_per_lifted_block(self):
+        sims = self.run_all()
+        self.assertEqual(failures(sims), [])
+        for sim in sims:
+            self.assertEqual({k: x["launches"] for k, x in sim.crash_loops.items()}, {"held-harness": 1, "held-vault": 1})
+            self.assertEqual(len(sim.crash_loop_conditions), 4)  # each loop opened, closed by its lift, opened again
+
+    def test_the_hold_undone_breaks_in(self):
+        saved = queue_sim.A.crash_loop_hold
+        queue_sim.A.crash_loop_hold = lambda conditions, subject: None
+        self.addCleanup(setattr, queue_sim.A, "crash_loop_hold", saved)
+        self.assertIn("IN", {k for sim in self.run_all() for k in sim.kinds_seen})
+
+
 class KnownRedToolsTest(unittest.TestCase):
     """queue_sim.KNOWN_RED_TOOLS (the owner's "let it through", 2026-11-26): tools-only changes failing only in the open
     gate red's own test land on it (IK), the production one waits and never lands on it unnamed (IR); IK catches the

@@ -2142,7 +2142,7 @@ Use it for every push to main. Don't use it for `measure/` branches: `identity-m
 
 **CRASH_LOOP: a fixer crash-looping at launch is an escalation (2026-11-27, the transition analysis' item 6).** The
 server's tick (`crash loops`, crashloop.py) reads the fixer LAUNCH RECORDS -- a red's history (each dispatched lease's
-start, `started`, and end) and an escalation's tries (`escalation.tries` on its condition) -- and a subject whose newest
+lifetime, `lived`, and end) and an escalation's tries (`escalation.tries` on its condition) -- and a subject whose newest
 `$AGENTCTL_CRASH_LOOP_LAUNCHES` (3) launches each died within `$AGENTCTL_CRASH_LOOP_QUICK` (120 s) of starting with no
 result, of ONE cause (redcrash.py `launch_cause`), opens ONE condition `CRASH_LOOP` (key `crash-loop-red-<id>` /
 `crash-loop-condition-<id>`), its text the cause, its `evidence` each launch's end, lifetime, log and last words.
@@ -2155,7 +2155,9 @@ since it opened (a fix deployed) or the red was offered again after it (its bloc
 through: one dying the same way opens it again at once (the meta mark `crash_loop:<subject>` holds the newest launch
 it opened for), so a loop costs one launch per fix or answer, never a storm. A CRASH_LOOP condition's own fixer is no
 subject: its two tries end at the owner. The red ladder's own breaker (e01f564: the red's harness or vault block) is
-unchanged beside it. The relaunch hold is agent-proposed (it holds fixer launches, no change): the owner's to confirm.
+unchanged beside it. The relaunch hold is agent-proposed (it holds fixer launches, no change): the owner's to confirm. The simulator
+holds it (`CRASH_LOOPS_HELD`): IN, a fixer whose CRASH_LOOP condition is open is never launched (one launch per lifted
+block; the hold undone fails it), and IQ, every crash loop the owner's or cleared within its escalation budget.
 
 #### the queue simulator: the queue's invariants under random load (the owner, 2026-11-18)
 

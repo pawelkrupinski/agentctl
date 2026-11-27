@@ -2,29 +2,31 @@
 # fingerprint, the number of the gate's fixed scenarios violating it (its baseline). A changed
 # definition is a new version, in a commit of its own; a baseline only falls without one.
 # kind	version	fingerprint	baseline	what
-I1	15	d7306af6e5fa	0	one open item per change (worktree + head)
-I2	13	6722a938bca6	0	never two pushes of one change; never a decided change's commit pushed
-I3	15	5980f57f7bde	0	a red fix is never behind a batch or a non-red change (its own tree, started and pushed when it may go)
-I4	15	d7306af6e5fa	0	a batch reaches landed, bisecting or held within its bound
-I5	15	d7306af6e5fa	0	the oldest change lands within a bound when nothing fails
-I6	16	f55de545a0bb	0	no change lost (every item one of the queue's, LANDED is on main, every change decided after the drain)
-I7	16	c3d35410b93a	0	exactly one agentctl.landing record per decided change
-I8	13	abbe37f3c62a	0	a change that no longer applies was told at queue time and never checked meanwhile
-I9	13	a0c71c83663d	0	no full recheck for a file overlap with a change open when it was queued
-I10	20	aac643ea71ba	0	no change held behind a queued one for generated files alone
-I11	13	6722a938bca6	0	no unverified combined tree reaches main
-Ib	15	7e22c9e05fd6	0	every queued or checked change past its deadline has a recorded hold
-Ic	15	7e22c9e05fd6	0	no change past its deadline is silent in `land status`
-Id	15	7e22c9e05fd6	0	executors start in the documented priority order within a tick
-IX	16	8d54624056d0	0	no executor for a decided change
-IW	11	d7306af6e5fa	0	a red fix of an open gate red the store names never waits for green past N ticks
-IK	3	d7306af6e5fa	0	a tools-only change failing only as the open gate red fails never waits for green past N ticks
-IR	10	3947b484aac4	0	the queue never lands on a red gate a production commit naming no run of the open red
-IH	8	20a9960ccd87	0	two holders reading no hold at once make exactly one hold, both report it and both moves are said
-IT	9	aac643ea71ba	0	no overlap hold outlives its TTL while its holder is not in flight
-IE	6	a2fb9f511aff	0	never two escalation fixers of one kind, nor more than the cap in all
-IO	6	a2fb9f511aff	0	an owner-only escalation kind never dispatches
-IG	6	a2fb9f511aff	0	every dispatched escalation ends cleared or handed to the owner within its budget
-IL	5	cd12f0da01d9	0	a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer
-IS	2	d7306af6e5fa	0	a change reads one state whichever reader asks: the queue's view says its item's state, no record a status of its own
-IC	2	17250cec90c9	0	the item carries the record: an open change's item holds its whole record (id, seq, worktree, head, commits)
+I1	16	81f67aca4d03	0	one open item per change (worktree + head)
+I2	14	360e181ef3b3	0	never two pushes of one change; never a decided change's commit pushed
+I3	16	45310a79af47	0	a red fix is never behind a batch or a non-red change (its own tree, started and pushed when it may go)
+I4	16	81f67aca4d03	0	a batch reaches landed, bisecting or held within its bound
+I5	16	81f67aca4d03	0	the oldest change lands within a bound when nothing fails
+I6	17	fc0e073da2cd	0	no change lost (every item one of the queue's, LANDED is on main, every change decided after the drain)
+I7	17	bd45fea1232d	0	exactly one agentctl.landing record per decided change
+I8	14	89efaa2fdeea	0	a change that no longer applies was told at queue time and never checked meanwhile
+I9	14	a0ef8a3dd220	0	no full recheck for a file overlap with a change open when it was queued
+I10	21	cbafe4d45d4b	0	no change held behind a queued one for generated files alone
+I11	14	360e181ef3b3	0	no unverified combined tree reaches main
+Ib	16	fbda2fdb9f38	0	every queued or checked change past its deadline has a recorded hold
+Ic	16	fbda2fdb9f38	0	no change past its deadline is silent in `land status`
+Id	16	fbda2fdb9f38	0	executors start in the documented priority order within a tick
+IX	17	63a85ffb4be3	0	no executor for a decided change
+IW	12	81f67aca4d03	0	a red fix of an open gate red the store names never waits for green past N ticks
+IK	4	81f67aca4d03	0	a tools-only change failing only as the open gate red fails never waits for green past N ticks
+IR	11	3d85b7bcdefb	0	the queue never lands on a red gate a production commit naming no run of the open red
+IH	9	2d71a32864f1	0	two holders reading no hold at once make exactly one hold, both report it and both moves are said
+IT	10	cbafe4d45d4b	0	no overlap hold outlives its TTL while its holder is not in flight
+IE	7	ba98ecc35b2e	0	never two escalation fixers of one kind, nor more than the cap in all
+IO	7	ba98ecc35b2e	0	an owner-only escalation kind never dispatches
+IG	7	ba98ecc35b2e	0	every dispatched escalation ends cleared or handed to the owner within its budget
+IL	6	7d3b5e78ceed	0	a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer
+IN	1	c546e76a2629	0	no relaunch storm: a fixer whose CRASH_LOOP condition is open is never launched
+IQ	1	71a23522b5f1	0	every crash loop reaches the owner or clears within its escalation budget
+IS	3	81f67aca4d03	0	a change reads one state whichever reader asks: the queue's view says its item's state, no record a status of its own
+IC	3	53e5e66fb4b6	0	the item carries the record: an open change's item holds its whole record (id, seq, worktree, head, commits)
