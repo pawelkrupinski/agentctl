@@ -15,6 +15,7 @@ from agentctl.inboxentry import inbox_dir, inbox_write
 from agentctl.cistate import ci_state_load
 from agentctl.agewords import fmt_age
 from agentctl.paths import recovery_dir
+from agentctl.escalationtable import TO_AGENT, escalation_offer_item, escalation_route, owner_escalation
 import glob
 import json
 import os
@@ -374,10 +375,19 @@ def _escalation_due(it: Any, t: Any) -> bool:
     return it["state"] == "open" and t >= max(it["deadline"], float(it["data"].get("escalate_after") or 0))
 
 
-def _escalate_overdue(st: Any, it: Any, t: Any) -> None:
-    """An open condition past its deadline (and its own escalate_after): the state's self-transition, an escalate event."""
+def _owner_escalation(st: Any, it: Any, t: float) -> tuple[bool, str]:
+    """(due, why) of an overdue condition's owner escalation: an agent's kind waits while an agent has it, or may still
+    take it (escalationtable.py owner_escalation); only an agent's kind reads its offer."""
+    if escalation_route(it["data"]).mode != TO_AGENT:
+        return True, ""
+    return owner_escalation(it, st.offer_of(escalation_offer_item(it["id"])), t)
+
+
+def _escalate_overdue(st: Any, it: Any, t: Any, why: str = "") -> None:
+    """An open condition past its deadline (and its own escalate_after): the state's self-transition, an escalate event
+    saying why no agent took it (why: owner_escalation's)."""
     age = fmt_age(t - float(it["data"].get("opened_at") or t))
-    line = f"ESCALATED: {it['data'].get('kind')} open for {age}: {str(it['data'].get('text'))[:200]}"
+    line = f"ESCALATED: {it['data'].get('kind')} open for {age}{', ' + why if why else ''}: {str(it['data'].get('text'))[:200]}"
     with suppress(StaleVersion):
         st.transition("condition", it["id"], "open", it["version"], deadline_s=CONDITION_ESCALATE_EVERY,
                       event={"cause": "timeout", "text": line, "audience": {"worktree": it["data"].get("cwd")} if it["data"].get("cwd")
@@ -393,15 +403,25 @@ def _tick_condition(st: Any, it: Any, t: Any, force: bool, server: bool, out: li
         it = _reprobe(st, it, c, t, out, registry)
         if it is None:
             return
-    if server and _escalation_due(it, t):
-        _escalate_overdue(st, it, t)
+    if server:
+        escalate_if_due(st, it, t)
+
+
+def escalate_if_due(st: Any, it: Any, t: float) -> None:
+    """The server's escalation of open condition item `it`: past its deadline, and -- an agent's kind -- no agent has
+    it (escalationtable.py owner_escalation), the escalate event, saying why."""
+    if _escalation_due(it, t):
+        due, why = _owner_escalation(st, it, t)
+        if due:
+            _escalate_overdue(st, it, t, why)
 
 
 def recovery_tick(store: Any, registry: ConditionRegistry, now_: Any = None, force: bool = False) -> Any:
     """Each host's look (the server's tick and the laptop's sync both run it): each open condition OPENED ON THIS HOST
     whose next check is due re-runs ITS probe; a pass closes it. Backoff: PROBE_EVERY x 2^fails, at most
     RECOVER_BACKOFF_MAX. Past its deadline (10 min after opening, then every 2 h) an open condition escalates -- on the
-    server only (one writer of escalations): the state's self-transition, an escalate event the notifier delivers.
+    server only (one writer of escalations): the state's self-transition, an escalate event the notifier delivers; an
+    agent's kind only once no agent has it, saying why (escalationtable.py owner_escalation).
     Returns the RECOVERED lines."""
     st = store
     t = now_ if now_ is not None else epoch_now()

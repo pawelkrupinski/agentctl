@@ -44,6 +44,11 @@ MUTATIONS = {
         "        if r.returncode != 0:\n            return None\n        _production[c]",
         "        if r.returncode != 0:\n            raise RuntimeError(r.stderr)\n        _production[c]",
         "the red rule raises on a commit the clone lacks (the 2026-11-26 dead tick)"),
+    "EscalationTest": (
+        "lib/agentctl/conditions.py",
+        "        if due:\n            _escalate_overdue(st, it, t, why)",
+        "        if True:\n            _escalate_overdue(st, it, t, why)",
+        "the server escalates an agent-routed condition to the owner while its agent works"),
     "SlowLinkTest": (
         "lib/agentctl/remotestore.py",
         'return json.loads(open_within(req, timeout or self.timeout) or b"null")',

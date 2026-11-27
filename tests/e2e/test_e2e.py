@@ -1,7 +1,7 @@
 """THE END-TO-END SCENARIOS (the owner, 2026-11-27): the real store server, the real reconciler tick and sync, the laptop's
 real CLI and a real git remote, together (tests/e2e/e2e_harness.py); GitHub is the stub (tests/e2e/ghstub.py). Each
 scenario is one test, and each FAILS when its behaviour is broken (tests/e2e/mutations.py proves it per scenario)."""
-import io, os, re, shutil, socket, subprocess, sys, tarfile, threading, time, unittest
+import io, json, os, re, shutil, socket, subprocess, sys, tarfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -284,6 +284,108 @@ class Throttle:
         self.sock.close()
         for t in self.threads:
             t.join(5)
+
+
+class EscalationTest(E2ETest):
+    """AN AGENT-ROUTED CONDITION GOES TO AN AGENT, NOT THE OWNER (2026-11-27, condition vendor-drift: the laptop's
+    dispatcher started its agent at 20:08:28Z and the server's escalation told the owner "ESCALATED: VENDOR_DRIFT open
+    for 10 min" five seconds later). The laptop's sync opens a VENDOR_DRIFT condition (a movies checkout -- here a temp
+    one -- ahead of one vendored copy), its escalation dispatcher offers, leases and launches it through a STUB claude
+    (tests/e2e/claude_stub.py, $AGENTCTL_CLAUDE: never the real one) in a fresh worktree of a toy agentctl clone, the
+    server's tick holds the owner's escalation while the agent works, and the condition's own probe closes it."""
+
+    def setUp(self):
+        super().setUp()
+        w = self.w
+        bare, self.bin = os.path.join(w.root, "github", "bin.git"), os.path.join(w.root, "bin")
+        H.sh(w.root, "git", "init", "-q", "--bare", "-b", "main", bare)
+        H.sh(w.root, "git", "init", "-q", "-b", "main", self.bin)
+        H.sh(self.bin, "git", "remote", "add", "origin", bare)
+        w.write("README.md", "toy agentctl\n", at=self.bin)
+        w.commit("init", at=self.bin)
+        H.sh(self.bin, "git", "push", "-q", "origin", "HEAD:main")
+        with open(os.path.join(H.BIN, "devtools", "design_rules", "VENDORED.tsv")) as f:
+            copy, source, _ = next(x for x in f if x.strip() and not x.startswith("#")).rstrip("\n").split("\t")
+        movies = os.path.join(w.root, "movies-ahead")
+        theirs = os.path.join(movies, source)
+        os.makedirs(os.path.dirname(theirs))
+        with open(os.path.join(H.BIN, copy)) as f, open(theirs, "w") as g:
+            g.write(f.read() + "# movies moved ahead\n")
+        w.write(".claude/settings.json", '{"permissions": {"defaultMode": "auto"}}', at=w.home)
+        self.claude = os.path.join(w.root, "claude")
+        w.extra_env.update(AGENTCTL_CLAUDE=os.path.join(H.HERE, "claude_stub.py"), E2E_CLAUDE_DIR=self.claude,
+                           AGENTCTL_BIN_REPO=self.bin, MOVIES_ROOT=movies,
+                           E2E_CLAUDE_FIX_FROM=os.path.join(H.BIN, copy), E2E_CLAUDE_FIX_TO=theirs)
+
+    def sync(self):
+        r = self.w.sync()
+        no_traceback(self, r, "the sync")
+        return r
+
+    def condition(self):
+        rows = self.w.db("SELECT state, data FROM items WHERE type='condition' AND id='vendor-drift'")
+        return dict(rows[0], data=json.loads(rows[0]["data"] or "{}")) if rows else None
+
+    def claude_calls(self, verb):
+        p = os.path.join(self.claude, "calls.jsonl")
+        calls = [json.loads(x) for x in open(p)] if os.path.exists(p) else []
+        return [c for c in calls if c["argv"][:1] == [verb]]
+
+    def owner_escalations(self):
+        return [e["text"] for e in self.w.events("vendor-drift") if str(e.get("text") or "").startswith("ESCALATED")]
+
+    def inbox_escalations(self):
+        return [str(e.get("verdict")) for e in self.w.inbox() if "ESCALAT" in str(e.get("verdict"))]
+
+    def open_past_its_bound(self):
+        self.sync()
+        self.assertEqual((self.condition() or {}).get("state"), "open", self.w.diagnosis())
+        self.w.backdate("condition", "vendor-drift", 11 * 60, ("opened_at",))  # 11 min open: past the dispatch bound
+
+    def test_an_agent_routed_condition_is_dispatched_and_clears_with_no_owner_escalation(self):
+        self.open_past_its_bound()
+        self.sync()  # the escalation dispatcher: the offer, its lease, the launch
+        bg = self.claude_calls("--bg")
+        self.assertEqual(len(bg), 1, self.w.diagnosis())
+        self.assertTrue(bg[0]["cwd"].startswith(self.bin + "-wt-escalation-vendor-drift"), bg[0]["cwd"])
+        self.assertIn("escalation · VENDOR_DRIFT", bg[0]["argv"])
+        self.assertIn("VENDOR DRIFT", bg[0]["argv"][1])  # the brief carries the condition
+        self.assertEqual(self.w.db("SELECT holder FROM leases WHERE name='escalation/VENDOR_DRIFT'")[0]["holder"][:8],
+                         "laptop:e")
+        self.assertEqual(self.w.tick().returncode, 0)  # the server's look, past the deadline, while the agent works
+        self.assertEqual(self.owner_escalations(), [], "an agent works on it: the owner is not told")
+        self.w.backdate("condition", "vendor-drift", 3600, ("next_check",))  # its probe due: the stub's fix is in
+        self.sync()
+        self.assertEqual(self.condition()["state"], "closed", self.w.diagnosis())
+        self.sync()  # the dispatcher: CLEARED, its session stopped
+        with open(os.path.join(self.claude, "sessions.json")) as f:
+            started = json.load(f)[0]["id"]
+        self.assertEqual([c["argv"][1] for c in self.claude_calls("stop")], [started])
+        self.assertEqual(self.w.tick().returncode, 0)
+        self.assertEqual(self.owner_escalations(), [])
+        self.assertEqual(self.inbox_escalations(), [])
+
+    def test_a_failed_launch_tells_the_owner_why_and_spent_tries_hand_it_to_him(self):
+        self.w.extra_env["E2E_CLAUDE_BG_FAIL"] = "Error: this workspace is not trusted"
+        self.open_past_its_bound()
+        self.sync()  # try 1: the launch fails
+        self.assertEqual(self.w.tick().returncode, 0)
+        told = self.owner_escalations()
+        self.assertEqual(len(told), 1, self.w.diagnosis())
+        self.assertIn("no agent took it: the launch failed: NOT STARTED: `claude --bg` exit 1: Error: this workspace "
+                      "is not trusted", told[0])
+        self.sync()  # the event reaches the laptop's inbox
+        self.assertTrue(any("the launch failed" in x for x in self.inbox_escalations()), self.inbox_escalations())
+        for _ in range(2):  # tries 2 and 3, each once its backoff is over
+            self.w.backdate("condition", "vendor-drift", 3 * 3600, ("escalation.next_after",))
+            self.sync()
+        self.assertEqual(len(self.claude_calls("--bg")), 3)
+        self.sync()  # the tries are spent: the owner is handed it, once
+        gave_up = [x for x in self.inbox_escalations() if "ESCALATION GAVE UP" in x]
+        self.assertEqual(len(gave_up), 1, self.inbox_escalations())
+        self.assertIn("WAITING ON YOU", gave_up[0])
+        self.sync()
+        self.assertEqual(len(self.claude_calls("--bg")), 3, "never past its tries")
 
 
 class SlowLinkTest(E2ETest):

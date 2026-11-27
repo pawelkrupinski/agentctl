@@ -92,6 +92,7 @@ class World:
         self.root = os.path.realpath(tempfile.mkdtemp(prefix="agentctl-e2e-"))
         self.tool, self.server_tool = tool, server_tool or TOOL
         self.procs, self.logs, self.gh_srv = [], os.path.join(self.root, "logs"), None
+        self.extra_env = {}  # a scenario's own variables, in every process's environment (the stub claude's, ...)
         os.makedirs(self.logs)
         try:
             self._build()
@@ -184,6 +185,7 @@ class World:
                    AGENTCTL_SOCK_DIR=os.path.join(self.root, "sock"), AGENTCTL_GITHUBSTATUS_URL=self.gh_url + "/status",
                    AGENTCTL_STATS_URL="", AGENTCTL_HOSTNAME="e2e-laptop", AGENTCTL_MACHINE_ID="e2e-machine",
                    AGENTCTL_TEST_HOME=self.home, PYTHONDONTWRITEBYTECODE="1")
+        env.update(self.extra_env)
         return env
 
     def server_env(self):
@@ -302,6 +304,28 @@ class World:
         try:
             c.row_factory = sqlite3.Row
             return [dict(r) for r in c.execute(sql, args)]
+        finally:
+            c.close()
+
+    def backdate(self, typ, iid, seconds, data_fields=()):
+        """Item (typ, iid) as if it entered its state `seconds` earlier: its deadline and each of `data_fields` (epoch
+        times in its data, `a.b` one nested in a) moved back -- the wall clock the real processes read is not the
+        scenario's to turn."""
+        import sqlite3
+        c = sqlite3.connect(os.path.join(self.root, "server", "state", "store.db"), timeout=30)
+        try:
+            row = c.execute("SELECT data FROM items WHERE type=? AND id=?", (typ, iid)).fetchone()
+            data = json.loads(row[0] or "{}")
+            for path in data_fields:
+                *outer, k = path.split(".")
+                d = data
+                for o in outer:
+                    d = d.get(o) or {}
+                if d.get(k) is not None:
+                    d[k] = float(d[k]) - seconds
+            c.execute("UPDATE items SET deadline=deadline-?, entered_at=entered_at-?, data=? WHERE type=? AND id=?",
+                      (seconds, seconds, json.dumps(data), typ, iid))
+            c.commit()
         finally:
             c.close()
 

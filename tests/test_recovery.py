@@ -205,11 +205,12 @@ class HostTest(RegistryBase):
 
 class ConditionItemTest(RegistryBase):
     """Step 12: a condition is an item of the "condition" machine -- it escalates (an event the notifier delivers) 10 min
-    after opening and every 2 h after, and only its own probe passing closes it."""
+    after opening and every 2 h after, and only its own probe passing closes it. (An owner-only kind: an agent's kind
+    waits for its agent first, tests/test_escalations.py OwnerEscalationTest.)"""
     def test_open_escalate_by_deadline_close_by_its_probe_and_old_files_migrate(self):
         ok = [False]
         tunnel = self.fake("tunnel", lambda a: (ok[0], "down" if not ok[0] else "up"))
-        A.open_condition("STALLED", "STALLED: x", A.run_probe(tunnel), [], key="k1", store=A.CurrentStore(A.process_store))
+        A.open_condition("NETWORK", "NETWORK: x", A.run_probe(tunnel), [], key="k1", store=A.CurrentStore(A.process_store))
         st = A.process_store()
         it = st.item("condition", "k1")
         self.assertEqual((it["state"], it["level"]), ("open", 0))

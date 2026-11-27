@@ -299,6 +299,74 @@ class ClosureAndRetryTest(EscalationBase):
         self.assertEqual(self.events(c["id"])[-1]["to_state"], "cleared")
 
 
+class OwnerEscalationTest(EscalationBase):
+    """The server's escalation of a condition an agent may take (2026-11-27, vendor-drift: dispatched at 20:08:28Z, the
+    owner told "ESCALATED: VENDOR_DRIFT open for 10 min" at 20:08:33Z while the agent worked): held while an agent has
+    it, and once due it says WHY no agent took it."""
+
+    def server_tick(self, advance=0):
+        self.t[0] += advance
+        A.recovery_tick(self.st, registry(A, escprobe=self.probe), self.t[0])
+
+    def escalations(self, c):
+        return [e["text"] for e in self.st.item_events("condition", c["id"]) if e.get("cause") == "timeout"]
+
+    def test_a_dispatched_agent_holds_the_owners_escalation_until_its_condition_clears(self):
+        c = self.open("VENDOR_DRIFT", "vendor-drift", "VENDOR DRIFT: devtools/design_rules/model.py drifted")
+        self.run_pass(advance=A.DISPATCH_AFTER)
+        self.assertEqual(len(self.launcher.starts), 1)
+        self.server_tick(advance=5)  # the server's tick, at its deadline, just after the dispatch
+        self.run_pass(advance=60)  # the session works: taken
+        for _ in range(4):
+            self.server_tick(advance=600)
+            self.run_pass()
+        self.assertEqual(self.escalations(c), [], "an agent works on it: the owner is not told")
+        self.clear("vendor-drift")
+        self.run_pass(advance=60)
+        self.assertEqual(self.escalations(c), [])
+
+    def test_no_dispatcher_tells_the_owner_after_the_grace_that_it_was_never_offered(self):
+        c = self.open("VENDOR_DRIFT", "vendor-drift", "VENDOR DRIFT: x drifted")
+        self.server_tick(advance=A.DISPATCH_AFTER + 5)
+        self.assertEqual(self.escalations(c), [], "the dispatcher may still take it")
+        self.server_tick(advance=A.OWNER_GRACE)
+        lines = self.escalations(c)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("no agent took it: never offered", lines[0])
+
+    def test_an_offer_nobody_could_take_tells_the_owner_its_reason(self):
+        self.launcher.gap = "claude does not trust ~/bin"
+        c = self.open("VENDOR_DRIFT", "vendor-drift", "VENDOR DRIFT: x drifted")
+        self.run_pass(advance=A.DISPATCH_AFTER)
+        self.server_tick(advance=5)
+        self.assertEqual(self.escalations(c), [])
+        self.run_pass(advance=A.OWNER_GRACE)
+        self.server_tick()
+        self.assertIn("no agent took it: NOT DISPATCHABLE: claude does not trust ~/bin", self.escalations(c)[0])
+
+    def test_a_launch_that_failed_tells_the_owner_at_once_with_its_reason(self):
+        self.launcher.refuse = "no `claude` CLI"
+        c = self.open("VENDOR_DRIFT", "vendor-drift", "VENDOR DRIFT: x drifted")
+        self.run_pass(advance=A.DISPATCH_AFTER)
+        self.server_tick(advance=5)
+        lines = self.escalations(c)
+        self.assertEqual(len(lines), 1)
+        self.assertIn("no agent took it: the launch failed: NOT STARTED: no `claude` CLI", lines[0])
+
+    def test_spent_tries_and_owner_kinds_escalate_and_a_backoff_holds(self):
+        t = 1_800_000_000.0
+        it = {"id": "c1", "data": {"kind": "CLONE", "text": "CLONE: z", "opened_at": t - 3600}}
+        spent = {**it, "data": {**it["data"], "escalation": {"tries": [{"outcome": "ENDED: x"}] * 3, "owner_told": t}}}
+        self.assertEqual(A.owner_escalation(spent, None, t), (True, "its 3 agent tries did not clear it"))
+        backing = {**it, "data": {**it["data"], "escalation": {"tries": [{"outcome": "ENDED: x"}], "state": "offered"}}}
+        self.assertFalse(A.owner_escalation(backing, {"reason": "try 2 backs off"}, t)[0])
+        capped = {**it, "data": {**it["data"], "escalation": {"state": "offered"}}}
+        self.assertEqual(A.owner_escalation(capped, {"reason": "capacity 2/2 escalation fixers"}, t),
+                         (True, "no agent took it: capacity 2/2 escalation fixers"))
+        owner = {"id": "c2", "data": {"kind": "NETWORK", "text": "NETWORK: offline", "opened_at": t - 3600}}
+        self.assertEqual(A.owner_escalation(owner, None, t), (True, ""))
+
+
 class TrustAskTest(unittest.TestCase):
     def test_the_escalation_repos_are_asked_for_once_like_a_watched_repos_clone(self):
         with tempfile.TemporaryDirectory() as tmp:

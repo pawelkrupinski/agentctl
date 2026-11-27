@@ -139,6 +139,64 @@ def crash_loop_hold(open_conditions: list[dict[str, Any]], subject: str) -> Opti
     return None
 
 
+# THE OWNER HEARS OF AN AGENT'S ESCALATION ONLY WHEN NO AGENT HAS IT (2026-11-27, condition vendor-drift: the laptop's
+# dispatcher offered and dispatched it at 20:08:28Z, ten minutes after it opened, and the server's condition escalation
+# -- the same ten-minute deadline, blind to the route -- told the owner "ESCALATED: VENDOR_DRIFT open for 10 min" five
+# seconds later, while the agent worked). ONE rule, read by the server's escalation (conditions.py) from the condition's
+# escalation record (escalations.py writes it) and its offer: held while an agent works on it, its retry backs off or
+# the dispatcher may still take it (OWNER_GRACE past its bound); due -- saying WHY no agent took it -- once the launch
+# failed, the offer waited past the grace (its reason: no taker, the cap, a hold, an untrusted repo), or the tries are spent.
+OWNER_GRACE = 10 * 60   # s past an agent kind's bound the dispatcher has to take it before the owner is told why not
+
+
+def escalation_offer_item(cid: str) -> str:
+    """The offer's item of condition `cid`'s escalation (the store's offers table, kind `escalation`)."""
+    return f"condition:{cid}"
+
+
+def record_of(it: dict[str, Any]) -> dict[str, Any]:
+    """The escalation record on a condition's data: its tries, the next try's time, the owner told, its last state."""
+    return dict((it.get("data") or {}).get("escalation") or {})
+
+
+def owner_escalation(it: dict[str, Any], offer: Optional[dict[str, Any]], t: float) -> tuple[bool, str]:
+    """(due, why) of the owner's escalation of open condition item `it` (offer: its escalation offer, or None): an
+    owner-only kind is due ("" -- the owner's anyway); an agent's kind is held while an agent has it, else due naming
+    why no agent took it."""
+    d = it.get("data") or {}
+    route = escalation_route(d)
+    if route.mode != TO_AGENT:
+        return True, ""
+    return tries_verdict(record_of(it), route) or waiting_verdict(it, offer, t, route)
+
+
+def tries_verdict(rec: dict[str, Any], route: EscalationRoute) -> Optional[tuple[bool, str]]:
+    """What the escalation record alone decides: its tries spent, an agent at work, a launch that failed, a failed try
+    backing off -- else None (no try yet)."""
+    tries = rec.get("tries") or []
+    if rec.get("owner_told") or len(tries) >= route.tries:
+        return True, f"its {len(tries)} agent tries did not clear it"
+    if rec.get("state") in ("dispatched", "working"):
+        return False, "an agent works on it"
+    if not tries:
+        return None
+    last = str(tries[-1].get("outcome") or "")
+    if last.startswith("NOT STARTED"):
+        return True, f"no agent took it: the launch failed: {last}"
+    return False, f"try {len(tries)} failed, the next backs off"
+
+
+def waiting_verdict(it: dict[str, Any], offer: Optional[dict[str, Any]], t: float,
+                    route: EscalationRoute) -> tuple[bool, str]:
+    """No try yet: held for OWNER_GRACE past its bound, then due with the offer's reason (or that none was made)."""
+    d = it.get("data") or {}
+    if t < float(d.get("opened_at") or it.get("entered_at") or t) + route.after + OWNER_GRACE:
+        return False, "the escalation dispatcher may still take it"
+    if not offer:
+        return True, "no agent took it: never offered (the laptop's escalation dispatcher has not run)"
+    return True, f"no agent took it: {offer.get('reason') or 'offered, no taker (the laptop dispatcher has not taken it)'}"
+
+
 INVARIANT_ID = re.compile(r"INVARIANT (W\w+)")
 
 

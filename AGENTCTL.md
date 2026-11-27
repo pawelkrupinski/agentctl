@@ -722,7 +722,15 @@ WHEN ITS CONDITION CLOSES (its own probe), never on the agent's word: a session 
 times out, never starts or loses its lease is a FAILED TRY, the next one backed off 10 min, doubled each try; once the
 row's tries are spent ONE entry `ESCALATION GAVE UP: <kind> <key>: WAITING ON YOU: ... try 1: ... (worktree)` goes
 to the owner under the condition's alert item (it closes with the condition), and the kind is not dispatched again
-that spell. A repo claude does not trust is NOT DISPATCHABLE on the offer (no try counted, no retry storm); the owner
+that spell. THE OWNER HEARS OF AN AGENT'S KIND ONLY WHEN NO AGENT HAS IT (2026-11-27, vendor-drift: its agent started
+at 20:08:28Z and the server's escalation, on the same 10-minute deadline, told the owner "open for 10 min" 5 s later):
+the server's condition escalation (conditions.py) asks `escalationtable.owner_escalation` first -- held while an agent
+is dispatched or working, while a failed try's retry backs off, and for `OWNER_GRACE` (10 min) past the bound while the
+dispatcher may still take it; due at once when the launch failed, and saying WHY no agent took it: `ESCALATED: <kind>
+open for 20 min, no agent took it: <the offer's reason>` (`capacity 2/2`, `held: ...`, `NOT DISPATCHABLE: ...`, `never
+offered`), `... the launch failed: NOT STARTED: ...`, or `its 3 agent tries did not clear it`. Held by
+tests/test_escalations.py, the simulator's IA and the e2e `EscalationTest` (a stub claude, tests/e2e/claude_stub.py).
+A repo claude does not trust is NOT DISPATCHABLE on the offer (no try counted, no retry storm); the owner
 is asked once by the sync's `workspace trust` pass, which checks the table's repos beside red-repos.json's clones.
 Every offer, dispatch, take (actor `session:<id>`), failed try, give-up and clear is a move of the file-held item
 `escalation` (`<kind>/<condition id>`), so `agentctl analyze --type escalation` prints `time to end by kind`

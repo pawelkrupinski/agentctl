@@ -24,7 +24,8 @@
 
 from typing import Any, Callable, Optional, Protocol
 from agentctl.escalationtable import (
-    ESCALATION_FIXERS, RETRY_BACKOFF, TO_AGENT, EscalationRoute, crash_loop_hold, escalation_kind, escalation_route)
+    ESCALATION_FIXERS, RETRY_BACKOFF, TO_AGENT, EscalationRoute, crash_loop_hold, escalation_kind, escalation_offer_item,
+    escalation_route, record_of)
 from agentctl.statefile import json_object
 from agentctl.statemachines import StaleVersion
 from agentctl.filelog import file_event, note_events
@@ -90,11 +91,6 @@ def item_of(kind: str, cid: str) -> str:
 
 
 # ---------------------------------------------------------------- the condition's escalation record
-def record_of(it: dict[str, Any]) -> dict[str, Any]:
-    """The escalation record on a condition's data: its tries, the next try's time, the owner told, its last state."""
-    return dict((it.get("data") or {}).get("escalation") or {})
-
-
 def write_record(store: Any, cid: str, change: Callable[[dict[str, Any]], dict[str, Any]]) -> Optional[dict[str, Any]]:
     """change(record) applied to condition cid's escalation record, compare-and-set (re-read once when another writer
     moved it). The record written, or None when the condition is gone or kept moving."""
@@ -226,7 +222,7 @@ def offer_escalations(store: Any, t: float, conditions: dict[str, Any]) -> list[
         elif escalation_route(it["data"]).mode != TO_AGENT:
             store.close_offer(item, "owner-only")
     for cid, it in conditions.items():
-        line = offer_one(store, t, it, offers.get(f"condition:{cid}"))
+        line = offer_one(store, t, it, offers.get(escalation_offer_item(cid)))
         if line:
             acts.append(line)
     return acts
@@ -243,7 +239,7 @@ def offer_one(store: Any, t: float, it: dict[str, Any], offer: Optional[dict[str
     picture = {"kind": kind, "key": d.get("key"), "condition": cid, "try": len(tries) + 1,
                "next_after": rec.get("next_after"), "state": rec.get("state") or "offered"}
     if not offer or offer.get("picture") != picture:
-        store.offer(OFFER_KIND, f"condition:{cid}", LEASE_PREFIX + kind, kind, OFFER_PRIORITY, t + route.runtime, picture)
+        store.offer(OFFER_KIND, escalation_offer_item(cid), LEASE_PREFIX + kind, kind, OFFER_PRIORITY, t + route.runtime, picture)
     if rec.get("state"):
         return None
     write_record(store, cid, moved_to("offered", offered_at=t))
