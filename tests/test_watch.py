@@ -5,6 +5,7 @@ import datetime as dt, os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
 
 MOVIES = "pawelkrupinski/movies"
@@ -23,7 +24,7 @@ class WatchTest(Base):
     def setUp(self):
         super().setUp()
         self.saved = A.gh_json, A.ci_why
-        A.ci_why = lambda o_r, tail=6, run_id=None, repo=None, store=None: (True, "ci-why: main is RED for the gate")
+        A.ci_why = lambda o_r, tail=6, run_id=None, repo=None, store=None, ctx=None: (True, "ci-why: main is RED for the gate")
         self.main, self.conv, self.takes, self.jobs = [], [], None, {}
         self.listed = []
 
@@ -58,7 +59,7 @@ class WatchTest(Base):
         import contextlib, io
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
-            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, *on_clock(self.clock), o_r=MOVIES)
+            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, *on_clock(self.clock), o_r=MOVIES, ctx=case_context())
         return rc, out.getvalue()
 
     def test_green_main_and_convergence(self):
@@ -312,7 +313,7 @@ class WatchTest(Base):
         import contextlib, io
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, *on_clock(self.clock), o_r="bitcashier/infra")
+            rc = A.watch_landed(self.r.path, self.sha, self.pushed_at, *on_clock(self.clock), o_r="bitcashier/infra", ctx=case_context())
         self.assertEqual(rc, 0)
         self.assertEqual(self.listed, [])
 
@@ -325,7 +326,7 @@ class LandWatchTest(Base):
         self.saved = A.watch_landed
         self.calls = []
 
-        def fake(repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=()):
+        def fake(repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=(), ctx=None):
             # the lease is free while watching: another lander could take it now
             r = A.process_store().get(A.land_lease_name(repo))
             assert not r or not r["holder"] or r["expires_at"] <= A.epoch_now(), "the landing lease is held while watching"
@@ -399,11 +400,11 @@ class WatchItemTest(unittest.TestCase):
         wt = os.path.join(self.root, "wt")
         os.makedirs(wt)
         A.start_watch(A.CurrentStore(A.process_store), "/repo", "a" * 40, A.epoch_now(), worktree=wt, close=wt, session="s1")
-        A.watch_eval = lambda *a: None
-        self.assertEqual(A.tick_watches(*on_clock(FakeClock())), [])
+        A.watch_eval = lambda *a, ctx=None: None
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock()), ctx=case_context()), [])
         self.assertEqual(A.process_store().item("watch", "a" * 40)["state"], "watching")
-        A.watch_eval = lambda *a: ("ok", "WATCH OK: Main #5 green, convergence #6 green (aaaaaaaaaa)", [])
-        self.assertEqual(A.tick_watches(*on_clock(FakeClock(A.epoch_now() + 120))), [f"watch {'a' * 10}: ok"])
+        A.watch_eval = lambda *a, ctx=None: ("ok", "WATCH OK: Main #5 green, convergence #6 green (aaaaaaaaaa)", [])
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock(A.epoch_now() + 120)), ctx=case_context()), [f"watch {'a' * 10}: ok"])
         self.assertEqual(self.closed, [wt])
         A.project_events(A.CurrentStore(A.process_store))
         [e] = A.inbox_entries()
@@ -413,10 +414,10 @@ class WatchItemTest(unittest.TestCase):
         A.start_watch(A.CurrentStore(A.process_store), "/repo", "c" * 40, A.epoch_now(), worktree="/w",
                       follower={"followed_by": "laptop:1", "followed_until": A.epoch_now() + 600})
         looked = []
-        A.watch_eval = lambda *a: looked.append(1) or ("ok", "WATCH OK", [])
-        self.assertEqual(A.tick_watches(*on_clock(FakeClock())), [])
+        A.watch_eval = lambda *a, ctx=None: looked.append(1) or ("ok", "WATCH OK", [])
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock()), ctx=case_context()), [])
         self.assertEqual(looked, [])
-        self.assertEqual(A.tick_watches(*on_clock(FakeClock(A.epoch_now() + 4 * 3600))), [f"watch {'c' * 10}: unknown"],
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock(A.epoch_now() + 4 * 3600)), ctx=case_context()), [f"watch {'c' * 10}: unknown"],
                          "a lapsed follower's watch is the tick's again")
 
     def test_a_lapsed_laptop_followers_watch_is_taken_over_by_another_hosts_tick_in_its_own_clone(self):
@@ -426,13 +427,13 @@ class WatchItemTest(unittest.TestCase):
         A.start_watch(A.CurrentStore(A.process_store), laptop, "d" * 40, A.epoch_now(), worktree=laptop, close=laptop,
                       follower={"followed_by": "laptop:4242", "followed_until": A.epoch_now() - 1})
         looked = []
-        A.watch_eval = lambda repo, *a: looked.append(repo) or ("ok", "WATCH OK: Main #5 green (dddddddddd)", [])
-        self.assertEqual(A.tick_watches(*on_clock(FakeClock())), [f"watch {'d' * 10}: ok"])
+        A.watch_eval = lambda repo, *a, ctx=None: looked.append(repo) or ("ok", "WATCH OK: Main #5 green (dddddddddd)", [])
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock()), ctx=case_context()), [f"watch {'d' * 10}: ok"])
         self.assertEqual(looked, [self.here], "looked at in this host's clone, never the laptop's path")
         self.assertEqual(self.closed, [], "the laptop's worktree is not this host's to close")
         A.start_watch(A.CurrentStore(A.process_store), self.here, "e" * 40, A.epoch_now(), worktree=self.here)  # made here: its own path, as it is
-        A.watch_eval = lambda repo, *a: looked.append(repo) or None
-        A.tick_watches(*on_clock(FakeClock()))
+        A.watch_eval = lambda repo, *a, ctx=None: looked.append(repo) or None
+        A.tick_watches(*on_clock(FakeClock()), ctx=case_context())
         self.assertEqual(looked[-1], self.here)
 
     def test_a_watch_of_a_repo_this_host_has_no_clone_of_waits_for_its_deadline(self):
@@ -440,15 +441,15 @@ class WatchItemTest(unittest.TestCase):
         self.addCleanup(A.WATCH.pop, "someone/else", None)
         A.start_watch(A.CurrentStore(A.process_store), "/elsewhere", "f" * 40, A.epoch_now(), worktree="/w", o_r="someone/else")
         looked = []
-        A.watch_eval = lambda *a: looked.append(a) or ("ok", "WATCH OK", [])
-        self.assertEqual(A.tick_watches(*on_clock(FakeClock())), [])
+        A.watch_eval = lambda *a, ctx=None: looked.append(a) or ("ok", "WATCH OK", [])
+        self.assertEqual(A.tick_watches(*on_clock(FakeClock()), ctx=case_context()), [])
         self.assertEqual(looked, [], "no clone here: nothing looked at")
         self.assertEqual(A.process_store().item("watch", "f" * 40)["state"], "watching")
 
     def test_a_follower_never_renews_a_claim_another_follower_took_over(self):
         """Review round 7: renew() wrote its lease over whoever held the item, so a follower whose claim lapsed (asleep)
         took it back from the one that had taken it over."""
-        claim = A.WatchClaim(A.CurrentStore(A.process_store), "/repo", "g" * 40, A.epoch_now(), "pawelkrupinski/movies", FakeClock())
+        claim = A.WatchClaim(A.CurrentStore(A.process_store), "/repo", "g" * 40, A.epoch_now(), "pawelkrupinski/movies", FakeClock(), ctx=case_context())
         A.start_watch(A.CurrentStore(A.process_store), "/repo", "g" * 40, A.epoch_now(), worktree="/w",
                       follower={"followed_by": "ci-runner:7", "followed_until": A.epoch_now() + 600})
         claim.renew()
@@ -459,8 +460,8 @@ class WatchItemTest(unittest.TestCase):
 
     def test_undecided_past_its_deadline_is_unknown_and_escalates(self):
         A.start_watch(A.CurrentStore(A.process_store), "/repo", "b" * 40, A.epoch_now(), worktree="/w")
-        A.watch_eval = lambda *a: None
-        A.tick_watches(*on_clock(FakeClock(A.epoch_now() + 4 * 3600)))
+        A.watch_eval = lambda *a, ctx=None: None
+        A.tick_watches(*on_clock(FakeClock(A.epoch_now() + 4 * 3600)), ctx=case_context())
         self.assertEqual(A.process_store().item("watch", "b" * 40)["state"], "unknown")
         self.assertEqual(A.process_store().events()[-1]["severity"], "escalate")
 

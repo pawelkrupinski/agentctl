@@ -4,6 +4,7 @@
 import os
 import signal
 from typing import Any
+from agentctl.context import Context
 from agentctl.core import SHORT, err, git, remote, slug, is_ancestor
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, note_failure
@@ -59,16 +60,16 @@ def waiting_commits(repo, base, head):
 # #2896 `red fix of 2896 (gate)` -- the red item's names -- while this rule read only the gate's newest runs (#2897,
 # #2898) and kept the fix on `waiting` beside a non-fix change: a batch assembles only what may land on red, so the
 # fix waited for the green only it could bring (watchdog WR).
-def must_wait(repo: str, commits: list[str], reds: set[str], store: Any) -> bool:
+def must_wait(repo: str, commits: list[str], reds: set[str], store: Any, *, ctx: Context) -> bool:
     """A production commit with no Fixes-Red: naming a red run waits; tools-only and declared fixes go (the hook's rule).
     A red run is one of the gate's (`reds`) or any name of an open gate red in the store."""
-    return must_wait_why(repo, commits, reds, store) is not None
+    return must_wait_why(repo, commits, reds, store, ctx=ctx) is not None
 
 
-def must_wait_why(repo: str, commits: list[str], reds: set[str], store: Any) -> str | None:
+def must_wait_why(repo: str, commits: list[str], reds: set[str], store: Any, *, ctx: Context) -> str | None:
     """None when the commits may land on the gate's red (`reds`; or it is green), else why the first that may not
     waits, in words: THE RED-LANDING RULE (redland.may_land_on_red)."""
-    return may_land_on_red(facts_for(reds, store), repo=repo, commits=commits, store=store).wait
+    return may_land_on_red(facts_for(reds, store), repo=repo, commits=commits, store=store, ctx=ctx).wait
 
 
 def record_autoresolved(d: Any, e: dict[str, Any], resolved: Any, conflict: Any) -> None:
@@ -200,13 +201,13 @@ def diagnoses_of(repo, commits):
     return out
 
 
-def batch_order(repo, entries, reds, store):
+def batch_order(repo, entries, reds, store, *, ctx):
     """The order a batch is built in: a fix for the current red first, then (main red) what may land while red -- tools
     only, or every commit carrying a Fixes-Red for a red run -- then the rest; by join order within each."""
     facts = facts_for(reds, store)
 
     def rank(e):
-        landing = may_land_on_red(facts, e, repo, store=store)  # THE RED-LANDING RULE (redland.py)
+        landing = may_land_on_red(facts, e, repo, store=store, ctx=ctx)  # THE RED-LANDING RULE (redland.py)
         return 2 if not reds or landing.wait else 0 if landing.gate_fix else 1
     return sorted(entries, key=lambda e: (rank(e), e["seq"]))
 

@@ -12,6 +12,7 @@ import itertools, os, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 
 GATES = {"green": set(), "red": {"8", "98000"}, "unread": {"unread"}}
 STORES = ("none", "gate-item", "outside-item", "both", "unreadable")
@@ -53,7 +54,7 @@ def fake_commits(test, commits):
     prod = {s: p for s, (p, _f) in zip(shas, commits)}
     fixes = {s: set(f) for s, (_p, f) in zip(shas, commits)}
     for name, fake in (("touches_production", lambda repo, c: prod[c]),
-                       ("commit_fixes", lambda repo, c, store: set(fixes[c]))):
+                       ("commit_fixes", lambda repo, c, store, ctx=None: set(fixes[c]))):
         test.addCleanup(setattr, A, name, getattr(A, name))
         setattr(A, name, fake)
     return shas
@@ -67,10 +68,10 @@ def decisions(test, gate, store_kind, change):
     shas = fake_commits(test, commits)
     entry = {"id": "e", "fixes": list(names), "commits": shas, "status": "queued"}
     facts = A.queue_facts(reds, st)
-    k = A.classify_change(entry, facts, 0, "/repo", st)
-    may = not reds or A.must_wait_why("/repo", shas, reds, st) is None
-    tree = A.may_land_on_red(facts, entry, "/repo", store=st).red_fix  # checkround.check_entry's guard
-    return (may, k["red_fix"], k["gate_fix"], tree, A.gov_class_of("/repo", shas, reds, st))
+    k = A.classify_change(entry, facts, 0, "/repo", st, ctx=case_context())
+    may = not reds or A.must_wait_why("/repo", shas, reds, st, ctx=case_context()) is None
+    tree = A.may_land_on_red(facts, entry, "/repo", store=st, ctx=case_context()).red_fix  # checkround.check_entry's guard
+    return (may, k["red_fix"], k["gate_fix"], tree, A.gov_class_of("/repo", shas, reds, st, ctx=case_context()))
 
 
 # what every copy answered before (computed from waiting.must_wait_why, classify_change, the check_entry guard and
@@ -305,9 +306,9 @@ class RedLandingMatrixTest(unittest.TestCase):
     def test_without_the_commits_an_item_is_judged_by_its_recorded_names(self):
         """An item's data read without git (WR's pass, the governor's class of a lone entry): its names alone."""
         st = world(self, "gate-item")
-        v = A.may_land_on_red(A.queue_facts({"8"}, st), {"fixes": ["7"]})
+        v = A.may_land_on_red(A.queue_facts({"8"}, st), {"fixes": ["7"]}, ctx=case_context())
         self.assertEqual((v.red_fix, v.gate_fix, v.wait), (True, True, None))
-        v = A.may_land_on_red(A.queue_facts({"8"}, st), {"fixes": ["404"]})
+        v = A.may_land_on_red(A.queue_facts({"8"}, st), {"fixes": ["404"]}, ctx=case_context())
         self.assertEqual((v.red_fix, v.gate_fix), (False, False))
         self.assertIn("no run of the open gate red", v.wait)
 
@@ -341,15 +342,15 @@ class UnfetchedCommitTest(unittest.TestCase):
 
     def test_a_commit_the_clone_lacks_is_fetched_from_its_land_ref(self):
         entry = {"id": "c-1", "head": self.sha, "commits": [self.sha]}
-        rows = A.commit_rows(entry, self.server, None, self.st)
+        rows = A.commit_rows(entry, self.server, None, self.st, ctx=case_context())
         self.assertEqual([(c, p) for c, p, _f in rows], [(self.sha, True)])
 
     def test_a_commit_nowhere_to_be_read_leaves_the_change_unread_never_raises(self):
         gone = "0" * 40
         self.assertIsNone(A.touches_production(self.server, gone))
-        self.assertIsNone(A.commit_rows({"id": "c-2", "head": gone, "commits": [gone]}, self.server, None, self.st))
+        self.assertIsNone(A.commit_rows({"id": "c-2", "head": gone, "commits": [gone]}, self.server, None, self.st, ctx=case_context()))
         v = A.may_land_on_red({"gate": set(), "open": {}}, {"id": "c-2", "head": gone, "commits": [gone]}, self.server,
-                              store=self.st)
+                              store=self.st, ctx=case_context())
         self.assertIsNone(v.wait, "no gate red: nothing to wait for, judged by its recorded names")
 
 

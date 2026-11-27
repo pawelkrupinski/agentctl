@@ -265,7 +265,7 @@ def decide_one(store: Any, it: Any, answer: str, t: float) -> tuple[bool, str]:
                   "briefed with your answer; if the action fails you are told")
 
 
-def red_decide(store, o_r, target, answer):
+def red_decide(store, o_r, target, answer, *, ctx):
     """`agentctl decide <red> "<answer>"`: the owner's answer to a red waiting on them. Stored on the red, its block
     lifted (only this red leaves a block that holds others): the next tick offers it again, its fixer briefed with it."""
     answer = " ".join(str(answer or "").split())
@@ -274,7 +274,7 @@ def red_decide(store, o_r, target, answer):
     vault = VAULT_TARGET.fullmatch(str(target))
     if vault:  # `decide vault-<ns>`: the owner at the machine for every red on that vault's one lease
         return red_vault_decide(store, vault.group(1), answer)
-    items = red_targets(store, o_r, target, create=False)
+    items = red_targets(store, o_r, target, create=False, ctx=ctx)
     if not items:
         closed = red_closed_of(store, str(target).lstrip("#"))
         if closed:
@@ -285,8 +285,8 @@ def red_decide(store, o_r, target, answer):
     return (0 if any(ok for ok, _ in results) else 1), [line for _, line in results]
 
 
-def cmd_decide(a, store):
+def cmd_decide(a, store, *, ctx):
     o_r = slug(a.repo) if getattr(a, "repo", None) else default_repo()
-    rc, lines = red_decide(store, o_r, a.red, a.answer)
+    rc, lines = red_decide(store, o_r, a.red, a.answer, ctx=ctx)
     print("\n".join(lines))
     return rc

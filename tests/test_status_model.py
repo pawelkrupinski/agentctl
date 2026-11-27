@@ -5,6 +5,7 @@ import contextlib, io, os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 
 
 class StatusModelTest(unittest.TestCase):
@@ -66,7 +67,7 @@ class StatusModelTest(unittest.TestCase):
         t0 = time.monotonic()
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            rc = A.red_status(NoStore())
+            rc = A.red_status(NoStore(), ctx=case_context())
         took = time.monotonic() - t0
         self.assertEqual(rc, 0)
         self.assertIn("leased  Main #1 k: x", buf.getvalue())
@@ -76,11 +77,11 @@ class StatusModelTest(unittest.TestCase):
     def test_a_stale_red_status_snapshot_is_read_live(self):
         A.write_json(A.red_status_snapshot_path(), {"at": self.t - 3600, "text": "reds: STALE"})
         saved = A.red_status_text
-        A.red_status_text = lambda store, verbose=False: "reds: read live"
+        A.red_status_text = lambda store, verbose=False, ctx=None: "reds: read live"
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                A.red_status(object())
+                A.red_status(object(), ctx=case_context())
         finally:
             A.red_status_text = saved
         self.assertNotIn("STALE", buf.getvalue())
@@ -105,7 +106,7 @@ class StatusModelTest(unittest.TestCase):
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                A.red_status(st)
+                A.red_status(st, ctx=case_context())
             m = A.status_data(store=st, now_=st.clock(), only=("reds", "families", "owners", "dispatcher"))
         finally:
             A.cached_dispatch_blocker = saved

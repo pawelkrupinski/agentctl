@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, seed_gating_checks  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
 
@@ -29,7 +30,7 @@ class Phase2Base(unittest.TestCase):
         self.st = A.Store(path=os.path.join(self.tmp, "state", "store.db"))
         self.repo = os.path.join(self.tmp, "movies")
         subprocess.run(["git", "init", "-q", self.repo], check=True)
-        self.api = A.StoreAPI(self.st, ["pawel"], ["ci-metrics"], user_of=USERS.get, repo=self.repo)
+        self.api = A.StoreAPI(self.st, ["pawel"], ["ci-metrics"], user_of=USERS.get, repo=self.repo, ctx=case_context())
         self.srv = A.store_server(self.api, "127.0.0.1", 0)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.srv.server_port}"
@@ -326,7 +327,7 @@ class ServerSideTest(Phase2Base):
             A.track_red_time(st, True)
         t[0] += 300  # then green for 300 s
         A.track_red_time(st, False)
-        line = [x for x in A.metrics_text(st).splitlines() if x.startswith("agentctl_oldest_change_age_seconds ")]
+        line = [x for x in A.metrics_text(st, ctx=case_context()).splitlines() if x.startswith("agentctl_oldest_change_age_seconds ")]
         self.assertEqual(line, ["agentctl_oldest_change_age_seconds 300"])
 
     def test_roles_split_the_loop(self):
@@ -339,10 +340,10 @@ class ServerSideTest(Phase2Base):
             self.assertIsNone(A.store_url())
         finally:
             os.environ.pop("AGENTCTL_HOST")
-        names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r", *on_clock(A.Clock()), registry(A))]
+        names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r", *on_clock(A.Clock()), registry(A), ctx=case_context())]
         self.assertEqual(names, ["laptop role", "outbox", "file events", "state mirror", "children", "events", "notifier", "alerts", "workspace trust", "landed worktrees", "local queue", "landed changes", "regen holds", "claims", "dispatcher", "escalation dispatcher", "pins", "drift explorer", "revert notes", "fixer landing",
                                  "network watch", "tunnel probe", "red status snapshot", "upkeep", "root checkout", "recovery"])
-        server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f, *on_clock(A.Clock()), registry(A))]
+        server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f, *on_clock(A.Clock()), registry(A), ctx=case_context())]
         self.assertEqual(server, ["clone health", "landed changes", "stranded changes", "change tick", "land hold", "batch tick", "watches", "land refs",
                                   "lease archive", "children", "gate summary", "red time", "red tick", "recovery", "issues",
                                   "reverts", "queue stall", "file events", "timeline", "quiet deadlines", "stats"])
@@ -651,7 +652,7 @@ class RedFamilyTest(Phase2Base):
         self.assertEqual([o["picture"]["key"] for o, _x in self.spawned], ["v2"])  # the rest gets its own fixer
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            A.red_status(self.st)
+            A.red_status(self.st, ctx=case_context())
         self.assertIn("family convergence: 2 open red(s), ONE fixer: laptop:fixer:red-a07-5", out.getvalue())
         self.assertIn("[convergence]", out.getvalue())
         self.assertEqual(A.status_reds(self.st, t)[0]["family"], "convergence")
@@ -685,7 +686,7 @@ class RedFamilyTest(Phase2Base):
         self.assertTrue(A.lease_is_live(self.st.get("red/a07"), t), "the holder keeps its own red")
         it = self.st.item("red", "v1")
         self.assertEqual(it["data"]["family_released"], ["laptop:fixer:red-a07-5"])
-        A.red_lease_ended(self.st, it, row, None, t)  # the tick: offered again, no attempt counted
+        A.red_lease_ended(self.st, it, row, None, t, ctx=case_context())  # the tick: offered again, no attempt counted
         self.assertEqual(self.st.item("red", "v1")["data"]["attempts"], 0)
         self.spawned.clear()
         acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
@@ -753,7 +754,7 @@ class RedFamilyTest(Phase2Base):
         said = [e["verdict"] for e in A.inbox_entries() if str(e.get("verdict")).startswith("RED NO PROGRESS")]
         self.assertEqual(len(said), 1, said)
         self.assertIn("no DIAGNOSED line, commit naming it or note on it within 45 min", said[0])
-        A.red_lease_ended(self.st, self.st.item("red", "ab21"), row, None, t)
+        A.red_lease_ended(self.st, self.st.item("red", "ab21"), row, None, t, ctx=case_context())
         it = self.st.item("red", "ab21")
         self.assertEqual((it["state"], it["data"]["attempts"]), ("offered", 1), "an attempt: on up the ladder")
 
@@ -850,11 +851,11 @@ class RedFamilyTest(Phase2Base):
         off = self.red("c4", "Verify scrape recording", "convergence (spain)", 2532)
         self.st.offer_reason(off, "its previous fixer pid 20496 (~/x) is still at work on it: it stays the holder")
         t = A.epoch_now() + 300
-        self.assertEqual([it["id"] for it in A.red_unheld(self.st, t)], ["c4"])
-        acts = A.red_enforce(self.st, None, t)
+        self.assertEqual([it["id"] for it in A.red_unheld(self.st, t, ctx=case_context())], ["c4"])
+        acts = A.red_enforce(self.st, None, t, ctx=case_context())
         self.assertTrue(any("no live lease" in a for a in acts), acts)
         self.assertIsNone(self.st.offers("fixer")[0]["reason"])
-        self.assertEqual(A.red_unheld(self.st, t), [])
+        self.assertEqual(A.red_unheld(self.st, t, ctx=case_context()), [])
 
 
 class LandAsYouGoTest(Phase2Base):
@@ -946,7 +947,7 @@ class LandHoldTest(Phase2Base):
     def land(self, cmd, **kw):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = A.cmd_waiting(argparse.Namespace(wcmd=cmd, repo=self.repo, entry=None, **kw), *on_clock(FakeClock()), registry(A))
+            rc = A.cmd_waiting(argparse.Namespace(wcmd=cmd, repo=self.repo, entry=None, **kw), *on_clock(FakeClock()), registry(A), ctx=case_context())
         return rc, out.getvalue()
 
     def test_a_hold_made_on_the_laptop_holds_ci_runners_batch_until_released(self):
@@ -963,7 +964,7 @@ class LandHoldTest(Phase2Base):
         A.ChangeRecords = lambda st_, d_: type("R", (), {"waiting": lambda self: [{"id": "e1"}],
                                                          "every": lambda self: [{"id": "e1"}]})()  # a change waits: only the hold stops the batch
         try:
-            self.assertEqual(A.tick_batch(self.repo, d, *on_clock(A.Clock())), ["held"])
+            self.assertEqual(A.tick_batch(self.repo, d, *on_clock(A.Clock()), ctx=case_context()), ["held"])
         finally:
             A.ChangeRecords, A.current_batch = saved
         A.write_snapshot(d, A.CurrentStore(A.process_store))
@@ -992,7 +993,7 @@ class LandHoldTest(Phase2Base):
         saved = A.tick_land_hold
         A.tick_land_hold = ticked.append
         try:
-            dict(A.server_steps(self.repo, "/d", lambda f: f, A.Clock(), self.st, registry(A)))["land hold"]()
+            dict(A.server_steps(self.repo, "/d", lambda f: f, A.Clock(), self.st, registry(A), ctx=case_context()))["land hold"]()
         finally:
             A.tick_land_hold = saved
         self.assertEqual(ticked, [self.st], "the reconciler's step ticks the hold on the store it was handed")
@@ -1139,7 +1140,7 @@ class StoreTokensTest(Phase2Base):
         self.saved_secret = os.environ.get("AGENTCTL_STORE_SECRET")
         os.environ["AGENTCTL_STORE_SECRET"] = os.path.join(self.tmp, "secret", "store-secret")
         self.srv.shutdown()
-        self.api = A.StoreAPI(self.st, ["pawel"], ["ci-metrics"], repo=self.repo)
+        self.api = A.StoreAPI(self.st, ["pawel"], ["ci-metrics"], repo=self.repo, ctx=case_context())
         self.srv = A.store_server(self.api, "127.0.0.1", 0)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         self.url = f"http://127.0.0.1:{self.srv.server_port}"

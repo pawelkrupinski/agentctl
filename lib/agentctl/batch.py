@@ -6,6 +6,7 @@ import subprocess
 import sys
 from contextlib import suppress
 from typing import Any
+from agentctl.context import Context
 from agentctl.selfcode import TOOL_PATH
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.timefmt import ts
@@ -163,11 +164,11 @@ def say_batch(d, lines):
 # assembling again every 5 min -- and an assembling batch goes first, so three checked changes that could land on red
 # waited behind it for over an hour. Now red, a batch assembles only when something in it may land now (batch_ready);
 # otherwise it is blocked-red, which holds no solo change, until the gate turns or a change that may go joins.
-def batch_ready(repo, waiting, reds, st):
+def batch_ready(repo, waiting, reds, st, *, ctx):
     """The changes a batch takes now, in batch order: red, only those that may land on red; after a drift-red batch at
     most one identity-model change (drift_serialize)."""
-    order = batch_order(repo, waiting, reds, st)
-    return drift_serialize(repo, [e for e in order if not reds or not must_wait(repo, e["commits"], reds, st)]
+    order = batch_order(repo, waiting, reds, st, ctx=ctx)
+    return drift_serialize(repo, [e for e in order if not reds or not must_wait(repo, e["commits"], reds, st, ctx=ctx)]
                            )[:waiting_batch_max()]
 
 
@@ -203,10 +204,10 @@ def _precheck_stands(it: Any, order: Any) -> Any:
         or (it["data"].get("precheck_failed") or [None])[1:] == ids
 
 
-def red_precheck(repo, d, st, it, waiting, reds):
+def red_precheck(repo, d, st, it, waiting, reds, *, ctx):
     """The blocked-red waiting batch's step: pre-check every waiting change as one tree when its membership or main
     changed since the last pre-check and a check tree is free (THE BATCH IS THE MECHANISM, above)."""
-    order = [e for e in batch_order(repo, waiting, reds, st) if must_wait(repo, e["commits"], reds, st)][:waiting_batch_max()]
+    order = [e for e in batch_order(repo, waiting, reds, st, ctx=ctx) if must_wait(repo, e["commits"], reds, st, ctx=ctx)][:waiting_batch_max()]
     if not order:
         return []
     if _precheck_stands(it, order):
@@ -269,14 +270,14 @@ def green_batch_depth(tree, it, kept, base, tip):
 # red names (its episode: changekind.py queue_facts) whose commits must_wait no longer holds -- it goes back to the queue,
 # first and alone, and a batch is left to the changes that may wait. One the rule still holds is told what holds it
 # (`wait_rule` on its item: WR and the liveness line print it), the one escalation left.
-def release_red_fixes(repo: Any, d: Any, st: Any, reds: Any, waiting: Any, t: float) -> list[str]:
+def release_red_fixes(repo: Any, d: Any, st: Any, reds: Any, waiting: Any, t: float, *, ctx: Context) -> list[str]:
     facts = facts_for(reds, st)
     out = []
     for e in waiting:
-        k = classify_change(e, facts, t)
+        k = classify_change(e, facts, t, ctx=ctx)
         if not k["red_fix"]:
             continue
-        why = must_wait_why(repo, e["commits"], reds, st) if reds else None
+        why = must_wait_why(repo, e["commits"], reds, st, ctx=ctx) if reds else None
         if why:
             note_wait_rule(st, e, why)
             continue

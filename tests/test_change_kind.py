@@ -7,6 +7,7 @@ import os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 
 
 class ChangeKindTest(unittest.TestCase):
@@ -28,7 +29,7 @@ class ChangeKindTest(unittest.TestCase):
         it = self.st.item("red", "r-closed")
         self.st.transition("red", "r-closed", "cleared", it["version"], event={"cause": "agent"})
         facts = A.queue_facts({"7"}, self.st)
-        k = A.classify_change({"fixes": ["#6", "7", "8", "9", "404"]}, facts)
+        k = A.classify_change({"fixes": ["#6", "7", "8", "9", "404"]}, facts, ctx=case_context())
         self.assertEqual(k["reds"], [{"name": "6", "red": "r-out", "kind": "outside"},
                                      {"name": "7", "red": None, "kind": "gate"},
                                      {"name": "8", "red": "r-flake", "kind": "flake"}])
@@ -39,7 +40,7 @@ class ChangeKindTest(unittest.TestCase):
 
     def test_a_trailer_naming_only_closed_or_unknown_reds_is_an_ordinary_change(self):
         """Before: the backlog batch put ANY change with a `Fixes-Red:` first (`0 if e.get("fixes")`)."""
-        k = A.classify_change({"fixes": ["404"], "status": "queued"}, A.queue_facts(set(), self.st))
+        k = A.classify_change({"fixes": ["404"], "status": "queued"}, A.queue_facts(set(), self.st), ctx=case_context())
         self.assertEqual((k["red_fix"], k["gate_fix"], k["priority"], k["backlog_batch"]),
                          (False, False, "ordinary", None))
 
@@ -66,20 +67,20 @@ class ChangeKindTest(unittest.TestCase):
         self.st.put_item("red", "k8", "leased", {"key": "k8", "workflow": "Main", "gate": True, "red_kind": "test",
                                                 "job": "Unit tests", "line": "Failed: A", "runs": ["8"]})
         facts = A.queue_facts({"8"}, self.st)
-        by = lambda n: A.classify_change({"fixes": [n]}, facts)
+        by = lambda n: A.classify_change({"fixes": [n]}, facts, ctx=case_context())
         self.assertTrue(by("7")["gate_fix"], "a run of the same episode and signature")
         self.assertFalse(by("6")["red_fix"], "a run failing another way")
         self.assertFalse(by("4")["red_fix"], "a run of the older episode")
 
     def test_the_gate_decides_with_the_gate_s_reds_alone(self):
         self.red("r-out", ["6"])
-        k = A.classify_change({"fixes": ["6"]}, A.queue_facts(set(), self.st))
+        k = A.classify_change({"fixes": ["6"]}, A.queue_facts(set(), self.st), ctx=case_context())
         self.assertEqual((k["red_fix"], k["gate_fix"]), (True, False), "a red fix, no gate red's fix: it may still wait")
 
     def test_why_a_change_may_not_join_a_batch(self):
         facts = A.gate_facts(set())
-        why = lambda **e: (A.classify_change({"status": "queued", **e}, facts)["backlog_batch"],
-                           A.classify_change({"status": "checked", **e}, facts)["push_batch"])
+        why = lambda **e: (A.classify_change({"status": "queued", **e}, facts, ctx=case_context())["backlog_batch"],
+                           A.classify_change({"status": "checked", **e}, facts, ctx=case_context())["push_batch"])
         self.assertEqual(why(no_batch=True), ("no-batch", "no-batch"))
         self.assertEqual(why(batch_alone="regen"), ("batch-alone: regen", "batch-alone: regen"))
         self.assertEqual(why(push_alone="drift"), (None, "push-alone: drift"))
@@ -88,9 +89,9 @@ class ChangeKindTest(unittest.TestCase):
 
     def test_a_verify_round_running_now_is_the_verify_class(self):
         t = A.epoch_now()
-        k = A.classify_change({"verify": True, "status": "queued"}, A.gate_facts(set()), t)
+        k = A.classify_change({"verify": True, "status": "queued"}, A.gate_facts(set()), t, ctx=case_context())
         self.assertEqual((k["priority"], k["rank"]), ("verify", 1))
-        k = A.classify_change({"verify": True, "status": "queued", "retry_after": t + 60}, A.gate_facts(set()), t)
+        k = A.classify_change({"verify": True, "status": "queued", "retry_after": t + 60}, A.gate_facts(set()), t, ctx=case_context())
         self.assertEqual(k["priority"], "ordinary", "its retry is not due: no round runs now")
 
     def test_the_priority_classes_are_the_table_s_order(self):
@@ -145,11 +146,11 @@ class ChangeKindTest(unittest.TestCase):
         governor like an ordinary check."""
         self.red("r-out", ["6"])
         saved = A.commit_fixes, A.touches_production
-        A.commit_fixes = lambda repo, c, store: {"6"}
+        A.commit_fixes = lambda repo, c, store, ctx=None: {"6"}
         A.touches_production = lambda repo, c: True
         try:
-            self.assertEqual(A.gov_class_of("/nonexistent", ["c1"], set(), self.st), "red")
-            self.assertEqual(A.gov_class_of("/nonexistent", [], set(), self.st), "check")
+            self.assertEqual(A.gov_class_of("/nonexistent", ["c1"], set(), self.st, ctx=case_context()), "red")
+            self.assertEqual(A.gov_class_of("/nonexistent", [], set(), self.st, ctx=case_context()), "check")
         finally:
             A.commit_fixes, A.touches_production = saved
 
@@ -218,7 +219,7 @@ class WatchdogKindTest(unittest.TestCase):
                                                           "red_kind": "outside"})
         self.st.put_item("change", "c-fix", "checked", {"fixes": ["6"], "submitted_at": A.epoch_now() - 3600})
         self.st.put_item("change", "c-wait", "waiting", {"fixes": ["6"], "submitted_at": A.epoch_now()})
-        ok, why = A.inv_wr(A.Clock(), st=self.st, reds=set())
+        ok, why = A.inv_wr(A.Clock(), st=self.st, reds=set(), ctx=case_context())
         self.assertFalse(ok, why)
         self.assertIn("c-fix (red fix of 6 (outside)) is checked", why)
         self.assertNotIn("c-wait", why, "only a GATE red's fix may not wait for green")
@@ -234,17 +235,17 @@ class WatchdogKindTest(unittest.TestCase):
         self.st.put_item("red", "k8", "leased", {"key": "k8", "workflow": "Main", "gate": True, "runs": ["8"]})
         self.st.put_item("change", "c-fix", "waiting", {"fixes": ["8"], "submitted_at": t - 100,
                                                         "wait_rule": "abc1234567 names 9, no run of the open gate red"})
-        self.assertIsNone(A.red_fix_liveness(self.st, t, snap(50 * 60)), "red for 50 min: not yet")
-        line = A.red_fix_liveness(self.st, t, snap(80 * 60))
+        self.assertIsNone(A.red_fix_liveness(self.st, t, snap(50 * 60), ctx=case_context()), "red for 50 min: not yet")
+        line = A.red_fix_liveness(self.st, t, snap(80 * 60), ctx=case_context())
         self.assertEqual(line.count("\n"), 0)
         self.assertIn("the gate has been red 1 h", line)
         self.assertIn("c-fix (red fix of 8 (gate)) is waiting for main to turn green: abc1234567 names 9, no run of the "
                       "open gate red", line)
-        self.assertEqual(A.with_liveness("the status line\nchanges: 1", self.st, t), "the status line\nchanges: 1",
+        self.assertEqual(A.with_liveness("the status line\nchanges: 1", self.st, t, ctx=case_context()), "the status line\nchanges: 1",
                          "no snapshot read: no line")
         it = self.st.item("change", "c-fix")
         self.st.transition("change", "c-fix", "queued", it["version"], event={"cause": "agent"})
-        self.assertIsNone(A.red_fix_liveness(self.st, t, snap(80 * 60)), "its fix is queued, not stalled")
+        self.assertIsNone(A.red_fix_liveness(self.st, t, snap(80 * 60), ctx=case_context()), "its fix is queued, not stalled")
 
     def test_a_stale_hold_is_re_derived_by_the_tick_never_paged(self):
         """THE HOLD TABLE's recovery (policy.py HOLDS, 2026-11-20): a hold whose blocker ended, or past its kind's own

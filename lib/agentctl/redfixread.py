@@ -1,6 +1,7 @@
 # agentctl, part `redfixread`: a fix's reach: Fixes-Red commits on main, what a red's failing jobs read and whether a fix touches it.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 import os
 import re
@@ -15,7 +16,7 @@ from agentctl.repos import red_repo_of
 from agentctl.trailers import commit_trailer_values
 from agentctl.workflows import fix_workflow_jobs
 from agentctl.clones import fetch_main
-from agentctl.ciruns import ci_runs
+
 from agentctl.statemachines import open_states
 
 
@@ -227,11 +228,11 @@ def _failed_step_names(job: dict[str, Any]) -> list[str]:
     return [str(s.get("name")) for s in job.get("steps") or [] if s.get("conclusion") in FIX_STEP_FAILED and s.get("name")]
 
 
-def _run_step_failures(d: dict[str, Any], rid: Any) -> dict[str, list[str]] | None:
+def _run_step_failures(d: dict[str, Any], rid: Any, *, ctx: Context) -> dict[str, list[str]] | None:
     """{job name: its failed steps' names} of run rid, read through gh; None when they cannot be read or the run lists
     no job."""
     try:
-        jobs = ci_runs().run_jobs(red_repo_of(d), rid)
+        jobs = ctx.runs.run_jobs(red_repo_of(d), rid)
     except (Exception, SystemExit):
         return None
     if not jobs:
@@ -239,13 +240,13 @@ def _run_step_failures(d: dict[str, Any], rid: Any) -> dict[str, list[str]] | No
     return {str(j.get("name")): _failed_step_names(j) for j in jobs if j.get("conclusion") in FIX_STEP_FAILED}
 
 
-def _run_step_record(d: dict[str, Any], rid: Any) -> dict[str, list[str]] | None:
+def _run_step_record(d: dict[str, Any], rid: Any, *, ctx: Context) -> dict[str, list[str]] | None:
     """The failed steps of run rid by job: kept (reds/runsteps/<run id>.json: a finished run's steps never change), else
     read once through gh and kept; None when they cannot be read."""
     path = reds_dir("runsteps", f"{rid}.json")
     rec: Any = read_record(path)
     if rec is None:
-        rec = _run_step_failures(d, rid)
+        rec = _run_step_failures(d, rid, ctx=ctx)
         if rec is not None:
             with suppress(OSError):
                 os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -253,13 +254,13 @@ def _run_step_record(d: dict[str, Any], rid: Any) -> dict[str, list[str]] | None
     return rec  # type: ignore[no-any-return]
 
 
-def red_failed_steps(d: dict[str, Any]) -> list[str]:
+def red_failed_steps(d: dict[str, Any], *, ctx: Context) -> list[str]:
     """The steps that failed in red d's jobs on its newest run (by name): its `steps`, else the run's record
     (_run_step_record); [] when they cannot be read."""
     if d.get("steps"):
         return sorted(map(str, d["steps"]))
     rid = (d.get("last_run") or {}).get("databaseId")
-    rec = _run_step_record(d, rid) if rid else None
+    rec = _run_step_record(d, rid, ctx=ctx) if rid else None
     if rec is None:
         return []
     names = set(red_job_names(d))
@@ -383,22 +384,22 @@ class JobReads:
         return [(f, True)]
 
 
-def _job_steps_text(workflow_text: Any, d: Any) -> Any:
+def _job_steps_text(workflow_text: Any, d: Any, *, ctx: Context) -> Any:
     """The text of red d's failing job's failing steps; (unsure which) the whole workflow."""
     picked = red_failing_jobs(workflow_text, d)
-    failing = red_failed_steps(d) if picked else []
+    failing = red_failed_steps(d, ctx=ctx) if picked else []
     picked = [fix_step_text(body, failing) for body in picked] if failing else picked
     return "\n".join(picked) if picked else workflow_text
 
 
-def red_job_reads(repo, sha, d):
+def red_job_reads(repo, sha, d, *, ctx):
     """What red d's failing job reads, from the tree of `sha`: {files, prefixes, text, broad, sbt} -- or None when it
     cannot be told (no workflow file of that name, nothing readable)."""
     files = fix_tree_files(repo, sha)
     wf = red_workflow_file(repo, sha, d, files)
     if not wf:
         return None
-    steps = _job_steps_text(wf[1], d)  # its job's steps, or (unsure which) the whole workflow
+    steps = _job_steps_text(wf[1], d, ctx=ctx)  # its job's steps, or (unsure which) the whole workflow
     job = JobReads(repo, sha, files)
     job.reads.add(wf[0])
     texts = job.walk(steps)

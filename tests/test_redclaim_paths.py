@@ -15,6 +15,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402,F401 (puts lib on the path)
+from harness import case_context  # noqa: E402
 
 
 def _harness(module, script, log, tmp, stack):
@@ -23,6 +24,7 @@ def _harness(module, script, log, tmp, stack):
 
     def rec(name, ret=None):
         def fake(*a, **k):
+            k.pop("ctx", None)  # the Context is no call data (tests/golden_cases.py)
             log.append(shown(f"{name} {a} {sorted(k.items())}"))
             return ret(*a, **k) if callable(ret) else ret
         return fake
@@ -80,7 +82,7 @@ def run_claim(module, script):
         os.makedirs(os.path.join(tmp, "wt"))
         store, shown = _harness(module, script, log, tmp, stack)
         wt = {"tmp": os.path.join(tmp, "wt"), "gone": os.path.join(tmp, "gone"), None: None}[script.get("wt")]
-        got = module.red_claim(store, "R", script.get("target", "#7"), script.get("note", ""), wt)
+        got = module.red_claim(store, "R", script.get("target", "#7"), script.get("note", ""), wt, ctx=case_context())
         return shown(got), log
 
 
@@ -89,7 +91,7 @@ def run_release(module, script):
     with tempfile.TemporaryDirectory() as tmp0, contextlib.ExitStack() as stack:
         tmp = os.path.realpath(tmp0)
         store, shown = _harness(module, script, log, tmp, stack)
-        return shown(module.red_release(store, "R", script.get("target", "7"), script.get("any", False))), log
+        return shown(module.red_release(store, "R", script.get("target", "7"), script.get("any", False), ctx=case_context())), log
 
 
 def item(key, ident=None, gate=False):

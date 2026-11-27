@@ -70,8 +70,9 @@ movies model (movies "Code quality ratchets" and "Coupling"), on the movies repo
   modules it imports (a FOUNDATION -- a module importing no module but other foundations, a leaf helper like
   `statefile` -- is no collaborator: extracting a concept into its own module never raises its users' fan-out), and
   mypy checks the modules concatenated in `MODULES` order. What a module must not import -- the remote store -- is
-  wired at the composition root (cli: `CurrentStore(process_store)`) and passed in, never reached by a module calling up
-  nor kept in a cell a `wire_*` fills (`tests/test_no_service_locators.py`); a lower module's event for a higher one is
+  wired at the composition root (cli: `CurrentStore(process_store)`; the process's `Context`, passed down a call tree as
+  ONE parameter `ctx`: `docs/design/contexts.md`) and passed in, never reached by a module calling up nor kept in a cell
+  a `wire_*` fills (`tests/test_no_service_locators.py`); a lower module's event for a higher one is
   pulled, not called back (a missing token's note: `storetoken.take_token_notes`, taken by the tick's recovery step). The tests read and patch
   the modules as one object, `A` (`tests/agentctl_view.py`: `A.<name> = fake` replaces the name in every module
   binding it), until the collaborators are injected.

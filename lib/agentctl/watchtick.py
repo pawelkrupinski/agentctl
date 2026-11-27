@@ -3,6 +3,7 @@
 
 import os
 from typing import Any, Optional, Sequence
+from agentctl.context import Context
 from agentctl.core import NoToken, err, slug
 from agentctl.timefmt import iso_at, age_since
 from agentctl.procs import safe_cwd
@@ -21,10 +22,10 @@ from agentctl.statemachines import StaleVersion, TerminalState
 from agentctl.clock import Clock
 
 
-def landed_fixes(repo: str, sha: str, fixes: Sequence[str], store: Any) -> list[str]:
+def landed_fixes(repo: str, sha: str, fixes: Sequence[str], store: Any, *, ctx: Context) -> list[str]:
     """The runs named to verify: the caller's and the sha's own Fixes-Red trailers (those alone when they cannot be read)."""
     try:
-        return sorted(set(fixes) | fixes_of(repo, [sha], store))
+        return sorted(set(fixes) | fixes_of(repo, [sha], store, ctx=ctx))
     except Exception:
         return sorted(set(fixes))
 
@@ -37,7 +38,7 @@ def decided_by_follower(sha: str, it: dict[str, Any]) -> int:
 
 
 def watch_unclaimed(repo: str, sha: str, pushed_at: float, clock: Clock, store: Any, o_r: str, flows: Any, how: Any,
-                    claim: "WatchClaim", close: Optional[str], fixes: Sequence[str]) -> int:
+                    claim: "WatchClaim", close: Optional[str], fixes: Sequence[str], *, ctx: Context) -> int:
     """The watch run here: owned (one watcher per sha; on agentctl's new code it re-execs as `agentctl watch`), the claim
     kept when it is ours ("mine"), none when the store did not answer."""
     own = Owned("watch", f"{o_r}-{sha}", ["watch", "--repo", repo, "--sha", sha, "--pushed-at", str(pushed_at)]
@@ -50,13 +51,13 @@ def watch_unclaimed(repo: str, sha: str, pushed_at: float, clock: Clock, store: 
               "its verdict is its own (`agentctl orphans` lists owners)")
         return 2
     try:
-        return _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes, claim if how == "mine" else None, store=store)
+        return _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes, claim if how == "mine" else None, store=store, ctx=ctx)
     finally:
         own.release()
 
 
 def watch_landed(repo: str, sha: str, pushed_at: float | None, clock: Clock, store: Any, o_r: str | None = None,
-                 close: str | None = None, fixes: Sequence[str] = ()) -> int:
+                 close: str | None = None, fixes: Sequence[str] = (), *, ctx: Context) -> int:
     """Watch Main and the convergence for a landed sha. 0 green (or nothing to watch), 3 red, 2 could not tell. OWNED
     (one watcher per sha; on agentctl's new code it re-execs as `agentctl watch`). fixes: the runs the landed commits'
     `Fixes-Red:` trailers name (the sha's own are read here too): each is verified against the new run (FIX OK / FIX
@@ -67,8 +68,8 @@ def watch_landed(repo: str, sha: str, pushed_at: float | None, clock: Clock, sto
         print(f"watch: no CI watched for {o_r} (only movies' Main and convergence are)")
         return 0
     pushed_at = pushed_at or clock.time()
-    fixes = landed_fixes(repo, sha, fixes, store)
-    claim = WatchClaim(store, repo, sha, pushed_at, o_r, clock, close)
+    fixes = landed_fixes(repo, sha, fixes, store, ctx=ctx)
+    claim = WatchClaim(store, repo, sha, pushed_at, o_r, clock, close, ctx=ctx)
     how, it = claim.look()
     if how == "theirs":
         how, it = claim.wait_theirs(it)
@@ -77,14 +78,15 @@ def watch_landed(repo: str, sha: str, pushed_at: float | None, clock: Clock, sto
               f"{int(knob_watch_timeout() // 60)} min; check `agentctl ci-why` later", flush=True)
         return 2
     rc = decided_by_follower(sha, it) if how == "decided" else \
-        watch_unclaimed(repo, sha, pushed_at, clock, store, o_r, flows, how, claim, close, fixes)
+        watch_unclaimed(repo, sha, pushed_at, clock, store, o_r, flows, how, claim, close, fixes, ctx=ctx)
     if rc == 0 and close:
         print(close_worktree(close), flush=True)
     return rc
 
 
 class WatchClaim:
-    def __init__(self, store, repo, sha, pushed_at, o_r, clock, close=None):
+    def __init__(self, store, repo, sha, pushed_at, o_r, clock, close=None, *, ctx):
+        self.ctx = ctx
         self.store, self.repo, self.sha, self.pushed_at, self.o_r, self.close = store, repo, sha, pushed_at, o_r, close
         self.clock = clock
         self.me = f"{os.uname().nodename}:{os.getpid()}"
@@ -174,7 +176,7 @@ class WatchClaim:
             st = self.store
             it = st.item("watch", self.sha)
             if it and watch_outcome(it) not in ("ok", "red"):
-                finish_watch(st, it, state, line, list(red_runs), told=True)
+                finish_watch(st, it, state, line, list(red_runs), told=True, ctx=self.ctx)
         except (Exception, SystemExit) as e:
             err(f"watch {self.sha[:10]}: could not write its verdict to the store ({str(e)[:120]})")
 
@@ -183,7 +185,8 @@ class WatchLoop:
     """The follower's loop for one sha: read Main's and the convergence's runs, back off on an unreadable GitHub, and end
     with a named verdict (green, red with its ci-why, unknown at the bound, stalled) printed and given to the claim."""
 
-    def __init__(self, repo, sha, pushed_at, o_r, flows, own, clock, claim, store):
+    def __init__(self, repo, sha, pushed_at, o_r, flows, own, clock, claim, store, *, ctx):
+        self.ctx = ctx
         self.repo, self.sha, self.o_r, self.flows, self.own = repo, sha, o_r, flows, own
         self.pushed_at, self.clock, self.claim, self.store = pushed_at, clock, claim, store
         self.timeout = knob_watch_timeout()
@@ -225,7 +228,7 @@ class WatchLoop:
         self.seen = {}
         try:
             self.seen = watch_look(self.repo, self.sha, self.o_r, self.flows, self.done, self.pushed_at, self.t0,
-                                   self.clock.time(), self.on_run)
+                                   self.clock.time(), self.on_run, ctx=self.ctx)
             if self.unreachable is not None:
                 err(f"watch: GitHub answers again after {age_since(iso_at(self.unreachable))} ({self.failures} failed reads)")
             self.unreachable, self.failures, self.err_delays = None, 0, None
@@ -243,11 +246,11 @@ class WatchLoop:
         return None
 
     def decided(self) -> Optional[int]:
-        v = watch_verdict(self.o_r, self.sha, self.flows, self.done)
+        v = watch_verdict(self.o_r, self.sha, self.flows, self.done, ctx=self.ctx)
         if v and v[0] == "red":
             self.verdict(3, v[1], v[2])
             try:
-                print(ci_why(self.o_r, 4, repo=self.repo, store=self.store)[1])
+                print(ci_why(self.o_r, 4, repo=self.repo, store=self.store, ctx=self.ctx)[1])
             except (Exception, SystemExit) as e:
                 print(f"(agentctl ci-why failed: {e})")
             return 3
@@ -289,21 +292,21 @@ class WatchLoop:
             self.clock.sleep(next(self.err_delays) if self.unreachable is not None else next(self.delays))
 
 
-def _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None, *, store):
+def _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None, *, store, ctx):
     err(f"watching Main and the convergence for {sha[:10]} (up to "
         f"{int(knob_watch_timeout() // 60)} min; `--no-watch` skips this)"
         + (f"; its Fixes-Red {', '.join(fixes)} is verified by the red's own item (`agentctl red status`)" if fixes else ""))
-    return WatchLoop(repo, sha, pushed_at, o_r, flows, own, clock, claim, store).run()
+    return WatchLoop(repo, sha, pushed_at, o_r, flows, own, clock, claim, store, ctx=ctx).run()
 
 
-def cmd_watch(a, clock, store):
+def cmd_watch(a, clock, store, *, ctx):
     a.inbox_cwd = a.agent_cwd or a.close or a.repo or safe_cwd()  # its inbox entry routes to the agent's worktree
     repo = main_clone(a.repo or safe_cwd())
     os.chdir(repo)  # not the worktree: --close removes it, and so may its agent
-    return watch_landed(repo, a.sha, a.pushed_at, clock, store, close=a.close, fixes=a.fixes or ())
+    return watch_landed(repo, a.sha, a.pushed_at, clock, store, close=a.close, fixes=a.fixes or (), ctx=ctx)
 
 
-def tick_watches(clock, st):
+def tick_watches(clock, st, *, ctx):
     """One evaluation of each due watch item. Returns what it decided."""
     t = clock.time()
     did = []
@@ -312,13 +315,13 @@ def tick_watches(clock, st):
         if float(dd.get("followed_until") or 0) > t:  # a live `land --follow` watches it and writes its verdict here
             continue
         try:
-            did += tick_watch(st, it, t)
+            did += tick_watch(st, it, t, ctx=ctx)
         except (StaleVersion, TerminalState):  # its follower claimed or decided it meanwhile: it is that one's
             pass
     return did
 
 
-def tick_watch(st, it, t):
+def tick_watch(st, it, t, *, ctx):
     """One evaluation of a due watch item: what it decided (StaleVersion / TerminalState when a follower took it)."""
     dd = it["data"]
     if t > it["deadline"]:
@@ -331,18 +334,18 @@ def tick_watch(st, it, t):
         return []
     flows = WATCH.get(dd["o_r"]) or {}
     try:
-        verdict = watch_eval(watch_clone(dd), it["id"], dd["pushed_at"], dd["o_r"], flows, t)
+        verdict = watch_eval(watch_clone(dd), it["id"], dd["pushed_at"], dd["o_r"], flows, t, ctx=ctx)
     except (Exception, SystemExit) as e:  # unreadable now: tried again at the next look, the deadline bounds it
         err(f"watch {it['id'][:10]}: could not read the runs ({str(e)[:120]})")
         verdict = None
     if verdict is None:
         st.update_item("watch", it["id"], it["version"], {"next_at": t + knob_watch_poll()})
         return []
-    finish_watch(st, it, *verdict)
+    finish_watch(st, it, *verdict, ctx=ctx)
     return [f"watch {it['id'][:10]}: {verdict[0]}"]
 
 
-def finish_watch(st, it, state, line, red_runs, told=False):
+def finish_watch(st, it, state, line, red_runs, told=False, *, ctx):
     """The watch item's verdict (ok / red / unknown), kept on it for a later follower (`verdict`); its event goes to
     its author's inbox unless told (a follower printed it to the author already); on ok its worktree closed, on red
     the red machine takes each red run, its author offered first. An `unknown` item a follower re-watched keeps the
@@ -360,6 +363,6 @@ def finish_watch(st, it, state, line, red_runs, told=False):
         err(close_worktree(dd["close"]))
     for wf, n in red_runs:
         try:
-            red_attach(st, wf, n, author={"session": dd.get("session"), "worktree": dd.get("worktree")})
+            red_attach(st, wf, n, author={"session": dd.get("session"), "worktree": dd.get("worktree")}, ctx=ctx)
         except (Exception, SystemExit) as e:
             err(f"watch {it['id'][:10]}: could not attach {wf} #{n} ({str(e)[:120]})")

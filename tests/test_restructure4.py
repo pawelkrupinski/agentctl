@@ -1,11 +1,14 @@
 """RESTRUCTURE ROUND 4: each function split into named stages keeps its behaviour. The digests (fixtures/
 restructure4-digests.json, recorded from the code BEFORE the split with `R4_RECORD=1`) cover thousands of seeded cases
 each, collaborators faked (golden_cases.py): every call, its order and the result."""
+import types
 import os, sys, unittest
+from functools import partial
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from golden_cases import Probe, check  # noqa: E402
 
 
@@ -57,7 +60,7 @@ class TickChangesPassTest(unittest.TestCase):
                 pick(), pick(), r.choice([None, 3, 8]), {})
 
     def test_tick_changes_pass(self):
-        check(self, A, "_tick_changes_pass", self.build, lambda A: A._tick_changes_pass)
+        check(self, A, "_tick_changes_pass", self.build, lambda A: partial(A._tick_changes_pass, ctx=case_context()))
 
 
 def item(rng, i, states):
@@ -179,7 +182,7 @@ class RedRetiredTest(unittest.TestCase):
 
         def wrapped(A):
             def call(*args):
-                out = A.red_run_retired(*args)
+                out = A.red_run_retired(*args, ctx=case_context())
                 why = A._retire_cache.get(("why", args[0]))
                 return out, why and why[1], ("fail", args[0]) in A._retire_cache
             return call
@@ -220,7 +223,7 @@ class RedFixReadTest(unittest.TestCase):
             d = {"workflow": r.choice(["w", "w.yml", "x"]), "jobs": r.choice([["job1"], ["Job One (a)"], ["job2 / x"], []]),
                  "line": r.choice(["", "FooSpec failed"])}
             return ("repo", "sha", d)
-        check(self, A, "red_job_reads", build, lambda A: A.red_job_reads, 3000)
+        check(self, A, "red_job_reads", build, lambda A: partial(A.red_job_reads, ctx=case_context()), 3000)
 
     def test_fix_job_steps(self):
         def build(case):
@@ -247,7 +250,7 @@ class RedFixReadTest(unittest.TestCase):
             if r.random() < 0.1:
                 store = Probe(case, "store", items=lambda rng, kind: 1 / 0)
             return ("repo", "sha", r.sample(["1", "2", "3", "local", " 5", "#2", ""], r.randint(0, 5)), store) if r.random() < 0.95 else (None, "sha", ["1"], store)
-        check(self, A, "fix_check", build, lambda A: A.fix_check, 4000)
+        check(self, A, "fix_check", build, lambda A: partial(A.fix_check, ctx=case_context()), 4000)
 
 
 NOW = 1_795_000_000.0
@@ -291,7 +294,7 @@ class RedFixesTest(unittest.TestCase):
             return (maybe(r, "repo", 0.85), maybe(r, store, 0.9))
         def facts_of(A):  # the patches dict's order follows a set's: compared sorted
             def call(*args):
-                out = A.red_fix_facts(*args)
+                out = A.red_fix_facts(*args, ctx=case_context())
                 return {**out, "patches": sorted(out["patches"].items())}
             return call
         check(self, A, "red_fix_facts", build, facts_of, 3000)
@@ -313,7 +316,7 @@ class RedFixesTest(unittest.TestCase):
                  "history": [{"outcome": r.choice(["LANDED abcdef12", "x", None]), "at": r.choice(["2026-11-20T10:00:00Z", None, "junk"])}
                              for _ in range(r.randint(0, 3))]}
             return (d, facts)
-        check(self, A, "red_fix_candidates", build, lambda A: lambda d, facts: list(A.red_fix_candidates(d, facts)), 4000)
+        check(self, A, "red_fix_candidates", build, lambda A: lambda d, facts: list(A.red_fix_candidates(d, facts, ctx=case_context())), 4000)
 
     def test_red_run_on_way(self):
         import types
@@ -329,7 +332,7 @@ class RedFixesTest(unittest.TestCase):
             d = {"last_run": r.choice([None, {"headSha": "base", "databaseId": r.randint(0, 5)}, {"headSha": "base", "databaseId": 2}, {"databaseId": 2}]),
                  "workflow": "w"}
             return (d, snap, r.choice([None, "repo"]))
-        check(self, A, "red_run_on_way", build, lambda A: A.red_run_on_way, 3000)
+        check(self, A, "red_run_on_way", build, lambda A: partial(A.red_run_on_way, ctx=case_context()), 3000)
 
 
 class ConflictsTest(unittest.TestCase):
@@ -419,10 +422,12 @@ class SmallOnesTest(unittest.TestCase):
         check(self, A, "alert_migrate", build, lambda A: A.alert_migrate, 3000)
 
     def test_watch_look(self):
+        ctx = []  # the case's Context: its CI reader's main_runs recorded as the module function it was
+
         def build(case):
             r = case.rng
             case.fake("env_num", lambda rng, name, default: rng.choice([10, 100]))
-            case.fake("main_runs", lambda rng, o_r, wfile: [wfile])
+            ctx[:] = [A.Context(runs=types.SimpleNamespace(main_runs=case.recorded("main_runs", lambda rng, o_r, wfile: [wfile])))]
             run = lambda rng: maybe(rng, {"databaseId": rng.randint(1, 3), "status": rng.choice(["completed", "queued"]),  # noqa: E731
                                           "updatedAt": "t", "conclusion": rng.choice(["success", "failure"])}, 0.7)
             case.fake("pick_main_run", lambda rng, repo, sha, runs: run(rng))
@@ -435,7 +440,7 @@ class SmallOnesTest(unittest.TestCase):
 
         def call(A):
             def run(*args):
-                return A.watch_look(*args), args[4]
+                return A.watch_look(*args, ctx=ctx[0]), args[4]
             return run
         check(self, A, "watch_look", build, call, 4000)
 
@@ -455,15 +460,15 @@ class Round4BackfillTest(unittest.TestCase):
         try:
             A._retire_cache.clear()
             args = ("o/rb", "W", {"databaseId": 7}, ["build"], 1_795_000_000)
-            self.assertIsNone(A.red_run_retired(*args))
+            self.assertIsNone(A.red_run_retired(*args, ctx=case_context()))
             self.assertEqual(len(A._retire_cache[("why", "o/rb")][1]), len("W #None: ") + 200)
-            self.assertIsNone(A.red_run_retired(*args))  # within the TTL: not asked again
+            self.assertIsNone(A.red_run_retired(*args, ctx=case_context()))  # within the TTL: not asked again
             self.assertEqual(len(calls), 1)
             A._retire_cache[("fail", "o/rb")] = (A.epoch_now() - A.RETIRE_FAIL_TTL - 1, 0)
-            A.red_run_retired(*args)  # expired: asked again
+            A.red_run_retired(*args, ctx=case_context())  # expired: asked again
             self.assertEqual(len(calls), 2)
             A._retire_cache[("fail", "o/rb")] = (A.epoch_now() - A.RETIRE_FAIL_TTL + 5, 0)
-            A.red_run_retired(*args)  # still inside
+            A.red_run_retired(*args, ctx=case_context())  # still inside
             self.assertEqual(len(calls), 2)
         finally:
             A.retire_main = saved

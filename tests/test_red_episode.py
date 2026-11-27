@@ -11,6 +11,7 @@ import itertools, os, random, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 
 # a streak run's signature: what its cached record says (classifier current or stale) and what a fresh read finds
 SIG_STATES = ("cur-A", "cur-B", "stale-A", "stale-oldline", "none", "broken")
@@ -44,8 +45,8 @@ class World:
         test.addCleanup(os.environ.pop, "AGENTCTL_STREAK_REREADS", None)
         test.addCleanup(setattr, A, "run_sigs", A.run_sigs)
         A.run_sigs = self.run_sigs
-        A.main_runs_of("o/r").gate["Main"] = self.runs
-        test.addCleanup(A.ci_runs().clear)
+        case_context().runs.main_runs_of("o/r").gate["Main"] = self.runs
+        test.addCleanup(case_context().runs.clear)
 
     def record(self, n, state):
         line = {"cur-A": "Failed: A", "cur-B": "Failed: B", "stale-A": "Failed: A", "stale-oldline": "WARN a"}.get(state)
@@ -75,7 +76,7 @@ def decisions(test, cell):
     """(the gate's episode -- gate_reds' names of the newest red run: its own and its episode's --, the queue facts'
     episode) of one cell, as run numbers."""
     w = World(test, *cell)
-    gate = A.run_names(w.runs[0]) | A.episode_names("o/r", "Main", w.runs[0])
+    gate = A.run_names(w.runs[0]) | A.episode_names("o/r", "Main", w.runs[0], ctx=case_context())
     return (numbers(gate), numbers(A.red_episode_names(w.item(), w.snap())))
 
 
@@ -165,7 +166,7 @@ class RedEpisodeMatrixTest(unittest.TestCase):
         st = A.Store(path=os.path.join(self.tmp.name, "store.db"))
         facts = A.queue_facts({"8"}, st)
         self.assertIn("Main", facts["episode_unread"])
-        v = A.may_land_on_red(facts, {"fixes": ["7"]})
+        v = A.may_land_on_red(facts, {"fixes": ["7"]}, ctx=case_context())
         self.assertIn("the episode of Main is unread", v.wait)
         w.states[8] = "cur-A"
         A.RedEpisode("o/r", "Main", w.runs, [0]).of_run(w.runs[0])

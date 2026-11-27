@@ -9,6 +9,7 @@ import json, os, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 import test_backlog_batch, test_generated  # noqa: E402
 
@@ -103,7 +104,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
 
     def in_flight(self, eid):
         """The change's check under way (its executor taken: checking)."""
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertEqual(self.started, [eid])
         A.set_change(A.CurrentStore(A.process_store), self.d, self.entry(eid), "checking", cause="agent")
 
@@ -136,7 +137,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         ea = self.lane("tool-a", {"tools/a.sh": "the first tool"})
         eb = self.lane("tool-b", {"tools/b.sh": "the second tool"})
         self.assertTrue(A.pair_conflict(self.r.path, self.entry(ea), self.entry(eb)), "git conflicts here")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertEqual(self.started, [], "both wait for the backlog batch, neither held behind the other")
         self.drive_as("sync")
         self.assertTrue(self.landed(ea, eb), [self.entry(x) for x in (ea, eb)])
@@ -151,7 +152,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         count. Regenerated all the same over the combined tree."""
         ea = self.lane("tool-a", {"tools/a.sh": "the first tool"})
         ez = self.lane("tool-z", {"tools/z.sh": "the last tool"})
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.drive_as("sync")
         self.assertTrue(self.landed(ea, ez), [self.entry(x) for x in (ea, ez)])
         self.assertIn("## Tools (3)", self.on_main(CATALOGUE))
@@ -163,7 +164,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         main_paths = self.on_main(PATHS)  # the older adds the later tool: a union of the two blocks is out of order
         ea = self.lane("paths-a", {"tools/b.sh": "b"}, main_paths.replace("src/top.txt", "src/top-a.txt"))
         eb = self.lane("paths-b", {"tools/a.sh": "a"}, main_paths.replace("src/bottom.txt", "src/bottom-b.txt"))
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.drive_as("sync")
         self.assertTrue(self.landed(ea, eb), [self.entry(x) for x in (ea, eb)])
         paths = self.on_main(PATHS)
@@ -176,7 +177,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         main_paths = self.on_main(PATHS)
         ea = self.lane("paths-a", {"tools/a.sh": "a"}, main_paths.replace("src/top.txt", "src/top-a.txt"))
         eb = self.lane("paths-b", {"tools/b.sh": "b"}, main_paths.replace("src/top.txt", "src/top-b.txt"))
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.drive_as("sync")
         self.assertEqual(self.entry(eb)["batch_alone"], "regen")
         self.assertIn(f"{PATHS}: both sides changed its hand-written lines",
@@ -191,7 +192,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         self.regen_on_this_host()
         ea = self.lane("tool-a", {"tools/a.sh": "the first tool"}, rows=["web:lint.B\tweb/b/*"])
         eb = self.lane("tool-b", {"tools/b.sh": "the second tool"}, rows=["worker:lint.C\tworker/*"])
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertEqual(self.started, [], "both wait for the backlog batch")
         self.assertNotIn(self.hold_of(eb).get("kind"), ("overlap",), "never held behind the other")
         self.drive_as("sync")
@@ -207,7 +208,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         self.assertFalse(A.regen_here())
         ids = [self.lane(f"tool-{c}", {f"tools/{c}.sh": f"tool {c}"}, rows=[f"web:lint.{c.upper()}\tweb/{c}/*"])
                for c in "abc"]
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertEqual(self.started, [], "every one waits for the backlog batch, none held behind another")
         self.drive()
         self.assertTrue(self.landed(*ids), [self.entry(x) for x in ids])
@@ -226,7 +227,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         ea = self.lane("tool-a", {"tools/a.sh": "the first tool"}, alone=True)
         self.in_flight(ea)
         eb = self.lane("tool-b", {"tools/b.sh": "the second tool"})
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertIn(eb, self.started, f"checked now, beside the older: {self.hold_of(eb)}")
         self.assertNotEqual(self.hold_of(eb).get("kind"), "overlap")
         self.check_and_push(ea, eb)
@@ -240,7 +241,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         ea = self.lane("tool-a", {"tools/a.sh": "the first tool"}, alone=True)
         self.in_flight(ea)
         eb = self.lane("tool-b", {"tools/b.sh": "the second tool"})
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertIn(eb, self.started, f"checked now, beside the older: {self.hold_of(eb)}")
         self.check_and_push(ea, eb)
 
@@ -261,7 +262,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         ea = self.lane("tool-a", {"tools/a.sh": "the first tool"}, alone=True, classes=["tools/a.sh\tMIGRATE"])
         self.in_flight(ea)
         eb = self.lane("tool-b", {"tools/b.sh": "the second tool"}, classes=["tools/b.sh\tKEEP"])
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertIn(eb, self.started, f"checked now: {self.hold_of(eb)}")
         self.check_and_push(ea, eb)
         self.assertEqual(sorted(self.on_main(CLASSES).splitlines()[1:]),
@@ -272,7 +273,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         ea = self.lane("tool-a", {"tools/a.sh": "a"}, alone=True, classes=["tools/a.sh\tMIGRATE"])
         self.in_flight(ea)
         eb = self.lane("tool-b", {"tools/b.sh": "b"}, classes=["tools/b.sh\tKEEP"])
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertNotIn(eb, self.started)
         self.assertEqual(self.hold_of(eb).get("files"), [CLASSES], "held for the declared path alone")
 
@@ -283,20 +284,20 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         ea = self.lane("tool-a", {"tools/a.sh": "the first tool"}, alone=True)
         self.in_flight(ea)
         ez = self.lane("tool-z", {"tools/z.sh": "the last tool"})
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertIn(ez, self.started, f"checked now: {self.hold_of(ez)}")
         self.check_and_push(ea, ez)
         self.assertIn(f"main moved under regenerated files it changes too (.github/convergence-paths.txt, {CATALOGUE})",
                       open(os.path.join(self.d, "processor.log")).read(), "the new round is owed for the page")
 
     def check_and_push(self, older, younger):
-        A.check_entry(self.r.path, older, *on_clock(self.clock))
-        A.check_entry(self.r.path, younger, *on_clock(self.clock))  # checked on the main the older has not reached yet
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))  # pushes the older; the younger's push finds main moved
+        A.check_entry(self.r.path, older, *on_clock(self.clock), ctx=case_context())
+        A.check_entry(self.r.path, younger, *on_clock(self.clock), ctx=case_context())  # checked on the main the older has not reached yet
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())  # pushes the older; the younger's push finds main moved
         for _ in range(4):
             if self.entry(younger)["status"] == "queued":
-                A.check_entry(self.r.path, younger, *on_clock(self.clock))  # its new round, on main with the older
-            A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+                A.check_entry(self.r.path, younger, *on_clock(self.clock), ctx=case_context())  # its new round, on main with the older
+            A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
             if A.entry_final(self.entry(younger)["status"]):
                 break
         self.assertTrue(self.landed(older, younger), [self.entry(x) for x in (older, younger)])
@@ -347,7 +348,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         sha) and the catalogue; its own commit, re-applied onto main as the check does, conflicts in the catalogue
         alone -- regenerated. Never refused `no longer applies`: it lands, main's page the generator's."""
         eid, _wd = self.stacked_on_a_landed_parent()
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertNotEqual(self.entry(eid)["status"], "rejected", self.entry(eid).get("why"))
         self.assertEqual(self.check(eid), 0, self.entry(eid).get("why"))
         self.assertTrue(self.landed(eid), self.entry(eid))
@@ -359,7 +360,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         """Only a real source conflict refuses: main edits the very line the change's own commit edits."""
         eid, _wd = self.stacked_on_a_landed_parent()
         self.main_commits("main-edits", {"src/kick.py": "def kick():\n    return 3\n"})
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertEqual(self.entry(eid)["status"], "rejected")
         self.assertIn("no longer applies", self.entry(eid)["why"])
         self.assertEqual(self.entry(eid).get("conflict_files"), ["src/kick.py"])
@@ -373,7 +374,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         self.r.push(at=wm)
         for c in A.PROCESS_CACHES:
             c.clear()
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertNotEqual(self.entry(eid)["status"], "rejected", self.entry(eid).get("why"))
         self.check(eid)
         self.assertEqual(self.entry(eid)["status"], "landed", self.entry(eid))
@@ -386,7 +387,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
         ea = self.lane("tool-a", {"tools/a.sh": "a"}, rows=["web:lint.B\tweb/b/*"], alone=True)
         self.in_flight(ea)
         eb = self.lane("tool-b", {"tools/b.sh": "b"}, rows=["worker:lint.C\tworker/*"])
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertNotIn(eb, self.started, "the younger waits for the check in flight")
         self.assertEqual((self.hold_of(eb).get("blocker"), self.hold_of(eb).get("files")), (ea, [LINT_REGISTRY]),
                          "held for the lint registry, never the catalogue")

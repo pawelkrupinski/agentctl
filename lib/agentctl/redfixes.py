@@ -1,6 +1,7 @@
 # agentctl, part `redfixes`: a red's candidate fixes: queued and landed Fixes-Red changes, refuted and set-aside ones, a fix on main.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 import re
 import time
@@ -18,30 +19,30 @@ from agentctl.fixchange import fixes_named, red_fix_fresh
 from agentctl.redfixcheck import fix_check, fix_reaches_red, landed_fix_commits, red_change_link
 
 
-def commit_fixes(repo: str, sha: str, store: Any) -> set[str]:
+def commit_fixes(repo: str, sha: str, store: Any, *, ctx: Context) -> set[str]:
     """The `Fixes-Red:` values of commit sha that count as fixes (fix_check)."""
     vals = commit_trailer_values(repo, sha, "Fixes-Red")
-    return fix_check(repo, sha, vals, store)[0] if vals else set()
+    return fix_check(repo, sha, vals, store, ctx=ctx)[0] if vals else set()
 
 
 _trailer_fixes = process_cache({})
 
 
-def _commit_fixes(repo: Any, c: Any, store: Any) -> Any:
+def _commit_fixes(repo: Any, c: Any, store: Any, *, ctx: Context) -> Any:
     """The runs commit c's Fixes-Red trailers name that count (cached per commit)."""
     if c not in _trailer_fixes:
-        _trailer_fixes[c] = sorted(commit_fixes(repo, c, store))  # only those that count
+        _trailer_fixes[c] = sorted(commit_fixes(repo, c, store, ctx=ctx))  # only those that count
     return _trailer_fixes[c]
 
 
-def entry_fixes(repo, e, store):
+def entry_fixes(repo, e, store, *, ctx):
     """The runs a queued change says it fixes: its `fixes` (recorded at submission from its Fixes-Red trailers), else
     read again from its commits' trailers (cached per commit) -- an entry that lost the field still links its red."""
     if e.get("fixes"):
         return sorted(fixes_named(e))
     out = []
     for c in e.get("commits") or []:
-        out += _commit_fixes(repo, c, store)
+        out += _commit_fixes(repo, c, store, ctx=ctx)
     return out
 
 
@@ -57,14 +58,14 @@ def _open_untrailered(e: Any, fx: Any) -> Any:
     return not fx and e.get("status") in FIX_OPEN
 
 
-def _queue_facts(repo: Any, store: Any) -> Any:
+def _queue_facts(repo: Any, store: Any, *, ctx: Context) -> Any:
     """(the queue's changes that name fixes, those that name none but are open, why the queue could not be read)."""
     entries: list[Any] = []
     untrailered: list[Any] = []
     try:
         d, _c, _w = waiting_state(repo)
         for e in ChangeRecords(store, d).every():
-            fx = entry_fixes(repo, e, store) if _recent_entry(e) or e.get("fixes") else None
+            fx = entry_fixes(repo, e, store, ctx=ctx) if _recent_entry(e) or e.get("fixes") else None
             if fx and not red_unrelated(repo, e):
                 entries.append({**e, "fixes": fx})
             elif _open_untrailered(e, fx):
@@ -120,12 +121,12 @@ def _landed_times(repo: Any, entries: Any) -> Any:
     return landed_at
 
 
-def red_fix_facts(repo, store):
+def red_fix_facts(repo, store, *, ctx):
     """What links a red to its fix: the queue's Fixes-Red changes, the Fixes-Red commits on main, and every run any
     spell of each red key was seen in (key_runs: a red whose own item lost a run -- a duplicate spell, an import --
     still meets the change that names that run)."""
-    entries, untrailered, queue_unread = _queue_facts(repo, store)
-    landed = attempt(lambda: landed_fix_commits(store, repo), [], catch=(Exception, SystemExit))
+    entries, untrailered, queue_unread = _queue_facts(repo, store, ctx=ctx)
+    landed = attempt(lambda: landed_fix_commits(store, repo, ctx=ctx), [], catch=(Exception, SystemExit))
     keyed = KeyedReds()
     _each_red(store, keyed.add)
     # THE FIXES' CONTENT (simplification-2026-10-31 item 3): the patch-id of every fix commit a red could take and of
@@ -193,14 +194,15 @@ class FixCandidates:
     """The fixes that may be on their way for one red, best first: a method per source (the queue's changes, the
     untrailered ones editing the red's own workflow, the commits landed on main, its fixers' verdicts)."""
 
-    def __init__(self, d: Any, facts: Any) -> None:
+    def __init__(self, d: Any, facts: Any, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.d, self.facts = d, facts
         self.names = red_names(d) | set((facts.get("key_runs") or {}).get(d.get("key")) or [])
         self.since = float(d.get("opened_at") or 0) - 3600
         self.repo = facts.get("repo")
 
     def its_own(self, named: Any, shas: Any) -> Any:  # PER RED: named by its key, or a fix its own failing job reads (fix_reaches_red)
-        return self.d.get("key") in named or any(fix_reaches_red(self.repo, x, self.d) for x in shas if x) or not any(shas)
+        return self.d.get("key") in named or any(fix_reaches_red(self.repo, x, self.d, ctx=self.ctx) for x in shas if x) or not any(shas)
 
     def all(self) -> Any:
         yield from self.queued()
@@ -248,7 +250,7 @@ class FixCandidates:
         for e in [] if self.d.get("gate") else self.facts.get("untrailered") or []:
             if {str(x) for x in e.get("diagnoses") or []} & {str(x) for x in self.names}:
                 continue  # DIAGNOSTICS ARE NO FIX: a `Diagnoses-Red:` change never links its red, whatever it edits
-            link = red_change_link(self.repo, self.d, e.get("commits") or [])  # what it changes of the failing step (redfixcheck.py)
+            link = red_change_link(self.repo, self.d, e.get("commits") or [], ctx=self.ctx)  # what it changes of the failing step (redfixcheck.py)
             if link:
                 yield {"entry": e["id"], "status": e["status"], "linked": link,
                        "author": {"worktree": e.get("worktree"), "session": e.get("session")}}
@@ -269,11 +271,11 @@ class FixCandidates:
                 yield {"entry": None, "status": "landed", "sha": m.group(1), "at": at, "via": "its fixer's LANDED"}
 
 
-def red_fix_candidates(d, facts):
+def red_fix_candidates(d, facts, *, ctx):
     """Every fix that may be on its way for red data d, best first: the queue's changes naming one of its runs (the
     newest first), the `Fixes-Red:` commits landed on main since it opened (the newest first), then its own fixers'
     `LANDED <sha>` verdicts since it opened (the newest first). Unjudged: red_fix_of drops the ones set aside."""
-    yield from FixCandidates(d, facts).all()
+    yield from FixCandidates(d, facts, ctx=ctx).all()
 
 
 def _workflow_runs(snap: Any, workflow: Any) -> Any:
@@ -288,13 +290,13 @@ def _newer_undecided(r: Any, own: Any, base: Any) -> Any:
                 or int(r.get("databaseId") or 0) <= int(own.get("databaseId") or 0) or r["headSha"] == base)
 
 
-def _reaching_commit(repo: Any, base: Any, head: Any, d: Any) -> Any:
+def _reaching_commit(repo: Any, base: Any, head: Any, d: Any, *, ctx: Context) -> Any:
     """The first commit since base up to head that reaches red d's failing job (fix_reaches_red), else None."""
     got = git(repo, "rev-list", "--max-count=50", f"{base}..{head}", check=False)
-    return next((sha for sha in (got.stdout.split() if got.returncode == 0 else []) if fix_reaches_red(repo, sha, d)), None)
+    return next((sha for sha in (got.stdout.split() if got.returncode == 0 else []) if fix_reaches_red(repo, sha, d, ctx=ctx)), None)
 
 
-def red_run_on_way(d, snap, repo):
+def red_run_on_way(d, snap, repo, *, ctx):
     """(run, sha): an undecided run on main of red d's workflow, newer than its failing run, containing a commit since
     that run's head that reaches its failing job (fix_reaches_red) -- a fix landed with no Fixes-Red, which that run
     will prove or refute. None when there is none (or the clone cannot tell)."""
@@ -303,7 +305,7 @@ def red_run_on_way(d, snap, repo):
     if not repo or not base or not snap:
         return None
     for r in _workflow_runs(snap, d.get("workflow")):
-        sha = _reaching_commit(repo, base, r["headSha"], d) if _newer_undecided(r, own, base) else None
+        sha = _reaching_commit(repo, base, r["headSha"], d, ctx=ctx) if _newer_undecided(r, own, base) else None
         if sha:
             return r, sha
     return None
@@ -323,7 +325,7 @@ def red_run_on_way(d, snap, repo):
 # sha is resolved against main (onmain.MainContainment.carrying): kept when main contains it, followed to the main commit carrying
 # its patch (a re-cut on landing), and no fix at all when main carries neither; and a fix that landed before this spell
 # opened is no fix for it (the run that opened it already contained it), however its entry reads. A red already
-# fix-pending on such a sha is corrected the same way (red_fix_pending).
+# fix-pending on such a sha is corrected the same way (redpending.FixPending).
 def red_fix_on_main(fix, repo):
     """A landed fix with its sha on main (MainContainment.carrying: `recut` names the sha it was given), None when main
     never got it; any other fix as given."""
@@ -347,7 +349,7 @@ def _counted_fix(fix: Any, facts: Any, d: Any, store: Any, since: Any) -> Any:
     return fix
 
 
-def red_fix_of(it, facts, store=None):
+def red_fix_of(it, facts, store=None, *, ctx):
     """The fix on its way for this red, or None: {entry, status, sha?, at?}. A refuted or unverified fix -- by sha or
     by content -- counts no more, and is never the reason a later fix is not seen. store: each candidate corrected by
     its change's store item first (red_fix_fresh). A landed fix is a commit on main (red_fix_on_main) that landed
@@ -355,7 +357,7 @@ def red_fix_of(it, facts, store=None):
     d = it["data"]
     aside = red_set_aside(d, facts)
     since = float(d.get("opened_at") or 0) - 3600
-    for candidate in red_fix_candidates(d, facts):
+    for candidate in red_fix_candidates(d, facts, ctx=ctx):
         fix = _counted_fix(candidate, facts, d, store, since)
         if fix and not (fix.get("sha") and red_fix_is_set_aside(fix["sha"], aside, facts)):
             return fix
@@ -366,11 +368,11 @@ def red_entry_status(facts, eid):
     return next((e.get("status") for e in facts.get("entries") or [] if e.get("id") == eid), None)
 
 
-def fixes_of(repo, commits, store):
+def fixes_of(repo, commits, store, *, ctx):
     """The run ids/numbers the commits' Fixes-Red: trailers name -- those that count as fixes (fix_check)."""
     out = set()
     for c in commits:
-        out |= commit_fixes(repo, c, store)  # only those that count: touching what the red's job reads (fix_check)
+        out |= commit_fixes(repo, c, store, ctx=ctx)  # only those that count: touching what the red's job reads (fix_check)
     return out
 
 

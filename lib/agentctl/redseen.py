@@ -2,6 +2,7 @@
 # and everything red on main (red_observe) with main's own local-checks red (reds/local.json)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.statemachines import is_terminal
 from agentctl.clock import wall_epoch
 import os
@@ -16,7 +17,7 @@ from agentctl.forge import RED_CONCLUSIONS
 from agentctl.repos import gated_repo
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.ciwhy import gate_from_snap, gate_report_only, gate_runs, outside_from_snap
-from agentctl.ciruns import main_runs_of
+
 from agentctl.runsigs import classifier_version, run_names, signature
 from agentctl.redrecord import red_key, red_what, RedEpisode, streak_budget
 from agentctl.red import red_close, STUCK_FACTOR
@@ -346,7 +347,7 @@ def cleared_by_latest_run(d: dict[str, Any], snap: Any) -> bool:
     return newest > own or newest == own and last.get("conclusion") == "success"
 
 
-def gate_reds(repo: str) -> set[str]:
+def gate_reds(repo: str, *, ctx: Context) -> set[str]:
     """The ids (run numbers and run ids) of the gating workflows' red runs on main; empty when green or not gated. A
     report-only red (gate_report_only: red only in the registry's unproven jobs) holds no push.
     When the gate cannot be read: {GATE_UNREAD}, which every caller takes as RED -- a production change waits, the
@@ -357,9 +358,9 @@ def gate_reds(repo: str) -> set[str]:
         if not gated_repo(o_r):
             return set()
         reds = set()
-        for name, decided, _newer, _streak in gate_runs(o_r):
-            if decided and decided.get("conclusion") != "success" and not gate_report_only(o_r, name, decided)[0]:
-                reds |= {str(decided.get("number")), str(decided.get("databaseId"))} | episode_names(o_r, name, decided)
+        for name, decided, _newer, _streak in gate_runs(o_r, ctx=ctx):
+            if decided and decided.get("conclusion") != "success" and not gate_report_only(o_r, name, decided, ctx=ctx)[0]:
+                reds |= {str(decided.get("number")), str(decided.get("databaseId"))} | episode_names(o_r, name, decided, ctx=ctx)
         return reds
     except (Exception, SystemExit) as e:  # SystemExit: NoToken
         why = str(e).replace("agentctl: ", "")[:200]
@@ -375,10 +376,10 @@ def gate_reds(repo: str) -> set[str]:
 # streak) that share a failure signature with its newest red run -- the names red_units links a red item by. A run of
 # an older episode (main went green since) never counts. movies' pre-push judges the same rule from gh's run list and
 # failed job names (episode_reds there).
-def episode_names(o_r, name, decided):
+def episode_names(o_r, name, decided, *, ctx):
     """The names (numbers and ids) of workflow `name`'s red streak runs on main that fail the way its newest decided red
     run does: RedEpisode.of_run (its signatures unread: only that run, and `episode_unread` says why)."""
-    return set(RedEpisode(o_r, name, main_runs_of(o_r).gate.get(name) or [], streak_budget()).of_run(decided).names)
+    return set(RedEpisode(o_r, name, ctx.runs.main_runs_of(o_r).gate.get(name) or [], streak_budget()).of_run(decided).names)
 
 
 def predict_units(o_r, snap):
@@ -395,12 +396,12 @@ def predict_units(o_r, snap):
     return units
 
 
-def red_observe(o_r, repo, snap):
+def red_observe(o_r, repo, snap, *, ctx):
     """{key: observation} of everything red on main now: the gate, every other workflow (its newest decided run, audit
     #7), main's local checks, the branch runs that predict main red, and the stuck runs (audit #8). A report-only gate
     run's reds (gate_report_only) are outside the gate's."""
-    gate, outside, mine = gate_from_snap(snap), outside_from_snap(snap), main_runs_of(snap["repo"])
-    rows = [(n, d, mine.gate.get(n, []), not gate_report_only(o_r, n, d)[0]) for n, d, _nw, _s in gate]
+    gate, outside, mine = gate_from_snap(snap, ctx=ctx), outside_from_snap(snap, ctx=ctx), ctx.runs.main_runs_of(snap["repo"])
+    rows = [(n, d, mine.gate.get(n, []), not gate_report_only(o_r, n, d, ctx=ctx)[0]) for n, d, _nw, _s in gate]
     others = [(n, r, mine.outside.get(n, []), False) for n, r, _s, _c in outside]
     units = gate_red_units(o_r, rows, others) + local_units(repo) + predict_units(o_r, snap)
     obs = red_obs_of_units(units)

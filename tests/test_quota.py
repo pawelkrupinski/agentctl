@@ -5,6 +5,7 @@ import os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 
 SPENT = "::error::OMDb refuses the key (HTTP 401: Request limit reached) -- every lookup would fail"
 INVALID = "::error::OMDb refuses the key (HTTP 401: Invalid API key!)"
@@ -72,11 +73,11 @@ class QuotaTest(unittest.TestCase):
                 {"number": 6, "databaseId": 60, "createdAt": "2027-01-15T07:00:00Z", "conclusion": "failure"}]
         A.gh_json = lambda *a, **k: runs
         try:
-            A.run_jobs = lambda o_r, r: [{"name": "preflight", "conclusion": "failure"}]
-            ok, why = A.probe_quota_reset({"workflow": "Record scrape fixtures", "since": since, "job": "preflight"})
+            A.run_jobs = lambda o_r, r, ctx=None: [{"name": "preflight", "conclusion": "failure"}]
+            ok, why = A.probe_quota_reset({"workflow": "Record scrape fixtures", "since": since, "job": "preflight"}, ctx=case_context())
             self.assertEqual(ok, False)
-            A.run_jobs = lambda o_r, r: [{"name": "preflight", "conclusion": "success"}, {"name": "leg", "conclusion": "failure"}]
-            ok, why = A.probe_quota_reset({"workflow": "Record scrape fixtures", "since": since, "job": "preflight"})
+            A.run_jobs = lambda o_r, r, ctx=None: [{"name": "preflight", "conclusion": "success"}, {"name": "leg", "conclusion": "failure"}]
+            ok, why = A.probe_quota_reset({"workflow": "Record scrape fixtures", "since": since, "job": "preflight"}, ctx=case_context())
             self.assertTrue(ok, why)
         finally:
             A.gh_json, A.run_jobs = saved

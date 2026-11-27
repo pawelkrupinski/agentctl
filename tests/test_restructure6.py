@@ -2,10 +2,12 @@
 restructure6-digests.json, recorded from the code BEFORE the split with `R4_RECORD=1`) cover thousands of seeded cases
 each, collaborators faked (golden_cases.py): every call, its order and the result."""
 import os, sys, types, unittest
+from functools import partial
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from golden_cases import Probe, cherry_state, check as _check  # noqa: E402
 
 DIGESTS = os.path.join(HERE, "fixtures", "restructure6-digests.json")
@@ -438,7 +440,7 @@ class RedHoldTest(unittest.TestCase):
             d = {"fix": fix} if r.random() < 0.9 else {}
             facts = r.choice([None, {}, {"queue_unread": "q" * 100}, {"queue_unread": None}])
             return ({"data": d}, 1000.0, facts, r.choice([None, "store"]))
-        check(self, "red_fix_held", build, lambda A: A.red_fix_held, 10000)
+        check(self, "red_fix_held", build, lambda A: partial(A.red_fix_held, ctx=case_context()), 10000)
 
 
 class RevertsTest(unittest.TestCase):

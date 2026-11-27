@@ -8,6 +8,7 @@ import contextlib, io, json, os, stat, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 
 
 class AlertBase(unittest.TestCase):
@@ -120,7 +121,7 @@ class RedEscalationTest(AlertBase):
             self.unclaimed()
         [e] = self.unread()
         self.assertEqual((e["audience"], e["count"]), ("fixer", 5))
-        A.notify_escalations(self.st)
+        A.notify_escalations(self.st, ctx=case_context())
         self.assertEqual(self.shown(), [], "never notified")
         self.assertEqual(A.escalated_now(self.st), [])
 
@@ -130,7 +131,7 @@ class RedEscalationTest(AlertBase):
         for _ in range(3):
             self.unclaimed()
         self.assertEqual({e["audience"] for e in self.unread()}, {"fixer"})
-        A.notify_escalations(self.st)
+        A.notify_escalations(self.st, ctx=case_context())
         self.assertEqual(self.shown(), [])
 
     def test_a_red_nobody_can_take_becomes_the_owners_once_per_level_then_updates_silently(self):
@@ -145,7 +146,7 @@ class RedEscalationTest(AlertBase):
             self.unclaimed()
         [e] = self.unread()
         self.assertEqual((e["count"], e["surfaced"]), (8, 2), "the repeats update it; they surface nothing")
-        A.notify_escalations(self.st)
+        A.notify_escalations(self.st, ctx=case_context())
         self.assertEqual(len(self.shown()), 1)
         code, out = self.owner_wait()
         self.assertEqual(code, 0)
@@ -159,7 +160,7 @@ class RedEscalationTest(AlertBase):
         A.project_events(self.st)
         [e] = self.unread()
         self.assertEqual((e["audience"], e["count"]), ("fixer", 4))
-        A.notify_escalations(self.st)
+        A.notify_escalations(self.st, ctx=case_context())
         self.assertEqual(self.shown(), [])
 
 

@@ -4,6 +4,7 @@
 import os
 import re
 from typing import Any, Optional
+from agentctl.context import Context
 from agentctl.statefile import read_record, write_json
 from agentctl.timefmt import ts
 from agentctl.core import err, reds_dir, slug
@@ -52,10 +53,10 @@ def run_failure_keys(o_r: str, run_id: Any) -> set[str]:
     return keys
 
 
-def base_failure_keys(st: Any, repo: str, d: str, e: Entry, base: str, now: float) -> dict[str, str]:
+def base_failure_keys(st: Any, repo: str, d: str, e: Entry, base: str, now: float, *, ctx: Context) -> dict[str, str]:
     """{key: where} failing on the change's base: main's red gate runs, and other changes' failed checks on this
     base (a different head) in the last day."""
-    out = gate_failure_keys(repo)
+    out = gate_failure_keys(repo, ctx=ctx)
     for k, where in queue_failure_keys(st, d, e, base, now).items():
         out.setdefault(k, where)
     return out
@@ -69,12 +70,12 @@ def on_gate_run(where: str) -> bool:
     return where.endswith(GATE_RUN_WHERE)
 
 
-def gate_failure_keys(repo: str) -> dict[str, str]:
+def gate_failure_keys(repo: str, *, ctx: Context) -> dict[str, str]:
     """{key: where} of main's red gate runs."""
     out: dict[str, str] = {}
     try:
         o_r = slug(repo)
-        for name, decided in failed_gate_runs(o_r):
+        for name, decided in failed_gate_runs(o_r, ctx=ctx):
             try:
                 for k in run_failure_keys(o_r, decided["databaseId"]):
                     out.setdefault(k, f"{name} #{decided.get('number') or decided['databaseId']}{GATE_RUN_WHERE}")
@@ -85,11 +86,11 @@ def gate_failure_keys(repo: str) -> dict[str, str]:
     return out
 
 
-def failed_gate_runs(o_r: str) -> list[tuple[str, Entry]]:
+def failed_gate_runs(o_r: str, *, ctx: Context) -> list[tuple[str, Entry]]:
     """(workflow, its newest decided run) of each gate workflow whose run did not pass; none for an ungated repo."""
     if not gated_repo(o_r):
         return []
-    return [(name, decided) for name, decided, _newer, _streak in gate_runs(o_r)
+    return [(name, decided) for name, decided, _newer, _streak in gate_runs(o_r, ctx=ctx)
             if decided and decided.get("conclusion") != "success" and decided.get("databaseId")]
 
 
@@ -141,7 +142,7 @@ def head_only(keys: dict[str, str], known: dict[str, str], own_paths: Optional[s
 
 
 def judge_failure(st: Any, repo: str, d: str, e: Entry, base: str, out: Optional[str], now: float,
-                  own_paths: Optional[set[str]] = None) -> tuple[str, Any]:
+                  own_paths: Optional[set[str]] = None, *, ctx: Context) -> tuple[str, Any]:
     """('base', {key: where}) when every failing job's tests fail on the base too; ('unrun', [names]) when what fails
     only on the head is script tests its base never ran (A TEST ITS BASE NEVER RAN IS NOBODY'S YET; own_paths: the
     change's paths, None when unread); else ('head', [what is the change's own]). The head's keys are kept on the
@@ -154,7 +155,7 @@ def judge_failure(st: Any, repo: str, d: str, e: Entry, base: str, out: Optional
         return "head", sorted(keys.values()) + ["the checks' time cap"]
     if not keys:
         return "head", unnamed(unjudged) or ["(no failing test named)"]
-    known = base_failure_keys(st, repo, d, e, base, now)
+    known = base_failure_keys(st, repo, d, e, base, now, ctx=ctx)
     mine, unrun = head_only(keys, known, own_paths)
     if mine or unjudged:
         return "head", mine + unnamed(unjudged) + [f"{n} (not run on its base)" for n in unrun]

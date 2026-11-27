@@ -1,6 +1,7 @@
 # agentctl, part `cireport`: the CI report: ci_why's explanation of main's runs and who holds each red, and the CI-state snapshot's refresh
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 from typing import Any, Optional
 from agentctl.core import err, remote
@@ -12,7 +13,7 @@ from agentctl.gating import GATING_CHECKS_FILE
 from agentctl.cistate import ci_state_load, ci_state_write, state_read
 from agentctl.ciwhy import NO_VERDICT_FLOWS, gate_from_snap, gate_snap_rows, gate_report_only, gate_runs, outside_from_snap, run_no_verdict, run_target
 from agentctl.timefmt import age_since
-from agentctl.ciruns import main_runs_of
+
 from agentctl.runsigs import run_sigs, save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
 from agentctl.fixerblockers import short_flow
@@ -32,12 +33,12 @@ Row = tuple[Any, ...]  # a gate row (name, decided, newer, (since, count)), an o
 
 
 def ci_why(o_r: str, tail: int = 6, run_id: Any = None, repo: Optional[str] = None, summary: bool = False,
-           snap: Optional[dict[str, Any]] = None, *, store: Any) -> tuple[bool, str]:
+           snap: Optional[dict[str, Any]] = None, *, store: Any, ctx: Context) -> tuple[bool, str]:
     """(red, text). run_id: explain that one run; else the gating workflows' newest decided runs on main, each red row
     followed by who holds it (`fixing: <its state, holder or offer>`; never NOBODY). summary: text is the status line's one line."""
     if run_id:
-        return True, run_report(o_r, run_id, tail, repo)
-    r = GateReport(o_r, tail, repo, summary, snap, store)
+        return True, run_report(o_r, run_id, tail, repo, ctx=ctx)
+    r = GateReport(o_r, tail, repo, summary, snap, store, ctx=ctx)
     r.gate_rows()
     r.local_rows()
     r.flake_rows()
@@ -47,9 +48,9 @@ def ci_why(o_r: str, tail: int = 6, run_id: Any = None, repo: Optional[str] = No
     return r.red, (r.summary_line() if summary else "\n".join([head] + r.out))
 
 
-def run_report(o_r: str, run_id: Any, tail: int, repo: Optional[str]) -> str:
+def run_report(o_r: str, run_id: Any, tail: int, repo: Optional[str], *, ctx: Context) -> str:
     """One run explained (`agentctl ci-why <run>`); a run GitHub does not know says so."""
-    rid, said = run_target(o_r, run_id)
+    rid, said = run_target(o_r, run_id, ctx=ctx)
     try:
         lines, _ = explain_run(o_r, {"databaseId": int(rid)}, tail, repo)
     except RuntimeError as e:
@@ -59,14 +60,14 @@ def run_report(o_r: str, run_id: Any, tail: int, repo: Optional[str]) -> str:
     return f"run {o_r}#{rid}\n" + "".join(f"  {l}\n" for l in said) + "\n".join(lines)
 
 
-def outside_runs(o_r: str, snap: Optional[dict[str, Any]]) -> tuple[list[Row], Any]:
+def outside_runs(o_r: str, snap: Optional[dict[str, Any]], *, ctx: Context) -> tuple[list[Row], Any]:
     """(the reds outside the gate, why they could not be listed or None): from the snapshot when given."""
     if snap:
-        return outside_from_snap(snap), snap.get("outside_error")
+        return outside_from_snap(snap, ctx=ctx), snap.get("outside_error")
     if not gated_repo(o_r):
         return [], None
     try:
-        return outside_gate(o_r), None
+        return outside_gate(o_r, ctx=ctx), None
     except Exception as e:  # the gate's verdict stands without them
         return [], e
 
@@ -101,13 +102,14 @@ class GateReport:
     the report's lines; parts: each gate row's word for the one-line summary."""
 
     def __init__(self, o_r: str, tail: int, repo: Optional[str], summary: bool, snap: Optional[dict[str, Any]],
-                 store: Any) -> None:
+                 store: Any, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.o_r, self.tail, self.repo, self.summary, self.store = o_r, tail, repo, summary, store
         self.out: list[str] = []
         self.parts: list[str] = []
         self.red = False
-        self.gate = gate_from_snap(snap) if snap else gate_runs(o_r)
-        others, self.others_err = outside_runs(o_r, snap)
+        self.gate = gate_from_snap(snap, ctx=self.ctx) if snap else gate_runs(o_r, ctx=self.ctx)
+        others, self.others_err = outside_runs(o_r, snap, ctx=self.ctx)
         self.lrepo = scan_repo_for(o_r, repo)
         self.lstale = local_stale(self.lrepo)
         self.bsnap = snap or ci_state_load(o_r)  # the branch reds come from the snapshot only (the processor writes it)
@@ -139,8 +141,8 @@ class GateReport:
 
     def _read_holders(self, others: list[Row]) -> None:
         try:  # who holds each red: its item in the store (the tick acts; ci-why only renders)
-            mine = main_runs_of(self.o_r)
-            rows = [(n, d, mine.gate.get(n, []), not gate_report_only(self.o_r, n, d)[0]) for n, d, _nw, _s in self.gate]
+            mine = self.ctx.runs.main_runs_of(self.o_r)
+            rows = [(n, d, mine.gate.get(n, []), not gate_report_only(self.o_r, n, d, ctx=self.ctx)[0]) for n, d, _nw, _s in self.gate]
             units = gate_red_units(self.o_r, rows, [(n, r, mine.outside.get(n, []), False) for n, r, _s, _c in others],
                                    rereads=0 if self.summary else None)
             units += local_units(self.lrepo) + predict_units(self.o_r, self.bsnap)
@@ -148,7 +150,7 @@ class GateReport:
                 self.units_of.setdefault((u["workflow"], u["run"].get("databaseId")), []).append(u)
             self.states = red_view_of_units(self.store, units)
             self.flakes = [it for it in red_active(self.store).values() if it["data"].get("red_kind") == "flake"]
-            self.untracked = red_untracked_runs(self.store, self.o_r, units)
+            self.untracked = red_untracked_runs(self.store, self.o_r, units, ctx=self.ctx)
         except (Exception, SystemExit) as e:  # who is fixing is information: the gate's verdict stands without it
             err(f"red: could not tell who is fixing ({str(e)[:160]})")
 
@@ -161,7 +163,7 @@ class GateReport:
     def _sort_outside(self, others: list[Row]) -> tuple[list[Row], list[Row], list[Row]]:
         """(proven fixed, red, never green on main) of the runs outside the gate."""
         proven = [o for o in others if self._proven_fixed(o)]
-        reds = [o for o in others if o not in proven and not red_run_retired(self.o_r, o[0], o[1])]
+        reds = [o for o in others if o not in proven and not red_run_retired(self.o_r, o[0], o[1], ctx=self.ctx)]
         never = [o for o in reds if (o[0], o[1].get("databaseId")) in self.untracked]  # never green on main: untracked
         return proven, [o for o in reds if o not in never], never
 
@@ -172,7 +174,7 @@ class GateReport:
 
     def gate_rows(self) -> None:
         for name, decided, newer, (since, count) in self.gate:
-            nov = main_runs_of(self.o_r).no_verdict.get(name)
+            nov = self.ctx.runs.main_runs_of(self.o_r).no_verdict.get(name)
             if nov and not self.summary:
                 self.out.append(f"{name}: newest run {nov['databaseId']} #{nov.get('number')}: NO VERDICT (incomplete: "
                                 "only `verdict complete` failed -- a takes row skipped, cancelled or missing; no red, no "
@@ -189,12 +191,12 @@ class GateReport:
             self.out.append(f"{name}: GREEN ({run})")
             self.parts.append(f"{short_flow(name)} green")
             return
-        retired = red_run_retired(self.o_r, name, decided)
+        retired = red_run_retired(self.o_r, name, decided, ctx=self.ctx)
         if retired:  # its check is gone from main: no run can clear it, it gates nothing and no fixer is offered it
             self.out.append(f"{name}: RETIRED ({run}, {decided['conclusion']}): {retired} -- no red")
             self.parts.append(f"{short_flow(name)} retired")
             return
-        report, why = gate_report_only(self.o_r, name, decided)
+        report, why = gate_report_only(self.o_r, name, decided, ctx=self.ctx)
         if report:  # red only in checks the registry calls unproven: it reports, it holds no push
             self.out.append(f"{name}: RED, REPORT ONLY ({run}, {decided['conclusion']}): {why} ({GATING_CHECKS_FILE}) "
                             "-- holds no push")
@@ -301,50 +303,50 @@ class GateReport:
         return [outage_line(c, u_, ns, q_) for c, (u_, ns, q_) in causes.items()] + reds
 
 
-def ci_state_refresh(o_r: str, write: bool = True, store: Any = None) -> dict[str, Any]:
+def ci_state_refresh(o_r: str, write: bool = True, store: Any = None, *, ctx: Context) -> dict[str, Any]:
     """Read the gate and every other workflow on main once, write the snapshot (unless write=False: ci_state_write
     later), return it. Raises when the gate cannot be read (nothing is written: the old snapshot ages out). store: the
     change items a check/ branch run's owner is read from (none: matched by the worktree holding its commit)."""
-    gate = gate_runs(o_r)
+    gate = gate_runs(o_r, ctx=ctx)
     snap = {"at": epoch_now(), "repo": o_r, "outside_error": None, "outside": [],
-            "gate": gate_snap_rows(o_r, gate)}
+            "gate": gate_snap_rows(o_r, gate, ctx=ctx)}
     if gated_repo(o_r):
-        snap.update(outside_snap(o_r))
+        snap.update(outside_snap(o_r, ctx=ctx))
         snap["callable_only"] = sorted(main_callable_flows(o_r))  # their reds wait for red_callable_evidence
-    snap.update(branches_snap(o_r, store))
-    snap["latest"] = latest_decided(o_r)
-    snap["stuck"] = stuck_runs({**main_runs_of(o_r).outside, **main_runs_of(o_r).gate}, o_r=o_r)  # audit #8: undecided far past their workflow's p90
+    snap.update(branches_snap(o_r, store, ctx=ctx))
+    snap["latest"] = latest_decided(o_r, ctx=ctx)
+    snap["stuck"] = stuck_runs({**ctx.runs.main_runs_of(o_r).outside, **ctx.runs.main_runs_of(o_r).gate}, o_r=o_r, ctx=ctx)  # audit #8: undecided far past their workflow's p90
     if write:
         ci_state_write(snap)
     return snap
 
 
-def outside_snap(o_r: str) -> dict[str, Any]:
+def outside_snap(o_r: str, *, ctx: Context) -> dict[str, Any]:
     try:
-        return {"outside": [{"name": n, "decided": r, "since": since, "count": count, "runs": main_runs_of(o_r).outside.get(n, [])}
-                            for n, r, since, count in outside_gate(o_r)]}
+        return {"outside": [{"name": n, "decided": r, "since": since, "count": count, "runs": ctx.runs.main_runs_of(o_r).outside.get(n, [])}
+                            for n, r, since, count in outside_gate(o_r, ctx=ctx)]}
     except Exception as e:
         return {"outside_error": str(e)[:200]}
 
 
-def branches_snap(o_r: str, store: Any) -> dict[str, Any]:
+def branches_snap(o_r: str, store: Any, *, ctx: Context) -> dict[str, Any]:
     """The branch runs: measure/*, check/*, red fixers' and every recorded dispatch's (after the main lists)."""
     try:
         prev = (state_read().get("ci") or {}).get("branches") or []
-        return {"branches": branch_state(o_r, scan_repo_for(o_r), store, prev)}
+        return {"branches": branch_state(o_r, scan_repo_for(o_r), store, prev, ctx=ctx)}
     except (Exception, SystemExit) as e:
         return {"branches_error": str(e)[:200]}
 
 
-def latest_decided(o_r: str) -> dict[str, Any]:
+def latest_decided(o_r: str, *, ctx: Context) -> dict[str, Any]:
     """Each workflow's newest decided run on main: what workflow_green probes read."""
     latest = {}
-    for name, runs in list(main_runs_of(o_r).outside.items()) + list(main_runs_of(o_r).gate.items()):
-        d = next((r for r in runs if decided_on_main(o_r, name, r)), None)
+    for name, runs in list(ctx.runs.main_runs_of(o_r).outside.items()) + list(ctx.runs.main_runs_of(o_r).gate.items()):
+        d = next((r for r in runs if decided_on_main(o_r, name, r, ctx=ctx)), None)
         if d:
             latest[name] = {k: d.get(k) for k in ("number", "databaseId", "conclusion", "headSha", "updatedAt")}
     return latest
 
 
-def decided_on_main(o_r: str, name: str, r: dict[str, Any]) -> bool:
-    return r.get("status") == "completed" and not is_cancelled(r) and not (name in NO_VERDICT_FLOWS and run_no_verdict(o_r, r))
+def decided_on_main(o_r: str, name: str, r: dict[str, Any], *, ctx: Context) -> bool:
+    return r.get("status") == "completed" and not is_cancelled(r) and not (name in NO_VERDICT_FLOWS and run_no_verdict(o_r, r, ctx=ctx))

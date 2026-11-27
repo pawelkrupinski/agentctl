@@ -5,6 +5,7 @@ import re
 import time
 from contextlib import suppress
 from typing import Any
+from agentctl.context import Context
 from agentctl.statemachines import StaleVersion, open_items, is_terminal
 from agentctl.timefmt import parse_time
 from agentctl.watchknobs import knob_wr_max
@@ -75,7 +76,7 @@ def snap_reds(snap):
     return out - {"None"}
 
 
-def inv_wr(clock, st, reds = None):
+def inv_wr(clock, st, reds = None, *, ctx):
     """WR: A RED FIX NEVER WAITS FOR GREEN (the owner, 2026-11-16). No open change whose KIND (changekind.py: its
     `Fixes-Red:` against the gate's reds and every red the store has open) is a gate red's fix is on `waiting`, and no
     fix of any open red -- the gate's or one outside it (08010c, 2026-11-19) -- is still unlanded WR_MAX after it was
@@ -86,18 +87,18 @@ def inv_wr(clock, st, reds = None):
     facts = facts_for(reds or set(), st)
     if not reds and not facts["open"]:
         return True, "main green (or its gate unread) and no red open: no red fix to hold"
-    bad = red_fix_stalls(st, clock.time(), facts)
+    bad = red_fix_stalls(st, clock.time(), facts, ctx=ctx)
     if not bad:
         return True, "no red fix waits"
     return False, "a red fix waits: " + "; ".join(bad[:3]) + " -- `agentctl land status`, `agentctl ci-why`"
 
 
-def red_fix_stalls(st: Any, t: float, facts: dict[str, Any]) -> list[str]:
+def red_fix_stalls(st: Any, t: float, facts: dict[str, Any], *, ctx: Context) -> list[str]:
     """Why each open red fix does not move, as WR words it: [text], the changes WR violates on (inv_wr, the liveness line)."""
     lim = knob_wr_max()
     out = []
     for it in open_items(st, "change"):
-        k = classify_change(it.get("data") or {}, facts, t)
+        k = classify_change(it.get("data") or {}, facts, t, ctx=ctx)
         why = k and k["red_fix"] and red_fix_stall(st, it, k, t, lim)
         if why:
             out.append(f"{it['id']} ({kind_text(k)}) {why}")
@@ -130,7 +131,7 @@ def slow_stall(st: Any, it: Any, data: dict[str, Any], t: float, lim: float, rul
     return None
 
 
-def red_fix_liveness(st: Any, t: float, snap: Any = None) -> str | None:
+def red_fix_liveness(st: Any, t: float, snap: Any = None, *, ctx: Context) -> str | None:
     """THE LIVENESS LINE (the owner, 2026-11-25: the gate sat red for hours with its fix waiting and nothing said): ONE line
     when the gate has been red for over RED_LIVENESS_MAX while a red-fix change is not progressing -- the change and the
     exact rule blocking it (red_fix_stalls) -- else None. `agentctl status` and `red status` print it."""
@@ -141,7 +142,7 @@ def red_fix_liveness(st: Any, t: float, snap: Any = None) -> str | None:
     age_since = t - min(parse_time(g["since"]).timestamp() for g in rows)
     if age_since <= knob_red_liveness_max():
         return None
-    stalls = red_fix_stalls(st, t, facts_for(snap_reds(snap), st))
+    stalls = red_fix_stalls(st, t, facts_for(snap_reds(snap), st), ctx=ctx)
     if not stalls:
         return None
     return (f"RED FIX STALLED: the gate has been red {fmt_age(age_since)}; {stalls[0]}"
@@ -152,7 +153,7 @@ _UNDECIDED: Any = object()  # a stage of red_fix_held with no verdict: the next 
 
 
 def _requeue_pending(ch: Any, t: float) -> bool:
-    """The fix's change ended only just now: its worktree may queue it again (as red_fix_pending waits)."""
+    """The fix's change ended only just now: its worktree may queue it again (as redpending.FixPending waits)."""
     return bool(ch and ch["state"] in CHANGE_ENDED
                 and t - float(ch.get("entered_at") or 0) < knob_red_fix_requeue_grace())
 
@@ -185,10 +186,10 @@ def _unread_queue_holder(f: dict[str, Any], facts: Any) -> Any:
     return _UNDECIDED
 
 
-def _queue_holder(it: Any, f: dict[str, Any], facts: Any) -> Any:
+def _queue_holder(it: Any, f: dict[str, Any], facts: Any, *, ctx: Context) -> Any:
     """With facts the queue's own fix decides (None: nothing is on its way); without (the watchdog), the one recorded."""
     if facts is not None and not f.get("waited_on"):  # a waited-on fix that landed is no candidate of its own
-        fx = red_fix_of(it, facts)
+        fx = red_fix_of(it, facts, ctx=ctx)
         if fx and fx["status"] in FIX_OPEN:
             return f"fix {fx.get('entry')} {fx['status']}"
         if fx is None and f.get("status") not in ("verify", "owner"):  # owner: filed with the owner (red owner-push)
@@ -213,9 +214,9 @@ def _recorded_holder(it: Any, d: dict[str, Any], f: dict[str, Any], t: float) ->
     return f"fix {f.get('entry') or (f.get('sha') or '')[:10] or 'verify'} {f.get('status')}"
 
 
-def red_fix_held(it, t, facts = None, store = None):
+def red_fix_held(it, t, facts = None, store = None, *, ctx):
     """A fix-pending red's holder, or None: its fix change open in the queue (or ended within RED_FIX_REQUEUE_GRACE:
-    its worktree may queue it again, as red_fix_pending waits), or a fix landed / a verify run dispatched (or a gate run
+    its worktree may queue it again, as redpending.FixPending waits), or a fix landed / a verify run dispatched (or a gate run
     due) within its give-up of entering fix-pending. With facts the queue decides; without (the watchdog), the fix the
     item recorded."""
     d = it["data"]
@@ -228,7 +229,7 @@ def red_fix_held(it, t, facts = None, store = None):
     held = _unread_queue_holder(f, facts)
     if held is not _UNDECIDED:
         return held
-    held = _queue_holder(it, f, facts)
+    held = _queue_holder(it, f, facts, ctx=ctx)
     return _recorded_holder(it, d, f, t) if held is _UNDECIDED else held
 
 
@@ -243,31 +244,31 @@ def offer_names_holder(off) -> bool:
     return bool(off and HOLDER_CLAIM.search(str(off.get("reason") or "")))
 
 
-def red_unheld(store, t = None, facts = None):
+def red_unheld(store, t = None, facts = None, *, ctx):
     """The non-terminal reds with NOTHING live behind them: no live lease, no open offer, no fix on its way (red_fix_held),
     no live block. The tick's invariant (never NOBODY), enforced by red_enforce; a red the tick has not looked at yet
     (state `red`) counts after 2 min."""
     t = t if t is not None else store.clock()
-    return [it for it in red_active(store).values() if not _red_held(store, it, t, facts)]
+    return [it for it in red_active(store).values() if not _red_held(store, it, t, facts, ctx=ctx)]
 
 
-def _offer_holds(store, it, t, facts):
+def _offer_holds(store, it, t, facts, ctx):
     """An open offer holds an `offered` red unless it names a holder (the dispatcher takes it again)."""
     off = store.offer_of(f"red:{it['id']}")
     return bool(off) and not offer_names_holder(off)
 
 
-# what holds a red of each state, besides a live lease: (store, red item, t, facts) -> held
+# what holds a red of each state, besides a live lease: (store, red item, t, facts, context) -> held
 RED_STATE_HOLDS = {
-    "fix-pending": lambda store, it, t, facts: red_fix_held(it, t, facts, store),
-    "blocked-external": lambda store, it, t, facts: red_block_of(it, store),
+    "fix-pending": lambda store, it, t, facts, ctx: red_fix_held(it, t, facts, store, ctx=ctx),
+    "blocked-external": lambda store, it, t, facts, ctx: red_block_of(it, store),
     # its repo's dispatch is off by the owner: that holds it (red auto off --repo)
-    "dispatch-off": lambda store, it, t, facts: repo_dispatch_off(store, red_repo_of(it["data"])),
+    "dispatch-off": lambda store, it, t, facts, ctx: repo_dispatch_off(store, red_repo_of(it["data"])),
     "offered": _offer_holds,
 }
 
 
-def _red_held(store, it, t, facts) -> bool:
+def _red_held(store, it, t, facts, *, ctx: Context) -> bool:
     """Whether something live is behind the red: a young one (state `red`, under 2 min), a live lease, or its state's hold."""
     st = it["state"]
     if st == "red" and t - it["entered_at"] < 120:
@@ -275,7 +276,7 @@ def _red_held(store, it, t, facts) -> bool:
     if lease_is_live(store.get(red_lease(it["data"]["key"])), t):
         return True
     hold = RED_STATE_HOLDS.get(st)
-    return bool(hold and hold(store, it, t, facts))
+    return bool(hold and hold(store, it, t, facts, ctx))
 
 
 def red_fix_gone_why(store, it, t):
@@ -291,7 +292,7 @@ def red_fix_gone_why(store, it, t):
     return f"INVARIANT: no fix on its way for {fmt_age(t - it['entered_at'])} in fix-pending"
 
 
-def _enforce_unheld(store: Any, it: Any, t: Any, acts: Any) -> Any:
+def _enforce_unheld(store: Any, it: Any, t: Any, acts: Any, *, ctx: Context) -> Any:
     """red_enforce's step for one unheld red, its actions appended to `acts` as they are taken."""
     d, st = it["data"], it["state"]
     if st == "offered":
@@ -306,7 +307,7 @@ def _enforce_unheld(store: Any, it: Any, t: Any, acts: Any) -> Any:
     elif st == "fix-pending":
         acts += red_fix_unverifiable(store, it, red_fix_gone_why(store, it, t), t)
     elif st == "leased":
-        acts += red_lease_ended(store, it, store.get(red_lease(d["key"])), red_block_of(it, store), t)
+        acts += red_lease_ended(store, it, store.get(red_lease(d["key"])), red_block_of(it, store), t, ctx=ctx)
     else:
         acts.append(f"INVARIANT: {red_what(d)}: {st} with no holder: offered")
         red_offer(store, it, f"INVARIANT: {red_what(d)}: {st} with no holder for "
@@ -314,15 +315,15 @@ def _enforce_unheld(store: Any, it: Any, t: Any, acts: Any) -> Any:
                   data={"cause": None, "block": None} if st == "blocked-external" else None)
 
 
-def red_enforce(store, facts, t):
+def red_enforce(store, facts, t, *, ctx):
     """THE INVARIANT, SELF-RECOVERING (the owner, 2026-10-29): a red with no live holder (red_unheld) is offered again,
     escalated, its dead fix set aside -- the dispatcher, next in the same tick, gives it a fixer. Runs after every red's
     own step, so it only catches what the step's own transitions left resting."""
     acts: list[str] = []
-    for it in red_unheld(store, t, facts):
+    for it in red_unheld(store, t, facts, ctx=ctx):
         it = store.item("red", it["id"])
         if not it or is_terminal("red", it["state"]):
             continue
         with suppress(StaleVersion):
-            _enforce_unheld(store, it, t, acts)
+            _enforce_unheld(store, it, t, acts, ctx=ctx)
     return acts

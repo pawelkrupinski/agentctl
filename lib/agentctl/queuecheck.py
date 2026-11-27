@@ -1,6 +1,7 @@
 # agentctl, part `queuecheck`: a change's check round's pieces: main fetched, its commits, the run adopted, the rebase, the refusals, the mode, the failure judged
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import Clock, epoch_now
 import time
 from typing import Any
@@ -235,10 +236,10 @@ def requeued_for_laptop_failure(st: Any, repo: str, d: str, e: dict[str, Any], o
 
 
 def judge_check_failure(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any, base: str, out: str,
-                        where: str, now: float) -> tuple[int | None, str, Any]:
+                        where: str, now: float, *, ctx: Context) -> tuple[int | None, str, Any]:
     """Failed checks judged: the change's own failure rejects it (1; a provisional one waits for its regen), one only
     as its base fails too waits behind that red (known_red)."""
-    side, what = judge_failure(st, repo, d, e, base, out, now, own_paths(tree, base, e))
+    side, what = judge_failure(st, repo, d, e, base, out, now, own_paths(tree, base, e), ctx=ctx)
     timed_out = bool(CHECK_TIMEOUT.search(out or ""))
     if side == "head" and e.get("provisional") and not timed_out:
         return regen_hold(st, d, e, tree, keys_text(what), out), where, None  # A ROW ONLY A REGEN DECIDES IS NO BOUNCE

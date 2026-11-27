@@ -8,6 +8,7 @@ import glob, json, os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from test_red_crash_loop import CrashLoopBase  # noqa: E402
 
 RULE = "; rule: identity-flip-backlog.tsv: the 2 Titans flips, accepted"
@@ -83,14 +84,14 @@ class StaleBlockTest(AskBase):
         self.assertIn("re-pin movies runner scheduler", note)
         self.assertIn("said 4 h ago, no block holds it", note)
         self.assertIn('agentctl red unblock vsr --why', note)
-        self.assertEqual(A.red_unblock(self.st, O_R, "vsr", "")[0], 2, "a reason is required")
-        rc, lines = A.red_unblock(self.st, O_R, "vsr", "re-pinned; ci-runner runs scheduler 36ae3557f4", who="me")
+        self.assertEqual(A.red_unblock(self.st, O_R, "vsr", "", ctx=case_context())[0], 2, "a reason is required")
+        rc, lines = A.red_unblock(self.st, O_R, "vsr", "re-pinned; ci-runner runs scheduler 36ae3557f4", who="me", ctx=case_context())
         self.assertEqual(rc, 0, lines)
         self.assertIn("its BLOCKED ON OWNER verdict struck", lines[0])
         self.assertEqual(self.note("vsr"), "UNBLOCKED: re-pinned; ci-runner runs scheduler 36ae3557f4")
         it = self.st.item("red", "vsr")
         self.assertEqual(it["state"], "fix-pending", "its fix still waits for its run")
-        rc, lines = A.red_unblock(self.st, O_R, "vsr", "again", who="me")
+        rc, lines = A.red_unblock(self.st, O_R, "vsr", "again", who="me", ctx=case_context())
         self.assertIn("not blocked on the owner", lines[0])
         self.assertEqual(len(self.st.item("red", "vsr")["data"]["history"]), 2)
 
@@ -98,7 +99,7 @@ class StaleBlockTest(AskBase):
         it = self.owner_cause_blocked()
         self.assertIsNotNone(A.red_block_of(it, self.st))
         self.assertIsNone(A.block_verdict_note(it, self.t[0], self.st))  # a real block speaks for itself
-        rc, lines = A.red_unblock(self.st, O_R, "nix", "the owner granted it", who="me")
+        rc, lines = A.red_unblock(self.st, O_R, "nix", "the owner granted it", who="me", ctx=case_context())
         self.assertEqual(rc, 0, lines)
         self.assertIsNone(A.red_block_of(self.st.item("red", "nix"), self.st))
         self.assertTrue(str(A.lease_meta(self.st.get(A.block_lease("nix"))).get("outcome")).startswith("RELEASED"))
@@ -169,11 +170,11 @@ class ReminderTest(AskBase):
         try:
             self.assertEqual(len(self.remind(0)), 1, "an owner-command block is told by the tick")
             A.project_events(self.st)
-            A.notify_escalations(self.st)
+            A.notify_escalations(self.st, ctx=case_context())
             self.assertEqual(self.remind(1), [])
             self.remind(61)
             A.project_events(self.st)
-            A.notify_escalations(self.st)
+            A.notify_escalations(self.st, ctx=case_context())
         finally:
             A.notify = saved
         entries = [json.load(open(p)) for p in glob.glob(os.path.join(os.environ["AGENTCTL_INBOX_DIR"], "*.json"))]
@@ -250,7 +251,7 @@ class HoldTest(AskBase):
 class DecideTest(AskBase):
     def test_decide_stores_the_answer_lifts_the_block_and_reads_in_progress(self):
         it = self.decision_blocked()
-        rc, out = A.red_decide(self.st, O_R, "k", "baseline the 2 Titans flips")
+        rc, out = A.red_decide(self.st, O_R, "k", "baseline the 2 Titans flips", ctx=case_context())
         self.assertEqual(rc, 0, out)
         self.assertIn("IN PROGRESS", out[0])
         it = self.st.item("red", it["id"])
@@ -293,7 +294,7 @@ class DecideTest(AskBase):
         self.st.revoke("block/k", "PROBE PASSED: a newer run did not attach")
         A.red_offer(self.st, self.st.item("red", it["id"]), "its block ended: offered again", data={"cause": None, "block": None})
         self.assertIsNone(A.red_block_of(self.st.item("red", it["id"]), self.st))
-        rc, out = A.red_decide(self.st, O_R, "k", "baseline them")
+        rc, out = A.red_decide(self.st, O_R, "k", "baseline them", ctx=case_context())
         self.assertEqual(rc, 0, out)
         d = self.st.item("red", it["id"])["data"]
         self.assertEqual(d["decision"]["status"], "in-progress")
@@ -310,7 +311,7 @@ class DecideTest(AskBase):
                              "final": True, "exit": 1, "verdict": line, "kind": "BLOCKED", "verdicts": [line],
                              "tail": [], "audience": "owner", "item": "run:x -- Main #1"}, A.CurrentStore(A.process_store))
         A.red_move(self.st, self.st.item("red", it["id"]), "cleared", "RED CLEARED: a newer run is green")
-        rc, out = A.red_decide(self.st, O_R, "k", "yes")
+        rc, out = A.red_decide(self.st, O_R, "k", "yes", ctx=case_context())
         self.assertEqual(rc, 0, out)
         self.assertIn("already resolved (red closed", out[0])
         self.assertTrue(A.alert_acked(A.inbox_dir(), eid), "its alert acknowledged")
@@ -329,7 +330,7 @@ class DecideTest(AskBase):
 
         self.st.update_item = racing
         try:
-            rc, out = A.red_decide(self.st, O_R, "k", "go")
+            rc, out = A.red_decide(self.st, O_R, "k", "go", ctx=case_context())
         finally:
             self.st.update_item = real
         self.assertEqual(rc, 0, out)
@@ -359,7 +360,7 @@ class DecideTest(AskBase):
     def test_a_failed_decided_action_comes_back_to_the_owner_with_its_failure(self):
         # convergence #728: decided, the land NOT LANDED on its pre-push checks -- and nobody told the owner for 15 h
         it = self.decision_blocked()
-        A.red_decide(self.st, O_R, "k", "baseline the 2 Titans flips")
+        A.red_decide(self.st, O_R, "k", "baseline the 2 Titans flips", ctx=case_context())
         it = A.red_offer(self.st, self.st.item("red", it["id"]), "offered again")
         n0 = len(self.events())
         it, _acts = self.launch(it, outcome="NOT LANDED: pre-push check identity-drift failed")
@@ -373,7 +374,7 @@ class DecideTest(AskBase):
 
     def test_a_landed_decided_action_is_no_failure(self):
         it = self.decision_blocked()
-        A.red_decide(self.st, O_R, "k", "baseline")
+        A.red_decide(self.st, O_R, "k", "baseline", ctx=case_context())
         it = A.red_offer(self.st, self.st.item("red", it["id"]), "offered again")
         it, _acts = self.launch(it, outcome="LANDED abc1234def")
         self.assertNotEqual(it["state"], "blocked-external")
@@ -384,7 +385,7 @@ class DecideTest(AskBase):
         # came back to the owner twice as a fresh WAITING ON YOU (ev10700, ev10709).
         self.red(key="other", workflow="Main", runs=["2521"], last_run={"number": 2521, "databaseId": 92521})
         it = self.decision_blocked()
-        A.red_decide(self.st, O_R, "k", "hold until 715ab5a1a is on main, then verify")
+        A.red_decide(self.st, O_R, "k", "hold until 715ab5a1a is on main, then verify", ctx=case_context())
         it = A.red_offer(self.st, self.st.item("red", it["id"]), "offered again")
         n0 = len(self.events())
         it, _acts = self.launch(it, outcome="NOT LANDED: holding on Identity model convergence #2375 as you decided; "

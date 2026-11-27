@@ -5,6 +5,7 @@ import os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_clock import FakeClock  # noqa: E402
 
 NOW = 1_800_000_000.0
@@ -40,7 +41,7 @@ class SelfCiTest(unittest.TestCase):
             p = A.state_root(f)
             if os.path.exists(p):
                 os.unlink(p)
-        return A.inv_wa(self.clock, None, runs=lambda: runs, pin=lambda: pin, behind=lambda rev: behind, failure=lambda rid: None)
+        return A.inv_wa(self.clock, None, runs=lambda: runs, pin=lambda: pin, behind=lambda rev: behind, failure=lambda rid: None, ctx=case_context())
 
     def test_green_ci_and_a_current_pin_hold(self):
         ok, detail = self.check([run(9, "success", 5), run(8, "failure", 60)])
@@ -96,24 +97,24 @@ class SelfCiTest(unittest.TestCase):
         A.wire_runner(FakeRunner(run=fake))
 
     def read(self, **kw):
-        return A.inv_wa(self.clock, None, runs=lambda: [run(9, "success", 5)], behind=lambda rev: 0, **kw)
+        return A.inv_wa(self.clock, None, runs=lambda: [run(9, "success", 5)], behind=lambda rev: 0, **kw, ctx=case_context())
 
     def test_the_pin_is_read_from_the_reconcilers_reported_rev_with_no_ssh(self):
         calls = []
         self.wire("c" * 12, calls)
-        self.assertEqual(A.readings(NOW, lambda: [], None)[1], "c" * 12)
+        self.assertEqual(A.readings(NOW, lambda: [], None, ctx=case_context())[1], "c" * 12)
         self.assertTrue(self.read()[0])
         self.assertEqual(calls, [])
 
     def test_without_a_reported_rev_ssh_reuses_the_master_and_is_kept_thirty_minutes(self):
         calls = []
         self.wire(None, calls)
-        self.assertEqual(A.readings(NOW, lambda: [], None)[1], "b" * 40)
+        self.assertEqual(A.readings(NOW, lambda: [], None, ctx=case_context())[1], "b" * 40)
         self.assertNotIn("ControlPath=none", " ".join(calls[0]))
         self.assertNotIn("ControlMaster=no", " ".join(calls[0]))
-        A.readings(NOW + 1500, lambda: [], None)
+        A.readings(NOW + 1500, lambda: [], None, ctx=case_context())
         self.assertEqual(len(calls), 1)
-        A.readings(NOW + 1900, lambda: [], None)
+        A.readings(NOW + 1900, lambda: [], None, ctx=case_context())
         self.assertEqual(len(calls), 2)
 
     def test_a_red_names_the_failing_test_the_seed_and_the_replay_command(self):
@@ -125,7 +126,7 @@ class SelfCiTest(unittest.TestCase):
                 os.unlink(p)
         seen = []
         ok, detail = A.inv_wa(self.clock, None, runs=lambda: [dict(run(9, "failure", 100), databaseId=77)], pin=lambda: sha(9),
-                              behind=lambda rev: 0, failure=lambda rid: seen.append(rid) or log)
+                              behind=lambda rev: 0, failure=lambda rid: seen.append(rid) or log, ctx=case_context())
         self.assertFalse(ok)
         self.assertIn("failing: test_reds.BackgroundSessionTest.test_x", detail)
         self.assertIn("seed 4242", detail)

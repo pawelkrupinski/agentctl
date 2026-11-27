@@ -17,7 +17,7 @@ from agentctl.conditionregistry import PROBE_EVERY, ConditionRegistry
 from agentctl.redrepos import red_gate_flows
 from agentctl.redask import OWNER_CAUSES, ask_category, ask_refusal
 from agentctl.ciwhy import resolve_run
-from agentctl.ciruns import main_runs_of
+
 from agentctl.redseen import local_units, red_units
 from agentctl.runsigs import run_sigs
 from agentctl.conditions import probe_gate_read
@@ -41,16 +41,16 @@ def gate_unread_spell(o_r, why, store):
     return line if c else None
 
 
-def red_run_units(o_r, n):
+def red_run_units(o_r, n, *, ctx):
     """The units of one red run (for claim / dispatch / block by run); `local`: main's own local-checks red."""
     if str(n) == "local":
         us = local_units(scan_repo_for(o_r))
         return LOCAL_FLOW, (us[0]["run"] if us else {"number": "local"}), us
-    name, r = resolve_run(o_r, n)
+    name, r = resolve_run(o_r, n, ctx=ctx)
     if r is None:
         return name, None, []
     if r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS:
-        runs = main_runs_of(o_r).runs_of(name) or [r]
+        runs = ctx.runs.main_runs_of(o_r).runs_of(name) or [r]
         gate = name in {g for g, _ in red_gate_flows(o_r)}
         try:
             sigs = run_sigs(o_r, r, name)

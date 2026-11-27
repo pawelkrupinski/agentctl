@@ -202,12 +202,12 @@ def stamp_author(store: Any, it: Any, author: Any, run: Any) -> Any:
     return store.item("red", it["id"])
 
 
-def red_attach(store, workflow, run, author=None, o_r=None):
+def red_attach(store, workflow, run, author=None, o_r=None, *, ctx):
     """WATCH RED (the landed watch): the run's failures opened or attached, its author offered first. run: the run (a
     dict), or its number."""
     o_r = o_r or SHORT["movies"]
     if not isinstance(run, dict):
-        _name, run = resolve_run(o_r, run)
+        _name, run = resolve_run(o_r, run, ctx=ctx)
         if run is None:
             return []
     sigs: list[Any] = attempt(lambda: run_sigs(o_r, run, workflow), [], catch=(Exception, SystemExit))

@@ -7,6 +7,7 @@ import subprocess
 import sys
 from typing import Any, Callable, Sequence
 from contextlib import suppress
+from agentctl.context import Context
 from agentctl.statefile import read_record, write_json
 from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import Clock
@@ -132,7 +133,7 @@ def file_events_refused(e: BaseException) -> None:
 
 
 def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
-               registry: ConditionRegistry) -> Sequence[tuple[str, Callable[[], Any]]]:
+               registry: ConditionRegistry, *, ctx: Context) -> Sequence[tuple[str, Callable[[], Any]]]:
     """The laptop's loop once the store is remote: it never ticks. clock, store and registry (the conditions' probes and
     actions): the process's (cli's)."""
     s = _SyncDuties(repo, o_r, clock, store)
@@ -140,7 +141,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
     duty = s.duty
     return (("laptop role", s.claim_role),
             ("outbox", lambda: flush_outbox(store)), ("file events", lambda: drain_event_log(store, refused=file_events_refused)), ("state mirror", s.mirror), ("children", reap_children),
-            ("events", lambda: project_events(store)), ("notifier", duty(lambda: notify_escalations(store))),
+            ("events", lambda: project_events(store)), ("notifier", duty(lambda: notify_escalations(store, ctx=ctx))),
             ("alerts", duty(lambda: reconcile_alerts(store))),
             ("workspace trust", lambda: [err(x) for x in trust_asks()]),
             ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees(store)]),
@@ -154,7 +155,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
             ("revert notes", duty(lambda: [err(x) for x in revert_notes(store)])),
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch(pace=land_pace)]),
             ("network watch", lambda: network_watch(store)), ("tunnel probe", lambda: tunnel_watch(store)),
-            ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store), 1)),
+            ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store, ctx=ctx), 1)),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep(store)]),
             ("root checkout", lambda: [err(x) for x in root_checkout_ff(repo)]),
             ("recovery", lambda: maybe_recovery_tick(store, registry, clock.time())))

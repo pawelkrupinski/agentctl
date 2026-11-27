@@ -7,6 +7,7 @@ import json, os, stat, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, StallSamples, sh  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_clock import FakeClock, lagging_clock, on_clock  # noqa: E402
 
 REPO_HOOK = """#!/bin/sh
@@ -32,7 +33,7 @@ class WaitingTest(Base):
         self.saved = (A.WAITING_DIR, A.gate_reds, A.spawn_waiting_processor, A.await_entry, A.watch_landed)
         A.WAITING_DIR = os.path.join(t, "waiting-state")
         self.reds = {"7"}
-        A.gate_reds = lambda repo: set(self.reds)
+        A.gate_reds = lambda repo, ctx=None: set(self.reds)
         A.spawn_waiting_processor = lambda repo: None
         self.watches = []
         self.saved_start_watch = A.start_watch
@@ -42,7 +43,7 @@ class WaitingTest(Base):
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(t, "inbox")
         self.awaited = []
         A.await_entry = lambda repo, eid, clock, store, close=None: (self.awaited.append(eid), (9, None, None))[1]
-        A.watch_landed = lambda repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=(): 0
+        A.watch_landed = lambda repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=(), ctx=None: 0
         os.environ.pop("PREPUSH_SKIP", None)
         self.calls, self.pushes = os.path.join(t, "hook-calls"), os.path.join(t, "pushes")
         hooks = os.path.join(t, "hooks")
@@ -100,11 +101,11 @@ class WaitingTest(Base):
         deadline the executor stamped as passed once the test was 5 min into a loaded run)."""
         d, _c, _w = A.waiting_state(self.r.path)
         saved = A.spawn_batch_executor
-        A.spawn_batch_executor = lambda repo, d_, bid: A.check_batch(repo, bid, *on_clock(self.clock))
+        A.spawn_batch_executor = lambda repo, d_, bid: A.check_batch(repo, bid, *on_clock(self.clock), ctx=case_context())
         out = []
         try:
             for _ in range(n):
-                did = A.close_landed_changes(self.r.path, self.clock, A.CurrentStore(A.process_store), d) + A.tick_batch(self.r.path, d, *on_clock(self.clock))  # the server's order
+                did = A.close_landed_changes(self.r.path, self.clock, A.CurrentStore(A.process_store), d) + A.tick_batch(self.r.path, d, *on_clock(self.clock), ctx=case_context())  # the server's order
                 out += did
                 if not did or did == ["held"]:
                     break
@@ -229,7 +230,7 @@ class WaitingTest(Base):
         self.land(wa)
         d, _c, wt = A.waiting_state(self.r.path)
         e = {"id": "x-9", "seq": 9, "worktree": wa, "head": "", "commits": [], "fixes": ["7"], "status": "waiting"}
-        self.assertEqual([x["id"] for x in A.batch_order(self.r.path, A.ChangeRecords(A.process_store(), d).waiting() + [e], {"7"}, A.CurrentStore(A.process_store))][0], "x-9")
+        self.assertEqual([x["id"] for x in A.batch_order(self.r.path, A.ChangeRecords(A.process_store(), d).waiting() + [e], {"7"}, A.CurrentStore(A.process_store), ctx=case_context())][0], "x-9")
 
     def test_a_conflict_is_found_when_the_batch_is_assembled_and_rejects_that_change_alone(self):
         """Step 8: waiting is no branch; a change that no longer applies is rejected when the batch is assembled."""
@@ -351,7 +352,7 @@ class WaitingTest(Base):
         A.check_tree_slot = lambda st, repo, d_: None  # every check tree busy: the batch cannot be assembled
         try:
             for _ in range(3):
-                A.tick_batch(self.r.path, d, *on_clock(self.clock))
+                A.tick_batch(self.r.path, d, *on_clock(self.clock), ctx=case_context())
         finally:
             A.check_tree_slot = saved
         st = A.CurrentStore(A.process_store)
@@ -384,16 +385,16 @@ class WaitingTest(Base):
     def test_the_tick_stays_cheap_while_nothing_waits(self):
         d, _c, _w = A.waiting_state(self.r.path)
         saved = A.gate_reds
-        A.gate_reds = lambda repo: self.fail("an empty batch reads no gate")
+        A.gate_reds = lambda repo, ctx=None: self.fail("an empty batch reads no gate")
         try:
-            self.assertEqual(A.tick_batch(self.r.path, d, *on_clock(self.clock)), [])
+            self.assertEqual(A.tick_batch(self.r.path, d, *on_clock(self.clock), ctx=case_context()), [])
         finally:
             A.gate_reds = saved
 
     def test_land_follow_still_waits_and_watches(self):
         A.await_entry = lambda repo, eid, clock, store, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
         watched = []
-        A.watch_landed = lambda repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=(): (watched.append(sha), 3)[1]
+        A.watch_landed = lambda repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=(), ctx=None: (watched.append(sha), 3)[1]
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         rc, out = self.land(wt, "--follow")
         self.assertEqual(rc, 3, out)
@@ -480,7 +481,7 @@ class WaitingTest(Base):
         server_store = A.Store(path=os.path.join(srv_state, "store.db"))
         server_repo = os.path.join(srv_state, "movies")
         sh(self.tmp.name, "git", "clone", "-q", self.r.bare, server_repo)
-        api = A.StoreAPI(server_store, ["pawel"], [], user_of={"tok-pawel": "pawel"}.get, repo=server_repo)
+        api = A.StoreAPI(server_store, ["pawel"], [], user_of={"tok-pawel": "pawel"}.get, repo=server_repo, ctx=case_context())
         srv = A.store_server(api, "127.0.0.1", 0)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         self.addCleanup(srv.shutdown)

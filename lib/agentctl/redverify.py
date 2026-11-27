@@ -4,6 +4,7 @@
 import glob
 from typing import Any
 import os
+from agentctl.context import Context
 from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.statefile import read_record
 from agentctl.core import err, git, pct, reds_dir, remote
@@ -21,22 +22,22 @@ from agentctl.redknobs import knob_red_main_verify_every, knob_red_verify_slack
 from agentctl.workflows import workflow_file_of
 from agentctl.onmain import contains_local
 from agentctl.forge import is_cancelled, stuck_durations
-from agentctl.ciruns import ci_runs, main_runs
 
 
-def red_verify_scheduled(store, it, f, sha, o_r, repo, t):
+
+def red_verify_scheduled(store, it, f, sha, o_r, repo, t, *, ctx):
     """A scheduled fix (red_verify_plan) at its deadline with no decided run containing it: a run of its workflow
     still undecided that will decide it holds it again, quietly; else the slot passed without verifying it --
     escalated (the scheduler never dispatched it, or its run ended without deciding it)."""
     d, wf = it["data"], it["data"].get("workflow")
-    r = red_verify_run_on_way(o_r, repo, f)
+    r = red_verify_run_on_way(o_r, repo, f, ctx=ctx)
     if r:
         line = (f"{red_what(d)}: fix {sha[:10]} awaits {wf} #{r.get('number')} ({r.get('status')}), the run that "
                 f"decides it")
         red_move(store, it, "fix-pending", line, data={"fix": {**f, "verify_by": t + RED_VERIFY_HOLD}},
                  deadline_s=RED_VERIFY_HOLD, severity="info")
         return [line]
-    since = [r for r in workflow_main_runs(o_r, f.get("verify_file")) if f.get("verify_file")
+    since = [r for r in workflow_main_runs(o_r, f.get("verify_file"), ctx=ctx) if f.get("verify_file")
              and r.get("createdAt") and parse_time(r["createdAt"]).timestamp() >= float(f.get("next_run_at") or 0) - 60]
     why = (f"its {hhmmz(f['next_run_at'])} run #{since[-1].get('number')} ended {since[-1].get('conclusion')} "
            f"without deciding it" if since else f"no {wf} run was dispatched for its {hhmmz(f['next_run_at'])} slot")
@@ -89,7 +90,7 @@ def _main_verify_due(it: Any, repo: Any, t: Any) -> bool:
     if d.get("gate") or it["state"] not in RED_MAIN_VERIFY_STATES or not repo:
         return False
     if (d.get("fix") or {}).get("status") == "landed":
-        return False  # its own landed fix's verify (red_fix_pending) is on its way
+        return False  # its own landed fix's verify (redpending.FixPending) is on its way
     mv = d.get("main_verify") or {}
     return t - float(mv.get("at") or 0) >= knob_red_main_verify_every()
 
@@ -106,7 +107,7 @@ def _main_moved(repo: Any, d: Any) -> Any:
     return main, (r.stdout.split() if r.returncode == 0 else [])
 
 
-def red_main_verify(store: Any, it: Any, repo: Any, o_r: Any, t: Any) -> Any:
+def red_main_verify(store: Any, it: Any, repo: Any, o_r: Any, t: Any, *, ctx: Context) -> Any:
     d = it["data"]
     if not _main_verify_due(it, repo, t):
         return []
@@ -114,7 +115,7 @@ def red_main_verify(store: Any, it: Any, repo: Any, o_r: Any, t: Any) -> Any:
     if not moved:
         return []
     main, shas = moved
-    reach = next((x for x in shas if fix_reaches_red(repo, x, d)), None)
+    reach = next((x for x in shas if fix_reaches_red(repo, x, d, ctx=ctx)), None)
     if not reach:
         return []
     line = red_verify_dispatch(o_r, repo, d.get("workflow"), main, (d.get("last_run") or {}).get("databaseId"))
@@ -133,21 +134,21 @@ def _flake_pass(d: Any, snap: Any) -> Any:
     return last if last.get("conclusion") == "success" else None
 
 
-def _unfixed_pass(repo: Any, d: Any, last: Any, facts: Any) -> bool:
+def _unfixed_pass(repo: Any, d: Any, last: Any, facts: Any, *, ctx: Context) -> bool:
     """Passed with no commit between that can have fixed it (and the commits between were readable)."""
     rec = {"runs": d.get("runs"), "job": d.get("job"), "line": d.get("line"), "workflow": d.get("workflow")}
     vals = sorted(set().union(*[v for _s, _c, v, _t in facts.get("landed") or []])) if facts.get("landed") else []
     fixed_by, known = fix_between(repo, rec, (d.get("last_run") or {}).get("headSha"), last.get("headSha"),
-                                  name_causes(None, vals), run_workflows())
+                                  name_causes(None, vals, ctx=ctx), run_workflows())
     return known and not fixed_by
 
 
-def red_flake_check(store: Any, it: Any, snap: Any, repo: Any, facts: Any) -> Any:
+def red_flake_check(store: Any, it: Any, snap: Any, repo: Any, facts: Any, *, ctx: Context) -> Any:
     """A test red that cleared with no commit between that can have fixed it: a FLAKE, its own red (determinism tier,
     lowest priority), open until a fix for it lands and a run proves it."""
     d = it["data"]
     last = _flake_pass(d, snap)
-    if not last or not _unfixed_pass(repo, d, last, facts):
+    if not last or not _unfixed_pass(repo, d, last, facts, ctx=ctx):
         return []
     ob = {"key": d["key"], "workflow": d["workflow"], "jobs": d.get("jobs"), "job": d.get("job"), "kind": "test",
           "line": d.get("line"), "red_kind": "flake", "gate": False, "names": set(d.get("runs") or []),
@@ -236,17 +237,17 @@ RED_VERIFY_HOLD = 30 * 60       # s a run that will decide the fix, still undeci
 VERIFY_RUNS_TTL = 5 * 60
 
 
-def workflow_main_runs(o_r, wfile):
+def workflow_main_runs(o_r, wfile, *, ctx):
     """The newest 30 runs on main of workflow file wfile (read at most every VERIFY_RUNS_TTL); [] when unread."""
     try:
         # listing: a fix is verified by a run CONTAINING it, the newest 30 read; none there keeps it pending, never refuted
-        return main_runs(o_r, wfile, 30, fresh_for=VERIFY_RUNS_TTL)
+        return ctx.runs.main_runs(o_r, wfile, 30, fresh_for=VERIFY_RUNS_TTL)
     except (Exception, SystemExit) as e:
         err(f"red verify: could not list {wfile} ({str(e)[:120]})")
-        return ci_runs().last_listed(o_r, wfile, 30) or []
+        return ctx.runs.last_listed(o_r, wfile, 30) or []
 
 
-def red_verify_plan(o_r, repo, workflow, after):
+def red_verify_plan(o_r, repo, workflow, after, *, ctx):
     """{slot, by, file} for a fix of a red of `workflow` landed at `after`: the first scheduled slot after the landing,
     and when its run should have decided (slot + the p90 of its finished runs + RED_VERIFY_SLACK). None when the
     workflow has no schedule or its file cannot be read."""
@@ -254,16 +255,16 @@ def red_verify_plan(o_r, repo, workflow, after):
     slot = cron_next(workflow_crons(txt), after) if path else None
     if slot is None:
         return None
-    runs = [r for r in workflow_main_runs(o_r, os.path.basename(path)) if not is_cancelled(r)]
+    runs = [r for r in workflow_main_runs(o_r, os.path.basename(path), ctx=ctx) if not is_cancelled(r)]
     duration = pct(stuck_durations(runs), 0.9) or RED_VERIFY_DURATION
     return {"slot": slot, "by": slot + duration + knob_red_verify_slack(),
             "file": os.path.basename(path)}
 
 
-def red_verify_run_on_way(o_r, repo, f):
+def red_verify_run_on_way(o_r, repo, f, *, ctx):
     """The undecided run on main of a scheduled fix's workflow that will decide it -- created since its slot, or one
     containing the fix -- or None."""
-    for r in workflow_main_runs(o_r, f["verify_file"]) if f.get("verify_file") else []:
+    for r in workflow_main_runs(o_r, f["verify_file"], ctx=ctx) if f.get("verify_file") else []:
         if r.get("status") != "completed" and (
                 run_since_slot(r, f) or (repo and r.get("headSha") and contains_local(repo, f.get("sha"), r["headSha"]))):
             return r

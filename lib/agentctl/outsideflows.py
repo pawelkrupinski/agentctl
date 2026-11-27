@@ -4,6 +4,7 @@
 import re
 import time
 from typing import Any
+from agentctl.context import Context
 from agentctl.core import err, git, process_cache, remote
 from agentctl.forge import RED_CONCLUSIONS
 from agentctl.repos import scan_repo_for
@@ -11,7 +12,7 @@ from agentctl.workflows import BOUND_JOBS, GITHUB_JOB_TIMEOUT, JobBlock, scan_jo
 from agentctl.gating import _flow_meta, main_workflow_files
 from agentctl.redrepos import red_gate_flows
 from agentctl.ciwhy import red_streak
-from agentctl.ciruns import ci_runs, main_runs, main_runs_of
+
 
 
 OUTSIDE_FLOW_RECHECK = 1800  # a workflow outside the newest-200 window is listed on its own this often (audit #7)
@@ -20,7 +21,7 @@ OUTSIDE_FLOW_RECHECK = 1800  # a workflow outside the newest-200 window is liste
 _flow_bounds = process_cache({})
 
 
-def stuck_history(o_r, name):
+def stuck_history(o_r, name, *, ctx):
     """The workflow's own last 30 finished runs on main (stuck_limit's, for a workflow the newest-200 list holds too few
     of): listed at most every OUTSIDE_FLOW_RECHECK; [] when its file is unknown or the list fails."""
     wfile = main_workflow_files(o_r).get(name)
@@ -28,10 +29,10 @@ def stuck_history(o_r, name):
         return []
     try:
         # listing: samples of a workflow's run lengths (the stuck limit); fewer samples widen it, never narrow it
-        return main_runs(o_r, wfile, 30, status="completed", fresh_for=OUTSIDE_FLOW_RECHECK)
+        return ctx.runs.main_runs(o_r, wfile, 30, status="completed", fresh_for=OUTSIDE_FLOW_RECHECK)
     except (Exception, SystemExit) as e:
         err(f"stuck limit: could not list {wfile} ({str(e)[:120]})")
-        return ci_runs().last_listed(o_r, wfile, 30, "completed") or []
+        return ctx.runs.last_listed(o_r, wfile, 30, "completed") or []
 
 
 JOB_BOUND_LINE = re.compile(r"^\s*timeout-minutes:[ \t]*(\d+)[ \t]*(?:#.*)?$")  # a trailing comment, as workflow_jobs reads it
@@ -88,21 +89,21 @@ def main_callable_flows(o_r):
     return main_flow_meta(o_r)["callable"]
 
 
-def _own_runs(o_r: Any, wfile: str) -> Any:
+def _own_runs(o_r: Any, wfile: str, *, ctx: Context) -> Any:
     """The workflow file's own newest 30 runs on main, listed at most every OUTSIDE_FLOW_RECHECK ([] when the list fails)."""
     try:
         # listing: the workflow's own newest 30, read because the cross-workflow 200 left it out
-        return main_runs(o_r, wfile, 30, fresh_for=OUTSIDE_FLOW_RECHECK)
+        return ctx.runs.main_runs(o_r, wfile, 30, fresh_for=OUTSIDE_FLOW_RECHECK)
     except Exception as e:  # this workflow unread this time: the others stand
         err(f"outside the gate: could not list {wfile} ({str(e)[:120]})")
-        return ci_runs().last_listed(o_r, wfile, 30) or []
+        return ctx.runs.last_listed(o_r, wfile, 30) or []
 
 
-def _outside_runs(o_r: Any, gated: set[str]) -> dict[str, list[Any]]:
+def _outside_runs(o_r: Any, gated: set[str], *, ctx: Context) -> dict[str, list[Any]]:
     """{workflow: its runs on main, newest first} of every workflow file on main: the newest 200 runs grouped, the files
     missing from them (and not gated) listed on their own."""
     # listing: the newest 200 across workflows; a workflow absent from it is listed on its own below
-    runs = ci_runs().recent_main(o_r, 200)
+    runs = ctx.runs.recent_main(o_r, 200)
     lists: dict[str, list[Any]] = {}
     for r in runs:
         if r.get("workflowName"):
@@ -110,23 +111,23 @@ def _outside_runs(o_r: Any, gated: set[str]) -> dict[str, list[Any]]:
     for name, wfile in main_workflow_files(o_r).items():
         if name in lists or name in gated:
             continue
-        mine = _own_runs(o_r, wfile)
+        mine = _own_runs(o_r, wfile, ctx=ctx)
         if mine:
             lists[name] = mine
     return lists
 
 
-def outside_gate(o_r: Any) -> Any:
+def outside_gate(o_r: Any, *, ctx: Context) -> Any:
     """[(workflow, newest decided run, since, count)] for each workflow on main OUTSIDE the gate whose newest decided
     run is red: not blocking a push, but red, and for how long (the owner, 2026-10-27: a red nobody is shown is a red
     that gets ignored). EVERY workflow file on main is read (audit #7): those in the newest 200 runs from that list,
     the others listed on their own (at most every OUTSIDE_FLOW_RECHECK)."""
     gated = {n for n, _ in red_gate_flows(o_r)}
     out = []
-    for name, mine in _outside_runs(o_r, gated).items():
+    for name, mine in _outside_runs(o_r, gated, ctx=ctx).items():
         if name in gated:
             continue
-        main_runs_of(o_r).outside[name] = mine
+        ctx.runs.main_runs_of(o_r).outside[name] = mine
         since, count = red_streak(mine)
         if count:
             decided = next(r for r in mine if r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS)

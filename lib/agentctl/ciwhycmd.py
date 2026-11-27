@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 from agentctl.core import slug
 from agentctl.cistate import state_read
@@ -24,13 +25,13 @@ def ci_why_cached(o_r: str, a: argparse.Namespace, target: Any) -> int:
     return 1 if text.startswith("gate RED") else 0 if GATE_LINE.match(text) else 2  # 2: UNREAD / ? / NETWORK
 
 
-def cmd_ci_why(a: argparse.Namespace, store: Any) -> int:
+def cmd_ci_why(a: argparse.Namespace, store: Any, *, ctx: Context) -> int:
     o_r = slug(a.repo) if a.repo else default_repo()
     target = None if a.target in (None, "main") else a.target.lstrip("#")
     if target is not None and not target.isdigit():
         raise SystemExit("agentctl: ci-why takes a run id, a run number (#N) or `main`")
     if getattr(a, "cached", False):
         return ci_why_cached(o_r, a, target)
-    red, text = ci_why(o_r, a.tail, target, summary=getattr(a, "summary", False), store=store)
+    red, text = ci_why(o_r, a.tail, target, summary=getattr(a, "summary", False), store=store, ctx=ctx)
     print(text)
     return 1 if red else 0

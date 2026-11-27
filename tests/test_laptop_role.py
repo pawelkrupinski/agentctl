@@ -6,6 +6,7 @@ import os, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 
@@ -101,7 +102,7 @@ class LaptopRoleTest(unittest.TestCase):
             saved_fn = getattr(A, name)
             setattr(A, name, lambda *a, _n=name, **k: ran.append(_n) or [])
             self.addCleanup(setattr, A, name, saved_fn)
-        steps = dict(A.sync_steps(None, None, "pawelkrupinski/movies", A.Clock(), self.st, registry(A)))
+        steps = dict(A.sync_steps(None, None, "pawelkrupinski/movies", A.Clock(), self.st, registry(A), ctx=case_context()))
         for name in ("laptop role", "notifier", "alerts", "claims", "dispatcher", "pins", "drift explorer"):
             steps[name]()
         self.assertEqual(ran, [], "standby: none of the laptop's duties")
@@ -136,7 +137,7 @@ class LaptopRoleTest(unittest.TestCase):
         self.assertIsNone(A.laptop_role_refusal(self.st, "/v1/store/revoke", {"args": [7]}, None), "a name that is no string")
 
     def api(self):
-        return A.StoreAPI(self.st, ["pawel"], [], user_of={"tok": "pawel"}.get)
+        return A.StoreAPI(self.st, ["pawel"], [], user_of={"tok": "pawel"}.get, ctx=case_context())
 
     def call(self, method, args, role, machine="laptop"):
         import json

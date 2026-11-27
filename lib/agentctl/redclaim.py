@@ -1,6 +1,7 @@
 # agentctl, part `redclaim`: interactive holders: claim, beat, release a red; `red owner-push`, an owner-only repo's fix
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 import os
 import time
@@ -25,7 +26,7 @@ from agentctl.fixerland import unlanded_commits
 
 
 # -- interactive: claim, beat, release
-def red_targets(store: Any, o_r: Any, target: Any, create: Any = True) -> Any:
+def red_targets(store: Any, o_r: Any, target: Any, create: Any = True, *, ctx: Context) -> Any:
     """The non-terminal red items a target names: a red key, or a run (number, id, or `local`); a run not yet seen by
     the tick is opened here (its observation), so a claim always has its item."""
     t = str(target).lstrip("#")
@@ -37,7 +38,7 @@ def red_targets(store: Any, o_r: Any, target: Any, create: Any = True) -> Any:
     hits = [h for h in red_item_of_run(store, t) if red_repo_of(h["data"]) == mine]
     if hits or not create:
         return hits
-    name, r, units = red_run_units(o_r, t)
+    name, r, units = red_run_units(o_r, t, ctx=ctx)
     out = []
     for key, ob in red_obs_for(o_r, red_obs_of_units(units)).items():
         it = active.get(key) or red_open(store, ob, None, store.clock(), o_r)
@@ -93,7 +94,7 @@ def _held_by_fixer(store: Any, rec: dict[str, Any]) -> Callable[[dict[str, Any]]
     return held_by_me
 
 
-def _fixer_claim(store: Any, o_r: Any, target: Any, note: str, own: str) -> tuple[tuple[int, list[str]] | None, list[Any], Any]:
+def _fixer_claim(store: Any, o_r: Any, target: Any, note: str, own: str, *, ctx: Context) -> tuple[tuple[int, list[str]] | None, list[Any], Any]:
     """A claim made inside a dispatched fixer: (the note it wrote when the reds are its own, else None; the reds that are
     not held by it, to claim; the worktree its record names). `red claim N` there used to write the note on its own
     lease and ignore N (2026-10-29)."""
@@ -101,7 +102,7 @@ def _fixer_claim(store: Any, o_r: Any, target: Any, note: str, own: str) -> tupl
     t = str(target).lstrip("#")
     if t in (str(rec.get("run")), str(rec.get("lease") or "").split("/", 1)[-1]):  # its own red, by run or key
         return _noted_on_lease(own, rec, note), [], None
-    items = red_targets(store, o_r, target)
+    items = red_targets(store, o_r, target, ctx=ctx)
     held_by_me = _held_by_fixer(store, rec)
     if not items or all(held_by_me(it) for it in items):
         done = _noted_on_lease(own, rec, note)
@@ -141,21 +142,21 @@ def _claim_worktree(wt, fixer_wt, here):
     return os.path.realpath(wt or fixer_wt or worktree_of(here) or here)
 
 
-def red_claim(store: Any, o_r: Any, target: Any, note: str = "", wt: Any = None) -> tuple[int, list[str]]:
+def red_claim(store: Any, o_r: Any, target: Any, note: str = "", wt: Any = None, *, ctx: Context) -> tuple[int, list[str]]:
     """(rc, lines): the red's lease to the caller (a claim, renewed by its worktree's activity). Inside a dispatched
     fixer, a red its wrapper already holds (its own, or a family / run sibling under the same holder) gets the fixer's
     note; ANY OTHER red N is claimed for the fixer, in its worktree -- how a fixer (the convergence family's) takes a
     second red."""
     own = own_fixer_record_path()
     here = safe_cwd()
-    noted, items, rec_wt = _fixer_claim(store, o_r, target, note, own) if own else (None, None, None)
+    noted, items, rec_wt = _fixer_claim(store, o_r, target, note, own, ctx=ctx) if own else (None, None, None)
     if noted:
         return noted
     wt = _claim_worktree(wt, rec_wt, here)
     if root_checkout(wt, o_r) or not os.path.isdir(wt):
         return 2, [f"NOT CLAIMED: {tilde(wt)} is not a worktree of your own (a claim is renewed by its worktree's "
                    "activity; the root checkout counts for nobody): `--worktree <your worktree>`"]
-    items = items if own else red_targets(store, o_r, target)
+    items = items if own else red_targets(store, o_r, target, ctx=ctx)
     if not items:
         return 1, [f"NOT CLAIMED: #{target} names no red on main"]
     who = claimant(here)
@@ -163,11 +164,11 @@ def red_claim(store: Any, o_r: Any, target: Any, note: str = "", wt: Any = None)
     return max(rc for rc, _line in claims), [line for _rc, line in claims]
 
 
-def red_beat(store, o_r, target, note):
+def red_beat(store, o_r, target, note, *, ctx):
     if own_fixer_record_path():
-        return red_claim(store, o_r, target, note)
+        return red_claim(store, o_r, target, note, ctx=ctx)
     out, rc = [], 1
-    for it in red_targets(store, o_r, target, create=False):
+    for it in red_targets(store, o_r, target, create=False, ctx=ctx):
         name = red_lease(it["data"]["key"])
         row = store.get(name)
         if not lease_is_live(row, store.clock()):
@@ -205,11 +206,11 @@ def _release_one(store: Any, it: dict[str, Any], me: str, any_: bool) -> tuple[s
     return f"released {red_what(it['data'])} ({row['holder']})", True
 
 
-def red_release(store: Any, o_r: Any, target: Any, any_: bool = False) -> tuple[int, list[str]]:
+def red_release(store: Any, o_r: Any, target: Any, any_: bool = False, *, ctx: Context) -> tuple[int, list[str]]:
     me = claimant()
     out: list[str] = []
     freed = False
-    for it in red_targets(store, o_r, target, create=False):
+    for it in red_targets(store, o_r, target, create=False, ctx=ctx):
         line, ok = _release_one(store, it, me, any_)
         out.extend([line] if line else [])
         freed = freed or ok
@@ -259,11 +260,11 @@ def _owner_push_line(items: Any, o_r: Any, branch: Any, ahead: Any, wt: Any, not
             + (f" -- {note}" if note else "") + f". {o_r} is owner-only (a push is a deploy): `! {cmd}`")
 
 
-def red_owner_push(store: Any, o_r: Any, target: Any, note: Any = "", wt: Any = None) -> Any:
+def red_owner_push(store: Any, o_r: Any, target: Any, note: Any = "", wt: Any = None, *, ctx: Context) -> Any:
     """(rc, lines) of `red owner-push`: an owner-only repo's fix (red-repos.json; infra, whose push is a deploy), prepared
     on the worktree's local branch, filed with the owner. The red goes to fix-pending with a fix of status `owner` (its
     branch, head and the owner's one-liner) and one escalation reaches the inbox with the command; a green gate run
-    verifies it, and unproven after RED_FIX_GIVEUP it is offered again (red_fix_pending). Never pushes."""
+    verifies it, and unproven after RED_FIX_GIVEUP it is offered again (redpending.FixPending). Never pushes."""
     if not red_owner_only(o_r):
         return 2, [f"NOT FILED: {o_r} is not owner-only (red-repos.json): land the fix with `~/bin/agentctl land`"]
     here = safe_cwd()
@@ -277,7 +278,7 @@ def red_owner_push(store: Any, o_r: Any, target: Any, note: Any = "", wt: Any = 
         return 1, [f"NOT FILED: git cannot compare {tilde(wt)} with {remote()}/main: fetch, then file again"]
     if not ahead:
         return 1, [f"NOT FILED: nothing in {tilde(wt)} that is not on {remote()}/main"]
-    items = red_targets(store, o_r, target, create=False)
+    items = red_targets(store, o_r, target, create=False, ctx=ctx)
     if not items:
         return 1, [f"NOT FILED: #{target} names no open red of {o_r}"]
     head = git(wt, "rev-parse", "HEAD").strip()

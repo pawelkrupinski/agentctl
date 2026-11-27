@@ -7,6 +7,7 @@ import os, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from functools import partial  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
@@ -360,7 +361,7 @@ class RequeueLoopTest(unittest.TestCase):
         A.fetch_main = lambda repo: (False, "error: Could not read 409b8bb3c1\nfatal: remote did not send all "
                                             "necessary objects")
         try:
-            self.assertEqual(A._check_entry(self.st, self.d, self.d, self.e, 1, *on_clock(A.Clock())), 0)
+            self.assertEqual(A._check_entry(self.st, self.d, self.d, self.e, 1, *on_clock(A.Clock()), ctx=case_context()), 0)
         finally:
             A.precheck_hook, A.fetch_main = saved
         self.assertEqual(self.e["status"], "queued")

@@ -42,14 +42,14 @@ def spawn_executor(repo, d, eid):
 QUEUE_ONLY_FIELDS = ("backlog_batch", "batch_alone", "push_alone", "drift_split", "remote_run")  # a check's, not a wait's
 
 
-def queue_join(st, repo, d, e, tree, head, why=None):
+def queue_join(st, repo, d, e, tree, head, why=None, *, ctx):
     """Under the landing lock, main red (or its checks failing only as its base fails, why): the checked change waits
     for green at `head` (ONE CHANGE, ONE ITEM, above); its WAITING note says why."""
     commits = waiting_commits(repo, f"{remote()}/main", head)
     supersede_older_waiting(st, d, e["worktree"], e.get("branch") or "", e["id"])
     for k in QUEUE_ONLY_FIELDS:
         e.pop(k, None)
-    e.update(tip=head, commits=commits, fixes=sorted(fixes_of(repo, commits, st)))
+    e.update(tip=head, commits=commits, fixes=sorted(fixes_of(repo, commits, st, ctx=ctx)))
     line = note_waiting(st, d, os.path.join(d, f"check-{e['id']}"), head, e["id"]) + (f": {why}" if why else "")
     # policy: red-gate
     set_change(st, d, e, "waiting", cause="gate-red", event=change_event(e, line, code=None, final=False), decided=ts())

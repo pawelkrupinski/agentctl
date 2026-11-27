@@ -8,6 +8,7 @@ import contextlib, fcntl, io, json, os, subprocess, sys, tempfile, time, unittes
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
 
 
@@ -374,7 +375,7 @@ class GovBoundTest(unittest.TestCase):
         out = io.StringIO()
         try:
             with tempfile.TemporaryDirectory() as d, contextlib.redirect_stdout(out):
-                rc = A.dry_run(d, "/bin/true", "a" * 40, os.path.join(d, "log"), 1, *on_clock(A.Clock()))
+                rc = A.dry_run(d, "/bin/true", "a" * 40, os.path.join(d, "log"), 1, *on_clock(A.Clock()), ctx=case_context())
         finally:
             A.check_slot = saved
         self.assertEqual(rc, 1)

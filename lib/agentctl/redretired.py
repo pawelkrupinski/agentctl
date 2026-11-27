@@ -1,6 +1,7 @@
 # agentctl, part `redretired`: retired checks: a red whose job or workflow no longer exists on main.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 import os
 import re
@@ -10,7 +11,7 @@ from agentctl.timefmt import parse_time
 from agentctl.forge import gh_json
 from agentctl.workflows import fix_workflow_jobs, workflow_triggers
 from agentctl.redknobs import knob_red_stale_days
-from agentctl.ciruns import ci_runs
+
 
 
 RETIRE_MAIN_TTL = 60         # s: main's head is read again after this
@@ -82,8 +83,8 @@ def retire_run(o_r, rid):
     return _retire_get(("run", o_r, str(rid)), None, lambda: gh_json(o_r, "api", f"repos/{o_r}/actions/runs/{rid}"))
 
 
-def retire_jobs(o_r, rid):
-    return ci_runs().run_jobs(o_r, rid)
+def retire_jobs(o_r, rid, *, ctx):
+    return ctx.runs.run_jobs(o_r, rid)
 
 
 def retire_newest(o_r, path):
@@ -291,7 +292,8 @@ def _retire_fail(o_r):
 class RetiredRun:
     """Why a red run's check is retired, a method per stage: its workflow gone or stale, then its failing jobs gone."""
 
-    def __init__(self, o_r: Any, workflow: Any, run: Any, rid: Any, jobs: Any, now: Any) -> None:
+    def __init__(self, o_r: Any, workflow: Any, run: Any, rid: Any, jobs: Any, now: Any, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.o_r, self.workflow, self.run, self.rid, self.jobs, self.now = o_r, workflow, run, rid, jobs, now
 
     def why(self) -> Any:
@@ -329,7 +331,7 @@ class RetiredRun:
         head = self.r.get("head_sha") or (self.run or {}).get("headSha")
         otext = retire_file(self.o_r, head, path) if head else None
         ojobs = retire_jobs_of(otext) if otext else None
-        api_jobs = retire_jobs(self.o_r, self.rid)
+        api_jobs = retire_jobs(self.o_r, self.rid, ctx=self.ctx)
         names = self.failing_names(api_jobs)
         whys = self.whys(names, cjobs, ojobs, api_jobs) if names else None
         return f"check retired at {self.sha[:10]}: " + "; ".join(whys) if whys else None
@@ -353,7 +355,7 @@ class RetiredRun:
         return whys
 
 
-def red_run_retired(o_r, workflow, run, jobs=None, now=None):
+def red_run_retired(o_r, workflow, run, jobs=None, now=None, *, ctx):
     """Why the red run of `workflow` can never clear -- "check retired at <sha>: ..." or "stale: no run since <date>" --
     else None. jobs: its failing jobs' names (default: the run's failed jobs). Anything unread or unparseable: None."""
     rid = (run or {}).get("databaseId") or (run or {}).get("id")
@@ -362,16 +364,16 @@ def red_run_retired(o_r, workflow, run, jobs=None, now=None):
     if _retire_cache.get(("fail", o_r)) and epoch_now() - _retire_cache[("fail", o_r)][0] < RETIRE_FAIL_TTL:
         return None
     try:
-        return RetiredRun(o_r, workflow, run, rid, jobs, now).why()
+        return RetiredRun(o_r, workflow, run, rid, jobs, now, ctx=ctx).why()
     except (Exception, SystemExit) as e:
         _retire_fail(o_r)  # silent (the status line and ci-why call this): the red stays, the reason kept for a look
         _retire_cache[("why", o_r)] = (epoch_now(), f"{workflow} #{(run or {}).get('number')}: {str(e)[:200]}")
         return None
 
 
-def red_retired(o_r, d, now=None):
+def red_retired(o_r, d, now=None, *, ctx):
     """red_run_retired for a red item's data (gate and outside reds only: local, stuck, predicted and flake reds have
     probes of their own)."""
     if d.get("red_kind") not in ("gate", "outside"):
         return None
-    return red_run_retired(o_r, d.get("workflow"), d.get("last_run") or {}, d.get("jobs") or [d.get("job")], now)
+    return red_run_retired(o_r, d.get("workflow"), d.get("last_run") or {}, d.get("jobs") or [d.get("job")], now, ctx=ctx)

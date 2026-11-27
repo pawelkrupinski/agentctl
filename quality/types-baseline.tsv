@@ -31,7 +31,7 @@ mypy-errors	ciwhy	36
 mypy-errors	ciwhycmd	2
 mypy-errors	cleanup	12
 mypy-errors	cleanuppass	3
-mypy-errors	cli	11
+mypy-errors	cli	9
 mypy-errors	clones	1
 mypy-errors	conditions	2
 mypy-errors	config	17
@@ -169,7 +169,7 @@ mypy-errors	statuspage	30
 mypy-errors	store	21
 mypy-errors	storeapi	28
 mypy-errors	storeauth	22
-mypy-errors	storecmd	10
+mypy-errors	storecmd	9
 mypy-errors	storemetrics	3
 mypy-errors	storestate	7
 mypy-errors	storetoken	46

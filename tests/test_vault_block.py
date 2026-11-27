@@ -10,6 +10,7 @@ import json, os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from test_owner_ask import AskBase  # noqa: E402
 
@@ -34,7 +35,7 @@ class VaultBase(AskBase):
 
     def step(self, it):
         return A.red_step(self.st, self.st.item("red", it["id"]), None, None, {}, None, "pawelkrupinski/movies",
-                          self.t[0])
+                          self.t[0], ctx=case_context())
 
     def owner_told(self):
         return [e for e in self.events() if "WAITING ON YOU" in str((e.get("refs") or {}).get("verdict"))]
@@ -117,7 +118,7 @@ class VaultAskTest(VaultBase):
         eid = A.alert_write({"id": "20261116T034801000000-ev1-red-ask", "at": self.t[0], "command": "red", "cwd": "/",
                              "final": True, "exit": 1, "verdict": line, "verdicts": [line], "tail": [],
                              "item_type": "red", "item_id": it["id"]}, A.CurrentStore(A.process_store))
-        rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-movies", "here")
+        rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-movies", "here", ctx=case_context())
         self.assertEqual(rc, 0, out)
         self.assertIn("DECIDED", out[0])
         it = self.st.item("red", it["id"])
@@ -145,7 +146,7 @@ class VaultAskTest(VaultBase):
         self.assertTrue(A.alert_acked(A.inbox_dir(), eid), "the owner's WAITING ON YOU alert closes with the block")
 
     def test_decide_vault_with_nothing_waiting_on_it_says_so(self):
-        rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-movies", "here")
+        rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-movies", "here", ctx=case_context())
         self.assertEqual(rc, 1)
         self.assertIn("no red waits on the movies vault", out[0])
 
@@ -163,7 +164,7 @@ class OneItemTest(VaultBase):
         late = self.launch(self.ios_red(key="a0", n=69), outcome=BLOCKED, minutes=1)[0]  # joins later, sorting first
         A.red_owner_reminders(self.st, self.t[0])
         self.assertEqual(len(self.owner_told()), 1, "a red joining the vault's wait is no second telling")
-        rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-movies", "here")
+        rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-movies", "here", ctx=case_context())
         self.assertEqual((rc, len(out)), (0, 4), out)
         for r in reds + [late]:
             self.assertEqual(self.st.item("red", r["id"])["state"], "offered")

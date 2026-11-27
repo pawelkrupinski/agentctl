@@ -5,6 +5,7 @@ import contextlib
 import os
 import sys
 from typing import Any, Optional
+from agentctl.context import Context
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.clock import Clock
 from agentctl.timefmt import ts
@@ -136,7 +137,8 @@ class BatchCheck:
     `it` is the batch's item, read again after each step that may have moved it."""
 
     def __init__(self, repo: str, bid: str, clock: Clock, st: Any, d: str, tree: str, it: dict[str, Any],
-                 members: list[dict[str, Any]]):
+                 members: list[dict[str, Any]], *, ctx: Context):
+        self.ctx = ctx
         self.repo, self.bid, self.clock, self.st, self.d, self.tree = repo, bid, clock, st, d, tree
         self.it, self.members = it, members
         data = it["data"]
@@ -226,7 +228,7 @@ class BatchCheck:
         return [self.base] + [e["id"] for e in self.members]
 
     def own_failure(self, bad: dict[str, Any], cout: str) -> bool:
-        return culprit_own_failure(self.st, self.repo, self.d, bad, self.base, cout, self.clock.time())
+        return culprit_own_failure(self.st, self.repo, self.d, bad, self.base, cout, self.clock.time(), ctx=self.ctx)
 
     def before(self, culprit: int) -> tuple[list[dict[str, Any]], Optional[str]]:
         """The members before the culprit and the tip they end at."""
@@ -295,7 +297,7 @@ class BatchCheck:
         return result
 
 
-def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
+def check_batch(repo: str, bid: str, clock: Clock, st: Any, *, ctx: Context) -> int:
     """THE BATCH EXECUTOR (`waiting check-batch <id>`): holding check/batch-<id> and its tree's slot, it checks the
     assembled tip; pass -> pushing (the tick pushes); fail -> bisecting -> a confirmed culprit rejected and the passing
     prefix -> pushing (or assembling), every prefix passing -> assembling again (counted); stalled twice -> held."""
@@ -315,7 +317,7 @@ def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
         if not slot.acquire():
             return 0
         _d, clone, _w = waiting_state(repo)
-        return BatchCheck(repo, bid, clock, st, d, f"{clone}-wt-check-{i}", it, batch_members(st, d, it)).run()
+        return BatchCheck(repo, bid, clock, st, d, f"{clone}-wt-check-{i}", it, batch_members(st, d, it), ctx=ctx).run()
     finally:
         slot.release()
         lease.release()
@@ -342,11 +344,11 @@ def batch_infra_failure(out):
     return hit.strip()[:160] if hit and not names_failing_test(lines) else None
 
 
-def culprit_own_failure(st, repo, d, e, base, out, now):
+def culprit_own_failure(st, repo, d, e, base, out, now, *, ctx):
     """Whether a backlog batch's confirmed culprit failed by its own fault, as a change's own check judges it
     (judge_failure): no infra failure, no time cap, a failing test that main's red runs and the queue's record do not
     share."""
     if INFRA_CHECK_FAILURE.search(out or "") or CHECK_TIMEOUT.search(out or ""):
         return False
     paths = change_paths_of(repo, e)
-    return judge_failure(st, repo, d, e, base, out, now, None if paths is None else set(paths))[0] == "head"
+    return judge_failure(st, repo, d, e, base, out, now, None if paths is None else set(paths), ctx=ctx)[0] == "head"

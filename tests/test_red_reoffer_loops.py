@@ -4,6 +4,7 @@ import json, os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, put_change  # noqa: E402
+from harness import case_context  # noqa: E402
 from test_red import run  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 from test_agentctl import sh  # noqa: E402
@@ -119,7 +120,7 @@ class ReOfferLoopTest(RedsBase):
         self.assertEqual(it["state"], "leased", f"its fixer goes on: {it['data'].get('history', [])[-1:]}")
         self.assertIsNone(it["data"].get("fix"))
         self.assertFalse(os.path.exists(os.path.join(wt, "RED-STOP.md")), "the fixer is never stopped for it")
-        self.assertIsNone(A.red_change_link(self.r.path, it["data"], e["commits"]))
+        self.assertIsNone(A.red_change_link(self.r.path, it["data"], e["commits"], ctx=case_context()))
 
     def test_a_change_to_the_failing_step_links_an_outside_red_and_never_stops_its_fixer(self):
         """The same red: a change editing its failing step itself (no trailer) may well be its fix -- linked, and its
@@ -137,7 +138,7 @@ class ReOfferLoopTest(RedsBase):
         self.tick(advance=120)
         it = self.only()
         self.assertEqual(it["state"], "leased", it["data"].get("history", [])[-1:])
-        self.assertEqual(A.red_change_link(self.r.path, it["data"], [sha]), A.LINK_STEP)
+        self.assertEqual(A.red_change_link(self.r.path, it["data"], [sha], ctx=case_context()), A.LINK_STEP)
         self.assertEqual(it["data"].get("linked_told"), e["id"])
         with open(os.path.join(wt, "RED-NOTE.md")) as f:
             self.assertIn(f"{e['id']} (no Fixes-Red) changes its failing step", f.read())
@@ -146,15 +147,15 @@ class ReOfferLoopTest(RedsBase):
     def test_a_script_only_the_failing_step_runs_is_its_code_a_shared_one_is_not(self):
         it, _wt = self.alert_backtest_red(holder=False)
         main = sh(self.r.path, "git", "rev-parse", "HEAD")
-        self.assertEqual(A.red_link_reads(self.r.path, main, it["data"])[2], {"scripts/backtest-alerts"},
+        self.assertEqual(A.red_link_reads(self.r.path, main, it["data"], ctx=case_context())[2], {"scripts/backtest-alerts"},
                          "gh-release.sh is run by the Publish step and by Scrape: shared tooling, no link")
         wt = self.r.worktree("repo-wt-code", branch="repo-wt-code")
         self.r.write("scripts/backtest-alerts", "#!/bin/sh\nbacktest --young\n", at=wt)
         own = self.r.commit("the backtest's young verdict, no trailer", at=wt)
         self.r.write("scripts/ci/gh-release.sh", "#!/bin/sh\nrelease --retry\n", at=wt)
         shared = self.r.commit("release retries, no trailer", at=wt)
-        self.assertEqual(A.red_change_link(self.r.path, it["data"], [own]), A.LINK_CODE)
-        self.assertIsNone(A.red_change_link(self.r.path, it["data"], [shared]))
+        self.assertEqual(A.red_change_link(self.r.path, it["data"], [own], ctx=case_context()), A.LINK_CODE)
+        self.assertIsNone(A.red_change_link(self.r.path, it["data"], [shared], ctx=case_context()))
 
     def test_20261112T164528_14afee_a_reds_own_run_rerun_green_clears_it_never_re_offers_it(self):
         self.tick()
@@ -212,7 +213,7 @@ class ReOfferLoopTest(RedsBase):
         self.tick()
         e = self.queued_entry("tidy the test runner, no trailer", "queued", path="scripts/ci/run-tests.sh")
         self.assertFalse(e.get("fixes"))
-        reads = A.red_job_reads(self.r.path, sh(self.r.path, "git", "rev-parse", "HEAD"), self.only()["data"])
+        reads = A.red_job_reads(self.r.path, sh(self.r.path, "git", "rev-parse", "HEAD"), self.only()["data"], ctx=case_context())
         self.assertIn("scripts/ci/run-tests.sh", reads["files"], "the change does edit a file the failing job reads")
         for _ in range(2):
             self.tick(advance=120)

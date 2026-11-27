@@ -6,6 +6,7 @@ import ast, json, os, re, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL, code_source  # noqa: E402
+from harness import case_context  # noqa: E402
 from test_red import RedBase, MOVIES  # noqa: E402
 from test_reds import TickClock  # noqa: E402
 from fake_probes import probe, registry  # noqa: E402
@@ -374,14 +375,14 @@ class UntilGreenTest(RedBase):
         return super().tool(*argv, cwd=cwd, clock=clock or TickClock(self.t))
 
     def snap(self, conclusion):
-        A.ci_runs().clear()
-        s = A.ci_state_refresh(MOVIES, write=False)
+        case_context().runs.clear()
+        s = A.ci_state_refresh(MOVIES, write=False, ctx=case_context())
         s["latest"]["Decodo probe"] = {"number": 99, "conclusion": conclusion}
         A.ci_state_write(s)
         return s
 
     def tick(self, snap):
-        return A.red_tick(self.st, MOVIES, self.r.path, snap, now_=self.t[0], dispatch=False, registry=registry(A))
+        return A.red_tick(self.st, MOVIES, self.r.path, snap, now_=self.t[0], dispatch=False, registry=registry(A), ctx=case_context())
 
     def test_the_block_lapses_when_the_probe_workflow_goes_green_and_the_red_is_verified(self):
         self.tick(self.snap("failure"))

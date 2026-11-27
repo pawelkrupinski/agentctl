@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from functools import partial
+from agentctl.context import Context
 from agentctl.clock import epoch_now, wall_epoch
 import json
 import os
@@ -110,7 +111,7 @@ def tell_violation(st: Dict[str, Any], wid: str, detail: str, cond: object, heal
         notify(f"agentctl watchdog: {wid}", detail[:220])
 
 
-def cmd_watchdog(a: Any, clock: Any, store: Any, registry: ConditionRegistry) -> int:
+def cmd_watchdog(a: Any, clock: Any, store: Any, registry: ConditionRegistry, *, ctx: Context) -> int:
     """One watchdog pass: every invariant checked; a violation opens its INVARIANT condition (and notifies), a restored
     one closes it; W5 kickstarts the processor. Prints one line per invariant. clock and store: cli's (the invariants'
     probe is wired with the same)."""
@@ -118,17 +119,17 @@ def cmd_watchdog(a: Any, clock: Any, store: Any, registry: ConditionRegistry) ->
     woke = awake_since(st, clock.time())
     write_beat("watchdog")
     misses = dict(st.get("misses") or {})
-    violated = [check_invariant(wid, st, misses, woke, clock, store, registry) for wid in INVARIANTS]
+    violated = [check_invariant(wid, st, misses, woke, clock, store, registry, ctx=ctx) for wid in INVARIANTS]
     print_unheld(store, clock)
     write_json(state_root("watchdog.json"), {**watchdog_state(), "misses": misses, "awake_since": woke})
     return 1 if any(violated) else 0
 
 
 def check_invariant(wid: Any, st: Any, misses: Any, woke: Any, clock: Any, store: Any,
-                    registry: ConditionRegistry) -> Any:
+                    registry: ConditionRegistry, *, ctx: Context) -> Any:
     """One invariant probed and printed: a violation counted and told, a restored one's condition closed, a silent
     processor kicked (W5). True when it is violated."""
-    r = run_probe(partial(probe_invariant, clock=clock, st=store), {"id": wid})
+    r = run_probe(partial(probe_invariant, clock=clock, st=store, ctx=ctx), {"id": wid})
     key = f"invariant-{wid}"
     cond = next((c for c in open_conditions(store) if c["key"] == key), None)
     print(f"{wid}: {probe_word(r.ok)} -- {r.detail}")

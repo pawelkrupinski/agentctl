@@ -8,6 +8,7 @@ import json, os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, sh, put_change  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
 
@@ -250,21 +251,21 @@ class TreeSlotTest(OneQueueBase):
         by a checker waiting on its remote CI run (up to its 2.4 h max hold), and a push waited for its own tree."""
         trees = []
         saved = A._push_change
-        A._push_change = lambda repo, d, e, i, clock, st: trees.append(i) or "landed"
+        A._push_change = lambda repo, d, e, i, clock, st, ctx=None: trees.append(i) or "landed"
         other = A.tree_slot(self.st, self.d, 1)
         self.assertTrue(other.acquire())
         try:
             e = {"id": "c-1", "tree": 1, "tip": "6" * 40, "status": "checked"}
-            self.assertEqual(A.push_change(self.r.path, self.d, e, *on_clock(A.Clock())), "landed")
+            self.assertEqual(A.push_change(self.r.path, self.d, e, *on_clock(A.Clock()), ctx=case_context()), "landed")
             self.assertEqual(trees, [A.PUSH_TREE], "never the tree another checker holds")
             push = A.tree_slot(self.st, self.d, A.PUSH_TREE)
             self.assertTrue(push.acquire(), "the push tree's lease is released after the push")
             try:
-                self.assertEqual(A.push_change(self.r.path, self.d, e, *on_clock(A.Clock())), "busy", "both held: it waits")
+                self.assertEqual(A.push_change(self.r.path, self.d, e, *on_clock(A.Clock()), ctx=case_context()), "busy", "both held: it waits")
             finally:
                 push.release()
             other.release()
-            self.assertEqual(A.push_change(self.r.path, self.d, e, *on_clock(A.Clock())), "landed")
+            self.assertEqual(A.push_change(self.r.path, self.d, e, *on_clock(A.Clock()), ctx=case_context()), "landed")
             self.assertEqual(trees[-1], 1, "its own tree, free, first: its tip and build are there")
         finally:
             A._push_change = saved
@@ -291,7 +292,7 @@ class BatchLeaseTest(OneQueueBase):
     def test_the_batch_executor_holds_its_leases_through_check_and_bisect(self):
         it = self.st.put_item("batch", A.batch_key(self.d) + "#1", "checking",
                               {"tree": 1, "base": "7" * 40, "tip": "6" * 40, "members": []})
-        A.check_batch(self.r.path, it["id"], *on_clock(self.clock))
+        A.check_batch(self.r.path, it["id"], *on_clock(self.clock), ctx=case_context())
         for name in (f"check/batch-{it['id']}", f"slot/check/{A.batch_key(self.d)}/1"):
             row = self.st.get(name)
             self.assertAlmostEqual(row["max_until"] - row["acquired_at"], A.BATCH_LEASE_MAX, delta=5, msg=name)

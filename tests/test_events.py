@@ -6,6 +6,7 @@ import ast, os, stat, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL, code_source  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_runner import FakeRunner  # noqa: E402
 
 
@@ -65,8 +66,8 @@ class EventsTest(unittest.TestCase):
     def test_the_notifier_notifies_each_escalation_once(self):
         self.st.put_item("change", "e2", "queued")
         self.st.transition("change", "e2", "queued", 1, event={"cause": "agent"})  # queued past its deadline: an escalation
-        self.assertEqual(A.notify_escalations(self.st), 1)
-        self.assertEqual(A.notify_escalations(self.st), 0)
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 1)
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 0)
         self.assertEqual(len(open(self.notes).read().splitlines()), 1)
         self.assertTrue(self.st.events()[-1]["notified_at"])
 
@@ -78,7 +79,7 @@ class EventsTest(unittest.TestCase):
         self.st.transition("change", "e4", "queued", 1, event={"cause": "agent"})  # an escalation whose item then closes
         self.st.transition("change", "e4", "cancelled", 2, event={"cause": "agent"})
         self.st.meta_set("notifier_seq", self.st.events()[-1]["seq"])  # the cursor past both, neither marked
-        self.assertEqual(A.notify_escalations(self.st), 1)
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 1)
         self.assertEqual(len(open(self.notes).read().splitlines()), 1)
         self.assertTrue(all(e["notified_at"] for e in self.st.events() if e["severity"] == "escalate"))
         os.environ["AGENTCTL_W6_MAX"] = "0"
@@ -275,7 +276,7 @@ class NotifierDeliveryTest(unittest.TestCase):
         os.environ["AGENTCTL_NOTIFY_TIMEOUT"] = "1"
         self.addCleanup(os.environ.pop, "AGENTCTL_NOTIFY_TIMEOUT", None)
         self.escalate("slow")
-        self.assertEqual(A.notify_escalations(self.st), 0)
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 0)
         self.assertEqual(A.notify_cause(), "osascript: timed out after 1 s")
         ok, detail = A.inv_wn(A.Clock(), self.st)
         self.assertIs(ok, False)
@@ -311,7 +312,7 @@ class NotifierDeliveryTest(unittest.TestCase):
         for i in range(5):
             self.escalate(f"d{i}")
         open(os.path.join(self.root, "down"), "w").close()
-        self.assertEqual(A.notify_escalations(self.st), 0)
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 0)
         self.assertEqual(len(self.unmarked()), 5, "nothing reached the owner: nothing is recorded as told")
         ok, detail = A.inv_wn(A.Clock(), self.st)
         self.assertIs(ok, False)
@@ -320,36 +321,36 @@ class NotifierDeliveryTest(unittest.TestCase):
         self.assertIsNone(A.inv_w6(A.Clock(), self.st)[0], "W6 defers to WN: one condition, not one per waiting escalation")
         os.remove(os.path.join(self.root, "down"))
         self.t[0] += 60
-        self.assertEqual(A.notify_escalations(self.st), 1)  # caught up: one summary
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 1)  # caught up: one summary
         self.assertEqual(self.unmarked(), [])
         self.assertIs(A.inv_wn(A.Clock(), self.st)[0], True)
         self.assertIs(A.inv_w6(A.Clock(), self.st)[0], True)
 
     def test_one_live_notification_per_item_re_notified_on_the_reminder_schedule(self):
         self.escalate("r1", times=3)  # three re-escalations pending at once
-        self.assertEqual(A.notify_escalations(self.st), 1)
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 1)
         self.assertEqual(self.unmarked(), [])
         for _ in range(5):  # re-escalated every 10 min: covered by the live notification, no new one
             self.t[0] += 600
             self.escalate("r1")
-            self.assertEqual(A.notify_escalations(self.st), 0)
+            self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 0)
         self.assertEqual(self.unmarked(), [])
         self.t[0] += A.ASK_REMIND_FIRST
         self.escalate("r1")
-        self.assertEqual(A.notify_escalations(self.st), 1, "the first reminder")
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 1, "the first reminder")
         self.assertEqual(len(self.shown()), 2)
 
     def test_an_escalation_whose_item_moved_on_is_closed_untold(self):
         self.escalate("m1")
         self.st.transition("change", "m1", "checking", self.st.item("change", "m1")["version"], event={"cause": "agent"})  # not terminal: moved on
-        self.assertEqual(A.notify_escalations(self.st), 0)
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 0)
         self.assertEqual(self.unmarked(), [])
         self.assertEqual(self.shown(), [])
 
     def test_a_catch_up_after_an_outage_is_one_summary_not_a_flood(self):
         for i in range(A.NOTIFY_BURST + 3):
             self.escalate(f"o{i}")
-        self.assertEqual(A.notify_escalations(self.st), 1)
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 1)
         [line] = self.shown()
         self.assertIn(f"{A.NOTIFY_BURST + 3} escalations", line)
         self.assertEqual(self.unmarked(), [])

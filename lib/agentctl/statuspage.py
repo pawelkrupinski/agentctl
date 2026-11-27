@@ -1,6 +1,7 @@
 # agentctl, part `statuspage`: the read-only status page: its HTTP server on a daemon thread, its URL, `agentctl status` and `--open`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 import http.server
 import json
@@ -50,7 +51,7 @@ STATUS_PAGE_FALLBACK = 3015
 STATUS_PAGE_HOSTS = (STATUS_PAGE_HOST, "127.0.0.1", "localhost")
 
 
-def cmd_status(a, store):
+def cmd_status(a, store, *, ctx):
     if getattr(a, "open", False):
         return status_page_open()
     t = epoch_now()
@@ -64,15 +65,15 @@ def cmd_status(a, store):
         print(store_unreachable_text(e), file=sys.stderr)
         print(render_status(h, t))
         return 0
-    print((f"STANDBY: {standby}\n" if standby else "") + with_liveness(render_status(h, t), store, t))
+    print((f"STANDBY: {standby}\n" if standby else "") + with_liveness(render_status(h, t), store, t, ctx=ctx))
     return 0
 
 
-def with_liveness(text: str, store: Any, t: float) -> str:
+def with_liveness(text: str, store: Any, t: float, *, ctx: Context) -> str:
     """`status`' text with the red-fix liveness line (redhold.py red_fix_liveness) under its first line, when there is one;
     a store that cannot be read says nothing here (the status line already says so)."""
     try:
-        line = red_fix_liveness(store, t)
+        line = red_fix_liveness(store, t, ctx=ctx)
     except (Exception, SystemExit):
         line = None
     head, _, rest = text.partition("\n")

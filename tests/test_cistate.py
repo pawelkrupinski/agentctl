@@ -6,6 +6,7 @@ import contextlib, glob, io, json, os, signal, subprocess, sys, tempfile, time, 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, seed_gating_checks, sh  # noqa: E402
+from harness import case_context  # noqa: E402
 from test_red import RedBase, run, MOVIES  # noqa: E402
 
 
@@ -28,36 +29,36 @@ class SnapshotTest(RedBase):
 
     def test_one_snapshot_drives_gate_and_reds_and_the_summary_names_the_non_gate_red(self):
         seed_gating_checks()  # Identity takes has no run here, so GitHub's list cannot name it: the name last read
-        snap = A.ci_state_refresh(MOVIES)
+        snap = A.ci_state_refresh(MOVIES, ctx=case_context())
         self.assertTrue(os.path.exists(A.state_path()))
         self.put("runs.json", [])  # no runs to read: everything below reads the snapshot only
-        A.ci_runs().clear()
-        red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.process_store())
+        case_context().runs.clear()
+        red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.process_store(), ctx=case_context())
         self.assertFalse(red)
         self.assertTrue(line.startswith("gate green · reds: Identity capture #2104 → offering"), line)
-        self.assertEqual([n for n, *_ in A.gate_from_snap(snap)], ["Main", "Identity model convergence", "Identity takes"])
-        self.assertEqual([n for n, *_ in A.outside_from_snap(snap)], ["Identity capture"])
+        self.assertEqual([n for n, *_ in A.gate_from_snap(snap, ctx=case_context())], ["Main", "Identity model convergence", "Identity takes"])
+        self.assertEqual([n for n, *_ in A.outside_from_snap(snap, ctx=case_context())], ["Identity capture"])
 
     def test_no_red_anywhere_says_no_reds(self):
         self.put("runs.json", green_gate(self, self.sha))
-        snap = A.ci_state_refresh(MOVIES)
-        self.assertEqual(A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path, store=A.process_store())[1], "gate green · no reds")
+        snap = A.ci_state_refresh(MOVIES, ctx=case_context())
+        self.assertEqual(A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path, store=A.process_store(), ctx=case_context())[1], "gate green · no reds")
 
     def test_a_red_beyond_the_cap_is_counted(self):
         extra = [run(80 + i, 3000 + i, f"Flow {i}", f"flow{i}.yml", self.sha, conclusion="failure") for i in range(5)]
         self.put("runs.json", green_gate(self, self.sha) + extra)
-        line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_refresh(MOVIES), repo=self.r.path, store=A.process_store())[1]
+        line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_refresh(MOVIES, ctx=case_context()), repo=self.r.path, store=A.process_store(), ctx=case_context())[1]
         self.assertIn("+2 more", line)
         self.assertNotIn("\n", line)
 
     def test_a_stale_snapshot_is_unread(self):
-        A.ci_state_refresh(MOVIES)
+        A.ci_state_refresh(MOVIES, ctx=case_context())
         self.assertIsNotNone(A.ci_state_load(MOVIES))
         self.assertIsNone(A.ci_state_load(MOVIES, now=A.epoch_now() + A.CI_STATE_MAX_AGE + 5))
         self.assertIsNone(A.ci_state_load("x/y"))
 
     def test_the_processor_publishes_the_snapshot_time_so_an_old_one_ages_out_as_unread(self):
-        snap = A.ci_state_refresh(MOVIES)
+        snap = A.ci_state_refresh(MOVIES, ctx=case_context())
         A.publish_gate_summary(MOVIES, "gate green · no reds", epoch=snap["at"] - 400)
         self.put("runs.json", "not json")
         rc, out = self.tool("ci-why", "--repo", "movies", "--summary", "--cached")
@@ -79,11 +80,11 @@ class SummaryLogReadsTest(RedBase):
         reads, real = [], A.read_log
         A.read_log = lambda o_r, *a: reads.append(a) or real(o_r, *a)
         try:
-            lines = [A.ci_why(MOVIES, summary=True, snap=A.ci_state_refresh(MOVIES), repo=self.r.path, store=A.process_store())[1]
+            lines = [A.ci_why(MOVIES, summary=True, snap=A.ci_state_refresh(MOVIES, ctx=case_context()), repo=self.r.path, store=A.process_store(), ctx=case_context())[1]
                      for _ in range(3)]
             self.assertEqual(len(reads), 1, reads)  # once per run: its signatures are cached (run_sigs)
             self.assertTrue(all(l.startswith("gate RED (main #20") for l in lines), lines)
-            full = A.ci_why(MOVIES, snap=A.ci_state_refresh(MOVIES), repo=self.r.path, store=A.process_store())[1]
+            full = A.ci_why(MOVIES, snap=A.ci_state_refresh(MOVIES, ctx=case_context()), repo=self.r.path, store=A.process_store(), ctx=case_context())[1]
             self.assertIn("FooSpec", full)  # `ci-why` itself still explains the run from its log
         finally:
             A.read_log = real

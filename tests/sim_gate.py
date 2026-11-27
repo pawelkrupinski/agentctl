@@ -27,7 +27,7 @@ when:
   measures (2026-11-20: the batching work loosened invariants 4 and 9 in the commit that needed them looser).
 A fall is no failure: `--update` records it (the ratchet tightens).
 """
-import argparse, ast, concurrent.futures, hashlib, json, os, subprocess, sys
+import argparse, ast, concurrent.futures, hashlib, json, os, re, subprocess, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -165,6 +165,12 @@ def counts(results):
 
 
 # ---------------------------------------------------------------- the fingerprints
+# THE CONTEXT IS NO DEFINITION: a call passing the case's Context on (`ctx=case_context()`, docs/design/contexts.md) or a
+# fake taking it (`ctx=None`) asks and decides what it did before the context was passed; it is read out of a
+# definition before it is fingerprinted.
+CONTEXT_ARGUMENT = re.compile(r", ctx=(?:case_context\(\)|None)")
+
+
 def fingerprints(src=None, gate_src=None, profiles_src=None):
     """{kind: sha1[:12] of its definition}: the source of every Sim method that raises it (violate("<kind>", ...)),
     plus what every kind shares -- the violate helper, the run loop and the scenario list (this file's scenarios(), the
@@ -178,7 +184,7 @@ def fingerprints(src=None, gate_src=None, profiles_src=None):
     for fn in sim.body:
         if not isinstance(fn, ast.FunctionDef):
             continue
-        seg = ast.get_source_segment(src, fn)
+        seg = CONTEXT_ARGUMENT.sub("", ast.get_source_segment(src, fn))
         if fn.name in ("violate", "run", "quiet"):
             shared.append(seg)
         for node in ast.walk(fn):

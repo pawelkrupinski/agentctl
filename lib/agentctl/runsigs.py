@@ -1,6 +1,7 @@
 # agentctl, part `runsigs`: a run's failure signatures: each failed job's cause and signature, saved per run, read again only as far as its budget
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 import glob
 import os
@@ -53,14 +54,14 @@ def known_run_causes() -> Any:
     return out
 
 
-def learn_run_causes(o_r: Any, missing: Any, out: Any) -> None:
+def learn_run_causes(o_r: Any, missing: Any, out: Any, *, ctx: Context) -> None:
     """Look up the runs `missing` once (those not looked up before and still red) and add their causes to `out`; a run that
     gave none is remembered as tried."""
     tried = read_record(reds_dir("unknown-runs.json")) or {}
     for v in missing:
         if v in tried:
             continue
-        name, r = resolve_run(o_r, v)
+        name, r = resolve_run(o_r, v, ctx=ctx)
         if r is not None and r.get("status") == "completed" and r.get("conclusion") in RED_CONCLUSIONS:
             with suppress(Exception, SystemExit):
                 sigs = run_sigs(o_r, r, name)
@@ -73,13 +74,13 @@ def learn_run_causes(o_r: Any, missing: Any, out: Any) -> None:
         write_json(reds_dir("unknown-runs.json"), tried)
 
 
-def name_causes(o_r=None, values=()):
+def name_causes(o_r=None, values=(), *, ctx):
     """{run number or id: {causes}} from every run whose signatures are known (reds/runsig), plus, with o_r, the runs
     `values` name that are not known yet (looked up once, then cached like any run)."""
     out = known_run_causes()
     missing = [v for v in values if v not in out and v.isdigit()]
     if o_r and missing:
-        learn_run_causes(o_r, missing, out)
+        learn_run_causes(o_r, missing, out, ctx=ctx)
     return out
 
 

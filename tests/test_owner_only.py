@@ -7,6 +7,7 @@ import glob, json, os, re, subprocess, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from test_vault_block import VaultBase  # noqa: E402
 
@@ -214,10 +215,10 @@ class StaleVaultAskTest(OwnerOnlyBase):
         def revoke_then_tick(name, *a, **k):  # the tick's invariant, in the same second as the decide's revoke
             r = real(name, *a, **k)
             if name == "block/cause/vault-bitcashier":
-                A.red_enforce(self.st, None, self.t[0])
+                A.red_enforce(self.st, None, self.t[0], ctx=case_context())
             return r
         self.st.revoke = revoke_then_tick
-        rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-bitcashier", "here")
+        rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-bitcashier", "here", ctx=case_context())
         self.assertEqual(rc, 0, out)
         it = self.st.item("red", it["id"])
         self.assertEqual(it["state"], "offered")
@@ -226,7 +227,7 @@ class StaleVaultAskTest(OwnerOnlyBase):
     def test_decide_vault_after_the_invariant_re_offered_it_resumes_it_too(self):
         it = self.vault_blocked()
         A.red_offer(self.st, self.st.item("red", it["id"]), "INVARIANT: re-offered")  # the lease still live
-        rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-bitcashier", "here")
+        rc, out = A.red_decide(self.st, "pawelkrupinski/movies", "vault-bitcashier", "here", ctx=case_context())
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.st.item("red", it["id"])["data"]["decision"]["category"], "vault")
 

@@ -1,6 +1,7 @@
 # agentctl, part `landwatch`: land's watch.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 import os
 from typing import Any
@@ -11,7 +12,7 @@ from agentctl.repos import movies_repo_path, red_repo_clone
 from agentctl.clones import main_clone
 from agentctl.onmain import contains
 from agentctl.ciwhy import run_no_verdict
-from agentctl.ciruns import ci_runs, main_runs
+
 from agentctl.watchknobs import knob_watch_conv_start
 
 
@@ -38,18 +39,18 @@ def pick_main_run(repo, sha, runs):
     return max(later, key=lambda r: r["databaseId"]) if later else None
 
 
-def pick_convergence_run(repo, sha, runs, pushed_at, o_r=None):
+def pick_convergence_run(repo, sha, runs, pushed_at, o_r=None, *, ctx):
     """The FIRST convergence run on main created after the push whose head contains sha -- this commit's kick, a later
     push's, or the daily run (the owner, 2026-10-26: never hunt the sha's own kick). A cancelled one (the lane replaced
     it) passes to the next, and so does an incomplete one (run_no_verdict: only `verdict complete` failed; o_r given)."""
     after = [r for r in runs if r.get("createdAt") and parse_time(r["createdAt"]).timestamp() >= pushed_at - WATCH_SLACK]
     ok = [r for r in sorted(after, key=lambda r: r["databaseId"]) if not is_cancelled(r) and contains(repo, sha, r.get("headSha"), WATCH_MAIN_REFETCH)
-          and not (o_r and run_no_verdict(o_r, r))]
+          and not (o_r and run_no_verdict(o_r, r, ctx=ctx))]
     return ok[0] if ok else None
 
 
-def failed_jobs(o_r, rid):
-    return [j["name"] for j in ci_runs().run_jobs(o_r, rid) if j.get("conclusion") in ("failure", "timed_out", "cancelled")]
+def failed_jobs(o_r, rid, *, ctx):
+    return [j["name"] for j in ctx.runs.run_jobs(o_r, rid) if j.get("conclusion") in ("failure", "timed_out", "cancelled")]
 
 
 def start_watch(st, repo, sha, pushed_at, worktree=None, close=None, session=None, o_r=None, follower=None):
@@ -96,11 +97,11 @@ def watch_outcome(it):
     return (it.get("data") or {}).get("outcome") or it["state"]
 
 
-def _pick_run(repo: Any, sha: Any, o_r: Any, kind: Any, wfile: Any, pushed_at: Any) -> Any:
+def _pick_run(repo: Any, sha: Any, o_r: Any, kind: Any, wfile: Any, pushed_at: Any, *, ctx: Context) -> Any:
     """The run of flow `kind` (its workflow file wfile) that contains sha, or None."""
     # listing: the newest 30 of the flow on main; a run past them is not this push's
-    runs = main_runs(o_r, wfile)
-    return pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at, o_r)
+    runs = ctx.runs.main_runs(o_r, wfile)
+    return pick_main_run(repo, sha, runs) if kind == "main" else pick_convergence_run(repo, sha, runs, pushed_at, o_r, ctx=ctx)
 
 
 def _unstarted(kind: Any, now_: Any, since: Any, conv_start: Any) -> Any:
@@ -114,7 +115,7 @@ def _decide(done: Any, kind: Any, run: Any) -> Any:
         done[kind] = (run, run.get("conclusion") == "success")
 
 
-def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None):
+def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None, *, ctx):
     """ONE look at the runs that contain sha (the tick's watch item and `land --follow`'s own watch alike): each
     undecided flow's run is picked; a completed (not cancelled) one goes into `done` as (run, green?), a convergence
     that has not started CONV_START s after `since` as (None, None). on_run(kind, run or None) hears each pick.
@@ -124,7 +125,7 @@ def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None)
     for kind, (name, wfile) in flows.items():
         if kind in done:
             continue
-        run = _pick_run(repo, sha, o_r, kind, wfile, pushed_at)
+        run = _pick_run(repo, sha, o_r, kind, wfile, pushed_at, ctx=ctx)
         if run is not None:
             seen[kind] = (run.get("databaseId"), run.get("status"), run.get("updatedAt"))
             _decide(done, kind, run)
@@ -137,11 +138,11 @@ def watch_look(repo, sha, o_r, flows, done, pushed_at, since, now_, on_run=None)
     return seen
 
 
-def _watch_red_lines(o_r: Any, sha: Any, flows: Any, reds: Any) -> Any:
+def _watch_red_lines(o_r: Any, sha: Any, flows: Any, reds: Any, *, ctx: Context) -> Any:
     lines = []
     for kind, r in reds:
         try:
-            failed = failed_jobs(o_r, r["databaseId"])
+            failed = failed_jobs(o_r, r["databaseId"], ctx=ctx)
         except (Exception, SystemExit) as e:  # the verdict stands without the job names
             err(f"could not read the jobs of run {r['databaseId']} ({str(e)[:120]})")
             failed = []
@@ -151,12 +152,12 @@ def _watch_red_lines(o_r: Any, sha: Any, flows: Any, reds: Any) -> Any:
     return "\n".join(lines)
 
 
-def watch_verdict(o_r, sha, flows, done):
+def watch_verdict(o_r, sha, flows, done, *, ctx):
     """('red', lines, [(workflow, number)]) when a decided run is red, ('ok', line, []) when every flow is decided
     green (or the convergence never started), else None."""
     reds = [(k, r) for k, (r, ok) in done.items() if ok is False]
     if reds:
-        return "red", _watch_red_lines(o_r, sha, flows, reds), [(flows[k][0], r.get("number")) for k, r in reds]
+        return "red", _watch_red_lines(o_r, sha, flows, reds, ctx=ctx), [(flows[k][0], r.get("number")) for k, r in reds]
     if len(done) == len(flows):
         parts = [f"{flows[k][0].split()[0] if k == 'main' else k} " +
                  (f"#{r.get('number')} green" if r else "none started") for k, (r, ok) in done.items()]
@@ -164,9 +165,9 @@ def watch_verdict(o_r, sha, flows, done):
     return None
 
 
-def watch_eval(repo, sha, pushed_at, o_r, flows, now_):
+def watch_eval(repo, sha, pushed_at, o_r, flows, now_, *, ctx):
     """The tick's look at a watch item: ('ok', line, []), ('red', lines, reds) or None (undecided)."""
     done = {}
-    watch_look(repo, sha, o_r, flows, done, pushed_at, pushed_at, now_)
-    v = watch_verdict(o_r, sha, flows, done)
+    watch_look(repo, sha, o_r, flows, done, pushed_at, pushed_at, now_, ctx=ctx)
+    v = watch_verdict(o_r, sha, flows, done, ctx=ctx)
     return (v[0], v[1] + f" ({sha[:10]})", v[2]) if v and v[0] == "ok" else v

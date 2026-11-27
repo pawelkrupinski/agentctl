@@ -174,7 +174,7 @@ class LandTest(LandBase):
 
     def test_red_gate_prints_ci_why(self):
         self.hook('echo "! pre-push main is red: only a fix for it lands." >&2\nexit 1')
-        A.ci_why = lambda o_r, tail=6, run_id=None, repo=None, store=None: (True, "ci-why SUMMARY: Main RED run 9")
+        A.ci_why = lambda o_r, tail=6, run_id=None, repo=None, store=None, ctx=None: (True, "ci-why SUMMARY: Main RED run 9")
         self.r.write("f1.txt", "mine\n")
         self.r.commit("mine")
         rc, out = self.land()

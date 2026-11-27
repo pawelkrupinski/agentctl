@@ -7,6 +7,7 @@ import os, re, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 
 CRASH = "ended with no LANDED / GAVE UP line"
@@ -49,7 +50,7 @@ class CrashLoopBase(unittest.TestCase):
         it = self.st.item("red", it["id"])
         if it["state"] != "leased":
             it = A.red_move(self.st, it, "leased", "taken again")
-        acts = A.red_lease_ended(self.st, it, self.st.get(A.red_lease(key)), None, self.t[0])
+        acts = A.red_lease_ended(self.st, it, self.st.get(A.red_lease(key)), None, self.t[0], ctx=case_context())
         return self.st.item("red", it["id"]), acts
 
     def escalations(self):
@@ -97,7 +98,7 @@ class BreakerTest(CrashLoopBase):
         self.assertTrue(refs["verdict"].startswith("RED ESCALATE"))
         self.assertEqual(sum(1 for l in refs["tail"] if CRASH in l), 3)  # each launch's outcome ...
         self.assertTrue(any("OutOfMemoryError" in l for l in refs["tail"]))  # ... and its log tail
-        self.assertEqual(A.red_unheld(self.st, self.t[0]), [])  # still held: an open offer
+        self.assertEqual(A.red_unheld(self.st, self.t[0], ctx=case_context()), [])  # still held: an open offer
 
     def test_the_deep_tier_crash_looping_too_blocks_on_the_owner_once_and_the_red_stays_held(self):
         it = self.red()
@@ -114,7 +115,7 @@ class BreakerTest(CrashLoopBase):
         self.assertEqual(blk["cause"], A.CRASH_LOOP_CAUSE)
         self.assertEqual(blk["meta"]["probe"]["kind"], "red_newer_verdict")
         self.assertIsNone(A.block_invalid(self.st, it, blk["meta"], self.t[0]))  # a test red may hold THIS block
-        self.assertEqual(A.red_unheld(self.st, self.t[0]), [])
+        self.assertEqual(A.red_unheld(self.st, self.t[0], ctx=case_context()), [])
         # A HARNESS FAULT IS agentctl's OWN (2026-11-19, core #1053): never the owner's -- an agentctl issue, once
         self.assertEqual(len(self.escalations()), 1)  # the deep move only
         self.assertIsNone(A.red_ask(it, blk), "no owner-only category: no question for the owner")
@@ -195,7 +196,7 @@ class BlockTextTest(CrashLoopBase):
         it = self.st.item("red", it["id"])
         if it["state"] != "leased":
             it = A.red_move(self.st, it, "leased", "taken again")
-        A.red_lease_ended(self.st, it, self.st.get(A.red_lease(key)), None, self.t[0])
+        A.red_lease_ended(self.st, it, self.st.get(A.red_lease(key)), None, self.t[0], ctx=case_context())
         return self.st.item("red", it["id"])
 
     def test_the_owner_block_names_the_owners_log_and_each_launchs_reason(self):
@@ -234,7 +235,7 @@ class LaunchFailedTest(CrashLoopBase):
             it = self.st.item("red", it["id"])
             if it["state"] != "leased":
                 it = A.red_move(self.st, it, "leased", "taken again")
-            A.red_lease_ended(self.st, it, self.st.get(A.red_lease(key)), None, self.t[0])
+            A.red_lease_ended(self.st, it, self.st.get(A.red_lease(key)), None, self.t[0], ctx=case_context())
             it = self.st.item("red", it["id"])
         self.assertEqual(it["state"], "blocked-external")
         text = A.red_block_of(it, self.st)["text"]
@@ -280,7 +281,7 @@ class DecisionTest(CrashLoopBase):
         self.assertIsNone(A.block_invalid(self.st, it, blk["meta"], self.t[0]), "a test red may hold THIS block")
         self.assertEqual(A.red_crash_streak(it["data"]), [], "never a crash")
         self.assertNotIn("crash_loop", it["data"])
-        self.assertEqual(A.red_unheld(self.st, self.t[0]), [])
+        self.assertEqual(A.red_unheld(self.st, self.t[0], ctx=case_context()), [])
 
     def test_one_diagnosis_goes_to_an_implementer_and_a_second_in_a_row_proceeds_never_the_owner(self):
         """2026-11-19, Stage NixOS closures #102 and Record scrape fixtures #198: DIAGNOSED twice (a lane placement the
@@ -319,7 +320,7 @@ class DecisionTest(CrashLoopBase):
             for _ in range(n):
                 it, _ = self.launch(it, outcome=outcome)
             self.assertEqual(it["state"], "blocked-external")
-            rc, out = A.red_release(self.st, "pawelkrupinski/movies", it["data"]["key"], any_=True)
+            rc, out = A.red_release(self.st, "pawelkrupinski/movies", it["data"]["key"], any_=True, ctx=case_context())
             self.assertEqual(rc, 0, out)
             self.assertIn("lifted the owner block", out[0])
             self.assertIsNone(A.red_block_of(it, self.st))
@@ -433,7 +434,7 @@ class OneEndOneAttemptTest(CrashLoopBase):
 
     def step(self, it):
         return A.red_step(self.st, self.st.item("red", it["id"]), None, None, {}, None, "pawelkrupinski/movies",
-                          self.t[0])
+                          self.t[0], ctx=case_context())
 
     def test_an_ended_lease_is_read_once_never_at_every_tick(self):
         it = A.red_offer(self.st, self.red(tier="infra"), "red: offered")

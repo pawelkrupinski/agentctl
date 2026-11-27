@@ -7,6 +7,7 @@ import argparse, json, os, shutil, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from test_red import run, MOVIES  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
@@ -66,7 +67,7 @@ class RedReposBase(RedsBase):
 
     def others(self, advance=0):
         self.t[0] += advance
-        return A.red_tick_others(self.st, registry(A), now_=self.t[0])
+        return A.red_tick_others(self.st, registry(A), now_=self.t[0], ctx=case_context())
 
     def by_repo(self):
         out = {}
@@ -170,7 +171,7 @@ class TickTest(RedReposBase):
         self.others()
         self.assertNotIn(self.st.item("red", it["id"])["state"], A.terminal_states("red"), "no newer run yet: it stays")
         self.put("runs-bitcashier_infra.json", [run(8100, 156, dep, "dynamic/dependabot/dependabot-updates", self.sha)] + runs)
-        self.assertIn(dep, A.red_gate_snap(INFRA, self.st)["latest"])
+        self.assertIn(dep, A.red_gate_snap(INFRA, self.st, ctx=case_context())["latest"])
         self.others(advance=60)
         self.assertEqual(self.st.item("red", it["id"])["state"], "cleared")
 
@@ -187,14 +188,12 @@ class TickTest(RedReposBase):
             def main_runs(self, o_r, wfile, limit=30, status=None, fresh_for=0):
                 return [{"databaseId": 100 if o_r == MOVIES else 200, "number": 5, "status": "completed",
                          "conclusion": "failure", "workflowName": "Main", "headSha": sha}]
-        wired = A.ci_runs()
-        self.addCleanup(A.wire_ci_runs, wired)
+        ctx = A.Context(runs=Runs())
         try:
-            A.wire_ci_runs(Runs())
             A.red_gate_flows = lambda o_r: [("Main", "main.yml")]
-            A.red_open_flows = lambda o_r, store: seen.append(A.resolve_run(MOVIES, "5")[1]["databaseId"]) or []
-            A.gate_runs(MOVIES, [("Main", "main.yml")])
-            A.red_gate_snap(INFRA, self.st)
+            A.red_open_flows = lambda o_r, store: seen.append(A.resolve_run(MOVIES, "5", ctx=ctx)[1]["databaseId"]) or []
+            A.gate_runs(MOVIES, [("Main", "main.yml")], ctx=ctx)
+            A.red_gate_snap(INFRA, self.st, ctx=ctx)
         finally:
             for n, v in saved.items():
                 setattr(A, n, v)
@@ -203,10 +202,10 @@ class TickTest(RedReposBase):
     def test_an_unreadable_repo_is_skipped_and_the_others_still_tick(self):
         saved = A.gate_runs
 
-        def gate_runs(o_r, flows=None):
+        def gate_runs(o_r, flows=None, *, ctx):
             if o_r == CORE:
                 raise SystemExit("agentctl: HTTP 403 on bitcashier/core")
-            return saved(o_r, flows)
+            return saved(o_r, flows, ctx=ctx)
         A.gate_runs = gate_runs
         try:
             self.others()
@@ -260,9 +259,9 @@ class TickTest(RedReposBase):
         self.assertIn("(still)", A.red_others_skipped(CORE, "HTTP 502", now_=1070 + A.RED_SKIP_SAY))
 
     def test_another_repos_tick_leaves_the_primarys_run_lists_alone(self):
-        A.main_runs_of(MOVIES).gate["Main"] = ["movies"]
+        case_context().runs.main_runs_of(MOVIES).gate["Main"] = ["movies"]
         self.others()
-        self.assertEqual(A.main_runs_of(MOVIES).gate, {"Main": ["movies"]})
+        self.assertEqual(case_context().runs.main_runs_of(MOVIES).gate, {"Main": ["movies"]})
 
 
 class DispatchTest(RedReposBase):
@@ -372,7 +371,7 @@ class OwnerPushTest(RedReposBase):
     def test_the_fix_is_filed_with_the_owner_and_a_green_gate_run_verifies_it(self):
         self.others()
         wt = self.fixer_tree()
-        rc, lines = A.red_owner_push(self.st, INFRA, "3455", "the store read-only; restarts nothing", wt)
+        rc, lines = A.red_owner_push(self.st, INFRA, "3455", "the store read-only; restarts nothing", wt, ctx=case_context())
         self.assertEqual(rc, 0, lines)
         cmd = f"git -C {wt} pull --rebase origin main && git -C {wt} push origin HEAD:main"
         self.assertEqual(lines[-1], f"BLOCKED ON OWNER: {cmd}")
@@ -391,7 +390,7 @@ class OwnerPushTest(RedReposBase):
 
     def test_an_unproven_owner_push_is_offered_again_after_the_giveup(self):
         self.others()
-        rc, _lines = A.red_owner_push(self.st, INFRA, "3455", "", self.fixer_tree())
+        rc, _lines = A.red_owner_push(self.st, INFRA, "3455", "", self.fixer_tree(), ctx=case_context())
         self.assertEqual(rc, 0)
         self.others(advance=A.RED_FIX_GIVEUP + 60)
         it = self.infra_item()
@@ -400,13 +399,13 @@ class OwnerPushTest(RedReposBase):
 
     def test_it_is_refused_for_a_repo_that_lands_and_without_commits(self):
         self.others()
-        rc, lines = A.red_owner_push(self.st, CORE, "3455", "", self.r.path)
+        rc, lines = A.red_owner_push(self.st, CORE, "3455", "", self.r.path, ctx=case_context())
         self.assertEqual(rc, 2)
         self.assertIn("not owner-only", lines[0])
         wt = os.path.join(os.path.realpath(self.tmp.name), "infra-wt-empty")
         sh(self.infra, "git", "fetch", "-q", "origin")
         sh(self.infra, "git", "worktree", "add", "-q", "-b", "empty", wt, "origin/main")
-        rc, lines = A.red_owner_push(self.st, INFRA, "3455", "", wt)
+        rc, lines = A.red_owner_push(self.st, INFRA, "3455", "", wt, ctx=case_context())
         self.assertEqual(rc, 1)
         self.assertIn("nothing in", lines[0])
 

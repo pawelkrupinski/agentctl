@@ -6,6 +6,7 @@ import os
 import sys
 import time
 from typing import Any
+from agentctl.context import Context
 from agentctl.statefile import unlink_file
 from agentctl.statemachines import machine_state
 from agentctl.clock import Clock, epoch_now
@@ -46,7 +47,7 @@ def waiting_repo(a: argparse.Namespace) -> str:
     return main_clone(movies_repo_path())  # outside any git checkout (e.g. ~/bitcashier): the movies clone's queue, as `await` resolves it
 
 
-def queue_command(a: argparse.Namespace, store: Any) -> int:
+def queue_command(a: argparse.Namespace, store: Any, *, ctx: Context) -> int:
     """The land queue's commands (`land status | hold | release | cancel`, and the processor's children: a change's or
     the service): every `waiting` subcommand but `run` (the processor), `await` and the checkers (cmd_waiting)."""
     repo = waiting_repo(a)
@@ -58,26 +59,26 @@ def queue_command(a: argparse.Namespace, store: Any) -> int:
     if a.wcmd == "resume":
         return land_release_command(repo, d, store)
     if a.wcmd == "status":
-        return land_status_command(a, repo, d, store)
+        return land_status_command(a, repo, d, store, ctx=ctx)
     if a.wcmd == "cancel":
         return land_cancel_command(a, repo, d, store)
     return 2
 
 
-def queue_checker(a: argparse.Namespace, clock: Clock, store: Any) -> int:
+def queue_checker(a: argparse.Namespace, clock: Clock, store: Any, *, ctx: Context) -> int:
     """`waiting check <id>` (one queued change's checker) or `waiting check-batch <id>` (the batch's executor): the
     processor starts them, detached."""
     repo = main_clone(waiting_repo(a))
-    return check_entry(repo, a.entry, clock, store) if a.wcmd == "check" else check_batch(repo, a.entry, clock, store)
+    return check_entry(repo, a.entry, clock, store, ctx=ctx) if a.wcmd == "check" else check_batch(repo, a.entry, clock, store, ctx=ctx)
 
 
-def land_await(a: argparse.Namespace, repo: str, clock: Clock, store: Any) -> int:
+def land_await(a: argparse.Namespace, repo: str, clock: Clock, store: Any, *, ctx: Context) -> int:
     """`waiting await`: land's wait on its entry, resumed after a restart on new code."""
     a.inbox_cwd = a.close or a.repo
     repo = main_clone(repo)
     os.chdir(repo)
     rc, sha, pushed_at = await_entry(repo, a.entry, clock, store)
-    return watch_landed(repo, sha, pushed_at, clock, store, close=a.close) if rc == 0 and sha else rc
+    return watch_landed(repo, sha, pushed_at, clock, store, close=a.close, ctx=ctx) if rc == 0 and sha else rc
 
 
 def land_hold_command(a: argparse.Namespace, st: Any) -> int:
@@ -101,7 +102,7 @@ def land_release_command(repo: str, d: str, st: Any) -> int:
     return 0
 
 
-def land_status_command(a: argparse.Namespace, repo: str, d: str, st: Any) -> int:
+def land_status_command(a: argparse.Namespace, repo: str, d: str, st: Any, *, ctx: Context) -> int:
     """`land status [<id>]`: one change, open or decided (A VERDICT IS DURABLE), else the whole queue."""
     try:  # the store's reads are bounded (cli waited_on): one that does not answer fails the command fast, saying which
         if getattr(a, "entry", None):
@@ -120,7 +121,7 @@ def land_status_command(a: argparse.Namespace, repo: str, d: str, st: Any) -> in
     if bt:
         print(batch_status_line(bt))
     offer_token(repo)
-    print(gate_status_line(gate_reds(repo)))
+    print(gate_status_line(gate_reds(repo, ctx=ctx)))
     print(f"changes: {len(rows)}")
     in_batch = batch_row_ids(bt, rows)
     for r in rows:

@@ -3,10 +3,12 @@
 # checks of one commit, the drift seeds replayed on its overlay)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from functools import partial
 import os
-from typing import Any
+from typing import Any, Callable
 import re
 import subprocess
+from agentctl.context import Context
 from agentctl.core import attempt, err, git, reds_dir, remote, slug, tilde
 from agentctl.fixerrecords import agent_name, own_fixer_record_path
 from agentctl.owned import backoff, default_repo
@@ -47,42 +49,44 @@ def red_am_fixer():
     return 1
 
 
-def cmd_red(a, clock, st, registry):
+def cmd_red(a, clock, st, registry, *, ctx):
     if a.rcmd == "am-fixer":
         return red_am_fixer()
     if a.rcmd == "probe":
         return cmd_red_probe(a, clock)
     o_r = slug(a.repo) if getattr(a, "repo", None) and a.rcmd not in ("fixer", "owner") else default_repo()
-    handlers = {"block": lambda a, st, o_r: red_block(st, o_r, a, registry), "unblock": red_cmd_unblock, "owner-push": red_cmd_owner_push,
-                "claim": red_cmd_lease, "beat": red_cmd_lease, "release": red_cmd_lease, "status": red_cmd_status,
+    handlers: dict[str, Callable[..., Any]] = {"block": lambda a, st, o_r: red_block(st, o_r, a, registry, ctx=ctx),
+                "unblock": partial(red_cmd_unblock, ctx=ctx), "owner-push": partial(red_cmd_owner_push, ctx=ctx),
+                "claim": partial(red_cmd_lease, ctx=ctx), "beat": partial(red_cmd_lease, ctx=ctx),
+                "release": partial(red_cmd_lease, ctx=ctx), "status": partial(red_cmd_status, ctx=ctx),
                 "auto": red_cmd_auto, "owner": lambda a, st, o_r: red_owner(a, st),
-                "fixer": lambda a, st, o_r: red_fixer(a, st), "unblame": red_cmd_unblame,
-                "dispatch": red_cmd_dispatch}
+                "fixer": lambda a, st, o_r: red_fixer(a, st), "unblame": partial(red_cmd_unblame, ctx=ctx),
+                "dispatch": partial(red_cmd_dispatch, ctx=ctx)}
     return handlers[a.rcmd](a, st, o_r) if a.rcmd in handlers else 2
 
 
-def red_cmd_unblock(a: Any, st: Any, o_r: Any) -> Any:
-    rc, lines = red_unblock(st, o_r, a.run, a.why)
+def red_cmd_unblock(a: Any, st: Any, o_r: Any, *, ctx: Context) -> Any:
+    rc, lines = red_unblock(st, o_r, a.run, a.why, ctx=ctx)
     print("\n".join(lines))
     return rc
 
 
-def red_cmd_owner_push(a: Any, st: Any, o_r: Any) -> Any:
-    rc, lines = red_owner_push(st, o_r, a.run, a.note or "", getattr(a, "worktree", None))
+def red_cmd_owner_push(a: Any, st: Any, o_r: Any, *, ctx: Context) -> Any:
+    rc, lines = red_owner_push(st, o_r, a.run, a.note or "", getattr(a, "worktree", None), ctx=ctx)
     print("\n".join(lines))
     return rc
 
 
-def red_cmd_lease(a: Any, st: Any, o_r: Any) -> Any:
+def red_cmd_lease(a: Any, st: Any, o_r: Any, *, ctx: Context) -> Any:
     """`red claim|beat|release`: the lease's line(s) and exit code."""
     if a.rcmd == "claim":
         if not claimed_by_its_fixer(a):
             return 2
-        rc, lines = red_claim(st, o_r, a.run, a.note or "", getattr(a, "worktree", None))
+        rc, lines = red_claim(st, o_r, a.run, a.note or "", getattr(a, "worktree", None), ctx=ctx)
     elif a.rcmd == "beat":
-        rc, lines = red_beat(st, o_r, a.run, a.note or "")
+        rc, lines = red_beat(st, o_r, a.run, a.note or "", ctx=ctx)
     else:
-        rc, lines = red_release(st, o_r, a.run, a.any)
+        rc, lines = red_release(st, o_r, a.run, a.any, ctx=ctx)
     print("\n".join(lines))
     return rc
 
@@ -97,8 +101,8 @@ def claimed_by_its_fixer(a: Any) -> Any:
     return True
 
 
-def red_cmd_status(a: Any, st: Any, o_r: Any) -> Any:
-    return red_status(st, getattr(a, "verbose", False), getattr(a, "live", False))
+def red_cmd_status(a: Any, st: Any, o_r: Any, *, ctx: Context) -> Any:
+    return red_status(st, getattr(a, "verbose", False), getattr(a, "live", False), ctx=ctx)
 
 
 def red_cmd_auto(a: Any, st: Any, o_r: Any) -> Any:
@@ -123,8 +127,8 @@ def red_cmd_auto(a: Any, st: Any, o_r: Any) -> Any:
     return 0
 
 
-def red_cmd_unblame(a: Any, st: Any, o_r: Any) -> Any:
-    items = red_targets(st, o_r, a.run, create=False)
+def red_cmd_unblame(a: Any, st: Any, o_r: Any, *, ctx: Context) -> Any:
+    items = red_targets(st, o_r, a.run, create=False, ctx=ctx)
     if not items:
         print(f"NOT WITHDRAWN: #{a.run} names no red")
         return 1
@@ -136,13 +140,13 @@ def red_cmd_unblame(a: Any, st: Any, o_r: Any) -> Any:
     return rc
 
 
-def red_cmd_dispatch(a: Any, st: Any, o_r: Any) -> Any:
+def red_cmd_dispatch(a: Any, st: Any, o_r: Any, *, ctx: Context) -> Any:
     """`red dispatch <run>`: its reds offered at top priority, the dispatcher run now."""
     b = dispatch_blocker()
     if b:
         print(f"NOT DISPATCHED: {b}")
         return 2
-    items = red_targets(st, o_r, a.run)
+    items = red_targets(st, o_r, a.run, ctx=ctx)
     if not items:
         print(f"NOT DISPATCHED: #{a.run} names no red on main")
         return 1
@@ -416,28 +420,28 @@ def owner_context_lines(o: dict[str, Any]) -> list[str]:
                f"({r.get('tokens')} tokens)" for r in (o.get("rollovers") or [])[-3:]])
 
 
-def red_status_text(store: Any, verbose: bool = False) -> str:
+def red_status_text(store: Any, verbose: bool = False, *, ctx: Context) -> str:
     """`agentctl red status`'s text, from the status model (its reds, families and dispatcher sections)."""
     t = store.clock() if hasattr(store, "clock") else epoch_now()
     try:
-        stalled = red_fix_liveness(store, t)
+        stalled = red_fix_liveness(store, t, ctx=ctx)
     except (Exception, SystemExit):
         stalled = None
     return (f"{stalled}\n" if stalled else "") + render_red_status(status_data(store=store, now_=t, only=("reds", "families", "owners", "dispatcher",
                                                                     "untracked", "reverts")), verbose)
 
 
-def write_red_status_snapshot(store: Any) -> None:
+def write_red_status_snapshot(store: Any, *, ctx: Context) -> None:
     """The sync's step: the rendered red status, for `red status` to print at once."""
-    write_json(red_status_snapshot_path(), {"at": epoch_now(), "text": red_status_text(store or status_store())})
+    write_json(red_status_snapshot_path(), {"at": epoch_now(), "text": red_status_text(store or status_store(), ctx=ctx)})
 
 
-def red_status(store: Any, verbose: bool = False, live: bool = False) -> int:
+def red_status(store: Any, verbose: bool = False, live: bool = False, *, ctx: Context) -> int:
     """`agentctl red status`: the sync's fresh snapshot, else read now."""
     snap = {} if verbose or live else (read_record(red_status_snapshot_path()) or {})
     age = epoch_now() - float(snap.get("at") or 0)
     if snap.get("text") and 0 <= age <= RED_STATUS_FRESH:
         print(f"{snap['text']}\n(as of {age:.0f} s ago: the sync's snapshot; `agentctl red status --live` reads the store)")
         return 0
-    print(red_status_text(store, verbose))
+    print(red_status_text(store, verbose, ctx=ctx))
     return 0

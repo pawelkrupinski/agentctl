@@ -3,6 +3,7 @@
 
 import os
 from typing import Any, Optional
+from agentctl.context import Context
 from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import change_exits_unannounced
 from agentctl.clock import Clock
@@ -165,11 +166,11 @@ def inv_w1(clock: Clock, st: Any) -> tuple[bool, str]:
                   "within what its state's table allows")
 
 
-def inv_w2(clock, st):
+def inv_w2(clock, st, *, ctx):
     """W2: every red has a live lease, an open offer, a fix on its way or an owner block -- for no red is that missing
     for W2_MAX (read from the store)."""
     try:
-        bad = red_unheld(st)
+        bad = red_unheld(st, ctx=ctx)
     except Exception as e:
         return None, f"cannot read the store ({str(e)[:120]})"
     ws = watchdog_state()
@@ -354,12 +355,15 @@ def inv_wf(clock, st, reading=False, lsof_out=None):
     return False, detail
 
 
-# EVERY INVARIANT IS CHECKED AS fn(clock, st): the watchdog's clock and store, from cli (the composition root)
+# EVERY INVARIANT IS CHECKED AS fn(clock, st): the watchdog's clock and store, from cli (the composition root); one
+# that reads CI runs (READS_CI) as fn(clock, st, ctx=ctx), with the process's context too
 INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "WR": inv_wr, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7,
               "W8": inv_w8, "WA": inv_wa, "WM": inv_wm, "WN": inv_wn, "WF": inv_wf, "WU": inv_wu,
               "WP": lambda clock, st: inv_wp(now_=clock.time()), "WT": lambda clock, st: inv_wt(now_=clock.time())}
+READS_CI = frozenset({"WR", "W2", "WA"})
 
 
-def probe_invariant(a: dict[str, Any], clock: Clock, st: Any) -> Any:
-    """The `invariant` probe (cli wires it with the process's clock and store): invariant a["id"] checked."""
-    return INVARIANTS[a["id"]](clock, st)
+def probe_invariant(a: dict[str, Any], clock: Clock, st: Any, *, ctx: Context) -> Any:
+    """The `invariant` probe (cli wires it with the process's clock, store and context): invariant a["id"] checked."""
+    check = INVARIANTS[a["id"]]
+    return check(clock, st, ctx=ctx) if a["id"] in READS_CI else check(clock, st)

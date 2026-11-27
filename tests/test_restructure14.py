@@ -2,10 +2,12 @@
 restructure14-digests.json, recorded from the code BEFORE the split with `R4_RECORD=1`) cover thousands of seeded cases
 each, collaborators faked (golden_cases.py): every call, its order and the result. Every case is bounded."""
 import contextlib, io, os, sys, types, unittest
+from functools import partial
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 
 
 def change_state_of(ok, via=None):
@@ -124,7 +126,7 @@ class RedMainVerifyTest(unittest.TestCase):
         return (Probe(case, "st"), an_item(r), r.choice(["/repo"] * 9 + ["", None]), "o/r", NOW)
 
     def test_red_main_verify(self):
-        check(self, "red_main_verify", self.build, lambda A: A.red_main_verify, 8000)
+        check(self, "red_main_verify", self.build, lambda A: partial(A.red_main_verify, ctx=case_context()), 8000)
 
 
 class RedFlakeCheckTest(unittest.TestCase):
@@ -147,7 +149,7 @@ class RedFlakeCheckTest(unittest.TestCase):
         return (st, it, snap, "/repo", facts)
 
     def test_red_flake_check(self):
-        check(self, "red_flake_check", self.build, lambda A: A.red_flake_check, 8000)
+        check(self, "red_flake_check", self.build, lambda A: partial(A.red_flake_check, ctx=case_context()), 8000)
 
 
 # ------------------------------------------------------------------------------------------------ queueclose

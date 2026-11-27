@@ -12,6 +12,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402,F401 (puts lib on the path)
+from harness import case_context  # noqa: E402
 
 FLOWS = {"main": ("Main", "main.yml")}
 SHA = "abcdef0123456789"
@@ -26,7 +27,7 @@ def run_landed(module, script):
             return 5000.0
 
     class Claim:
-        def __init__(self, store, repo, sha, pushed_at, o_r, clock, close=None):
+        def __init__(self, store, repo, sha, pushed_at, o_r, clock, close=None, ctx=None):
             log.append(f"claim {repo} {sha[:10]} {pushed_at} {o_r} {close}")
 
         def look(self):
@@ -53,12 +54,12 @@ def run_landed(module, script):
         def release(self):
             log.append("release owned")
 
-    def fixes_of(repo, shas, store):
+    def fixes_of(repo, shas, store, ctx=None):
         if script.get("fixes_fail"):
             raise RuntimeError("no git")
         return set(script.get("trailers", ()))
 
-    def watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None, *, store):
+    def watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None, *, store, ctx=None):
         log.append(f"_watch {pushed_at} {fixes} claim={claim is not None}")
         return script.get("rc", 0)
 
@@ -71,7 +72,7 @@ def run_landed(module, script):
         stack.enter_context(mock.patch.dict(os.environ, {"AGENTCTL_WATCH_TIMEOUT": "900"}))
         stack.enter_context(contextlib.redirect_stdout(out))
         rc = module.watch_landed("REPO", SHA, script.get("pushed_at"), Clock(), None, o_r=script.get("o_r"),
-                                 close=script.get("close"), fixes=script.get("fixes", ()))
+                                 close=script.get("close"), fixes=script.get("fixes", ()), ctx=case_context())
     return rc, log, out.getvalue()
 
 

@@ -42,7 +42,8 @@ STORE_BODY_MAX = 4 << 20     # bytes: a larger request body is refused unread (4
 class StoreAPI:
     """The HTTP API's logic, apart from the socket (tests call handle() directly too)."""
 
-    def __init__(self, store, allow=(), metrics=(), user_of=None, repo=None, calls=None):
+    def __init__(self, store, allow=(), metrics=(), user_of=None, repo=None, calls=None, *, ctx):
+        self.ctx = ctx
         self.store = store
         self.calls = served_calls() if calls is None else calls  # what it serves (storecalls.py; a test: an older store's)
         self.allow, self.metrics = set(allow), set(metrics)
@@ -131,7 +132,7 @@ class StoreAPI:
     def route(self, method, p, q, b):
         st = self.store
         if method == "GET" and p == "/metrics":
-            return 200, "text/plain; version=0.0.4", metrics_text(st).encode()
+            return 200, "text/plain; version=0.0.4", metrics_text(st, ctx=self.ctx).encode()
         if method == "GET" and p == "/v1/state":
             return self._json(200, state_read())
         if method == "POST":

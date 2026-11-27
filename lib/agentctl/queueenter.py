@@ -6,6 +6,7 @@ import os
 import subprocess
 import time
 from typing import Any
+from agentctl.context import Context
 from agentctl.procrunner import process_runner
 from agentctl.statemachines import machine_state
 from agentctl.clock import epoch_now
@@ -41,11 +42,11 @@ from agentctl.landqueue import queue_command
 from agentctl.syncsteps import submit_remote
 
 
-def change_fields(repo, main_ref, head, a, store):
+def change_fields(repo, main_ref, head, a, store, *, ctx):
     """A queue entry's fields for the change at head in repo (land's own submission)."""
     commits = waiting_commits(repo, f"{remote()}/main", head)
     return {"worktree": repo, "branch": branch_of(repo), "head": head, "commits": commits,
-            "fixes": sorted(fixes_of(repo, commits, store)), "diagnoses": sorted(diagnoses_of(repo, commits)) or None,
+            "fixes": sorted(fixes_of(repo, commits, store, ctx=ctx)), "diagnoses": sorted(diagnoses_of(repo, commits)) or None,
             "keep_worktree": bool(getattr(a, "keep_worktree", False)),
             "no_batch": bool(getattr(a, "no_batch", False)),
             "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
@@ -93,14 +94,14 @@ def _refusal_told(a: Any, verdict: Any, lines: Any) -> Any:
     return 1
 
 
-def _cancel_refused(a: Any, store: Any, lines: Any, last: Any) -> Any:
+def _cancel_refused(a: Any, store: Any, lines: Any, last: Any, *, ctx: Context) -> Any:
     """The precheck refused change a.entry (`last`: its closing line): cancel it and tell its author. Exit code 1 when
     the verdict is NOT LANDED or the cancel failed, 0 when the change was decided already."""
     cancel = argparse.Namespace(wcmd="cancel", repo=a.repo, entry=a.entry, hold_for=None, hold_why=None)
     # NOT LANDED only when the cancel took: the landing check runs alongside and may have decided first (review
     # 2026-11-07: a change that LANDED was told NOT LANDED, "its queue entry is cancelled").
     try:
-        rc = queue_command(cancel, store)
+        rc = queue_command(cancel, store, ctx=ctx)
     except (Exception, SystemExit) as e:  # the store unreachable: the change is still queued, its check judges it
         err(f"could not cancel {a.entry}: {e}")
         verdict = (f"PRECHECK REFUSED {a.entry} ({a.head[:10]}): {last}; it could not be cancelled ({str(e)[:120]}), so "
@@ -115,7 +116,7 @@ def _cancel_refused(a: Any, store: Any, lines: Any, last: Any) -> Any:
     return _refusal_told(a, verdict, lines)
 
 
-def cmd_land_precheck(a, store):
+def cmd_land_precheck(a, store, *, ctx):
     """The detached half of start_fast_precheck: run the repo's precheck, and on a refusal cancel the queued change."""
     # Its own process group, ended WHOLE at the bound (review 2026-11-07: subprocess.run killed only the script, so what
     # it started -- sbt, a test JVM -- lived on, and kept the output pipe, and so this wait, open): run_watched.
@@ -135,12 +136,12 @@ def cmd_land_precheck(a, store):
     last = next((l for l in reversed(lines) if l.startswith("PRECHECK ")), lines[-1] if lines else "exit 1")
     why = precheck_reason(lines)
     last = f"{last} -- {why}" if why else last
-    return _cancel_refused(a, store, lines, last)
+    return _cancel_refused(a, store, lines, last, ctx=ctx)
 
 
-def queue_here(repo: Any, main_ref: Any, head: Any, d: Any, a: Any, store: Any, waits: Any, after_queued: Any) -> Any:
+def queue_here(repo: Any, main_ref: Any, head: Any, d: Any, a: Any, store: Any, waits: Any, after_queued: Any, *, ctx: Context) -> Any:
     """Queue the change in this checkout's own store (no server): QUEUED line, its processor started. Returns 0."""
-    fields = change_fields(repo, main_ref, head, a, store)
+    fields = change_fields(repo, main_ref, head, a, store, ctx=ctx)
     e, ahead = queue_change(store, d, fields)
     if submit_ref(repo, d, e):
         ChangeRecords(store, d).save(e)
@@ -152,7 +153,7 @@ def queue_here(repo: Any, main_ref: Any, head: Any, d: Any, a: Any, store: Any, 
     return 0
 
 
-def enqueue(repo, main_ref, sh, a, clock, store):
+def enqueue(repo, main_ref, sh, a, clock, store, *, ctx):
     """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor. A red
     fixer's land then waits for the verdict (fixer_land)."""
     rc, head = sync(repo, main_ref, sh, clock, store, getattr(a, "release_hold", False))
@@ -169,29 +170,29 @@ def enqueue(repo, main_ref, sh, a, clock, store):
             start_fast_precheck(repo, main_ref, head, eid, a)
     if host_role() == "sync":  # THE LAPTOP'S LAND NEEDS NO VAULT (see submit_to_server)
         with no_vault():
-            rc = submit_to_server(repo, d, change_fields(repo, main_ref, head, a, store), store, after_queued=after_queued,
+            rc = submit_to_server(repo, d, change_fields(repo, main_ref, head, a, store, ctx=ctx), store, after_queued=after_queued,
                                   waits=waits)
     else:
-        rc = queue_here(repo, main_ref, head, d, a, store, waits, after_queued)
+        rc = queue_here(repo, main_ref, head, d, a, store, waits, after_queued, ctx=ctx)
     if rc != 0 or not waits or not a.queued_id:
         return rc
     if not fixer:  # land --until-done: its caller waits (land_until_done)
-        return foreground_precheck(repo, main_ref, head, a.queued_id, a, store)
-    return fixer_land(repo, main_ref, head, a.queued_id, a, clock, store)
+        return foreground_precheck(repo, main_ref, head, a.queued_id, a, store, ctx=ctx)
+    return fixer_land(repo, main_ref, head, a.queued_id, a, clock, store, ctx=ctx)
 
 
-def foreground_precheck(repo, main_ref, head, eid, a, store):
+def foreground_precheck(repo, main_ref, head, eid, a, store, *, ctx):
     """The fast precheck of queued change eid in THIS process (a land that waits for its verdict): 1 when it refused
     (its NOT LANDED or PRECHECK REFUSED line the last printed), else 0."""
     if not getattr(a, "no_fast_precheck", False) and os.access(os.path.join(repo, FAST_PRECHECK), os.X_OK):
         base = git(repo, "rev-parse", main_ref).strip()
-        if cmd_land_precheck(argparse.Namespace(entry=eid, repo=repo, base=base, head=head), store) == 1:
+        if cmd_land_precheck(argparse.Namespace(entry=eid, repo=repo, base=base, head=head), store, ctx=ctx) == 1:
             return 1
     return 0
 
 
-def fixer_land(repo, main_ref, head, eid, a, clock, store):
-    if foreground_precheck(repo, main_ref, head, eid, a, store) == 1:
+def fixer_land(repo, main_ref, head, eid, a, clock, store, *, ctx):
+    if foreground_precheck(repo, main_ref, head, eid, a, store, ctx=ctx) == 1:
         return 1
     return await_queued(eid, clock, store)
 
@@ -210,7 +211,7 @@ def decided_while_away(repo: Any, main_ref: Any, head: Any, it: Any, store: Any)
     return 1
 
 
-def enqueue_until_done(repo: Any, main_ref: Any, sh: Any, a: Any, clock: Any, store: Any) -> Any:
+def enqueue_until_done(repo: Any, main_ref: Any, sh: Any, a: Any, clock: Any, store: Any, *, ctx: Context) -> Any:
     """(None, rc) when the change needs no queue entry or none could be made, else (its new entry's id, None)."""
     git(repo, "fetch", "--quiet", remote(), "main", check=False)
     state = landed_state(repo, main_ref, "HEAD")
@@ -219,7 +220,7 @@ def enqueue_until_done(repo: Any, main_ref: Any, sh: Any, a: Any, clock: Any, st
         # nothing of its own left to land (it reached main another way, or there never was a commit)
         return None, until_done_finish(repo, "-", git(repo, "rev-parse", main_ref).strip(), a)
     a.until_done = True
-    rc = enqueue(repo, main_ref, sh, a, clock, store)
+    rc = enqueue(repo, main_ref, sh, a, clock, store, ctx=ctx)
     eid = getattr(a, "queued_id", None)
     if rc != 0 or not eid:
         print(next_command(repo, ""), flush=True)
@@ -227,7 +228,7 @@ def enqueue_until_done(repo: Any, main_ref: Any, sh: Any, a: Any, clock: Any, st
     return eid, None
 
 
-def until_done_entry(repo: Any, main_ref: Any, sh: Any, a: Any, clock: Any, store: Any, head: Any, it: Any) -> Any:
+def until_done_entry(repo: Any, main_ref: Any, sh: Any, a: Any, clock: Any, store: Any, head: Any, it: Any, *, ctx: Context) -> Any:
     """The queue entry `land --until-done` waits on: (its id, None), or (None, rc) when land is decided here."""
     if it and it["state"] == "landed":
         return it["id"], None
@@ -236,7 +237,7 @@ def until_done_entry(repo: Any, main_ref: Any, sh: Any, a: Any, clock: Any, stor
     if it and not machine_state("change", it["state"]).terminal:
         print(f"RESUMING {it['id']} ({head[:10]}, {it['state']}): waiting for its verdict", flush=True)
         return it["id"], None
-    return enqueue_until_done(repo, main_ref, sh, a, clock, store)
+    return enqueue_until_done(repo, main_ref, sh, a, clock, store, ctx=ctx)
 
 
 def until_done_verdict(repo: Any, a: Any, clock: Any, store: Any, eid: Any, it: Any, t0: float, bound: float) -> Any:
@@ -257,13 +258,13 @@ def until_done_verdict(repo: Any, a: Any, clock: Any, store: Any, eid: Any, it: 
     return 2
 
 
-def land_until_done(repo, main_ref, sh, a, clock, store):
+def land_until_done(repo, main_ref, sh, a, clock, store, *, ctx):
     """`land --until-done` (LAND --UNTIL-DONE above)."""
     t0 = clock.time()
     bound = a.deadline if a.deadline is not None else knob_until_done_deadline()
     head = git(repo, "rev-parse", "HEAD").strip()
     it = own_change_item(repo, head, store)
-    eid, rc = until_done_entry(repo, main_ref, sh, a, clock, store, head, it)
+    eid, rc = until_done_entry(repo, main_ref, sh, a, clock, store, head, it, ctx=ctx)
     if rc is not None:
         return rc
     return until_done_verdict(repo, a, clock, store, eid, it, t0, bound)

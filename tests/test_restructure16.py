@@ -3,11 +3,13 @@ restructure16-digests.json, recorded from the code BEFORE the cut -- 01e78e1's p
 thousands of seeded cases each, collaborators faked (golden_cases.py): every call, its order and the result.
 Every case is bounded."""
 import builtins, contextlib, io, json, os, subprocess, sys, threading, unittest, urllib.error, urllib.request
+from functools import partial
 from types import SimpleNamespace as NS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from golden_cases import Probe, check as _check, stable  # noqa: E402
 from test_restructure12 import NOW, maybe, printing  # noqa: E402
@@ -208,7 +210,7 @@ class RedUnheldTest(unittest.TestCase):
         return (st, r.choice([None, NOW]), r.choice([None, {"f": 1}]))
 
     def test_red_unheld(self):
-        check(self, "red_unheld", self.build, lambda A: A.red_unheld, 3000)
+        check(self, "red_unheld", self.build, lambda A: partial(A.red_unheld, ctx=case_context()), 3000)
 
 
 # ------------------------------------------------------------------------------------------------ queueslots
@@ -478,7 +480,7 @@ class SyncStepsTest(unittest.TestCase):
     def test_sync_steps(self):
         def run(A):
             def go(repo, d, o_r, clock, store, picks):
-                steps = list(A.sync_steps(repo, d, o_r, clock, store, registry(A)))
+                steps = list(A.sync_steps(repo, d, o_r, clock, store, registry(A), ctx=case_context()))
                 out = [name for name, _fn in steps]
                 for k in picks:
                     name, fn = steps[k % len(steps)]
@@ -744,7 +746,7 @@ class RedClaimTest(unittest.TestCase):
         return (st, "o/r", r.choice(["#5", "5", "k1"]), r.choice(["", "note"]), r.choice([None, "/given-wt"]))
 
     def test_red_claim(self):
-        check(self, "red_claim", self.build, lambda A: A.red_claim, 4000)
+        check(self, "red_claim", self.build, lambda A: partial(A.red_claim, ctx=case_context()), 4000)
 
 
 class PinnedZoneTest(unittest.TestCase):

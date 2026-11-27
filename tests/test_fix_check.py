@@ -7,6 +7,7 @@ import os, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Repo, sh  # noqa: E402
+from harness import case_context  # noqa: E402
 
 CONV = """name: Identity model convergence
 on: workflow_dispatch
@@ -91,7 +92,7 @@ class FixCheckBase(unittest.TestCase):
 
     def check(self, files, fixes=("2375",)):
         sha = self.change(files, fixes)
-        return A.fix_check(self.r.path, sha, set(fixes), self.st)
+        return A.fix_check(self.r.path, sha, set(fixes), self.st, ctx=case_context())
 
 
 class FixCheckTest(FixCheckBase):
@@ -124,8 +125,8 @@ class FixCheckTest(FixCheckBase):
 
     def test_the_author_is_told_once_and_the_verdict_is_cached(self):
         sha = self.change([SPEC + "IdentitySliceCasesSpec.scala"], ("2375",))
-        A.fix_check(self.r.path, sha, {"2375"}, self.st)
-        A.fix_check(self.r.path, sha, {"2375"}, self.st)
+        A.fix_check(self.r.path, sha, {"2375"}, self.st, ctx=case_context())
+        A.fix_check(self.r.path, sha, {"2375"}, self.st, ctx=case_context())
         told = [A.read_record(os.path.join(os.environ["AGENTCTL_INBOX_DIR"], f))
                 for f in os.listdir(os.environ["AGENTCTL_INBOX_DIR"]) if f.endswith(".json")]
         told = [e for e in told if "FIX NOT COUNTED" in e["verdict"]]
@@ -140,22 +141,22 @@ class LandingTest(FixCheckBase):
         A.is_production_path = lambda p: True
         self.addCleanup(lambda: setattr(A, "is_production_path", saved))
         bad = self.change([SPEC + "IdentitySliceCasesSpec.scala"], ("2375",))
-        self.assertTrue(A.must_wait(self.r.path, [bad], {"2375", "9375"}, self.st))
-        self.assertEqual(A.fixes_of(self.r.path, [bad], self.st), set())
+        self.assertTrue(A.must_wait(self.r.path, [bad], {"2375", "9375"}, self.st, ctx=case_context()))
+        self.assertEqual(A.fixes_of(self.r.path, [bad], self.st, ctx=case_context()), set())
         good = self.change([SPEC + "IdentityDriftSpec.scala"], ("2375",))
-        self.assertFalse(A.must_wait(self.r.path, [good], {"2375", "9375"}, self.st))
-        self.assertEqual(A.fixes_of(self.r.path, [good], self.st), {"2375"})
+        self.assertFalse(A.must_wait(self.r.path, [good], {"2375", "9375"}, self.st, ctx=case_context()))
+        self.assertEqual(A.fixes_of(self.r.path, [good], self.st, ctx=case_context()), {"2375"})
 
     def test_a_landed_commit_whose_trailer_does_not_count_is_no_landed_fix(self):
         bad = self.change([SPEC + "IdentitySliceCasesSpec.scala"], ("2375",))
         good = self.change([SPEC + "IdentityDriftSpec.scala"], ("2375",))
         self.r.push()
-        shas = [x[0] for x in A.landed_fix_commits(self.st, self.r.path)]
+        shas = [x[0] for x in A.landed_fix_commits(self.st, self.r.path, ctx=case_context())]
         self.assertIn(good, shas)
         self.assertNotIn(bad, shas)
         it = self.st.item("red", "drift")
-        self.assertEqual(A.red_fix_of(it, {"entries": [], "landed": [x for x in A.landed_fix_commits(self.st, self.r.path)
-                                                                     if x[0] == bad]}), None)
+        self.assertEqual(A.red_fix_of(it, {"entries": [], "landed": [x for x in A.landed_fix_commits(self.st, self.r.path, ctx=case_context())
+                                                                     if x[0] == bad]}, ctx=case_context()), None)
 
 
 ORDER = """name: Order independence
@@ -208,7 +209,7 @@ class PerRedTest(FixCheckBase):
                                                      "opened_at": 0})
 
     def facts(self):
-        return {"entries": [], "landed": A.landed_fix_commits(self.st, self.r.path), "repo": self.r.path}
+        return {"entries": [], "landed": A.landed_fix_commits(self.st, self.r.path, ctx=case_context()), "repo": self.r.path}
 
     def ios_fix(self):
         sha = self.change(["ios/KinowoUITests/CardShareMenuUITests.swift"], ("74",))
@@ -217,25 +218,25 @@ class PerRedTest(FixCheckBase):
 
     def test_a_run_level_trailer_is_the_fix_only_of_the_reds_whose_failing_step_reads_it(self):
         sha = self.ios_fix()
-        self.assertEqual(A.fix_check(self.r.path, sha, {"74"}, self.st)[0], {"74"}, "it fixes a red of #74: it counts")
+        self.assertEqual(A.fix_check(self.r.path, sha, {"74"}, self.st, ctx=case_context())[0], {"74"}, "it fixes a red of #74: it counts")
         facts = self.facts()
-        self.assertEqual((A.red_fix_of(self.st.item("red", "ios74"), facts) or {}).get("sha"), sha)
-        self.assertIsNone(A.red_fix_of(self.st.item("red", "swift74"), facts),
+        self.assertEqual((A.red_fix_of(self.st.item("red", "ios74"), facts, ctx=case_context()) or {}).get("sha"), sha)
+        self.assertIsNone(A.red_fix_of(self.st.item("red", "swift74"), facts, ctx=case_context()),
                           "the self-test step reads ios/scripts alone, never ios/KinowoUITests")
-        self.assertFalse(A.fix_reaches_red(self.r.path, sha, self.st.item("red", "swift74")["data"]))
+        self.assertFalse(A.fix_reaches_red(self.r.path, sha, self.st.item("red", "swift74")["data"], ctx=case_context()))
 
     def test_a_red_named_by_its_key_takes_the_fix_whatever_it_touches(self):
         sha = self.ios_fix()
         it = self.st.item("red", "swift74")
         self.assertEqual(A.red_fix_of(it, {"entries": [], "landed": [(sha, 1e10, {"swift74"}, "s")],
-                                           "repo": self.r.path})["sha"], sha)
+                                           "repo": self.r.path}, ctx=case_context())["sha"], sha)
 
     def test_a_job_failing_in_a_step_that_builds_the_app_or_unknown_steps_reads_all_of_it(self):
         sha = self.ios_fix()
         d = dict(self.st.item("red", "swift74")["data"])
         for steps in (["Every swift test case alone"], ["StateSyncModelTests at 2000 seeds"], None):
             self.assertTrue(A.fix_red_verdict(self.r.path, sha, {**d, "steps": steps, "last_run": {}},
-                                              A.fix_changed(self.r.path, sha))["ok"], steps)
+                                              A.fix_changed(self.r.path, sha), ctx=case_context())["ok"], steps)
 
     def test_a_fix_pending_red_on_another_reds_fix_is_offered_again(self):
         sha = self.ios_fix()
@@ -244,8 +245,8 @@ class PerRedTest(FixCheckBase):
                            data={"fix": {"entry": None, "status": "landed", "sha": sha, "at": 1.0}}, event={"cause": "agent"})
         it = self.st.item("red", "swift74")
         facts = self.facts()
-        out = A.red_fix_pending(self.st, it, A.red_fix_of(it, facts), False, None, {}, facts, self.r.path,
-                                A.RED_PRIMARY, 2.0)
+        out = A.FixPending(self.st, it, A.red_fix_of(it, facts, ctx=case_context()), False, None, {}, facts, self.r.path,
+                                A.RED_PRIMARY, 2.0, ctx=case_context()).run()
         self.assertIn("another red's", " ".join(out))
         it = self.st.item("red", "swift74")
         self.assertEqual((it["state"], it["data"].get("fix")), ("offered", None))
@@ -259,8 +260,8 @@ class PerRedTest(FixCheckBase):
             "entry": None, "status": "landed", "sha": sha, "at": 1.0, "verify_since": 1.0, "waited_on": "ios74"}}, event={"cause": "agent"})
         it = self.st.item("red", "swift74")
         facts = self.facts()
-        out = A.red_fix_pending(self.st, it, A.red_fix_of(it, facts), False, None, {}, facts, self.r.path,
-                                A.RED_PRIMARY, 2.0)
+        out = A.FixPending(self.st, it, A.red_fix_of(it, facts, ctx=case_context()), False, None, {}, facts, self.r.path,
+                                A.RED_PRIMARY, 2.0, ctx=case_context()).run()
         self.assertNotIn("another red's", " ".join(out))
         it = self.st.item("red", "swift74")
         self.assertEqual((it["state"], (it["data"].get("fix") or {}).get("sha")), ("fix-pending", sha))
@@ -290,7 +291,7 @@ class PerRedTest(FixCheckBase):
         saved = A.fix_cache_put
         A.fix_cache_put = lambda *a, **k: None  # a reds dir it cannot write: the verdict is still this call's
         self.addCleanup(lambda: setattr(A, "fix_cache_put", saved))
-        self.assertFalse(A.fix_reaches_red(self.r.path, sha, d))
+        self.assertFalse(A.fix_reaches_red(self.r.path, sha, d, ctx=case_context()))
 
 
 SELF_TESTS = """name: Tool self-tests

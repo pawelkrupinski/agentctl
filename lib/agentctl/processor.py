@@ -6,6 +6,7 @@ import contextlib
 import os
 import signal
 from typing import Any, Callable, Sequence
+from agentctl.context import Context
 from agentctl.statefile import write_json
 from agentctl.selfcode import code_version
 from agentctl.statemachines import MACHINES, machine_state
@@ -103,7 +104,7 @@ class ProcessorLoop:
 
 
 def waiting_run(repo: str, clock: Clock, store: Any, registry: ConditionRegistry, once: bool = False,
-                service: bool = False) -> int:
+                service: bool = False, *, ctx: Context) -> int:
     """THE processor: ONE loop of ticks (design §3). On ci-runner (server_steps): the change items (executors,
     pushes), the batch, the watches, the gate line, the red tick, the recovery registry. On the laptop (sync_steps):
     the outbox, the state mirror, events -> inbox and the notifier, claims, the fixer dispatcher, the network and
@@ -131,15 +132,15 @@ def waiting_run(repo: str, clock: Clock, store: Any, registry: ConditionRegistry
                 with clone_shared(repo):
                     return fn()
             return run
-        steps = (sync_steps(repo, d, o_r, clock, store, registry) if role == "sync"
-                 else server_steps(repo, d, shared, clock, store, registry))
+        steps = (sync_steps(repo, d, o_r, clock, store, registry, ctx=ctx) if role == "sync"
+                 else server_steps(repo, d, shared, clock, store, registry, ctx=ctx))
         return ProcessorLoop(repo, d, clock, store, own, drop, steps, role, once, argv).run()
 
 
 TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns between ticks
 
 
-def cmd_tick(a: argparse.Namespace, clock: Clock, store: Any, registry: ConditionRegistry) -> int:
+def cmd_tick(a: argparse.Namespace, clock: Clock, store: Any, registry: ConditionRegistry, *, ctx: Context) -> int:
     """`agentctl tick`: the processor (the reconciler's loop of ticks); `tick service install|uninstall|status`: it as the
     launchd agent."""
     if host_role() == "server":  # ci-runner: its own clone, systemd's notify protocol, a clean stop between ticks
@@ -156,17 +157,17 @@ def cmd_tick(a: argparse.Namespace, clock: Clock, store: Any, registry: Conditio
     if a.tcmd == "service" and not a.action:
         print("usage: agentctl tick service install|uninstall|status")
         return 2
-    return cmd_waiting(w, clock, store, registry)
+    return cmd_waiting(w, clock, store, registry, ctx=ctx)
 
 
-def cmd_waiting(a: argparse.Namespace, clock: Clock, store: Any, registry: ConditionRegistry) -> int:
+def cmd_waiting(a: argparse.Namespace, clock: Clock, store: Any, registry: ConditionRegistry, *, ctx: Context) -> int:
     if a.wcmd == "run":
-        return waiting_run(waiting_repo(a), clock, store, registry, once=a.once, service=getattr(a, "service", False))
+        return waiting_run(waiting_repo(a), clock, store, registry, once=a.once, service=getattr(a, "service", False), ctx=ctx)
     if a.wcmd == "await":  # land's wait on its entry, resumed after a restart on new code
-        return land_await(a, waiting_repo(a), clock, store)
+        return land_await(a, waiting_repo(a), clock, store, ctx=ctx)
     if a.wcmd in ("check", "check-batch"):
-        return queue_checker(a, clock, store)
-    return queue_command(a, store)
+        return queue_checker(a, clock, store, ctx=ctx)
+    return queue_command(a, store, ctx=ctx)
 
 
 ROUND_ERRORS_MAX = 3

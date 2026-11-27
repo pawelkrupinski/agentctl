@@ -5,6 +5,7 @@ import os
 import time
 from contextlib import suppress
 from typing import Any
+from agentctl.context import Context
 from agentctl.statefile import read_record, write_json
 from agentctl.timefmt import ts
 from agentctl.queueknobs import knob_baseline, knob_land_stall_min
@@ -39,10 +40,10 @@ def stalled(step, output, log_path):
 
 
 def dry_run(repo: Any, hook: Any, head: Any, log_path: Any, attempt: Any, clock: Any, store: Any, mode: Any = "--range",
-            rechecked: Any = False, cls: Any = "check", a: Any = None, judged: Any = None) -> Any:
+            rechecked: Any = False, cls: Any = "check", a: Any = None, judged: Any = None, *, ctx: Context) -> Any:
     """The repo hook's dry run over origin/main..head, admitted by the governor as a check (`red` for a fix of a red
     run), watched for a stall: None when it passed, else land's rc (0: handed to the queue as infra: clock, store)."""
-    return DryRun(repo, hook, head, log_path, attempt, clock, store, mode, rechecked, cls, a, judged).run()
+    return DryRun(repo, hook, head, log_path, attempt, clock, store, mode, rechecked, cls, a, judged, ctx=ctx).run()
 
 
 class DryRun:
@@ -50,7 +51,8 @@ class DryRun:
     clearing main's known red."""
 
     def __init__(self, repo: Any, hook: Any, head: Any, log_path: Any, attempt: Any, clock: Any, store: Any, mode: Any,
-                 rechecked: Any, cls: Any, a: Any, judged: Any) -> None:
+                 rechecked: Any, cls: Any, a: Any, judged: Any, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.repo, self.hook, self.head, self.log_path, self.attempt = repo, hook, head, log_path, attempt
         self.clock, self.store, self.mode, self.rechecked, self.cls, self.a, self.judged = clock, store, mode, rechecked, cls, a, judged
 
@@ -88,13 +90,13 @@ class DryRun:
             main_at = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
             new, known = judge_against_baseline(repo, self.hook, self.head, out, self.log_path)
             if known is NETWORK_SHAPED:
-                return network_requeue(repo, self.head, out, self.log_path, self.clock, self.store, self.a)
+                return network_requeue(repo, self.head, out, self.log_path, self.clock, self.store, self.a, ctx=self.ctx)
             if known and not new:
                 return self._known_red(out, known, main_at)
             if known:
                 print(f"KNOWN RED (not held against this change): {', '.join(sorted(known))}; NEW with this change: "
                       f"{', '.join(sorted(new))}", flush=True)
-        return refused(self.store, repo, out, self.log_path, "the pre-push checks failed")
+        return refused(self.store, repo, out, self.log_path, "the pre-push checks failed", ctx=self.ctx)
 
     def _known_red(self, out: Any, known: Any, main_at: Any) -> Any:
         """Every failure is main's own: the hook again with main's baseline written (it passes known reds, stored), or
@@ -108,11 +110,11 @@ class DryRun:
         moved = rechecked and self.judged and main_at != self.judged and int(rechecked) < BASELINE_RECHECKS
         if not rechecked or moved:
             return dry_run(self.repo, self.hook, self.head, self.log_path, f"{self.attempt}, against the known-red baseline",
-                           self.clock, self.store, self.mode, rechecked=int(rechecked) + 1, cls=self.cls, a=self.a, judged=main_at)
+                           self.clock, self.store, self.mode, rechecked=int(rechecked) + 1, cls=self.cls, a=self.a, judged=main_at, ctx=self.ctx)
         return refused(self.store, self.repo, out, self.log_path,
                        f"the pre-push checks failed only where plain {remote()}/main fails too ({checks}; a known red, "
                        "claimable as `local`), and the hook still held them against it (no baseline mode, or no baseline "
-                       "for this main), so this change lands once they are fixed on main (or with the fix)")
+                       "for this main), so this change lands once they are fixed on main (or with the fix)", ctx=self.ctx)
 
     def _cleared(self, out: Any) -> Any:
         """Passing checks clear main's known red (and release it)."""
@@ -139,7 +141,7 @@ BASELINE_RECHECKS = 3  # dry runs against a known-red baseline at most, main mov
 NETWORK_SHAPED = "network-shaped"
 
 
-def network_requeue(repo, head, out, log_path, clock, store, a=None):
+def network_requeue(repo, head, out, log_path, clock, store, a=None, *, ctx):
     """A dry run that failed on the network, on the change and on plain main: the change goes to the land queue as an
     infra re-queue (bounded by requeue_infra's STALLED condition). A repo without a queue: NOT LANDED, nothing recorded."""
     sig = network_failure(out)
@@ -148,11 +150,11 @@ def network_requeue(repo, head, out, log_path, clock, store, a=None):
         f.write(f"=== infra {ts()} {head}: {why}\n")
     if not batching(repo):
         return refused(store, repo, out, log_path, f"the pre-push checks failed on the network, not on the change ({why}); "
-                       "land again once the remote answers")
+                       "land again once the remote answers", ctx=ctx)
     d, _clone, _wt = waiting_state(repo)
     if host_role() == "sync":  # ONE QUEUE: ci-runner's (its checks run there, its own network)
-        return submit_to_server(repo, d, change_fields(repo, f"{remote()}/main", head, a, store), store, note=f" after {why}")
-    e, _ahead = queue_change(store, d, change_fields(repo, f"{remote()}/main", head, a, store))
+        return submit_to_server(repo, d, change_fields(repo, f"{remote()}/main", head, a, store, ctx=ctx), store, note=f" after {why}")
+    e, _ahead = queue_change(store, d, change_fields(repo, f"{remote()}/main", head, a, store, ctx=ctx))
     if submit_ref(repo, d, e):
         ChangeRecords(store, d).save(e)
     requeue_infra(store, d, e, why, clock.time(), reason=NETWORK_REASON, detail=out, repo=repo)
@@ -233,7 +235,7 @@ def judge_against_baseline(repo, hook, head, out, log_path):
     return new, {c: l for c, l in mine.items() if c not in new}
 
 
-def precheck(repo, main_ref, sh, log_path, a, clock, store):
+def precheck(repo, main_ref, sh, log_path, a, clock, store, *, ctx):
     """Before the lock: sync and the hook's dry run (the long part). None when land goes on to the lock (with
     a.prechecked = (head, base) when the dry run passed there), else land's rc."""
     rc, head = sync(repo, main_ref, sh, clock, store, getattr(a, "release_hold", False))
@@ -245,24 +247,24 @@ def precheck(repo, main_ref, sh, log_path, a, clock, store):
     # The change's OWN checks first, red main or green (the owner, 2026-10-27: "once the checks are done but build is
     # red, merge to waiting"): main red and the change one that must wait, without the gate (--checks-only), since it
     # will join `waiting` and land with the batch at green.
-    reds = gate_reds(repo) if waiting_supported(repo) else set()
+    reds = gate_reds(repo, ctx=ctx) if waiting_supported(repo) else set()
     commits = waiting_commits(repo, f"{remote()}/main", head)
-    joining = bool(reds) and must_wait(repo, commits, reds, store)
+    joining = bool(reds) and must_wait(repo, commits, reds, store, ctx=ctx)
     rc = dry_run(repo, hook, head, log_path, "before the lock", clock, store, mode="--checks-only" if joining else "--range",
-                 cls=gov_class_of(repo, commits, reds), a=a)
+                 cls=gov_class_of(repo, commits, reds, ctx=ctx), a=a, ctx=ctx)
     if rc is not None:
         return rc
     a.prechecked = (head, git(repo, "rev-parse", main_ref).strip())
     return None
 
 
-def refused(store, repo, out, log_path, what):
+def refused(store, repo, out, log_path, what, *, ctx):
     """Print the NOT LANDED line for a hook or push that said no: the red gate explained by ci-why, a tunnel hinted."""
     tail = "\n  ".join([l for l in out.splitlines() if l.strip()][-25:])
     if REDGATE.search(out):
         print(f"NOT LANDED: the red gate refused the push (main is red).\n  {tail}")
         try:
-            print(ci_why(slug(repo), 4, repo=repo, store=store)[1])
+            print(ci_why(slug(repo), 4, repo=repo, store=store, ctx=ctx)[1])
         except Exception as e:
             print(f"(agentctl ci-why failed: {e})")
         return 1

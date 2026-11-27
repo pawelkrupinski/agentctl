@@ -13,7 +13,9 @@ def probe(kind, fn):
 def registry(A, clock=None, store=None, **extra):
     """cli's ConditionRegistry on clock and store (the wall's and the process's by default), with the made-up kinds of
     extra (kind=check) added."""
-    reg = A.condition_registry(clock or A.Clock(), store if store is not None else A.CurrentStore(A.process_store))
+    from harness import case_context  # the test's Context (tests/harness.py)
+    reg = A.condition_registry(clock or A.Clock(), store if store is not None else A.CurrentStore(A.process_store),
+                               case_context())
     for kind, fn in extra.items():
         reg.checks[kind] = probe(kind, fn)
     return reg

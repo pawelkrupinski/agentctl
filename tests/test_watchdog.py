@@ -6,6 +6,7 @@ import contextlib, io, json, os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock  # noqa: E402
 
@@ -83,7 +84,7 @@ class WatchdogTest(unittest.TestCase):
     def run_wd(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            rc = A.cmd_watchdog(None, FakeClock(), A.CurrentStore(A.process_store), registry(A))
+            rc = A.cmd_watchdog(None, FakeClock(), A.CurrentStore(A.process_store), registry(A), ctx=case_context())
         return rc, out.getvalue()
 
     def test_w5_a_silent_processor_is_a_condition_a_notification_and_one_kick(self):
@@ -268,14 +269,14 @@ class WatchdogTest(unittest.TestCase):
         st_.transition("change", "e1", "landed", it["version"], event={"cause": "agent"})
         self.assertTrue(A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))[0])  # W2 (step 10): a red with no live lease, open offer, fix or block -- read from the store
         st_.put_item("red", "k9", "leased", {"key": "k9", "workflow": "Main", "last_run": {"number": 9}, "runs": ["9"]})
-        self.assertTrue(A.inv_w2(FakeClock(), A.CurrentStore(A.process_store))[0])  # first seen now
+        self.assertTrue(A.inv_w2(FakeClock(), A.CurrentStore(A.process_store), ctx=case_context())[0])  # first seen now
         st = A.watchdog_state()
         A.write_json(A.state_root("watchdog.json"), {**st, "w2_since": A.epoch_now() - 11 * 60})
-        ok, detail = A.inv_w2(FakeClock(), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w2(FakeClock(), A.CurrentStore(A.process_store), ctx=case_context())
         self.assertFalse(ok)
         self.assertIn("Main #9", detail)
         st_.acquire("red/k9", "laptop:claim:x@/w", 600, 3600)
-        self.assertTrue(A.inv_w2(FakeClock(), A.CurrentStore(A.process_store))[0])
+        self.assertTrue(A.inv_w2(FakeClock(), A.CurrentStore(A.process_store), ctx=case_context())[0])
         self.assertIsNone(A.watchdog_state().get("w2_since"))
 
     def test_maintain_and_the_watchdog_watch_each_other(self):
@@ -372,12 +373,12 @@ class TableJudgedInvariantsTest(unittest.TestCase):
         self.st.put_item("red", "r7", "offered", {"key": "r7", "runs": ["7"], "gate": True})
         self.st.put_item("change", "fix-run", "checking", {"fixes": ["7"], "submitted_at": A.epoch_now() - 53 * 60})
         self.checker("fix-run")
-        ok, why = A.inv_wr(FakeClock(), st=self.st, reds={"7"})
+        ok, why = A.inv_wr(FakeClock(), st=self.st, reds={"7"}, ctx=case_context())
         self.assertTrue(ok, why)
         self.st.put_item("change", "fix-held", "queued", {
             "fixes": ["7"], "submitted_at": A.epoch_now() - 60,
             "hold": {"kind": "overlap", "why": "its check waits for older", "blocker": "older", "since": A.epoch_now()}})
-        ok, why = A.inv_wr(FakeClock(), st=self.st, reds={"7"})
+        ok, why = A.inv_wr(FakeClock(), st=self.st, reds={"7"}, ctx=case_context())
         self.assertFalse(ok, why)
         self.assertIn("fix-held", why)
         self.assertIn("held behind other work", why)

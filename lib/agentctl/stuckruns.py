@@ -1,6 +1,7 @@
 # agentctl, part `stuckruns`: the undecided runs past their workflow's own stuck limit (queued behind busy runners or waiting on a dispatched run are not stuck)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 import time
 from typing import Any, Callable
@@ -10,7 +11,7 @@ from agentctl.forge import runner_queue, stuck_durations
 from agentctl.runqueue import queue_full
 from agentctl.red import STUCK_FACTOR, STUCK_FLOOR
 from agentctl.outsideflows import stuck_history, stuck_timeout
-from agentctl.ciruns import ci_runs
+
 
 
 # THE STUCK LIMIT IS THE WORKFLOW'S OWN (the owner, 2026-11-06, deciding red 971723aec893: six false stuck reds in a
@@ -77,16 +78,16 @@ def stuck_child(lists: dict[str, Any], name: str, since: float) -> str | None:
     return None
 
 
-def stuck_runs(lists: dict[str, Any], now_: float | None = None, o_r: Any = None, jobs_of: Any = None, queue: Any = None, history_of: Any = None, timeout_of: Any = None) -> list[dict[str, Any]]:
+def stuck_runs(lists: dict[str, Any], now_: float | None = None, o_r: Any = None, jobs_of: Any = None, queue: Any = None, history_of: Any = None, timeout_of: Any = None, *, ctx: Context) -> list[dict[str, Any]]:
     """[{name, run, age, limit[, queued | waits_on]}]: per workflow, its undecided runs older than its stuck limit
     (stuck_limit). A run's age counts from its first job's start (Convergence bisect #2385, run 3568: an hour queued
     behind a measurement holding every `measure` slot was called a stuck red): a run whose unfinished jobs all wait,
     only on labels whose every runner is up with all slots busy, carries `queued`; one waiting on a run it dispatched,
     `waits_on`. Neither is a red."""
     t = now_ if now_ is not None else epoch_now()
-    jobs_of = jobs_of or (lambda r: run_jobs(o_r, r))
+    jobs_of = jobs_of or (lambda r: run_jobs(o_r, r, ctx=ctx))
     if history_of is None and o_r:
-        history_of = lambda name: stuck_history(o_r, name)  # noqa: E731
+        history_of = lambda name: stuck_history(o_r, name, ctx=ctx)  # noqa: E731
     if timeout_of is None and o_r:
         timeout_of = lambda name: stuck_timeout(o_r, name)  # noqa: E731
     queued_of = lambda r: queue_full(o_r, r.get("number"), runner_queue(t) if queue is None else queue)  # noqa: E731
@@ -153,9 +154,9 @@ def job_starts(jobs: list[dict[str, Any]] | None) -> list[float]:
     return sorted(parse_time(j["startedAt"]).timestamp() for j in jobs or [] if j.get("startedAt"))
 
 
-def run_jobs(o_r: Any, run: dict[str, Any]) -> list[dict[str, Any]] | None:
+def run_jobs(o_r: Any, run: dict[str, Any], *, ctx: Context) -> list[dict[str, Any]] | None:
     """The run's jobs ([{name, status, startedAt, ...}]), or None when they cannot be read."""
     try:
-        return ci_runs().run_jobs(o_r, run.get("databaseId"))
+        return ctx.runs.run_jobs(o_r, run.get("databaseId"))
     except (Exception, SystemExit):
         return None

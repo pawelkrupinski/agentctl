@@ -7,9 +7,10 @@
 from typing import Any
 import os
 import re
+from agentctl.context import Context
 from agentctl.core import attempt, state_root
 from agentctl.repos import red_repo_of
-from agentctl.ciruns import ci_runs
+
 
 
 import html as _html
@@ -43,21 +44,21 @@ def first_failed_step(job: Any) -> Any:
 # the reader keeps them (CiRuns.run_jobs).
 
 
-def _red_run_jobs(o_r: Any, run_id: Any, read_jobs: Any) -> Any:
+def _red_run_jobs(o_r: Any, run_id: Any, read_jobs: Any, *, ctx: Context) -> Any:
     """The jobs of a red's run: read_jobs' when given, else the reader's (CiRuns.run_jobs; None: unread)."""
     try:
-        return read_jobs() if read_jobs else ci_runs().run_jobs(o_r, run_id)
+        return read_jobs() if read_jobs else ctx.runs.run_jobs(o_r, run_id)
     except (Exception, SystemExit):
         return None
 
 
-def red_url(d, read_jobs=None):
+def red_url(d, read_jobs=None, *, ctx):
     """The click target of red data d: failing step's line, else the failing job, else the run, else None."""
     run_id = (d.get("last_run") or {}).get("databaseId")
     if not run_id:
         return None
     o_r = red_repo_of(d)
-    jobs = _red_run_jobs(o_r, run_id, read_jobs)
+    jobs = _red_run_jobs(o_r, run_id, read_jobs, ctx=ctx)
     job_id, step = failing_job_step(jobs, set(str(j) for j in d.get("jobs") or [d.get("job")] if j))
     return job_step_url(o_r, run_id, job_id, step) if job_id else run_page_url(o_r, run_id)
 
@@ -78,17 +79,17 @@ def ask_page(key, title, text, how=None):
     return f"file://{p}#question"
 
 
-def item_red_url(key: Any, store: Any) -> Any:
+def item_red_url(key: Any, store: Any, *, ctx: Context) -> Any:
     """The click target of the red item `key` of the store, or None (no key, no store, no such red, no target)."""
     it = attempt(lambda: store.item("red", key), None, catch=(Exception,)) if key and store is not None else None
-    return red_url(it["data"]) if it else None
+    return red_url(it["data"], ctx=ctx) if it else None
 
 
-def notification_url(ev, store):
+def notification_url(ev, store, *, ctx):
     """The URL a notification of event ev opens, or None."""
     refs = ev.get("refs") or {}
     key = refs.get("key")
-    u = item_red_url(key, store)
+    u = item_red_url(key, store, ctx=ctx)
     if u:
         return u
     if refs.get("run_url"):

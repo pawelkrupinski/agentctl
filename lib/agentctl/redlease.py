@@ -4,6 +4,7 @@
 import os
 import re
 from typing import Any
+from agentctl.context import Context
 from agentctl.core import remote
 from agentctl.onmain import landed_state
 from agentctl.repos import RED_PRIMARY, red_repo_of
@@ -79,7 +80,8 @@ class LeaseEnd:
     needs the owner's decision: AN ATTEMPT IS A FIXER THAT TRIED AND FAILED TO FIX), the verdict in its history, offered
     again up the ladder. Each stage answers what the tick did, or None for the next."""
 
-    def __init__(self, store: Any, it: dict[str, Any], row: Any, block: Any, t: float, repo: Any) -> None:
+    def __init__(self, store: Any, it: dict[str, Any], row: Any, block: Any, t: float, repo: Any, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.store, self.it, self.block, self.t, self.repo = store, it, block, t, repo
         self.d = it["data"]
         self.h = red_history(row, t)
@@ -139,7 +141,7 @@ class LeaseEnd:
     def fixer_landed(self) -> list[str] | None:
         """ITS FIXER LANDED ITS FIX (784badc4406e.4, 2026-11-13: `LANDED 8d06b1a5ab` was offered again, then put on the
         owner): the red waits for the run that proves it."""
-        fix = red_fix_of({"data": {**self.d, **self.upd}}, {"repo": self.repo}) if RED_LANDED_VERDICT.match(self.out) else None
+        fix = red_fix_of({"data": {**self.d, **self.upd}}, {"repo": self.repo}, ctx=self.ctx) if RED_LANDED_VERDICT.match(self.out) else None
         if not fix:
             return None
         sha, what = fix["sha"][:10], red_what(self.d)
@@ -240,9 +242,9 @@ class LeaseEnd:
         return self.offer_again()
 
 
-def red_lease_ended(store: Any, it: dict[str, Any], row: Any, block: Any, t: float, repo: Any = None) -> list[str]:
+def red_lease_ended(store: Any, it: dict[str, Any], row: Any, block: Any, t: float, repo: Any = None, *, ctx: Context) -> list[str]:
     """Its holder's lease ended: LeaseEnd's ladder."""
-    return LeaseEnd(store, it, row, block, t, repo).run()
+    return LeaseEnd(store, it, row, block, t, repo, ctx=ctx).run()
 
 
 RED_WAITS_ON_VERDICT = re.compile(r"^\W*WAITS ON ([0-9a-f]{7,40})\s*\(red ([0-9a-f]{12}(?:\.\d+)?|[\w.-]+)\)")
@@ -269,7 +271,7 @@ def red_waits_on_of(outcome, own_key, store):
 def red_already_fixed(store, it, upd, outcome, t):
     """Its fixer found the red already fixed on main: the red's probe (a newer decided run of its workflow no longer
     failing this way) closes it when it passes; else it waits in fix-pending (verify) for the run that decides it --
-    cleared by it, or offered again, the claim then counted as an attempt (red_fix_pending)."""
+    cleared by it, or offered again, the claim then counted as an attempt (redpending.FixPending)."""
     d = {**it["data"], **upd}
     try:
         ok, why = probe_red_newer_verdict(red_newer_probe(it, d)["args"], store)

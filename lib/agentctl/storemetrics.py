@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
+from agentctl.context import Context
 from agentctl.statemachines import MACHINES, machine_state, open_items
 from agentctl.tickknobs import knob_tick
 from agentctl.core import err
@@ -10,7 +11,7 @@ from agentctl.redrecord import red_lease
 from agentctl.redhold import red_unheld
 
 
-def metrics_text(st, now_=None):
+def metrics_text(st, now_=None, *, ctx):
     """The Prometheus text the module's agentctl-metrics copies to node-exporter (agentctl.rules' gauges)."""
     t = now_ if now_ is not None else st.clock()
     two = 2 * knob_tick()
@@ -18,7 +19,7 @@ def metrics_text(st, now_=None):
             ("agentctl_oldest_change_age_seconds", "age of the oldest non-terminal change, not counting red main time",
              oldest_change_age(st, t)),
             ("agentctl_red_unleased_seconds", "longest a red on main has had no lease, fix, block or offer",
-             longest_unleased_red(st, t)),
+             longest_unleased_red(st, t, ctx=ctx)),
             ("agentctl_leases_expired_unreaped", "leases past their TTL by more than 2 ticks with their item unmoved",
              unreaped_leases(st, t, two)),
             ("agentctl_items_past_deadline", "items past their state's deadline by more than 2 ticks",
@@ -41,11 +42,11 @@ def oldest_change_age(st: Any, t: float) -> float:
     return max(ages) if ages else 0
 
 
-def longest_unleased_red(st: Any, t: float) -> float:
+def longest_unleased_red(st: Any, t: float, *, ctx: Context) -> float:
     """The longest a red on main has had no lease, fix, block or offer (0 when the store cannot say)."""
     unleased = 0.0
     try:
-        for it in red_unheld(st):
+        for it in red_unheld(st, ctx=ctx):
             unleased = max(unleased, t - float(it.get("entered_at") or t))
     except Exception as e:
         err(f"the unleased red age could not be read ({str(e)[:160]}); 0")

@@ -9,11 +9,13 @@
 # 10-commit restructure push tripped it at 12 behind while CI was healthy and still testing it); it is only shown.
 # The watchdog's WA opens an INVARIANT condition (an inbox item for the owner, `conditions: N` on `status`).
 
+from functools import partial
 import json
 import os
 import re
 import time
 from typing import Any, Callable
+from agentctl.context import Context
 from agentctl.core import fmt_age, git, host_role, run_cmd, state_root
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record, write_json
@@ -21,7 +23,7 @@ from agentctl.cistate import state_read
 from agentctl.redrepos import diagnosis, read_failure
 from agentctl.repos import bin_repo
 from agentctl.watchknobs import knob_wa_read_every, knob_wa_red_max, knob_wa_undecided_max, knob_wa_unpinned_max
-from agentctl.ciruns import main_runs
+
 
 SELF_REPO = "pawelkrupinski/agentctl"
 DECIDED = ("success", "failure", "timed_out", "startup_failure")
@@ -29,10 +31,10 @@ WA_SSH_EVERY = 1800        # s the ssh fallback's reading is kept at least (each
 PIN_LINK = "/var/lib/agentctl-src/current"  # the export the auto-pin runs: a link to the directory named by the full rev
 
 
-def read_runs() -> list[dict[str, Any]]:
+def read_runs(*, ctx: Context) -> list[dict[str, Any]]:
     """agentctl's tests.yml runs on main, newest first."""
     # listing: the newest 30 on main; red_since reads from the newest decided run down, never an absence
-    return list(main_runs(SELF_REPO, "tests.yml", 30))
+    return list(ctx.runs.main_runs(SELF_REPO, "tests.yml", 30))
 
 
 def pin_from_state() -> str | None:
@@ -157,13 +159,13 @@ def red_why(runs: list[dict[str, Any]], now_: float, failure: Callable[[Any], st
     return str(kept.get("why") or "")
 
 
-def readings(now_: float, runs: Callable[[], Any] | None, pin: Callable[[], str | None] | None) -> tuple[Any, str | None]:
+def readings(now_: float, runs: Callable[[], Any] | None, pin: Callable[[], str | None] | None, *, ctx: Context) -> tuple[Any, str | None]:
     """(tests.yml's runs, the pin's rev), each kept WA_READ_EVERY seconds."""
     every = knob_wa_read_every()
     pin_rev = pin_from_state() if pin is None else None
     if pin_rev is None:
         pin_rev = cached(state_root("selfci-pin.json"), now_, pin or read_pin_over_ssh, max(every, WA_SSH_EVERY))
-    return cached(state_root("selfci-runs.json"), now_, runs or read_runs, every), pin_rev
+    return cached(state_root("selfci-runs.json"), now_, runs or partial(read_runs, ctx=ctx), every), pin_rev
 
 
 def holding_words(red_age: float | None, pin_rev: str | None, lag: int | None) -> str:
@@ -174,14 +176,14 @@ def holding_words(red_age: float | None, pin_rev: str | None, lag: int | None) -
 
 def inv_wa(clock: Any, st: Any, runs: Callable[[], Any] | None = None, pin: Callable[[], str | None] | None = None,
            behind: Callable[[str], int | None] | None = None,
-           failure: Callable[[Any], str | None] | None = None) -> tuple[bool | None, str]:
+           failure: Callable[[Any], str | None] | None = None, *, ctx: Context) -> tuple[bool | None, str]:
     """WA: deploys are not stuck: agentctl's own main CI has not been red past WA_RED_MAX, the newest green run is
     pinned within WA_UNPINNED_MAX, and the head has had a decided run within WA_UNDECIDED_MAX. The commit lag is
     informational. Read from the laptop (ci-runner reads itself through its auto-pin)."""
     if host_role() == "server":
         return True, "the laptop watches agentctl's CI"
     now_ = clock.time()
-    runs_now, pin_rev = readings(now_, runs, pin)
+    runs_now, pin_rev = readings(now_, runs, pin, ctx=ctx)
     if runs_now is None:
         return None, f"cannot read {SELF_REPO}'s tests.yml runs"
     red_words, red_age = red_problem(runs_now, now_, red_why(runs_now, now_, failure))

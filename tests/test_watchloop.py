@@ -13,6 +13,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402,F401 (puts lib on the path)
+from harness import case_context  # noqa: E402
 
 FLOWS = {"main": ("Main", "main.yml"), "conv": ("Convergence", "conv.yml")}
 
@@ -45,7 +46,7 @@ def run_watch(module, script):
     log, clock = [], StepClock()
     looks, verdicts = iter(script["looks"]), iter(script.get("verdicts", []))
 
-    def watch_look(repo, sha, o_r, flows, done, pushed_at, t0, now, on_run):
+    def watch_look(repo, sha, o_r, flows, done, pushed_at, t0, now, on_run, ctx=None):
         got = next(looks)
         log.append(f"look t={now - 1000.0:g}")
         if isinstance(got, BaseException):
@@ -57,7 +58,7 @@ def run_watch(module, script):
             on_run(kind, run)
         return seen
 
-    def watch_verdict(o_r, sha, flows, done):
+    def watch_verdict(o_r, sha, flows, done, ctx=None):
         got = next(verdicts, None)
         log.append(f"verdict {sorted(done)} {got}")
         return got
@@ -69,7 +70,7 @@ def run_watch(module, script):
         for name, fake in {
             "watch_look": watch_look, "watch_verdict": watch_verdict,
             "err": lambda text: log.append(f"err {text}"),
-            "ci_why": lambda o_r, n, repo=None, store=None: log.append(f"ci_why {o_r} {n}") or (0, "THE WHY"),
+            "ci_why": lambda o_r, n, repo=None, store=None, ctx=None: log.append(f"ci_why {o_r} {n}") or (0, "THE WHY"),
             "restart_if_changed": lambda owners: log.append(f"restart {owners}"),
             "iso_at": lambda t: t - 1000.0, "age_since": lambda t: f"{t:g}s after the start",
         }.items():
@@ -78,7 +79,7 @@ def run_watch(module, script):
         stack.enter_context(contextlib.redirect_stdout(out))
         claim = FakeClaim(log) if script.get("claim") else None
         rc = module._watch("REPO", "abcdef0123456789", 900.0, "o/r", FLOWS, "OWN", clock, script.get("fixes", ()), claim,
-                           store=None)
+                           store=None, ctx=case_context())
     return rc, log, out.getvalue()
 
 

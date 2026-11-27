@@ -3,6 +3,7 @@
 
 import os
 from typing import Any
+from agentctl.context import Context
 from agentctl.clock import Clock
 from agentctl.timefmt import ts
 from agentctl.repos import precheck_hook, waiting_supported
@@ -21,7 +22,7 @@ from agentctl.queuecheck import (
 from agentctl.entrychecks import run_entry_checks
 
 
-def check_entry(repo: str, eid: str, clock: Clock, store: Any) -> int:
+def check_entry(repo: str, eid: str, clock: Clock, store: Any, *, ctx: Context) -> int:
     """THE EXECUTOR of one change's checks (`waiting check <id>`, detached): holding check/<entry> and a check tree slot
     (leases), it takes the change to checking and leaves it checked (with the tip and base it passed on), rejected (a
     test failure, a conflict) or queued again (infra). It never pushes: the tick does (push_change)."""
@@ -37,14 +38,14 @@ def check_entry(repo: str, eid: str, clock: Clock, store: Any) -> int:
         e = ChangeRecords(store, d).get(eid)
         if not e or e.get("status") not in ("queued", "checking") or e.get("backlog_batch"):  # a backlog batch's
             return 0
-        fix = may_land_on_red(facts_for(gate_reds(repo), store), e, repo, store=store).red_fix  # its own tree
+        fix = may_land_on_red(facts_for(gate_reds(repo, ctx=ctx), store), e, repo, store=store, ctx=ctx).red_fix  # its own tree
         slot = check_tree_slot(store, repo, d, fix=fix)
         if not slot:  # all trees busy: it stays queued, the tick starts it again when one frees
             return 0
         i, slot_h = slot
         try:
             with clone_shared(repo):  # a clone swap (repair_clone) waits for the check
-                return _check_entry(store, repo, d, e, i, clock, own)
+                return _check_entry(store, repo, d, e, i, clock, own, ctx=ctx)
         finally:
             slot_h.release()
     finally:
@@ -52,7 +53,7 @@ def check_entry(repo: str, eid: str, clock: Clock, store: Any) -> int:
         lease.release()
 
 
-def _check_entry(st: Any, repo: str, d: str, e: dict[str, Any], i: int, clock: Clock, own: Any = None) -> int:
+def _check_entry(st: Any, repo: str, d: str, e: dict[str, Any], i: int, clock: Clock, own: Any = None, *, ctx: Context) -> int:
     """One change's check round: main fetched, the change rebased onto it (or its remote run adopted), refused for its
     blame or an unreplayed fix, the hook's checks run, and the change marked checked. 0: the round is over (checked,
     requeued, landed already), 1: the change is rejected."""
@@ -68,13 +69,13 @@ def _check_entry(st: Any, repo: str, d: str, e: dict[str, Any], i: int, clock: C
         return ended
     e["tip"] = head
     ChangeRecords(st, d).save(e)
-    commits, reds = waiting_commits(tree, base, head), gate_reds(repo) if waiting_supported(repo) else set()
+    commits, reds = waiting_commits(tree, base, head), gate_reds(repo, ctx=ctx) if waiting_supported(repo) else set()
     if tip_refused(st, repo, d, e, tree, commits, base):
         return 1
     hook = precheck_hook(repo)
-    mode = check_mode(d, e, tree, base, head, rem if adopt else {}, bool(reds) and must_wait(repo, commits, reds, st), hook)
-    done, where, known_red = run_hook_checks(st, repo, d, e, tree, base, head, mode, gov_class_of(repo, commits, reds),
-                                             os.path.join(d, f"check-{e['id']}"), clock, own) if hook \
+    mode = check_mode(d, e, tree, base, head, rem if adopt else {}, bool(reds) and must_wait(repo, commits, reds, st, ctx=ctx), hook)
+    done, where, known_red = run_hook_checks(st, repo, d, e, tree, base, head, mode, gov_class_of(repo, commits, reds, ctx=ctx),
+                                             os.path.join(d, f"check-{e['id']}"), clock, own, ctx=ctx) if hook \
         else (None, "no hook", None)
     if done is not None:
         return done
@@ -83,7 +84,7 @@ def _check_entry(st: Any, repo: str, d: str, e: dict[str, Any], i: int, clock: C
 
 
 def run_hook_checks(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any, base: str, head: str, mode: str,
-                    cls: Any, log_path: str, clock: Clock, own: Any) -> tuple[int | None, str, Any]:
+                    cls: Any, log_path: str, clock: Clock, own: Any, *, ctx: Context) -> tuple[int | None, str, Any]:
     """The hook's checks over the change: (the round's exit code when it ended here, else None; where they ran; the
     red they failed only as its base fails, if any). An infra failure (stalled, network, laptop, time cap) requeues."""
     ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
@@ -91,7 +92,7 @@ def run_hook_checks(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any, ba
         return 0, where, None
     if ok:
         return None, where, None
-    return judge_check_failure(st, repo, d, e, tree, base, out, where, clock.time())
+    return judge_check_failure(st, repo, d, e, tree, base, out, where, clock.time(), ctx=ctx)
 
 
 def mark_checked(st: Any, d: str, e: dict[str, Any], i: int, base: str, head: str, mode: str, where: str,

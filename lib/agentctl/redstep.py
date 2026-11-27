@@ -3,6 +3,7 @@
 
 import re
 from typing import Any
+from agentctl.context import Context
 from agentctl.statemachines import is_terminal
 from agentctl.timefmt import iso_at, ts
 from agentctl.core import attempt, fmt_age
@@ -21,7 +22,7 @@ from agentctl.redcrash import red_old_run, red_resolve_old
 from agentctl.reddispatch import repo_dispatch_off
 from agentctl.blame import blame_step
 from agentctl.redlease import red_lease_ended, red_lift_block
-from agentctl.redpending import red_fix_pending
+from agentctl.redpending import FixPending
 from agentctl.forge import forge_actions_run
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.gating import main_workflow_files
@@ -31,7 +32,8 @@ class RedStep:
     """One red item's step of one tick: what its state, lease, linked fix, block and the run's observation say it does
     next. `run` returns the actions taken (the early answers first, then the state's own handler)."""
 
-    def __init__(self, store: Any, it: Any, obs: Any, snap: Any, facts: Any, repo: Any, o_r: Any, t: Any) -> None:
+    def __init__(self, store: Any, it: Any, obs: Any, snap: Any, facts: Any, repo: Any, o_r: Any, t: Any, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.store, self.obs, self.snap, self.facts, self.repo, self.o_r, self.t = store, obs, snap, facts, repo, o_r, t
         it = store.item("red", it["id"])
         if not is_terminal("red", it["state"]):
@@ -43,7 +45,7 @@ class RedStep:
         # THE fix on its way for this red: red_fix_of's, corrected by the store (red_fix_fresh). Each candidate is judged in
         # turn: one the red refuted or set aside never hides the next (2026-11-11, Verify scrape recording #23: a stale
         # `waiting` entry came back as the refuted 547709c1e2 every tick, offered 593 times, no fixer ever offered the red)
-        self.it, self.fix = red_linked_kept(store, it, self.row, red_fix_of(it, facts, store), self.live)
+        self.it, self.fix = red_linked_kept(store, it, self.row, red_fix_of(it, facts, store, ctx=self.ctx), self.live)
         self.block = red_block_of(self.it, store)
         self.acts = []
 
@@ -69,7 +71,7 @@ class RedStep:
             done = early()
             if done is not None:
                 return done
-        self.acts += red_main_verify(self.store, self.it, self.repo, self.o_r, self.t) or []
+        self.acts += red_main_verify(self.store, self.it, self.repo, self.o_r, self.t, ctx=self.ctx) or []
         if self.acts:  # its version moved: read again
             self.reread()
         for early in (self.dispatch_on_again, self.old_run):
@@ -83,7 +85,7 @@ class RedStep:
     def retired(self) -> Any:
         if is_terminal("red", self.st):
             return None
-        why = red_retired(self.o_r, self.d, self.t)
+        why = red_retired(self.o_r, self.d, self.t, ctx=self.ctx)
         if not why:
             return None
         red_close(self.store, self.it, "cleared", why)  # its check is gone from main: no run can ever clear it
@@ -140,7 +142,7 @@ class RedStep:
 
     def run_on_way(self) -> Any:
         """A RUN ON THE WAY MAY HAVE FIXED IT (issue 20261107T224109-5c81e4): wait for it, never a fixer meanwhile."""
-        way = None if self.live or self.block else red_run_on_way(self.d, self.snap, self.repo)
+        way = None if self.live or self.block else red_run_on_way(self.d, self.snap, self.repo, ctx=self.ctx)
         if not way:
             return None
         run, sha = way
@@ -156,7 +158,7 @@ class RedStep:
         """What happened to an offered red since the last tick: cleared, fixed, leased, ended between ticks, blocked."""
         store, it, d, row = self.store, self.it, self.d, self.row
         if self.gone and not self.fix:
-            return self.cleared() + red_flake_check(store, it, self.snap, self.repo, self.facts)
+            return self.cleared() + red_flake_check(store, it, self.snap, self.repo, self.facts, ctx=self.ctx)
         if self.fix:
             store.close_offer(f"red:{it['id']}", "fix-pending")
             return self.fix_pending()
@@ -175,7 +177,7 @@ class RedStep:
         store, it, d, row = self.store, self.it, self.d, self.row
         if row and float(lease_meta(row).get("released_at") or 0) > it["entered_at"] and \
                 float(row.get("acquired_at") or 0) >= it["entered_at"] and not red_lease_read(d, row):
-            return red_lease_ended(store, it, row, self.block, self.t, self.repo)
+            return red_lease_ended(store, it, row, self.block, self.t, self.repo, ctx=self.ctx)
         if self.block:
             store.close_offer(f"red:{it['id']}", "blocked")
             red_move(store, it, "blocked-external", f"{red_what(d)}: {self.block['text']}",
@@ -241,15 +243,16 @@ class RedStep:
         if self.gone:
             return self.cleared()
         if not self.live:
-            return red_lease_ended(store, it, row, self.block, self.t, self.repo)
+            return red_lease_ended(store, it, row, self.block, self.t, self.repo, ctx=self.ctx)
         if row["holder"] != d.get("holder"):
             store.update_item("red", it["id"], it["version"], {"holder": row["holder"]})
         return self.acts + red_diagnosis_step(store, store.item("red", it["id"]), row, self.snap, self.repo, self.o_r,
                                               self.t)
 
     def pending(self) -> Any:
-        return red_fix_pending(self.store, self.it, self.fix, self.gone, self.obs, self.snap, self.facts, self.repo,
-                               self.o_r, self.t)
+        """Judge a fix-pending red on this tick (FixPending's stages): the lines of what it did."""
+        return FixPending(self.store, self.it, self.fix, self.gone, self.obs, self.snap, self.facts, self.repo, self.o_r,
+                          self.t, ctx=self.ctx).run()
 
     def blocked_external(self) -> Any:
         store, it, d, fix, row, block, t = self.store, self.it, self.d, self.fix, self.row, self.block, self.t
@@ -280,8 +283,8 @@ class RedStep:
         return [f"re-offered {red_what(d)} (block ended: {out[:60]})"]
 
 
-def red_step(store, it, obs, snap, facts, repo, o_r, t):
-    return RedStep(store, it, obs, snap, facts, repo, o_r, t).run()
+def red_step(store, it, obs, snap, facts, repo, o_r, t, *, ctx):
+    return RedStep(store, it, obs, snap, facts, repo, o_r, t, ctx=ctx).run()
 
 
 def red_linked_kept(store: Any, it: Any, row: Any, fix: Any, live: bool) -> tuple[Any, Any]:

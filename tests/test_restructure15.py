@@ -2,11 +2,13 @@
 restructure15-digests.json, recorded from the code BEFORE the split with `R4_RECORD=1`) cover thousands of seeded cases
 each, collaborators faked (golden_cases.py): every call, its order and the result. Every case is bounded."""
 import contextlib, io, json, os, sys, types, unittest
+from functools import partial
 from types import SimpleNamespace as NS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from golden_cases import Probe, check as _check  # noqa: E402
 from test_restructure12 import NOW, maybe, printing  # noqa: E402
 from test_restructure13 import pick  # noqa: E402
@@ -254,7 +256,7 @@ class RedFailedStepsTest(unittest.TestCase):
         return (d,)
 
     def test_red_failed_steps(self):
-        check(self, "red_failed_steps", self.build, lambda A: A.red_failed_steps, 4000)
+        check(self, "red_failed_steps", self.build, lambda A: partial(A.red_failed_steps, ctx=case_context()), 4000)
 
 
 class RedAttachObsTest(unittest.TestCase):

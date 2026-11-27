@@ -15,6 +15,7 @@ import os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, put_change  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 import test_queue  # noqa: E402
 from test_waiting import assert_queued_line_names_no_verdict  # noqa: E402
@@ -62,9 +63,9 @@ class RedFixLandsFastTest(test_queue.QueueTest):
             d, _c, _w = A.waiting_state(self.r.path)
             for e in A.ChangeRecords(A.process_store(), d).every():
                 if e["status"] in ("queued", "checking"):
-                    A.check_entry(self.r.path, e["id"], *on_clock(self.clock))
+                    A.check_entry(self.r.path, e["id"], *on_clock(self.clock), ctx=case_context())
                 elif e["status"] == "checked":
-                    A.push_change(self.r.path, d, e, *on_clock(A.Clock()))
+                    A.push_change(self.r.path, d, e, *on_clock(A.Clock()), ctx=case_context())
         self.clock.on_sleep = sleep
 
     # -- the fixer's land ---------------------------------------------------------------------------------------------
@@ -145,7 +146,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         saved = A.spawn_executor
         A.spawn_executor = lambda repo, d_, eid: started.append(eid)
         try:
-            return A.tick_changes(self.r.path, d, *on_clock(A.Clock())), started
+            return A.tick_changes(self.r.path, d, *on_clock(A.Clock()), ctx=case_context()), started
         finally:
             A.spawn_executor = saved
 
@@ -161,9 +162,9 @@ class RedFixLandsFastTest(test_queue.QueueTest):
             ef, _ = self.queued(wf)
             _did, started = self.tick(d)
             self.assertEqual(started, [ef], "the fix starts in the red-fix slot; the ordinary change waits")
-            A.check_entry(self.r.path, eo, *on_clock(self.clock))
+            A.check_entry(self.r.path, eo, *on_clock(self.clock), ctx=case_context())
             self.assertEqual(self.entry(eo)["status"], "queued", "an ordinary change never takes the red-fix slot")
-            A.check_entry(self.r.path, ef, *on_clock(self.clock))
+            A.check_entry(self.r.path, ef, *on_clock(self.clock), ctx=case_context())
             self.assertEqual(self.entry(ef)["status"], "checked", "the fix's executor took the red-fix slot")
         finally:
             for h in held:
@@ -179,7 +180,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         A.new_batch(st, d, "checking")
         wf, _ = self.agent("fix", "web/src/main/A.scala", "a\n", msg="the fix\n\nFixes-Red: 7")
         ef, _ = self.queued(wf)
-        A.check_entry(self.r.path, ef, *on_clock(self.clock))
+        A.check_entry(self.r.path, ef, *on_clock(self.clock), ctx=case_context())
         self.assertEqual(self.entry(ef)["status"], "checked")
         did, _ = self.tick(d)
         self.assertNotIn("waits for batch", " ".join(did))
@@ -190,11 +191,11 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         d, _c, _w = A.waiting_state(self.r.path)
         wf, _ = self.agent("fix", "web/src/main/A.scala", "a\n", msg="the fix\n\nFixes-Red: 7")
         ef, _ = self.queued(wf)
-        A.check_entry(self.r.path, ef, *on_clock(self.clock))
+        A.check_entry(self.r.path, ef, *on_clock(self.clock), ctx=case_context())
         e = self.entry(ef)
         e["known_red"] = {"keys": ["Local checks"], "where": ["plain main"], "base": e.get("checked_base")}
         put_change(A.CurrentStore(A.process_store), d, e)
-        A.push_change(self.r.path, d, e, *on_clock(A.Clock()))
+        A.push_change(self.r.path, d, e, *on_clock(A.Clock()), ctx=case_context())
         self.assertEqual(self.entry(ef)["status"], "landed", "a red fix is never parked on `waiting` for green")
 
     def test_an_ordinary_change_failing_only_as_main_fails_still_waits(self):
@@ -202,18 +203,18 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         d, _c, _w = A.waiting_state(self.r.path)
         wo, _ = self.agent("plain", "web/src/main/A.scala", "a\n", msg="an ordinary change")
         eo, _ = self.queued(wo)
-        A.check_entry(self.r.path, eo, *on_clock(self.clock))
+        A.check_entry(self.r.path, eo, *on_clock(self.clock), ctx=case_context())
         e = self.entry(eo)
         e["known_red"] = {"keys": ["Local checks"], "where": ["plain main"], "base": e.get("checked_base")}
         put_change(A.CurrentStore(A.process_store), d, e)
-        A.push_change(self.r.path, d, e, *on_clock(A.Clock()))
+        A.push_change(self.r.path, d, e, *on_clock(A.Clock()), ctx=case_context())
         self.assertEqual(self.entry(eo)["status"], "waiting")
 
     # -- the invariant ------------------------------------------------------------------------------------------------
     def test_watchdog_wr_escalates_a_red_fix_waiting_on_green_or_queued_too_long(self):
         st = A.process_store()
         st.put_item("change", "c-fix", "waiting", {"fixes": ["7"], "submitted_at": A.epoch_now()})
-        ok, why = A.inv_wr(A.Clock(), st=st, reds={"7"})
+        ok, why = A.inv_wr(A.Clock(), st=st, reds={"7"}, ctx=case_context())
         self.assertFalse(ok, why)
         self.assertIn("c-fix", why)
         self.assertIn("waiting for main to turn green", why)
@@ -222,11 +223,11 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         st2 = A.Store(path=os.path.join(self.tmp.name, "store2.db"))
         st2.put_item("change", "c-slow", "queued", {"fixes": ["7"], "submitted_at": A.epoch_now() - 3600})
         st2.put_item("change", "c-plain", "waiting", {"submitted_at": A.epoch_now() - 3600})
-        ok, why = A.inv_wr(A.Clock(), st=st2, reds={"7"})
+        ok, why = A.inv_wr(A.Clock(), st=st2, reds={"7"}, ctx=case_context())
         self.assertFalse(ok, why)
         self.assertIn("c-slow", why)
         self.assertNotIn("c-plain", why, "an ordinary change may wait for green")
-        ok, why = A.inv_wr(A.Clock(), st=st2, reds=set())
+        ok, why = A.inv_wr(A.Clock(), st=st2, reds=set(), ctx=case_context())
         self.assertTrue(ok, "main green: no red fix to hold")
 
 

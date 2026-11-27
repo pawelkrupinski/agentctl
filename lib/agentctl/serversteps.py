@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, Callable, Sequence
+from agentctl.context import Context
 from agentctl.statemachines import StaleVersion, TerminalState, machine_state
 from agentctl.clock import Clock
 from agentctl.core import reap_children, slug
@@ -105,7 +106,7 @@ def owner_summary(line: str, sinks: list[str]) -> None:
 
 
 def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callable[[], Any]],
-                 clock: Clock, store: Any, registry: ConditionRegistry) -> Sequence[tuple[str, Callable[[], Any]]]:
+                 clock: Clock, store: Any, registry: ConditionRegistry, *, ctx: Context) -> Sequence[tuple[str, Callable[[], Any]]]:
     """The reconciler's tick on ci-runner (the one writer): the changes, the batch, the watches, the gate, the reds,
     the recovery registry. Never the laptop's duties (events -> inbox, the notifier, the network and tunnel watches, the
     fixers, upkeep): those are sync_steps. clock, store and registry (the conditions' probes and actions): the process's
@@ -114,16 +115,16 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
             ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, clock, store,
                                                                                                   d)])),
             ("stranded changes", lambda: stranded_changes(repo, d, store)),
-            ("change tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d, clock, store)])),
+            ("change tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d, clock, store, ctx=ctx)])),
             ("land hold", lambda: tick_land_hold(store)),
-            ("batch tick", shared(lambda: say_batch(d, tick_batch(repo, d, clock, store)))),
-            ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches(clock, store)]),
+            ("batch tick", shared(lambda: say_batch(d, tick_batch(repo, d, clock, store, ctx=ctx)))),
+            ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches(clock, store, ctx=ctx)]),
             ("land refs", shared(lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d, store=store)])),
             ("lease archive", lambda: maybe_archive_leases(d, store)),
             ("children", reap_children),
-            ("gate summary", lambda: maybe_publish_gate(repo, store, registry)),
+            ("gate summary", lambda: maybe_publish_gate(repo, store, registry, ctx=ctx)),
             ("red time", lambda: track_red_time(store, gate_is_red_now())),
-            ("red tick", lambda: maybe_red_tick(repo, store, registry)),
+            ("red tick", lambda: maybe_red_tick(repo, store, registry, ctx=ctx)),
             ("recovery", lambda: maybe_recovery_tick(store, registry, clock.time())),
             ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues(store)]),
             ("reverts", lambda: [wlog(d, f"tick: {x}") for x in tick_reverts(repo, store)]),  # reverts.py: told their landers

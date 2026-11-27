@@ -5,6 +5,7 @@ import glob, os, re, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base  # noqa: E402
+from harness import case_context  # noqa: E402
 
 LIB = os.path.join(os.path.dirname(HERE), "lib", "agentctl")
 BARE = re.compile(r"^_?[a-z_]+(?:, _?[a-z_]+)* = (?:\{\}|\[\]|set\(\)|dict\(\)|list\(\))", re.M)
@@ -27,7 +28,7 @@ class CachesTest(Base):
     def test_a_registered_cache_starts_each_test_empty(self):
         self.assertTrue(A.PROCESS_CACHES)
         self.assertTrue(all(len(c) == 0 for c in A.PROCESS_CACHES))
-        A.main_runs_of("leak")  # the next test's setUp clears it
+        case_context().runs.main_runs_of("leak")  # the next test's setUp clears it
 
 
 class EveryTestCaseTest(unittest.TestCase):
@@ -38,7 +39,7 @@ class EveryTestCaseTest(unittest.TestCase):
 
     def test_the_harness_clears_every_registered_cache_for_any_test(self):
         import harness
-        A.main_runs_of("leak")
+        case_context().runs.main_runs_of("leak")
         harness._reset_process_state()
         self.assertEqual([c for c in A.PROCESS_CACHES if len(c)], [])
 

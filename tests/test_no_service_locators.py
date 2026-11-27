@@ -17,7 +17,6 @@ COMPOSITION_ROOT = "cli"
 FROZEN = {
     "clock.wire_clock": "281 `epoch_now()` readers take the clock (the clock migration)",
     "procrunner.wire_runner": "72 `process_runner()` readers take the runner",
-    "ciruns.wire_ci_runs": "16 red / ci-why / landing modules take the CiRuns reader",
     "inboxentry.wire_inbox_writer": "36 modules that write an inbox entry take the writer",
 }
 

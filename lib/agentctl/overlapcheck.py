@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, Optional
+from agentctl.context import Context
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.holdgraph import HOLDER_IN_FLIGHT, as_own, dependency_between
 from agentctl.core import git, process_cache, remote
@@ -165,7 +166,8 @@ class OverlapScan:
     """overlap_hold's walk over the older entries: what it has found so far (`first`), and the entry's backlog batching
     (`together`, read once, when an overlap with a queued entry first asks)."""
 
-    def __init__(self, st: Any, repo: Any, d: Any, e: Any, t: Any, facts: Any, stacks: Any) -> None:
+    def __init__(self, st: Any, repo: Any, d: Any, e: Any, t: Any, facts: Any, stacks: Any, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.st, self.repo, self.d, self.e, self.t, self.facts, self.stacks = st, repo, d, e, t, facts, stacks
         self.mine = as_own(e, stacks)
         self.together: Any = None
@@ -212,15 +214,15 @@ class OverlapScan:
         if o.get("status") != "queued" or o.get("backlog_batch"):
             return False
         if self.together is None:
-            self.together = backlog_batchable(self.st, self.repo, self.d, self.e, self.t, self.facts)
-        return bool(self.together and backlog_batchable(self.st, self.repo, self.d, o, self.t, self.facts))
+            self.together = backlog_batchable(self.st, self.repo, self.d, self.e, self.t, self.facts, ctx=self.ctx)
+        return bool(self.together and backlog_batchable(self.st, self.repo, self.d, o, self.t, self.facts, ctx=self.ctx))
 
 
 OverlapHold = tuple[dict[str, Any], list[str], Any]  # (the older entry, the files both change, the conflicting ones)
 
 
 def overlap_hold(st: Any, repo: str, d: str, e: dict[str, Any], entries: list[dict[str, Any]], facts: Any, t: float,
-                 stacks: dict[str, dict[str, Any]] | None = None) -> OverlapHold | None:
+                 stacks: dict[str, dict[str, Any]] | None = None, *, ctx: Context) -> OverlapHold | None:
     """(older entry, shared files, conflicting files or None) queued change e waits for (OVERLAPPING CHANGES ARE
     CHECKED AS ONE), or None. stacks: {id: the entry it is stacked on} (holdgraph.py A STACKED CHANGE WAITS FOR ITS
     PARENT): a parent and its stacked change are never each other's overlap, and each change's files are its own
@@ -228,7 +230,7 @@ def overlap_hold(st: Any, repo: str, d: str, e: dict[str, Any], entries: list[di
     EXPIRES, queuehold.py) holds it no more."""
     if e.get("backlog_batch"):
         return None
-    return OverlapScan(st, repo, d, e, t, facts, stacks or {}).run(entries)
+    return OverlapScan(st, repo, d, e, t, facts, stacks or {}, ctx=ctx).run(entries)
 
 
 def conflict_text(e: Any, o: Any, conflict: Any, waits: bool, hunks: Any) -> str:
@@ -278,7 +280,7 @@ def hold_for_overlap(st, d, e, o, shared, conflict, waits=True, repo=None):
     return did
 
 
-def backlog_batchable(st: Any, repo: str, d: str, e: dict[str, Any], t: float, facts: dict[str, Any] | None = None) -> bool:
+def backlog_batchable(st: Any, repo: str, d: str, e: dict[str, Any], t: float, facts: dict[str, Any] | None = None, *, ctx: Context) -> bool:
     """Whether queued entry e may join a backlog batch now (THE BACKLOG BATCH, above): its KIND lets it (no red fix,
     no --no-batch, no batch_alone, no identity change it cannot tell: changekind.py) and its state does (queued, no verify round, no
     retry due, no own run or live checker)."""
@@ -289,13 +291,13 @@ def backlog_batchable(st: Any, repo: str, d: str, e: dict[str, Any], t: float, f
         return False
     if checker_alive(st, e["id"]):
         return False
-    return kind_of(st, repo, e, facts, t)["backlog_batch"] is None
+    return kind_of(st, repo, e, facts, t, ctx=ctx)["backlog_batch"] is None
 
 
-def kind_of(st, repo, e, facts, t):
+def kind_of(st, repo, e, facts, t, *, ctx):
     """Entry e's kind (changekind.py classify_change) under facts (queue_facts of the gate's reds when None), read as
     it is now: a flag set since the tick began (push_alone, batch_alone, known_red) counts."""
-    return classify_change(e, facts if facts is not None else facts_for(gate_reds(repo), st), t, repo)
+    return classify_change(e, facts if facts is not None else facts_for(gate_reds(repo, ctx=ctx), st), t, repo, ctx=ctx)
 
 
 _behind_said = process_cache({})  # (entry id, what) -> batch id: said once per batch

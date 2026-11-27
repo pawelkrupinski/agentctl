@@ -1,8 +1,9 @@
-# agentctl, part `redpending`: a pending fix: following its work to main and judging it (red_fix_pending).
+# agentctl, part `redpending`: a pending fix: following its work to main and judging it (FixPending).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 
 from typing import Any
+from agentctl.context import Context
 from agentctl.timefmt import iso_at, parse_time, ts
 from agentctl.core import fmt_age
 from agentctl.workflows import LOCAL_FLOW
@@ -36,7 +37,8 @@ class FixPending:
     what the tick did (a list of lines), or None for the next stage; a stage may move the red on (refresh)."""
 
     def __init__(self, store: Any, it: dict[str, Any], fix: Any, gone: Any, obs: Any, snap: Any, facts: Any, repo: Any,
-                 o_r: Any, t: float) -> None:
+                 o_r: Any, t: float, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.store, self.fix, self.gone, self.obs, self.snap = store, fix, gone, obs, snap
         self.facts, self.repo, self.o_r, self.t = facts, repo, o_r, t
         self.it = it
@@ -165,7 +167,7 @@ class FixPending:
         whose fixer said its fix IS that red's commit (WAITS ON, red_waits_on_step: `waited_on`): the commit on main is
         the verification it waited for, whatever the reading rules make of its failing job (review 2026-11-16)."""
         f = self.f
-        if not (f.get("sha") and not self.fix and not f.get("waited_on") and not fix_reaches_red(self.repo, f["sha"], self.d)):
+        if not (f.get("sha") and not self.fix and not f.get("waited_on") and not fix_reaches_red(self.repo, f["sha"], self.d, ctx=self.ctx)):
             return None
         return self.offered_again(f"{self.what}: its fix {f['sha'][:10]} touches nothing its failing job reads: offered again",
                                   f"re-offered {self.what} (its fix {f['sha'][:10]} is another red's)")
@@ -425,7 +427,7 @@ class FixPending:
         d, f = self.d, self.f
         if not (not self.holds and red_waits_for_its_run(d) and "next_run_at" not in f and d.get("workflow") != LOCAL_FLOW):
             return None
-        plan = red_verify_plan(self.o_r, self.repo, d.get("workflow"), float(f.get("verify_since") or f.get("at") or self.t))
+        plan = red_verify_plan(self.o_r, self.repo, d.get("workflow"), float(f.get("verify_since") or f.get("at") or self.t), ctx=self.ctx)
         said = None
         if plan:
             said = red_verify_await(self.store, self.it, f, plan, self.t)
@@ -465,14 +467,14 @@ class FixPending:
     def verify_by_deadline(self) -> Any:
         f = self.f
         if self.t >= self.it["deadline"] and f.get("verify_by") and not self.holds:
-            return red_verify_scheduled(self.store, self.it, f, self.sha, self.o_r, self.repo, self.t)
+            return red_verify_scheduled(self.store, self.it, f, self.sha, self.o_r, self.repo, self.t, ctx=self.ctx)
         return None
 
     def dispatch_missed(self) -> Any:
         """A MISSED DEADLINE IS NEVER SILENT: its dispatched run never came."""
         f, t = self.f, self.t
         if not (t >= self.it["deadline"] and not self.holds and str(f.get("verify") or "").startswith("dispatched")
-                and not red_verify_run_on_way(self.o_r, self.repo, f)):
+                and not red_verify_run_on_way(self.o_r, self.repo, f, ctx=self.ctx)):
             return None
         return self.unverifiable(f"fix {self.sha[:10]} unverified {fmt_age(t - red_fix_since(self.it))} after "
                                  f"its verifying dispatch ({str(f.get('verify'))[:100]})")
@@ -488,11 +490,3 @@ class FixPending:
                  + (f" (awaiting {d.get('workflow')}'s next run)" if awaiting else ""),
                  severity="info" if awaiting else "escalate")
         return [f"{'re-deadlined' if awaiting else 'escalated'} {self.what}: fix unverified"]
-
-
-def red_fix_pending(store: Any, it: dict[str, Any], fix: Any, gone: Any, obs: Any, snap: Any, facts: Any, repo: Any, o_r: Any,
-                    t: float) -> Any:
-    """Judge a fix-pending red on this tick (FixPending's stages): the lines of what it did."""
-    return FixPending(store, it, fix, gone, obs, snap, facts, repo, o_r, t).run()
-
-

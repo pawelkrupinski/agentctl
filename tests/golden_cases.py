@@ -53,6 +53,10 @@ class Case:
         def fake(*a, **k):
             if threading.get_ident() != self.thread:  # not the case's call: the real one (above)
                 return real(*a, **k) if real is not None else None
+            # THE CONTEXT IS NO CALL DATA: `ctx` (lib/agentctl/context.py), the collaborators a call tree passes down, is
+            # neither recorded nor handed to the fake -- a digest records what was asked, and it reads the same as
+            # before the context was passed (docs/design/contexts.md)
+            k.pop("ctx", None)
             try:
                 value = gen(self.rng, *a, **k)
             except Exception as e:

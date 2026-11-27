@@ -9,6 +9,7 @@ import json, os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh, put_change  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 import test_backlog_batch, test_derived, test_generated  # noqa: E402
 from test_derived import CATALOGUE, CLASSES, tool  # noqa: E402
@@ -66,12 +67,12 @@ class ConflictHoldTest(test_derived.DerivedTest):
         self.in_flight(ei)
         er = self.lane_of("reuse", "r", classes=["tools/r.sh\tKEEP"], line=(0, "reuse's line 1"))
         eb = self.lane_of("bar", "b", line=(9, "bar's line 10"))
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertEqual([x for x in self.started if x != ei], [], "the two queued lanes wait for their batch")
         for x in (er, eb):
             self.assertNotEqual(self.hold_of(x).get("kind"), "overlap", self.hold_of(x))
-        A.check_entry(self.r.path, ei, *on_clock(self.clock))
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.check_entry(self.r.path, ei, *on_clock(self.clock), ctx=case_context())
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertEqual(self.entry(ei)["status"], "landed")
         calls, pushes = len(self.calls_of("--range")), len(self.pushed())
         self.drive()
@@ -95,7 +96,7 @@ class ConflictHoldTest(test_derived.DerivedTest):
         e = self.entry(es)
         e["batch_alone"] = "regen"
         put_change(A.CurrentStore(A.process_store), self.d, e)
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertIn(es, self.started, f"checked now, beside the older: {self.hold_of(es)}")
         self.check_and_push(ei, es)
         self.assertEqual([x.split("\t")[0] for x in self.on_main(CLASSES).splitlines() if "MIGRATE" in x],
@@ -110,7 +111,7 @@ class ConflictHoldTest(test_derived.DerivedTest):
         e = self.entry(ey)
         e["batch_alone"] = "regen"
         put_change(A.CurrentStore(A.process_store), self.d, e)
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertNotIn(ey, self.started, "never checked on a tree it cannot land on")
         self.assertEqual((self.hold_of(ey).get("blocker"), self.hold_of(ey).get("files")), (ei, [SOURCE]))
 
@@ -120,7 +121,7 @@ class ConflictHoldTest(test_derived.DerivedTest):
         ei = self.lane_of("isolated", "i", line=(0, "isolated's line 1"), alone=True)
         self.in_flight(ei)
         ey = self.lane_of("younger", "y", line=(9, "younger's line 10"))
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertNotIn(ey, self.started)
         self.assertEqual((self.hold_of(ey).get("blocker"), self.hold_of(ey).get("files")), (ei, [SOURCE]))
 
@@ -132,22 +133,22 @@ class ConflictHoldTest(test_derived.DerivedTest):
         ei = self.lane_of("underbar", "u", line=(4, "underbar's line 5"), alone=True)
         self.in_flight(ei)
         ey = self.lane_of("reusegit", "g", line=(4, "reusegit's line 5"))
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertEqual(self.hold_of(ey).get("blocker"), ei, "held while the older's check is in flight")
         st = A.CurrentStore(A.process_store)
         for state in ("checked", "waiting"):  # its checks failed only as main fails: parked until green
             A.set_change(st, self.d, self.entry(ei), state, cause="gate-red" if state == "waiting" else "check-passed")
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertNotIn(ey, self.started, "within the TTL it still waits")
         it = st.item("change", ey)
         old = A.epoch_now() - 2 * 3600  # past HOLD_IDLE_TTL (1 h)
         st.update_item("change", ey, it["version"], {"hold": {**it["data"]["hold"], "since": old}})
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertIn(ey, self.started, f"its hold on the parked change expired: {self.hold_of(ey)}")
         self.assertEqual(self.entry(ey).get("hold_expired"), [ei])
         told = [ev["text"] for ev in st.item_events("change", ey) if "expired after" in (ev.get("text") or "")]
         self.assertEqual(len(told), 1, told)
-        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
+        A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
         self.assertNotEqual(self.hold_of(ey).get("blocker"), ei, "let go for good")
 
     def test_the_six_hour_cap_runs_an_overlap_holds_own_recovery_never_a_stuck_escalation(self):

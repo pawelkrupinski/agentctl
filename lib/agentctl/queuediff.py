@@ -3,6 +3,7 @@
 
 import os
 from typing import Any, List, Optional, Tuple
+from agentctl.context import Context
 from agentctl.core import commit_known, git, remote
 from agentctl.repos import precheck_hook, waiting_supported
 from agentctl.clones import fetch_main
@@ -29,7 +30,7 @@ from agentctl.entrychecks import queue_join
 from agentctl.conditions import probe_git_fetch
 
 
-def push_change(repo: str, d: str, e: Entry, clock: Any, st: Any) -> Optional[str]:
+def push_change(repo: str, d: str, e: Entry, clock: Any, st: Any, *, ctx: Context) -> Optional[str]:
     """The tick's push of one checked change, under the landing lease: rebased onto a moved main (re-checked when what
     landed overlaps: a new round, queued), joined to `waiting` while main is red and it must wait, else pushed with
     the push's bounds and verified. pushing -> landed, or back to checked (a push never rejects); after
@@ -41,7 +42,7 @@ def push_change(repo: str, d: str, e: Entry, clock: Any, st: Any) -> Optional[st
         slot = tree_slot(st, d, i)
         if slot.acquire():
             try:
-                return _push_change(repo, d, e, i, clock, st)
+                return _push_change(repo, d, e, i, clock, st, ctx=ctx)
             finally:
                 slot.release()
     return "busy"
@@ -51,7 +52,7 @@ PUSH_TREE = "push"  # <clone>-wt-check-push, under its own lease; no checker eve
 # and a red fix's RED_FIX_TREE)
 
 
-def _push_change(repo: str, d: str, e: Entry, i: Any, clock: Any, st: Any) -> Optional[str]:
+def _push_change(repo: str, d: str, e: Entry, i: Any, clock: Any, st: Any, *, ctx: Context) -> Optional[str]:
     hook = precheck_hook(repo)
     tree = check_tree_for_push(repo, e, i)
     with land_lock_if_free(repo, st) as held:
@@ -62,7 +63,7 @@ def _push_change(repo: str, d: str, e: Entry, i: Any, clock: Any, st: Any) -> Op
             return status
         fetch_main(repo)  # a corrupt clone is marked for repair; a failed fetch pushes onto the last known main
         moved = git(repo, "rev-parse", f"{remote()}/main").strip()
-        push = ChangePush(repo, d, e, tree, clock, st, hook)
+        push = ChangePush(repo, d, e, tree, clock, st, hook, ctx=ctx)
         return push.onto(moved) or push.wait_or_push()
 
 
@@ -70,7 +71,8 @@ class ChangePush:
     """One checked change's push under the landing lock: what it is pushed as (base, head, where it was checked, the
     checks its hook may skip), brought onto main as it is now, then joined to `waiting` or pushed and verified."""
 
-    def __init__(self, repo: str, d: str, e: Entry, tree: str, clock: Any, st: Any, hook: Any) -> None:
+    def __init__(self, repo: str, d: str, e: Entry, tree: str, clock: Any, st: Any, hook: Any, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.repo, self.d, self.e, self.tree, self.clock, self.st, self.hook = repo, d, e, tree, clock, st, hook
         self.base, self.head, self.where = e["checked_base"], e["tip"], e.get("checked_where") or ""
         self.skip: Any = None
@@ -196,16 +198,16 @@ class ChangePush:
     def wait_or_push(self) -> str:
         """Joined to `waiting` behind main's red when it must wait, else pushed."""
         commits = waiting_commits(self.tree, self.base, self.head)
-        reds = gate_reds(self.repo) if waiting_supported(self.repo) else set()
+        reds = gate_reds(self.repo, ctx=self.ctx) if waiting_supported(self.repo) else set()
         # a gate red's fix failing only as main fails lands: no wait
-        landing = may_land_on_red(facts_for(reds, self.st), self.e, self.repo, commits, self.st)
+        landing = may_land_on_red(facts_for(reds, self.st), self.e, self.repo, commits, self.st, ctx=self.ctx)
         known = self.e.get("known_red")
         # policy: known-red-tools
         kr = None if landing.gate_fix or landing.tools_only_known_red else known
-        if kr or (reds and must_wait(self.repo, commits, reds, self.st)):
-            queue_join(self.st, self.repo, self.d, self.e, self.tree, self.head, known_red_words(kr))
+        if kr or (reds and must_wait(self.repo, commits, reds, self.st, ctx=self.ctx)):
+            queue_join(self.st, self.repo, self.d, self.e, self.tree, self.head, known_red_words(kr), ctx=self.ctx)
             return "joined"
-        fixes_of(self.repo, commits, self.st)  # its Fixes-Red trailers checked (fix_check caches each verdict and tells
+        fixes_of(self.repo, commits, self.st, ctx=self.ctx)  # its Fixes-Red trailers checked (fix_check caches each verdict and tells
         # the author of one that counts for nothing)
         return self._push(landing.tools_only_known_red)
 

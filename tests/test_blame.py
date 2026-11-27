@@ -458,7 +458,7 @@ class RevertTest(BlameBase):
         self.assertEqual((nb["state"], nb["reland_due"]), ("refuted", rv))
         self.assertEqual(A.blame_decision(nb)[0], "fixer")  # the normal fixer flow
         it = self.only()
-        self.st.update_item("red", it["id"], it["version"], {"blame": nb, "refuted": [rv]})  # as red_fix_pending does
+        self.st.update_item("red", it["id"], it["version"], {"blame": nb, "refuted": [rv]})  # as redpending.FixPending does
         it = self.st.item("red", it["id"])
         A.red_offer(self.st, it, "refuted")
         self.lands.clear()

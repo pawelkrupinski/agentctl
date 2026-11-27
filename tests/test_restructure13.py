@@ -7,6 +7,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from golden_cases import Probe, check as _check  # noqa: E402
 from test_restructure12 import NOW, maybe, printing  # noqa: E402
 
@@ -154,7 +155,7 @@ class OutsideGateTest(unittest.TestCase):
         # own _flow_runs, keyed by file alone); a None was "never listed"
         runs = A.CiRuns()
         runs._listed.update({("o/r", f, 30, None): v for f, v in mem.items() if v[1] is not None})
-        case.put("ci_runs", lambda: runs)
+        self.ctx = A.Context(runs=runs)
 
         def kept():
             listed = {k[1]: v for k, v in runs._listed.items() if k[0] == "o/r" and k[2:] == (30, None)}
@@ -164,7 +165,7 @@ class OutsideGateTest(unittest.TestCase):
     def test_outside_gate(self):
         def run(A):
             def go(snap):
-                got = A.outside_gate("o/r")
+                got = A.outside_gate("o/r", ctx=self.ctx)
                 mem, lists = snap()
                 return got, mem, lists
             return go
@@ -203,7 +204,7 @@ class JobEverGreenTest(unittest.TestCase):
         def run(A):
             def go(st, o_r, wf, job, runs, now_, mem):
                 try:
-                    got = A.job_ever_green(st, o_r, wf, job, runs, now_)
+                    got = A.job_ever_green(st, o_r, wf, job, runs, now_, ctx=case_context())
                 except BaseException as e:
                     got = ("raised", type(e).__name__)
                 return got, dict(mem)

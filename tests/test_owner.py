@@ -6,6 +6,7 @@ import json, os, signal, subprocess, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 from test_red import FAIL_LINE  # noqa: E402
 
@@ -379,7 +380,7 @@ class SessionRolloverTest(OwnerBase):
         self.assertNotIn("--resume", argv)
         self.assertIn("A FRESH SESSION, HANDED OVER", argv[argv.index("--bg") + 1])
         self.assertEqual([(r["old"], r["new"], r["tokens"]) for r in self.rec()["rollovers"]], [(old, new, 400000)])
-        text = A.red_status_text(self.st, verbose=True)
+        text = A.red_status_text(self.st, verbose=True, ctx=case_context())
         self.assertIn(f"rollover {self.rec()['rollovers'][0]['at']}: {old[:8]} -> {new[:8]} (400000 tokens)", text)
 
     def test_the_owners_next_turn_below_the_limit_resumes_with_its_context_read(self):

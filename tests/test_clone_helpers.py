@@ -6,6 +6,7 @@ from types import SimpleNamespace as NS
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 
 
 class RedDispatchLogTest(unittest.TestCase):
@@ -79,26 +80,26 @@ class FixFailedTest(unittest.TestCase):
 
 class GateSnapRowsTest(unittest.TestCase):
     def test_rows_carry_their_listed_runs_and_no_verdict(self):
-        A.main_runs_of("o/r").gate["wf"], A.main_runs_of("o/r").no_verdict["wf"] = [{"n": 1}], {"n": 2}
+        case_context().runs.main_runs_of("o/r").gate["wf"], case_context().runs.main_runs_of("o/r").no_verdict["wf"] = [{"n": 1}], {"n": 2}
         try:
-            rows = A.gate_snap_rows("o/r", [("wf", {"n": 0}, True, (5.0, 3)), ("other", None, False, (None, 0))])
+            rows = A.gate_snap_rows("o/r", [("wf", {"n": 0}, True, (5.0, 3)), ("other", None, False, (None, 0))], ctx=case_context())
         finally:
-            A.ci_runs().clear()
+            case_context().runs.clear()
         self.assertEqual(rows, [{"name": "wf", "decided": {"n": 0}, "newer": True, "since": 5.0, "count": 3,
                                  "runs": [{"n": 1}], "no_verdict": {"n": 2}},
                                 {"name": "other", "decided": None, "newer": False, "since": None, "count": 0,
                                  "runs": [], "no_verdict": None}])
 
     def test_the_snapshot_reads_back_what_it_wrote(self):
-        A.main_runs_of("o/r").gate["wf"], A.main_runs_of("o/r").no_verdict["wf"] = [{"n": 1}], None
+        case_context().runs.main_runs_of("o/r").gate["wf"], case_context().runs.main_runs_of("o/r").no_verdict["wf"] = [{"n": 1}], None
         try:
             unit = ("wf", {"n": 0}, False, (1.0, 2))
-            rows = A.gate_snap_rows("o/r", [unit])
-            A.ci_runs().clear()
-            self.assertEqual(A.gate_from_snap({"repo": "o/r", "gate": rows}), [unit])
-            self.assertEqual(A.main_runs_of("o/r").gate["wf"], [{"n": 1}])
+            rows = A.gate_snap_rows("o/r", [unit], ctx=case_context())
+            case_context().runs.clear()
+            self.assertEqual(A.gate_from_snap({"repo": "o/r", "gate": rows}, ctx=case_context()), [unit])
+            self.assertEqual(case_context().runs.main_runs_of("o/r").gate["wf"], [{"n": 1}])
         finally:
-            A.ci_runs().clear()
+            case_context().runs.clear()
 
 
 class StoreEventRowsTest(unittest.TestCase):

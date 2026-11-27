@@ -167,12 +167,26 @@ def _install_default_clock():
             mod.time = _WALL_TIME if mod.__name__ == "agentctl.clock" else _TEST_TIME
 
 
+# THE CASE'S CONTEXT (lib/agentctl/context.py): what cli.main builds for a process, one per test -- a fresh CiRuns, so
+# what one test read of CI runs never answers the next (_reset_process_state forgets it). A test hands it as `ctx=` to
+# what it calls directly; main builds its own.
+_CASE_CONTEXT = []
+
+
+def case_context():
+    """The running test's Context (made on first ask)."""
+    if not _CASE_CONTEXT:
+        _CASE_CONTEXT.append(sys.modules["agentctl.context"].Context(runs=sys.modules["agentctl.ciruns"].CiRuns()))
+    return _CASE_CONTEXT[0]
+
+
 def _reset_process_state():
     """agentctl's process-wide state a test may leave set (a processor run marks the process as the processor; a
     token read caches the token; the registered caches; a wired FakeRunner; main's wiring of a test's clock): every test
     starts as a fresh, non-processor process with no cached token, empty caches, the real process runner, a fresh
     default clock (above) and the import-time wiring (the default clock, the process's store)."""
     _install_default_clock()
+    _CASE_CONTEXT.clear()
     for mod in _agentctl_modules():
         for name in ("_IN_PROCESSOR", "_NO_VAULT"):
             flag = mod.__dict__.get(name)

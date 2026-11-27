@@ -1,6 +1,7 @@
 # agentctl, part `slots`: `agentctl land`: the land in a worktree, its loop (dry run, proven push, join) and its stash
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.ids import stamp
 from agentctl.clock import epoch_now
 import argparse
@@ -134,14 +135,14 @@ def output_file_shared(stream):
         return "its output file"
 
 
-def land_queue_subcommand(a: Any, store: Any) -> Any:
+def land_queue_subcommand(a: Any, store: Any, *, ctx: Context) -> Any:
     """`land status | hold | release | cancel <id>`: the queue (design §14.5)."""
     if a.lcmd == "cancel" and not a.entry:
         print("usage: agentctl land cancel <id>")
         return 2
     w = argparse.Namespace(wcmd=LAND_SUBCOMMANDS[a.lcmd], repo=a.repo, entry=a.entry,
                            hold_for=getattr(a, "hold_for", None), hold_why=getattr(a, "hold_why", None))
-    return queue_command(w, store)
+    return queue_command(w, store, ctx=ctx)
 
 
 def land_start_refusal(a: Any) -> Any:
@@ -172,9 +173,9 @@ def land_owner_only(repo: Any) -> Any:
     return owner_only and in_fixer()
 
 
-def cmd_land(a, clock, store):
+def cmd_land(a, clock, store, *, ctx):
     if getattr(a, "lcmd", None):
-        return land_queue_subcommand(a, store)
+        return land_queue_subcommand(a, store, ctx=ctx)
     refused = land_start_refusal(a)
     if refused is not None:
         return refused
@@ -186,7 +187,7 @@ def cmd_land(a, clock, store):
         return 1
     with exit_guard(), WorktreeGuard(repo):  # EVERY EXIT PUTS THE WORKTREE BACK: its rebase, stash and lease
         try:
-            return land_in_worktree(repo, a, clock, store)
+            return land_in_worktree(repo, a, clock, store, ctx=ctx)
         except Interrupted as ex:
             print(f"NOT LANDED: interrupted by {ex}: its stash, rebase and landing lease were put back; land again",
                   flush=True)
@@ -196,7 +197,7 @@ def cmd_land(a, clock, store):
 LAND_FETCH_TIMEOUT = 120  # s: one fetch of main proving a push (net_run tries it again through a blip)
 
 
-def land_in_worktree(repo, a, clock, store):
+def land_in_worktree(repo, a, clock, store, *, ctx):
     """cmd_land's work in the worktree (stash, rebase, checks, push, watch), under its exit guards."""
     main_ref = f"refs/remotes/{remote()}/main"
     env = tool_env()
@@ -218,26 +219,26 @@ def land_in_worktree(repo, a, clock, store):
             stash = Stash(repo)
             stash.save()
             err(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
-        queued = land_queued(repo, main_ref, sh, a, clock, store)
+        queued = land_queued(repo, main_ref, sh, a, clock, store, ctx=ctx)
         if queued is not None:
             return queued
-        rc = land_rounds(repo, main_ref, sh, log_path, a, clock, store)
+        rc = land_rounds(repo, main_ref, sh, log_path, a, clock, store, ctx=ctx)
     finally:
         if stash and not stash.restore():
             print(f"WARNING: local changes are in stash {stash.name}, not restored")
-    return land_followed(repo, a, rc, clock, store)
+    return land_followed(repo, a, rc, clock, store, ctx=ctx)
 
 
-def land_queued(repo: str, main_ref: Any, sh: Any, a: Any, clock: Any, store: Any) -> Any:
+def land_queued(repo: str, main_ref: Any, sh: Any, a: Any, clock: Any, store: Any, *, ctx: Context) -> Any:
     """land's exit code when the land queue takes the change (--until-done: submit, wait, clean up; else rebase, guard,
     QUEUED -- the checks and the push are the processor's); None when it lands directly."""
     if getattr(a, "until_done", False):  # the whole tail: submit, wait, clean up (queueuntil.py LAND --UNTIL-DONE)
         if not queue_mode(repo, a):
             print("NOT LANDED: --until-done is the land queue's (movies); it takes no --follow / --no-watch")
             return 1
-        return land_until_done(repo, main_ref, sh, a, clock, store)
+        return land_until_done(repo, main_ref, sh, a, clock, store, ctx=ctx)
     if queue_mode(repo, a):  # THE LAND QUEUE: rebase, guard, QUEUED -- the checks and the push are the processor's
-        return enqueue(repo, main_ref, sh, a, clock, store)
+        return enqueue(repo, main_ref, sh, a, clock, store, ctx=ctx)
     return None
 
 
@@ -256,7 +257,7 @@ def land_on_branch(branch: str, dirty: Any, sh: Any) -> bool:
     return True
 
 
-def land_rounds(repo: str, main_ref: Any, sh: Any, log_path: Any, a: Any, clock: Any, store: Any) -> Any:
+def land_rounds(repo: str, main_ref: Any, sh: Any, log_path: Any, a: Any, clock: Any, store: Any, *, ctx: Context) -> Any:
     """The direct land's rounds: the long checks outside the landing lock, then the push under it; checked again when
     main moved in between. Returns land's exit code (1, with NOT LANDED printed, when the lock timed out)."""
     a.landed_sha, a.pushed_at, a.waiting = None, None, None
@@ -265,7 +266,7 @@ def land_rounds(repo: str, main_ref: Any, sh: Any, log_path: Any, a: Any, clock:
         # The long checks first, WITHOUT the lock (the last round: under it, so a lander always finishes).
         a.prechecked = None
         if round_ < LAND_PRECHECK_ROUNDS:
-            rc = precheck(repo, main_ref, sh, log_path, a, clock, store)
+            rc = precheck(repo, main_ref, sh, log_path, a, clock, store, ctx=ctx)
             if rc is not None:
                 break
         with land_lock(repo, clock, store) as held:
@@ -273,14 +274,14 @@ def land_rounds(repo: str, main_ref: Any, sh: Any, log_path: Any, a: Any, clock:
                 print("NOT LANDED: timed out waiting for the landing lock (another land is running its checks); "
                       "land again.")
                 return 1
-            rc = land_loop(repo, main_ref, sh, log_path, a, clock, store)
+            rc = land_loop(repo, main_ref, sh, log_path, a, clock, store, ctx=ctx)
         if rc != MAIN_MOVED:
             break
         err(f"{remote()}/main moved since the check: checking again on it, outside the lock")
     return rc
 
 
-def land_followed(repo: str, a: Any, rc: Any, clock: Any, store: Any) -> Any:
+def land_followed(repo: str, a: Any, rc: Any, clock: Any, store: Any, *, ctx: Context) -> Any:
     """What follows a land that returned rc: nothing for a change the processor lands, else (--follow) the wait for its
     batch and the watch of main's CI, or the watch item whose verdict goes to the inbox."""
     follow = getattr(a, "follow", False)
@@ -291,10 +292,10 @@ def land_followed(repo: str, a: Any, rc: Any, clock: Any, store: Any) -> Any:
         rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"], clock, store, close=None if keep else repo)
     if rc != 0 or not a.landed_sha or getattr(a, "no_watch", False):
         return rc
-    return land_watched(repo, a, clock, store)
+    return land_watched(repo, a, clock, store, ctx=ctx)
 
 
-def land_watched(repo: str, a: Any, clock: Any, store: Any) -> int:
+def land_watched(repo: str, a: Any, clock: Any, store: Any, *, ctx: Context) -> int:
     """The watch of the landed push: its item, whose verdict goes to the inbox, or (--follow) main's CI watched here."""
     close = None if getattr(a, "keep_worktree", False) else repo
     if not getattr(a, "follow", False):  # land ends at LANDED; its watch item's verdict goes to the inbox
@@ -304,7 +305,7 @@ def land_watched(repo: str, a: Any, clock: Any, store: Any) -> int:
         return 0
     # the lock is free again: the next lander goes while this one watches main's CI; on WATCH OK the worktree it ran
     # from is closed when proven merged (close_worktree), unless --keep-worktree
-    return watch_landed(repo, a.landed_sha, a.pushed_at, clock, store, close=close, fixes=getattr(a, "fixes", None) or ())
+    return watch_landed(repo, a.landed_sha, a.pushed_at, clock, store, close=close, fixes=getattr(a, "fixes", None) or (), ctx=ctx)
 
 
 MAIN_MOVED = "main moved"  # land_loop: the check outside the lock no longer covers origin/main
@@ -334,37 +335,37 @@ def proven_push(repo, head, main_ref, log_path, a, store):
 PUSH_AGAIN = "push again"  # push_verdict: the push lost a race or failed remote-side; land_loop syncs and pushes again
 
 
-def land_loop(repo, main_ref, sh, log_path, a, clock, store):
+def land_loop(repo, main_ref, sh, log_path, a, clock, store, *, ctx):
     for attempt in range(LAND_RETRIES + 1):
-        rc, head, reds = land_synced(repo, main_ref, sh, a, clock, store, log_path)
+        rc, head, reds = land_synced(repo, main_ref, sh, a, clock, store, log_path, ctx=ctx)
         if rc is not None:
             return rc
-        rc = land_check_first(repo, main_ref, log_path, a, clock, store, attempt, head, reds)
+        rc = land_check_first(repo, main_ref, log_path, a, clock, store, attempt, head, reds, ctx=ctx)
         if rc is not None:
             return rc
         a.prechecked = None  # a retry after a push race checks its new base again
-        land_claims(repo, a, head, store)
-        verdict = land_push(repo, main_ref, log_path, a, clock, store, attempt, head)
+        land_claims(repo, a, head, store, ctx=ctx)
+        verdict = land_push(repo, main_ref, log_path, a, clock, store, attempt, head, ctx=ctx)
         if verdict != PUSH_AGAIN:
             return verdict
     return 1
 
 
-def land_synced(repo: str, main_ref: Any, sh: Any, a: Any, clock: Any, store: Any, log_path: Any) -> tuple[Any, str | None, set[str]]:
+def land_synced(repo: str, main_ref: Any, sh: Any, a: Any, clock: Any, store: Any, log_path: Any, *, ctx: Context) -> tuple[Any, str | None, set[str]]:
     """(land's exit code or None, the head synced onto main, the gate's reds): the sync's NOT LANDED, or the change joined
     to `waiting` while main is red, decide here; else the push goes on."""
     lock_note("fetch and rebase")
     rc, head = sync(repo, main_ref, sh, clock, store, getattr(a, "release_hold", False))
     if rc is not None:
         return rc, head, set()
-    reds = gate_reds(repo) if waiting_supported(repo) else set()
-    if reds and must_wait(repo, waiting_commits(repo, f"{remote()}/main", head), reds, store):
+    reds = gate_reds(repo, ctx=ctx) if waiting_supported(repo) else set()
+    if reds and must_wait(repo, waiting_commits(repo, f"{remote()}/main", head), reds, store, ctx=ctx):
         # checked already (before the lock, without the gate): only the cherry-pick onto `waiting` here
-        return join(store, repo, log_path, a, head), head, reds
+        return join(store, repo, log_path, a, head, ctx=ctx), head, reds
     return None, head, reds
 
 
-def land_push(repo: str, main_ref: Any, log_path: Any, a: Any, clock: Any, store: Any, attempt: Any, head: str) -> Any:
+def land_push(repo: str, main_ref: Any, log_path: Any, a: Any, clock: Any, store: Any, attempt: Any, head: str, *, ctx: Context) -> Any:
     """One push of head to main, its output appended to the land log: land's exit code, or PUSH_AGAIN."""
     err(f"pushing {head[:10]} to {remote()}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
     lock_note(f"push of {head[:10]}")
@@ -374,10 +375,10 @@ def land_push(repo: str, main_ref: Any, log_path: Any, a: Any, clock: Any, store
         mark_gate_dirty()
     with open(log_path, "a") as f:
         f.write(f"=== attempt {attempt + 1} {ts()} {head}\n{out}\n")
-    return push_verdict(repo, head, main_ref, log_path, a, clock, store, attempt, rc, out)
+    return push_verdict(repo, head, main_ref, log_path, a, clock, store, attempt, rc, out, ctx=ctx)
 
 
-def land_check_first(repo: str, main_ref: Any, log_path: Any, a: Any, clock: Any, store: Any, attempt: Any, head: str, reds: Any) -> Any:
+def land_check_first(repo: str, main_ref: Any, log_path: Any, a: Any, clock: Any, store: Any, attempt: Any, head: str, reds: Any, *, ctx: Context) -> Any:
     """None when the hook's check of what the push will carry passed (or none is needed); else land's exit code, MAIN_MOVED
     when main moved since the check outside the lock."""
     hook = precheck_hook(repo)
@@ -391,15 +392,15 @@ def land_check_first(repo: str, main_ref: Any, log_path: Any, a: Any, clock: Any
         # hook run reuses it in seconds). A long hook inside `git push` holds the push's ssh connection idle, and a
         # tunnel drop kills it after "all clear" (2026-10-23); the area tests make long hooks the norm.
         return dry_run(repo, hook, head, log_path, attempt + 1, clock, store,
-                       cls=gov_class_of(repo, waiting_commits(repo, f"{remote()}/main", head), reds), a=a)
+                       cls=gov_class_of(repo, waiting_commits(repo, f"{remote()}/main", head), reds, ctx=ctx), a=a, ctx=ctx)
     return None
 
 
-def land_claims(repo: str, a: Any, head: str, store: Any) -> None:
+def land_claims(repo: str, a: Any, head: str, store: Any, *, ctx: Context) -> None:
     """What the push carries, noted on the args: the runs its commits claim to fix (the watch verifies them) and the
     lander's keys (lander.py), so the commits are found on main again."""
     try:
-        a.fixes = sorted(fixes_of(repo, waiting_commits(repo, f"{remote()}/main", head), store))
+        a.fixes = sorted(fixes_of(repo, waiting_commits(repo, f"{remote()}/main", head), store, ctx=ctx))
     except Exception:
         a.fixes = []
     try:  # THE LANDER (lander.py): what this push carries, keyed so the commits are found on main again
@@ -408,17 +409,17 @@ def land_claims(repo: str, a: Any, head: str, store: Any) -> None:
         a.lander_keys = []
 
 
-def push_verdict(repo: str, head: str, main_ref: Any, log_path: Any, a: Any, clock: Any, store: Any, attempt: Any, rc: Any, out: Any) -> Any:
+def push_verdict(repo: str, head: str, main_ref: Any, log_path: Any, a: Any, clock: Any, store: Any, attempt: Any, rc: Any, out: Any, *, ctx: Context) -> Any:
     """land's exit code for the push that ended rc with `out` -- or PUSH_AGAIN (after a pause) when a race or the
     remote's own fault leaves attempts."""
     if rc is None:
         return stalled("push (git push and its pre-push hook)", out, log_path)
     if rc == 0:
         return proven_push(repo, head, main_ref, log_path, a, store)
-    return push_refused_verdict(repo, log_path, clock, store, attempt, out)
+    return push_refused_verdict(repo, log_path, clock, store, attempt, out, ctx=ctx)
 
 
-def push_refused_verdict(repo: str, log_path: Any, clock: Any, store: Any, attempt: Any, out: Any) -> Any:
+def push_refused_verdict(repo: str, log_path: Any, clock: Any, store: Any, attempt: Any, out: Any, *, ctx: Context) -> Any:
     """land's exit code for a push that failed with `out` -- PUSH_AGAIN (after a pause) when a race or the remote's own
     fault leaves attempts, else refused."""
     race = RACE.search(out)
@@ -436,10 +437,10 @@ def push_refused_verdict(repo: str, log_path: Any, clock: Any, store: Any, attem
         return PUSH_AGAIN
     return refused(store, repo, out, log_path, f"the push failed remote-side ({remote_fault.group(0)}), {LAND_RETRIES} "
                    "times: the forge's fault, not the change's -- land again later" if remote_fault else
-                   "the push failed (pre-push hook or remote)")
+                   "the push failed (pre-push hook or remote)", ctx=ctx)
 
 
-def join(st, repo, log_path, a, head):
+def join(st, repo, log_path, a, head, *, ctx):
     """The change (its own checks passed, synced onto main at head) waits for main to turn green: a `waiting` entry
     (design §14.1: no branch, no worktree -- the batch is computed at green, in a check tree). Prints `WAITING <head>
     (entry <id>, n waiting)`."""
@@ -452,7 +453,7 @@ def join(st, repo, log_path, a, head):
         eid = f"{stamp('entry')}-{os.path.basename(repo)}-{seq}"
         supersede_older_waiting(st, d, repo, branch, eid)
         e = {"id": eid, "seq": seq, "worktree": repo, "branch": branch, "head": head, "commits": commits,
-             "fixes": sorted(fixes_of(repo, commits, st)), "status": "waiting", "created": ts(), "tip": head,
+             "fixes": sorted(fixes_of(repo, commits, st, ctx=ctx)), "status": "waiting", "created": ts(), "tip": head,
              "follow": bool(getattr(a, "follow", False))}
         ChangeRecords(st, d).save(e)
     print(note_waiting(st, d, log_path, head, e["id"]), flush=True)

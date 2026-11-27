@@ -13,6 +13,7 @@ import os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from test_verify_wait import VerifyWaitBase, utc  # noqa: E402
 
 ORDER = """name: Order independence
@@ -51,7 +52,7 @@ class InHandBase(VerifyWaitBase):
         self.st.acquire(A.red_lease(KEY), "laptop:fixer:oi94", 4 * 3600, 48 * 3600,
                         meta={"kind": "fixer", "worktree": self.wt})
         for name, fake in (("main_workflow_files", lambda o_r: {}), ("red_callable_evidence", lambda *a: None),
-                           ("red_retired", lambda *a: None)):
+                           ("red_retired", lambda *a, ctx=None: None)):
             saved = getattr(A, name)
             setattr(A, name, fake)
             self.addCleanup(setattr, A, name, saved)
@@ -76,7 +77,7 @@ class InHandBase(VerifyWaitBase):
             self.t[0] = utc(at)
         it = self.st.item("red", KEY)
         return A.red_step(self.st, it, obs, {"latest": latest or {}}, self.facts(), self.r.path, A.RED_PRIMARY,
-                          self.t[0])
+                          self.t[0], ctx=case_context())
 
     def item(self):
         return self.st.item("red", KEY)
@@ -152,8 +153,8 @@ class MissedDeadlineIsNeverSilentTest(InHandBase):
         self.assertTrue(str(f.get("verify")).startswith("dispatched Order independence"), f)
         self.t[0] = self.item()["deadline"] + 30
         it = self.item()
-        A.red_fix_pending(self.st, it, it["data"]["fix"], False, {}, {"latest": {}}, self.facts(), self.r.path,
-                          A.RED_PRIMARY, self.t[0])
+        A.FixPending(self.st, it, it["data"]["fix"], False, {}, {"latest": {}}, self.facts(), self.r.path,
+                          A.RED_PRIMARY, self.t[0], ctx=case_context()).run()
         it = self.item()
         self.assertEqual(it["state"], "offered")
         self.assertIn("escalate", {e["severity"] for e in self.st.item_events("red", KEY)})

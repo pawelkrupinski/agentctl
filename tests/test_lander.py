@@ -5,6 +5,7 @@ import json, os, sys, time, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from test_agentctl import A, Base, sh  # noqa: E402
+from harness import case_context  # noqa: E402
 
 
 class LanderRecordTest(Base):
@@ -138,7 +139,7 @@ class CommitKeysTest(Base):
         wt, sha = self.change("b", {"b.txt": "b\n"})
         os.environ["CLAUDE_CODE_SESSION_ID"] = "sess-b"
         try:
-            fields = A.change_fields(wt, "refs/remotes/origin/main", sha, type("a", (), {})(), A.CurrentStore(A.process_store))
+            fields = A.change_fields(wt, "refs/remotes/origin/main", sha, type("a", (), {})(), A.CurrentStore(A.process_store), ctx=case_context())
         finally:
             os.environ.pop("CLAUDE_CODE_SESSION_ID")
         self.assertEqual(fields["lander"]["session"], "sess-b")

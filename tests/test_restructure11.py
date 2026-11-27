@@ -7,6 +7,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 
 
 def change_state_of(ok, via=None):
@@ -430,7 +431,7 @@ class NameCausesTest(unittest.TestCase):
         return (r.choice([None, "o/r", "o/r"]), values)
 
     def test_name_causes(self):
-        check(self, "name_causes", self.build, lambda A: with_state(lambda *a: sorted(A.name_causes(*a).items())), 6000)
+        check(self, "name_causes", self.build, lambda A: with_state(lambda *a: sorted(A.name_causes(*a, ctx=case_context()).items())), 6000)
 
 
 if __name__ == "__main__":

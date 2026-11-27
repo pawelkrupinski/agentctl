@@ -6,6 +6,7 @@
 import os
 from typing import Any
 import re
+from agentctl.context import Context
 from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.core import attempt, err, git, process_cache, reds_dir, remote, commit_known
 from agentctl.trailers import trailer_format, trailer_values
@@ -17,7 +18,7 @@ from agentctl.redfixread import (
     red_workflow_file)
 
 
-def landed_fix_commits(store, repo):
+def landed_fix_commits(store, repo, *, ctx):
     """[(sha, commit time, {values}, subject)]: Fixes-Red commits on origin/main in the last 3 days -- but for one whose
     `Red-Unrelated:` trailer says it names the red only to pass the gate (`red_unrelated`): landed, it is no more a fix
     than queued. Identity model convergence #2432 (2026-10-28): four CI speed-ups carrying `Fixes-Red: 2392` beside one
@@ -30,7 +31,7 @@ def landed_fix_commits(store, repo):
     for line in (r.stdout if r.returncode == 0 else "").splitlines():
         sha, ct, unrelated, vals, subj = (line.split("\t", 4) + ["", "", "", "", ""])[:5]
         if trailer_values(vals) and not unrelated.strip():
-            counted = fix_check(repo, sha, trailer_values(vals), store)[0]  # a trailer touching nothing the red reads: no fix
+            counted = fix_check(repo, sha, trailer_values(vals), store, ctx=ctx)[0]  # a trailer touching nothing the red reads: no fix
             if counted:
                 out.append((sha, float(ct or 0), counted, subj))
     return out
@@ -65,12 +66,12 @@ def fix_changed(repo: str, sha: str) -> list[str]:
     return [p for p in (r.stdout if r.returncode == 0 else "").splitlines() if p]
 
 
-def fix_red_verdict(repo, sha, d, changed):
+def fix_red_verdict(repo, sha, d, changed, *, ctx):
     """{ok, why?}: does commit sha (its paths `changed`) touch what red d's failing job reads? Unsure counts."""
     if d.get("kind") != "test":
         return {"ok": True, "why": "not a test failure"}
     try:
-        rd = red_job_reads(repo, sha, d)
+        rd = red_job_reads(repo, sha, d, ctx=ctx)
     except (Exception, SystemExit):
         rd = None
     if rd is None or not changed or not all(fix_path_unread(p, rd) for p in changed):
@@ -94,7 +95,7 @@ def fix_cache_put(path, cache, fresh):
         note_failure("fix cache not written", e)
 
 
-def fix_reaches_red(repo, sha, d):
+def fix_reaches_red(repo, sha, d, *, ctx):
     """Commit sha is a fix THIS red can take: it touches what ITS failing job reads (fix_red_verdict), cached per sha
     and red key. A run's `Fixes-Red:` value counts for the run when any of its reds reads the commit (fix_check); each
     red of the run takes it only when it reads it itself (PER RED, PER FAILING STEP)."""
@@ -105,7 +106,7 @@ def fix_reaches_red(repo, sha, d):
     if k not in cache:
         if not commit_known(repo, sha):
             return True  # a commit this clone lacks: unsure counts (and is not cached)
-        verdict = fix_red_verdict(repo, sha, d, fix_changed(repo, sha))
+        verdict = fix_red_verdict(repo, sha, d, fix_changed(repo, sha), ctx=ctx)
         fix_cache_put(path, cache, {k: verdict})  # kept for the next tick; this one's answer is the verdict itself
         return bool(verdict.get("ok"))
     return bool(cache[k].get("ok"))
@@ -115,7 +116,8 @@ class FixValues:
     """The `Fixes-Red:` values of one commit judged against the reds they name: the values that count (ok), those that
     do not (bad: value -> why), and the verdicts to cache (fresh)."""
 
-    def __init__(self, repo: Any, sha: Any, items: Any, ok: Any, bad: Any) -> None:
+    def __init__(self, repo: Any, sha: Any, items: Any, ok: Any, bad: Any, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.repo, self.sha, self.items, self.ok, self.bad = repo, sha, items, ok, bad
         self.fresh: dict[str, Any] = {}
         self.changed: Any = None
@@ -150,7 +152,7 @@ class FixValues:
             self.changed = fix_changed(self.repo, self.sha)
         verdict = None
         for it in its:
-            rv = fix_red_verdict(self.repo, self.sha, it["data"], self.changed)
+            rv = fix_red_verdict(self.repo, self.sha, it["data"], self.changed, ctx=self.ctx)
             self.fresh[f"red:{it['data']['key']}"] = rv
             if verdict is None or not verdict["ok"]:
                 verdict = rv
@@ -171,7 +173,7 @@ def _cached_verdicts(values: Any, cache: Any) -> Any:
     return ok, bad, todo
 
 
-def fix_check(repo, sha, values, store):
+def fix_check(repo, sha, values, store, *, ctx):
     """(the values that count as fixes, {value: why not} for those that do not): each `Fixes-Red:` value of commit sha
     against the reds it names (see above): a value counts when any red it names reads the commit. Cached per sha; a
     value naming no known red counts (unsure) and is not cached, so a red opened later is still checked."""
@@ -184,7 +186,7 @@ def fix_check(repo, sha, values, store):
         return ok, bad
     # SystemExit: NoToken (the laptop's land with no token: the server checks again)
     items = attempt(lambda: [it for it in store.items("red") if it["data"].get("key")], [], catch=(Exception, SystemExit))
-    judged = FixValues(repo, sha, items, ok, bad)
+    judged = FixValues(repo, sha, items, ok, bad, ctx=ctx)
     for v in todo:
         judged.judge(v)
     judged.record(path, cache)
@@ -257,20 +259,20 @@ def red_own_code(repo: str, sha: str, wf: tuple[str, str], part: str, own: list[
 _link_reads: dict[tuple[Any, str], LinkReads | None] = process_cache({})
 
 
-def red_link_reads(repo: str, sha: str, d: dict[str, Any]) -> LinkReads | None:
+def red_link_reads(repo: str, sha: str, d: dict[str, Any], *, ctx: Context) -> LinkReads | None:
     """(its workflow file, its failing steps' failing part, {paths only its failing steps name}) read at commit sha;
     None when no failing step can be told there (the workflow or the step unread)."""
     k = (d.get("key"), sha)
     if k not in _link_reads:
-        _link_reads[k] = red_link_read(repo, sha, d)
+        _link_reads[k] = red_link_read(repo, sha, d, ctx=ctx)
     return _link_reads[k]
 
 
-def red_link_read(repo: str, sha: str, d: dict[str, Any]) -> LinkReads | None:
+def red_link_read(repo: str, sha: str, d: dict[str, Any], *, ctx: Context) -> LinkReads | None:
     wf = red_workflow_file(repo, sha, d, fix_tree_files(repo, sha))
     if not wf:
         return None
-    failing = red_failed_steps(d)
+    failing = red_failed_steps(d, ctx=ctx)
     part = red_failing_part(wf[1], d, failing)
     if not part:
         return None
@@ -278,13 +280,13 @@ def red_link_read(repo: str, sha: str, d: dict[str, Any]) -> LinkReads | None:
     return wf[0], part, red_own_code(repo, sha, wf, part, own)
 
 
-def red_commit_link(repo: str, c: str, d: dict[str, Any], rd: LinkReads) -> str | None:
+def red_commit_link(repo: str, c: str, d: dict[str, Any], rd: LinkReads, *, ctx: Context) -> str | None:
     """How commit c links red d (its link reads rd), or None."""
     wf, _part, code = rd
     changed = set(fix_changed(repo, c))
     if changed & code:
         return LINK_CODE
-    failing = red_failed_steps(d)
+    failing = red_failed_steps(d, ctx=ctx)
     if wf in changed and red_failing_part(fix_show(repo, f"{c}~1", wf), d, failing) != \
             red_failing_part(fix_show(repo, c, wf), d, failing):
         return LINK_STEP
@@ -297,11 +299,11 @@ def red_link_base(repo: str, d: dict[str, Any]) -> str:
     return str(sha or (d.get("last_run") or {}).get("headSha") or "")
 
 
-def red_change_link(repo: str | None, d: dict[str, Any], commits: list[str]) -> str | None:
+def red_change_link(repo: str | None, d: dict[str, Any], commits: list[str], *, ctx: Context) -> str | None:
     """How these commits link outside red d without a trailer (LINK_STEP, LINK_CODE), or None."""
     sha = red_link_base(repo, d) if repo and commits else ""
     try:
-        rd = red_link_reads(str(repo), sha, d) if sha else None
+        rd = red_link_reads(str(repo), sha, d, ctx=ctx) if sha else None
     except (Exception, SystemExit):
         rd = None
-    return next((x for x in (red_commit_link(str(repo), c, d, rd) for c in commits) if x), None) if rd else None
+    return next((x for x in (red_commit_link(str(repo), c, d, rd, ctx=ctx) for c in commits) if x), None) if rd else None

@@ -11,6 +11,7 @@ import calendar, os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Repo  # noqa: E402
+from harness import case_context  # noqa: E402
 
 RECORD = """name: Record scrape fixtures
 on:
@@ -55,8 +56,8 @@ class VerifyWaitBase(unittest.TestCase):
             saved_fn = getattr(A, name)
             setattr(A, name, fake)
             self.addCleanup(setattr, A, name, saved_fn)
-        A.ci_runs().clear()
-        self.addCleanup(A.ci_runs().clear)
+        case_context().runs.clear()
+        self.addCleanup(case_context().runs.clear)
 
     def fake_gh(self, o_r, *args):  # GitHub's run list (the seam): the runs this test put there
         assert args[:2] == ("run", "list"), args
@@ -103,8 +104,8 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
         self.t[0] = utc(at)
         it = self.st.item("red", "50bc15cd7369")
         facts = self.facts()
-        return A.red_fix_pending(self.st, it, it["data"]["fix"], False, {}, {"latest": latest or {}}, facts,
-                                 self.r.path, A.RED_PRIMARY, self.t[0])
+        return A.FixPending(self.st, it, it["data"]["fix"], False, {}, {"latest": latest or {}}, facts,
+                                 self.r.path, A.RED_PRIMARY, self.t[0], ctx=case_context()).run()
 
     def item(self):
         return self.st.item("red", "50bc15cd7369")
@@ -123,7 +124,7 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
         self.assertEqual(self.step("2026-11-19T12:00:00Z"), [])
         it = self.item()
         self.assertEqual((it["state"], it["level"]), ("fix-pending", 0))
-        self.assertEqual(A.red_enforce(self.st, self.facts(), self.t[0]), [],
+        self.assertEqual(A.red_enforce(self.st, self.facts(), self.t[0], ctx=case_context()), [],
                          "a fix waiting for its slot is a fix on its way: no INVARIANT")
         self.assertEqual({e["severity"] for e in self.st.item_events("red", it["id"])}, {"info"})
 
@@ -169,8 +170,8 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
         t = utc("2026-11-20T01:00:30Z")
         self.t[0] = t
         it = self.item()
-        out = A.red_fix_pending(self.st, it, it["data"]["fix"], True, {}, {"latest": latest},
-                                self.facts(), self.r.path, A.RED_PRIMARY, t)
+        out = A.FixPending(self.st, it, it["data"]["fix"], True, {}, {"latest": latest},
+                                self.facts(), self.r.path, A.RED_PRIMARY, t, ctx=case_context()).run()
         self.assertIn("FIX OK", " ".join(out))
         self.assertEqual(self.item()["state"], "verified")
 
@@ -178,7 +179,7 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
         self.step("2026-11-19T04:23:15Z")
         self.runs.insert(0, gh_run(201, "2026-11-19T23:46:04Z", "2026-11-19T23:46:04Z", status="queued",
                                    conclusion="", sha=self.sha))
-        A.ci_runs().clear()
+        case_context().runs.clear()
         by = self.item()["deadline"]
         out = self.step(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(by + 30)))
         self.assertIn("awaits Record scrape fixtures #201 (queued)", " ".join(out))
@@ -198,7 +199,7 @@ class ScheduledFixWaitsForItsSlotTest(VerifyWaitBase):
     def test_past_its_deadline_a_slot_run_that_ended_without_deciding_it_escalates(self):
         self.step("2026-11-19T04:23:15Z")
         self.runs.insert(0, gh_run(201, "2026-11-19T23:46:04Z", "2026-11-19T23:50:00Z", conclusion="cancelled"))
-        A.ci_runs().clear()
+        case_context().runs.clear()
         by = self.item()["deadline"]
         out = self.step(time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(by + 30)))
         self.assertIn("its 23:31Z run #201 ended cancelled without deciding it",
@@ -251,8 +252,8 @@ class CancelledFixFollowsNoOlderChangeTest(VerifyWaitBase):
 
         def tick():
             it = self.st.item("red", "5254bffda9d2")
-            return A.red_fix_pending(self.st, it, A.red_fix_of(it, facts, self.st), False, {}, {"latest": {}}, facts,
-                                     None, A.RED_PRIMARY, self.t[0]) + A.red_enforce(self.st, facts, self.t[0])
+            return A.FixPending(self.st, it, A.red_fix_of(it, facts, self.st, ctx=case_context()), False, {}, {"latest": {}}, facts,
+                                     None, A.RED_PRIMARY, self.t[0], ctx=case_context()).run() + A.red_enforce(self.st, facts, self.t[0], ctx=case_context())
 
         self.t[0] += 7  # 03:59:06Z
         self.assertEqual(tick(), [], "no follow to the 11-11 change, no INVARIANT inside the re-queue grace")
@@ -287,8 +288,8 @@ class CancelledFixFollowsNoOlderChangeTest(VerifyWaitBase):
                               "created": "2026-11-22T07:26:12Z"}], "landed": [], "repo": None}
         self.t[0] += A.RED_FIX_REQUEUE_GRACE + 1
         it = self.st.item("red", "9a333c1f0ccc")
-        out = A.red_fix_pending(self.st, it, A.red_fix_of(it, facts, self.st), False, {}, {"latest": {}}, facts,
-                                None, A.RED_PRIMARY, self.t[0])
+        out = A.FixPending(self.st, it, A.red_fix_of(it, facts, self.st, ctx=case_context()), False, {}, {"latest": {}}, facts,
+                                None, A.RED_PRIMARY, self.t[0], ctx=case_context()).run()
         it = self.st.item("red", "9a333c1f0ccc")
         self.assertEqual(it["state"], "offered", out)
         self.assertIn("heap-sizing ergonomics", it["data"]["history"][-1]["outcome"])
@@ -327,7 +328,7 @@ class MainMovedUnderAnOutsideRedTest(VerifyWaitBase):
                     "linked": "its workflow's own files"}})
 
     def verify(self):
-        return A.red_main_verify(self.st, self.st.item("red", "ec12a4564dbc.9"), self.r.path, A.RED_PRIMARY, self.t[0])
+        return A.red_main_verify(self.st, self.st.item("red", "ec12a4564dbc.9"), self.r.path, A.RED_PRIMARY, self.t[0], ctx=case_context())
 
     def test_main_moving_under_it_dispatches_its_workflow_to_verify_once_per_head(self):
         self.assertEqual(self.verify(), [], "main has not moved since its run: nothing to verify")

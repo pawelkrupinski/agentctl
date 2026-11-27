@@ -4,6 +4,7 @@ import argparse, contextlib, io, os, subprocess, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
 
@@ -11,8 +12,8 @@ from fake_clock import FakeClock, on_clock  # noqa: E402
 class RenameTest(unittest.TestCase):
     def setUp(self):
         self.calls, self.saved = [], (A.cmd_waiting, A.queue_command)
-        A.cmd_waiting = lambda w, clock, store, registry: self.calls.append(w) or 0  # the processor's
-        A.queue_command = lambda w, store: self.calls.append(w) or 0  # the queue's
+        A.cmd_waiting = lambda w, clock, store, registry, ctx=None: self.calls.append(w) or 0  # the processor's
+        A.queue_command = lambda w, store, ctx=None: self.calls.append(w) or 0  # the queue's
 
     def tearDown(self):
         A.cmd_waiting, A.queue_command = self.saved
@@ -44,7 +45,7 @@ class RenameTest(unittest.TestCase):
         A.waiting_state = lambda repo: seen.append(repo) or (_ for _ in ()).throw(RuntimeError("stop"))
         try:
             with self.assertRaises(RuntimeError):
-                A.cmd_waiting(argparse.Namespace(wcmd="status", repo=tempfile.gettempdir(), entry=None), *on_clock(FakeClock()), registry(A))
+                A.cmd_waiting(argparse.Namespace(wcmd="status", repo=tempfile.gettempdir(), entry=None), *on_clock(FakeClock()), registry(A), ctx=case_context())
         finally:
             A.waiting_state, A.main_clone, A.movies_repo_path = saved
         self.assertEqual(seen, ["/the/movies/clone"])

@@ -24,6 +24,7 @@ import hashlib, json, os, random, re, shutil, subprocess, sys, tempfile, threadi
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import probe, registry  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
 
@@ -599,7 +600,7 @@ class Sim:
                 "--coupling-plan": ratchet_plan,
                 "--quality-plan": ratchet_plan}.get(flag, lambda p: [])(paths)
 
-    def commit_fixes(self, repo, sha, store):
+    def commit_fixes(self, repo, sha, store, ctx=None):
         pid = self.commits.get(sha, (None, None))[1]
         return set(self.patches[pid].fixes) if pid else set()
 
@@ -684,7 +685,7 @@ class Sim:
         self.verified.add(frozenset(self.patches_of(tip)))
         return True, f"checks passed {where}\n"
 
-    def base_failure_keys(self, st, repo, d, e, base, now):
+    def base_failure_keys(self, st, repo, d, e, base, now, ctx=None):
         """What fails on the change's base: the open gate red's own test, in the gate's newest run (queuefailure)."""
         return {k: f"Main #{self.red_run}{A.GATE_RUN_WHERE}" for k in A.test_keys([MAIN_FAILS_LINE])} if self.reds else {}
 
@@ -719,7 +720,7 @@ class Sim:
             raise Violation(f"(sim) run_watched step {step} is not modelled")
         sha = argv[3].split(":", 1)[0]
         commits = self.chain(self.main, sha)
-        if self.reds and A.must_wait(self.repo, commits, self.reds, self.store):
+        if self.reds and A.must_wait(self.repo, commits, self.reds, self.store, ctx=case_context()):
             return 1, "pre-push: main is red: only a fix may land\n"
         if self.main not in self.anc(sha):
             return 1, " ! [rejected] main -> main (non-fast-forward)\n"
@@ -788,10 +789,10 @@ class Sim:
                 c.cid for c in self.changes if (self.entry(c) or {}).get("status") == "waiting")
         if e.get("status") not in ("queued", "checking"):
             self.violate("IX", f"an executor started for {eid}, which is {e.get('status')}")
-        self._spawn(f"check-{eid}", lambda: A.check_entry(repo, eid, *on_clock(self.sim_clock)))
+        self._spawn(f"check-{eid}", lambda: A.check_entry(repo, eid, *on_clock(self.sim_clock), ctx=case_context()))
 
     def spawn_batch_executor(self, repo, d, bid):
-        self._spawn(f"batch-{bid}", lambda: A.check_batch(repo, bid, *on_clock(self.sim_clock)))
+        self._spawn(f"batch-{bid}", lambda: A.check_batch(repo, bid, *on_clock(self.sim_clock), ctx=case_context()))
 
     def _spawn(self, name, fn):
         t = Task(self, name, fn)
@@ -866,8 +867,8 @@ class Sim:
         A.change_landed = self.change_landed
         A.hook_query = self.hook_query
         A.commit_fixes = self.commit_fixes
-        A.gate_reds = lambda repo: set(self.reds)
-        A.gov_class_of = lambda repo, commits, reds: "check"
+        A.gate_reds = lambda repo, ctx=None: set(self.reds)
+        A.gov_class_of = lambda repo, commits, reds, ctx=None: "check"
         A.blame_land_refusal = lambda *a, **k: None
         A.fix_replay_refusal = lambda *a, **k: None  # the sim's reds register no replay (red-workflows.tsv)
         A.run_entry_checks = self.run_entry_checks
@@ -1115,7 +1116,7 @@ class Sim:
         import argparse, contextlib, io
         with contextlib.redirect_stdout(io.StringIO()):
             A.cmd_waiting(argparse.Namespace(wcmd="cancel", repo=self.repo, entry=ch.eid, hold_for=None,
-                                             hold_why=None), *on_clock(self.sim_clock), registry(A))  # a cancel never waits
+                                             hold_why=None), *on_clock(self.sim_clock), registry(A), ctx=case_context())  # a cancel never waits
 
     def records(self):
         """The queue's changes, as its readers see them (waitingdir.ChangeRecords: each change item's record, its state
@@ -1248,7 +1249,7 @@ class Sim:
             it = st.item("red", it["id"])
             if it["state"] != "leased":
                 it = A.red_move(st, it, "leased", "taken again")
-            A.red_lease_ended(st, it, st.get(A.red_lease(key)), None, self.clock[0])
+            A.red_lease_ended(st, it, st.get(A.red_lease(key)), None, self.clock[0], ctx=case_context())
         self.launch_deaths[key] = {"same": len(set(causes)) == 1, "said": False}
 
     def check_launch_deaths(self):
@@ -1382,9 +1383,9 @@ class Sim:
         self.open_before = set(self.reds) | set(self.outside)
         reds = set(self.reds)
         A.close_landed_changes(self.repo, self.sim_clock, self.store, self.d)
-        for x in A.tick_changes(self.repo, self.d, *on_clock(self.sim_clock)):
+        for x in A.tick_changes(self.repo, self.d, *on_clock(self.sim_clock), ctx=case_context()):
             A.wlog(self.d, f"tick {self.tick}: {x}")
-        for x in A.tick_batch(self.repo, self.d, *on_clock(self.sim_clock)):
+        for x in A.tick_batch(self.repo, self.d, *on_clock(self.sim_clock), ctx=case_context()):
             A.wlog(self.d, f"tick {self.tick}: {x}")
         if self.tick % 10 == 0:
             A.stats_pass(self.sim_clock, self.store, self.repo, self.d)

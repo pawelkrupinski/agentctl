@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, NamedTuple
+from agentctl.context import Context
 from agentctl.statemachines import machine_state
 from agentctl.timefmt import ts
 from agentctl.core import git, remote
@@ -23,16 +24,16 @@ from agentctl.queuepush import DEEP_BATCHES, check_tree_slot_free
 from agentctl.batchpush import push_batch_item
 
 
-def tick_batch(repo: str, d: str, clock: Any, st: Any) -> list[str]:
+def tick_batch(repo: str, d: str, clock: Any, st: Any, *, ctx: Context) -> list[str]:
     """One tick of the repository's batch. Returns what it did. A queue that stops moving is named by queuestall."""
     with facts_tick():  # the queue facts read once for the tick (changekind.py)
-        return _tick_batch(repo, d, st)
+        return _tick_batch(repo, d, st, ctx=ctx)
 
 
-def _tick_batch(repo: str, d: str, st: Any) -> list[str]:
+def _tick_batch(repo: str, d: str, st: Any, *, ctx: Context) -> list[str]:
     """A backlog batch's members brought in line with it (backlog_reconcile), then the batch's step. st: the tick's
     store, on the tick's clock (batch_step and the push read the time on it)."""
-    return backlog_reconcile(d, st) + batch_step(repo, d, st)
+    return backlog_reconcile(d, st) + batch_step(repo, d, st, ctx=ctx)
 
 
 class BatchTick(NamedTuple):
@@ -63,7 +64,7 @@ class Assembled(NamedTuple):
     range_base: str | None
 
 
-def batch_step(repo: str, d: str, st: Any) -> list[str]:
+def batch_step(repo: str, d: str, st: Any, *, ctx: Context) -> list[str]:
     t = st.clock()
     waiting = ChangeRecords(st, d).waiting()
     it = current_batch(st, d)
@@ -73,12 +74,12 @@ def batch_step(repo: str, d: str, st: Any) -> list[str]:
         return []
     if land_hold(st, t):  # the store's hold: honoured wherever `land hold` ran
         return ["held"]
-    reds = gate_reds(repo)
-    tick, acts = batch_plan(repo, d, st, t, it, reds)
-    return acts if tick is None else batch_state_step(tick)
+    reds = gate_reds(repo, ctx=ctx)
+    tick, acts = batch_plan(repo, d, st, t, it, reds, ctx=ctx)
+    return acts if tick is None else batch_state_step(tick, ctx=ctx)
 
 
-def batch_state_step(tick: BatchTick) -> list[str]:
+def batch_state_step(tick: BatchTick, *, ctx: Context) -> list[str]:
     """What the open batch's state asks for now: its deadline, and then by state -- blocked by the red gate, assembling,
     checking, pushing."""
     repo, d, st, t, it, reds = tick.repo, tick.d, tick.st, tick.t, tick.it, tick.reds
@@ -91,7 +92,7 @@ def batch_state_step(tick: BatchTick) -> list[str]:
         if tick.ready:
             batch_move(st, it, "assembling")
             return [f"batch {it['id']}: assembling"]
-        return red_precheck(repo, d, st, it, tick.waiting, reds)
+        return red_precheck(repo, d, st, it, tick.waiting, reds, ctx=ctx)
     if state == "assembling":
         return batch_assemble(tick)
     if state in ("checking", "bisecting"):
@@ -101,19 +102,19 @@ def batch_state_step(tick: BatchTick) -> list[str]:
     return []
 
 
-def batch_plan(repo: str, d: str, st: Any, t: float, it: Any, reds: Any) -> tuple[BatchTick | None, list[str]]:
+def batch_plan(repo: str, d: str, st: Any, t: float, it: Any, reds: Any, *, ctx: Context) -> tuple[BatchTick | None, list[str]]:
     """(the tick, []) once the batch to act on is chosen -- the open one, or a new one made for what may go now; (None,
     acts) when nothing is to be done: the acts say what the pass did instead."""
-    waiting = waiting_after_release(repo, d, st, t, it, reds)
+    waiting = waiting_after_release(repo, d, st, t, it, reds, ctx=ctx)
     depth = (it or {}).get("data", {}).get("depth") or "fast"
-    fix_waits = gate_fix_waits(repo, st, reds, waiting)
+    fix_waits = gate_fix_waits(repo, st, reds, waiting, ctx=ctx)
     if batch_forming(it, depth, waiting):
-        it, ready, depth, acts = batch_formed(repo, d, st, t, it, reds, depth)
+        it, ready, depth, acts = batch_formed(repo, d, st, t, it, reds, depth, ctx=ctx)
         if it is None:
             return None, acts
     else:
         unread_note(d, reds, waiting, st)
-        ready = batch_ready_now(repo, st, it, waiting, reds, fix_waits)
+        ready = batch_ready_now(repo, st, it, waiting, reds, fix_waits, ctx=ctx)
     if not it:  # red: a fix waits AND something may land on red now (see BLOCKED BY WHAT MUST WAIT)
         it = new_batch(st, d, "assembling" if ready else "blocked-red")
     return BatchTick(repo, d, st, t, it, waiting, reds, ready, depth, fix_waits), []
@@ -125,36 +126,36 @@ def batch_forming(it: Any, depth: Any, waiting: Any) -> bool:
     return not waiting and (not it or (depth in DEEP_BATCHES and it["state"] == "assembling"))
 
 
-def gate_fix_waits(repo: str, st: Any, reds: Any, waiting: Any) -> bool:
+def gate_fix_waits(repo: str, st: Any, reds: Any, waiting: Any, *, ctx: Context) -> bool:
     """Whether the gate is red and a waiting change names its red (THE RED-LANDING RULE: one that may land on it is
     released to the queue; one that waits beside a production commit naming no red stays)."""
     facts = facts_for(reds, st)
-    return bool(reds) and any(may_land_on_red(facts, e, repo, store=st).names_gate_red for e in waiting)
+    return bool(reds) and any(may_land_on_red(facts, e, repo, store=st, ctx=ctx).names_gate_red for e in waiting)
 
 
-def waiting_after_release(repo: str, d: str, st: Any, t: float, it: Any, reds: Any) -> list[dict[str, Any]]:
+def waiting_after_release(repo: str, d: str, st: Any, t: float, it: Any, reds: Any, *, ctx: Context) -> list[dict[str, Any]]:
     """The waiting entries, read again when a red fix was released: at green, or while red when the open red names it
     (release_red_fixes: WR self-heals)."""
     waiting = ChangeRecords(st, d).waiting()
-    if (not it or it["state"] in ("blocked-red", "assembling")) and release_red_fixes(repo, d, st, reds, waiting, t):
+    if (not it or it["state"] in ("blocked-red", "assembling")) and release_red_fixes(repo, d, st, reds, waiting, t, ctx=ctx):
         return ChangeRecords(st, d).waiting()
     return waiting
 
 
-def batch_ready_now(repo: str, st: Any, it: Any, waiting: Any, reds: Any, fix_waits: bool) -> Any:
+def batch_ready_now(repo: str, st: Any, it: Any, waiting: Any, reds: Any, fix_waits: bool, *, ctx: Context) -> Any:
     """The waiting entries a batch may take now: none while a red gate holds them (unless a fix waits for green), none
     for a batch already checking."""
     if (reds and not fix_waits) or (it and it["state"] not in ("blocked-red", "assembling")):
         return []
-    return batch_ready(repo, waiting, reds, st)
+    return batch_ready(repo, waiting, reds, st, ctx=ctx)
 
 
-def batch_formed(repo: str, d: str, st: Any, t: float, it: Any, reds: Any, depth: Any) -> tuple[Any, list[dict[str, Any]], str, list[str]]:
+def batch_formed(repo: str, d: str, st: Any, t: float, it: Any, reds: Any, depth: Any, *, ctx: Context) -> tuple[Any, list[dict[str, Any]], str, list[str]]:
     """(the batch, its ready members, its depth, acts) for a pass with no waiting change: THE PUSH BATCH (checked changes,
     each owing a verify round) before THE BACKLOG BATCH (queued changes). A new batch is made only with a check tree free
     for it (an assembling batch waiting for one holds every solo check behind it, and is held itself past its 5-min
     deadline); the batch is None when there is nothing to form."""
-    push, ready = batch_candidates(repo, d, st, t, it, reds, depth)
+    push, ready = batch_candidates(repo, d, st, t, it, reds, depth, ctx=ctx)
     if not it:
         if not ready or not check_tree_slot_free(st, repo, d):
             return None, ready, depth, []
@@ -165,12 +166,12 @@ def batch_formed(repo: str, d: str, st: Any, t: float, it: Any, reds: Any, depth
     return it, ready, it["data"]["depth"], []
 
 
-def batch_candidates(repo: str, d: str, st: Any, t: float, it: Any, reds: Any, depth: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def batch_candidates(repo: str, d: str, st: Any, t: float, it: Any, reds: Any, depth: Any, *, ctx: Context) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(the push batch's candidates, what is ready): the checked changes owing a verify round, else the queued ones a
     backlog batch would take -- each asked only when the batch is new or of that depth."""
     facts = facts_for(reds, st)
-    push = push_candidates(repo, d, reds, st, t, facts) if not it or depth == "verify" else []
-    return push, push or (backlog_candidates(repo, d, reds, st, t, facts) if not it or depth == "full" else [])
+    push = push_candidates(repo, d, reds, st, t, facts, ctx=ctx) if not it or depth == "verify" else []
+    return push, push or (backlog_candidates(repo, d, reds, st, t, facts, ctx=ctx) if not it or depth == "full" else [])
 
 
 def batch_assemble(tick: BatchTick) -> list[str]:

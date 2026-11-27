@@ -9,6 +9,7 @@ import base64, os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from test_red import run  # noqa: E402
 from test_red_repos import RedReposBase, CORE  # noqa: E402
 
@@ -225,10 +226,10 @@ class RetiredTickTest(RedReposBase):
                       [{"name": "smoke", "conclusion": "failure", "steps": []}])
         self.assertIn("workflow Sandbox Smoke is gone from main",
                       A.red_run_retired(CORE, "Sandbox Smoke", {"databaseId": 41000000002, "number": 77}, ["smoke"],
-                                        now=A.parse_time("2026-10-31T22:00:00Z").timestamp()))
+                                        now=A.parse_time("2026-10-31T22:00:00Z").timestamp(), ctx=case_context()))
         self.api(f"repos/{CORE}/actions/runs/41000000003", {"id": 41000000003, "path": "dynamic/dependabot/dependabot-updates",
                                                             "head_sha": OLD, "created_at": "2026-10-31T21:00:00Z"})
-        self.assertIsNone(A.red_run_retired(CORE, "Dependabot Updates", {"databaseId": 41000000003}, ["Dependabot"]))
+        self.assertIsNone(A.red_run_retired(CORE, "Dependabot Updates", {"databaseId": 41000000003}, ["Dependabot"], ctx=case_context()))
 
     def test_ci_why_shows_a_retired_run_as_no_red(self):
         self.flows(MAIN, {"playwright-deployed.yml": PW_NEW})
@@ -243,8 +244,8 @@ class RetiredTickTest(RedReposBase):
                                           "headSha": OLD, "url": "u", "number": 1081, "status": "completed",
                                           "conclusion": "failure", "workflowName": "Playwright Tests (deployed)"})
         self.put("run-41241638844.log", "playwright (dev, job 1)\tRun playwright\t2026-10-31T21:02:00Z Error: POST 400\n")
-        A.ci_runs().clear()
-        red, text = A.ci_why(CORE, repo=self.r.path, store=A.process_store())
+        case_context().runs.clear()
+        red, text = A.ci_why(CORE, repo=self.r.path, store=A.process_store(), ctx=case_context())
         self.assertFalse(red, text)
         self.assertIn("Playwright Tests (deployed): RETIRED (run 41241638844 #1081", text)
         self.assertIn("main is green for the gate", text)

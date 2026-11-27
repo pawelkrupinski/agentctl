@@ -4,6 +4,7 @@ import contextlib, io, os, subprocess, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from test_wait_run import FakeForge, job  # noqa: E402
 from fake_clock import FakeClock  # noqa: E402
@@ -179,7 +180,7 @@ class CiWhyTest(FakeForge):
                                run(90, 40, "Identity model convergence", "identity-model-convergence.yml")])
         saved, A.slug = A.slug, lambda repo: "pawelkrupinski/movies"
         try:
-            self.assertEqual(A.gate_reds("/any"), {"41", "91"})
+            self.assertEqual(A.gate_reds("/any", ctx=case_context()), {"41", "91"})
         finally:
             A.slug = saved
 
@@ -205,7 +206,7 @@ class CiWhyTest(FakeForge):
         saved, A.slug = A.slug, lambda repo: "pawelkrupinski/movies"
         try:
             with contextlib.redirect_stderr(io.StringIO()):
-                reds = A.gate_reds("/any")
+                reds = A.gate_reds("/any", ctx=case_context())
             self.assertEqual(reds, {"43", "93", "42", "92"})
         finally:
             A.slug = saved
@@ -219,9 +220,9 @@ class CiWhyTest(FakeForge):
         def fix(run_no):
             r.write("web/src/main/scala/A.scala", f"fix {run_no}\n")
             return r.commit(f"a fix\n\nFixes-Red: {run_no}")
-        self.assertFalse(A.must_wait(r.path, [fix(42)], reds, store), "a fix naming the episode's earlier run goes")
-        self.assertTrue(A.must_wait(r.path, [fix(39)], reds, store), "a fix naming an older episode's run waits")
-        self.assertTrue(A.must_wait(r.path, [fix(41)], reds, store), "a fix naming a run failing another way waits")
+        self.assertFalse(A.must_wait(r.path, [fix(42)], reds, store, ctx=case_context()), "a fix naming the episode's earlier run goes")
+        self.assertTrue(A.must_wait(r.path, [fix(39)], reds, store, ctx=case_context()), "a fix naming an older episode's run waits")
+        self.assertTrue(A.must_wait(r.path, [fix(41)], reds, store, ctx=case_context()), "a fix naming a run failing another way waits")
 
     def test_a_gating_workflow_not_on_main_yet_gates_nothing_and_the_rest_is_read(self):
         # 2026-11-08 16:35-18:10: agentctl's GATING named identity-takes.yml before the movies commit adding it reached
@@ -233,8 +234,8 @@ class CiWhyTest(FakeForge):
         saved, A.slug = A.slug, lambda repo: "pawelkrupinski/movies"
         try:
             with contextlib.redirect_stderr(io.StringIO()):
-                self.assertEqual(A.gate_reds("/any"), {"41", "91"})
-                gate = {n: d for n, d, _nw, _s in A.gate_runs("pawelkrupinski/movies")}
+                self.assertEqual(A.gate_reds("/any", ctx=case_context()), {"41", "91"})
+                gate = {n: d for n, d, _nw, _s in A.gate_runs("pawelkrupinski/movies", ctx=case_context())}
         finally:
             A.slug = saved
         takes = dict((f, n) for n, f in A.gate_flows("pawelkrupinski/movies"))["identity-takes.yml"]
@@ -252,7 +253,7 @@ class CiWhyTest(FakeForge):
                     raise exc
                 A.gh_json = broken
                 with contextlib.redirect_stderr(io.StringIO()):
-                    self.assertEqual(A.gate_reds("/any"), {A.GATE_UNREAD}, exc)
+                    self.assertEqual(A.gate_reds("/any", ctx=case_context()), {A.GATE_UNREAD}, exc)
         finally:
             A.slug, A.gh_json = saved
 
@@ -263,7 +264,7 @@ class CiWhyTest(FakeForge):
                                run(3190, 900, "Identity model convergence", "identity-model-convergence.yml")])
         saved, A.slug = A.slug, lambda repo: "pawelkrupinski/movies"
         try:
-            self.assertEqual(A.gate_reds("/any"), {"2047", "3192"})
+            self.assertEqual(A.gate_reds("/any", ctx=case_context()), {"2047", "3192"})
         finally:
             A.slug = saved
 
@@ -485,7 +486,7 @@ class CiWhyTest(FakeForge):
         self.assertIn("Verify scrape recording: RED", out.partition("Outside the gate")[2])
         saved, A.slug = A.slug, lambda repo: "pawelkrupinski/movies"
         try:
-            self.assertEqual(A.gate_reds("/any"), set(), "land and the processor read the same gate")
+            self.assertEqual(A.gate_reds("/any", ctx=case_context()), set(), "land and the processor read the same gate")
         finally:
             A.slug = saved
 
@@ -607,5 +608,5 @@ class CachedGateTest(CiWhyTest):
         subprocess.run(["git", "-C", clone, "remote", "add", "origin", "git@github.com:pawelkrupinski/movies.git"], check=True)
         self.scenario([])
         A._last_gate_publish[0] = 0
-        A.maybe_publish_gate(clone, A.CurrentStore(A.process_store), registry(A))
+        A.maybe_publish_gate(clone, A.CurrentStore(A.process_store), registry(A), ctx=case_context())
         self.assertTrue(A.gate_summary_line(A.state_read().get("summary") or {}, A.slug(clone))[1] or os.path.exists(self.gs))

@@ -143,13 +143,13 @@ def _verify_due(e: dict[str, Any], t: float) -> bool:
     return bool(e.get("verify")) and e.get("status") in ("queued", "checking") and not float(e.get("retry_after") or 0) > t
 
 
-def classify_change(e, facts, t=None, repo=None, store=None):
+def classify_change(e, facts, t=None, repo=None, store=None, *, ctx):
     """THE KIND of change entry e (or an item's data) under facts (queue_facts). Its red fix and gate fix are THE
     RED-LANDING RULE's (redland.may_land_on_red): with repo, read from the entry's commits' counting trailers. repo: also
     ask whether a queued change is an identity change (batch.identity_change, cached per entry and head) when nothing
     else already keeps it out of a backlog batch; otherwise `identity` is None (unasked)."""
     t = t if t is not None else epoch_now()
-    landing = may_land_on_red(facts, e, repo, store=store)
+    landing = may_land_on_red(facts, e, repo, store=store, ctx=ctx)
     names, reds = landing.names, list(landing.reds)
     red_fix, gate_fix = landing.red_fix, landing.gate_fix
     backlog_why, identity = _backlog_barrier(e, red_fix, repo)
@@ -186,11 +186,11 @@ def record_change_kind(st, e, kind):
         pass  # the next tick records it
 
 
-def classify_queue(repo, d, entries, facts, t, st, record=True):
+def classify_queue(repo, d, entries, facts, t, st, record=True, *, ctx):
     """{entry id: kind} for entries, each recorded on its item (record_change_kind) when st is given."""
     kinds = {}
     for e in entries:
-        kinds[e["id"]] = classify_change(e, facts, t, repo, st)
+        kinds[e["id"]] = classify_change(e, facts, t, repo, st, ctx=ctx)
         if st is not None and record:
             record_change_kind(st, e, kinds[e["id"]])
     return kinds

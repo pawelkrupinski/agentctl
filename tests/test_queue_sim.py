@@ -450,10 +450,10 @@ MUTATIONS = {
         "if False:  # MUTATION", "loadlone"),
     "pushes first, then the holds": (
         '    for phase in ("push", "check"):\n'
-        '        held = backlog_held(repo, d, reds, st, t, facts)\n'
-        '        pheld = push_held(repo, d, reds, st, t, facts)\n',
-        '    held = backlog_held(repo, d, reds, st, t, facts)\n'
-        '    pheld = push_held(repo, d, reds, st, t, facts)\n'
+        '        held = backlog_held(repo, d, reds, st, t, facts, ctx=ctx)\n'
+        '        pheld = push_held(repo, d, reds, st, t, facts, ctx=ctx)\n',
+        '    held = backlog_held(repo, d, reds, st, t, facts, ctx=ctx)\n'
+        '    pheld = push_held(repo, d, reds, st, t, facts, ctx=ctx)\n'
         '    for phase in ("push", "check"):\n', "load"),
     # (a) ONE CLASSIFIER: a fix of a red outside the gate counted as ordinary again (c74b64f's bug, now in one place)
     "changekind.py: a fix of any open red is a red fix": (

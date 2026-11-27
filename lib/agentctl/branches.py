@@ -1,6 +1,7 @@
 # agentctl, part `branches`: branch runs: their inputs against main's, their state, branch reds and their route; `agentctl dispatch`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 import datetime as dt
 import json
@@ -19,7 +20,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.owned import default_repo
 from agentctl.worktrees import merged_reason
 from agentctl.inbox import INBOX_TAIL
-from agentctl.ciruns import main_runs_of
+
 from agentctl.runsigs import save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
 from agentctl.fixerblockers import short_flow
@@ -110,11 +111,11 @@ def branch_exists(o_r, name):
         return not re.search(r"HTTP 404|Not Found", str(e))
 
 
-def branch_state(o_r, repo, store, prev=None):
+def branch_state(o_r, repo, store, prev=None, *, ctx):
     """[entry] per tracked (branch, workflow): the newest completed run, its owner, whether its branch is alive, and for
     a red one whether it PREDICTS MAIN RED (why not). A red no longer listed carries over from prev until its branch
     is gone."""
-    latest, newest_main = newest_branch_runs(o_r)
+    latest, newest_main = newest_branch_runs(o_r, ctx=ctx)
     carry_over_reds(latest, prev)
     reds = {k: r for k, r in latest.items() if r.get("conclusion") in RED_CONCLUSIONS}
     recs = {r["databaseId"]: owner_of(repo, store, b, r) for (b, _wf), r in reds.items()}
@@ -139,7 +140,7 @@ def carry_over_reds(latest: Any, prev: Any) -> Any:
             latest[k] = dict(e["run"], headBranch=e["branch"], workflowName=e["workflow"])
 
 
-def newest_branch_runs(o_r: Any) -> Any:
+def newest_branch_runs(o_r: Any, *, ctx: Context) -> Any:
     """({(branch, workflow): its newest completed run}, {workflow: main's newest completed run}) from the newest
     BRANCH_RUNS_LIMIT runs listed and the gate and outside workflows' lists."""
     # listing: the newest BRANCH_RUNS_LIMIT; a red no longer listed carries over from prev until its branch is gone
@@ -154,13 +155,13 @@ def newest_branch_runs(o_r: Any) -> Any:
             newest_main.setdefault(wf, r)
         elif tracked_branch(b, recorded):
             latest.setdefault((b, wf), r)
-    newer_gate_mains(o_r, newest_main)
+    newer_gate_mains(o_r, newest_main, ctx=ctx)
     return latest, newest_main
 
 
-def newer_gate_mains(o_r: str, newest_main: Any) -> Any:
+def newer_gate_mains(o_r: str, newest_main: Any, *, ctx: Context) -> Any:
     """The gate and outside workflows' own lists of main's runs, a newer completed one replacing the listing's."""
-    for wf, rs in main_runs_of(o_r).lists():
+    for wf, rs in ctx.runs.main_runs_of(o_r).lists():
         m = next((r for r in rs if r.get("status") == "completed"), None)
         if m and (wf not in newest_main or m["databaseId"] > newest_main[wf]["databaseId"]):
             newest_main[wf] = m

@@ -1,6 +1,7 @@
 # agentctl, part `redvault`: vault asks, blocks nobody can see clear.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 import re
 import time
@@ -219,13 +220,13 @@ def _unblock_one(store: Any, it: Any, who: Any, why: Any, t: Any) -> Any:
                                                          ": its BLOCKED ON OWNER verdict struck") + f" -- {why}")
 
 
-def red_unblock(store, o_r, target, why, who=None):
+def red_unblock(store, o_r, target, why, who=None, *, ctx):
     """(rc, lines) of `red unblock`: the reds a target names are no longer the owner's -- a live block lease holding
     them is ended (RELEASED: the tick offers them again, never escalated) and an UNBLOCKED entry ends their history, so a
     stale BLOCKED ON OWNER verdict is no longer their last word."""
     if not str(why or "").strip():
         return 2, ["NOT UNBLOCKED: --why \"<what changed>\" (the owner did it, it is superseded by ...)"]
-    items = red_targets(store, o_r, target, create=False)
+    items = red_targets(store, o_r, target, create=False, ctx=ctx)
     if not items:
         return 1, [f"NOT UNBLOCKED: #{target} names no open red"]
     who = who or claimant(safe_cwd())
@@ -241,16 +242,16 @@ class NotBlocked(Exception):
         self.rc = rc
 
 
-def block_target_units(st: Any, o_r: str, n: str) -> tuple[Any, list[Any], list[Any]]:
+def block_target_units(st: Any, o_r: str, n: str, *, ctx: Context) -> tuple[Any, list[Any], list[Any]]:
     """(workflow name, units, the reds already known) of `red block`'s target: a red key, or a run the tick has seen
     (as `red claim` finds it)."""
     name, units = None, []
-    known = red_targets(st, o_r, n, create=False)
+    known = red_targets(st, o_r, n, create=False, ctx=ctx)
     try:
-        name, _r, units = red_run_units(o_r, n)
+        name, _r, units = red_run_units(o_r, n, ctx=ctx)
     except (Exception, SystemExit):
         if not known:
-            name, _r = resolve_run(o_r, n)
+            name, _r = resolve_run(o_r, n, ctx=ctx)
     if known and name and name != known[0]["data"].get("workflow"):  # a bare NUMBER another workflow's run also has
         name, units = None, []  # (issue 20261107T072345-7bca40: `red block 14` read Report run timings #14): the red's
     if known and not units:  # issue 20261119T030011-293b9a: a key, or a run whose units no longer read (a green rerun)
@@ -422,17 +423,17 @@ def unclear_probe(o_r: str, a: Any, cause: Any, old: Any, om: Any, name: Any, n:
     return iprobe
 
 
-def block_reds(st: Any, o_r: str, a: Any, n: str, registry: ConditionRegistry) -> int:
+def block_reds(st: Any, o_r: str, a: Any, n: str, registry: ConditionRegistry, *, ctx: Context) -> int:
     """The stages of `red block`: the target's units, what may be blocked, the reds and the fixers holding them, the
     probe that clears the block, then the block lease the reds join. NotBlocked refuses at any stage."""
-    name, units, known = block_target_units(st, o_r, n)
+    name, units, known = block_target_units(st, o_r, n, ctx=ctx)
     cause = getattr(a, "cause", None)
     lname, old, om = existing_block(st, cause)
     owner_cause = getattr(a, "owner_cause", None) or om.get("owner_cause")
     owner_cmd = a.owner_cmd or om.get("cmd")
     vault = vault_ask_ns(a.owner_cmd)  # a locked vault: no owner cause, any red kind (block_on_vault)
     check_blockable(n, units, vault, owner_cmd, owner_cause)
-    items = known or (red_targets(st, o_r, n) if units else [])
+    items = known or (red_targets(st, o_r, n, ctx=ctx) if units else [])
     handed = handed_leases(st, items)
     refuse_live_fixer(st, items, handed, n)
     if vault and items:
@@ -454,13 +455,13 @@ def block_reds(st: Any, o_r: str, a: Any, n: str, registry: ConditionRegistry) -
     return 0
 
 
-def red_block(st: Any, o_r: str, a: Any, registry: ConditionRegistry) -> int:
+def red_block(st: Any, o_r: str, a: Any, registry: ConditionRegistry, *, ctx: Context) -> int:
     """`red block`: the red waits on the OWNER, for an owner cause only, as a block lease the tick renews while its
     probe -- named (--until-green / --until-http / --until-tcp), an open cause's, or the red's own workflow going green
     -- still fails and its justification holds. --cause NAME: ONE lease for that outage, every red it explains attached.
     registry: the process's ConditionRegistry (an open outage's probe run again by its kind)."""
     try:
-        return block_reds(st, o_r, a, str(a.run).lstrip("#"), registry)
+        return block_reds(st, o_r, a, str(a.run).lstrip("#"), registry, ctx=ctx)
     except NotBlocked as e:
         print(f"NOT BLOCKED: {e}")
         return e.rc

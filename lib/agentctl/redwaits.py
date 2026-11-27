@@ -5,6 +5,7 @@
 from typing import Any
 import re
 import time
+from agentctl.context import Context
 from agentctl.statemachines import is_terminal
 from agentctl.timefmt import iso_at, parse_time
 from agentctl.redrecord import lease_is_live, red_active_of, red_lease, red_of_key, red_what
@@ -19,7 +20,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.workflowdispatch import red_verify_dispatch
 from agentctl.stuckruns import run_jobs
 from agentctl.redblock import BLOCK_MAX, BLOCK_TTL
-from agentctl.ciruns import main_runs
+
 
 
 # A RED WHOSE FIX IS ANOTHER RED'S COMMIT (2026-11-16, Order independence #78, e948278d144a): its fix was the main-tests
@@ -142,13 +143,13 @@ def created_after(run: Any, since: float) -> bool:
                    catch=(KeyError, ValueError, TypeError))
 
 
-def quota_run_verdict(o_r: str, a: Any, r: Any) -> tuple[bool, str] | None:
+def quota_run_verdict(o_r: str, a: Any, r: Any, *, ctx: Context) -> tuple[bool, str] | None:
     """(cleared, why) of one run since the quota was spent: past its first job (a['job'], the preflight) or green clears
     it, that job failing again keeps it; None when the run says nothing yet."""
     label = f"{a['workflow']} #{r.get('number')}"
     if r.get("conclusion") == "success":
         return True, f"{label} green"
-    first = next((j for j in run_jobs(o_r, r) or [] if j.get("name") == a.get("job")), None)
+    first = next((j for j in run_jobs(o_r, r, ctx=ctx) or [] if j.get("name") == a.get("job")), None)
     conclusion = first.get("conclusion") if first else None
     if conclusion == "success":
         return True, f"{label}: {a.get('job')} passed (the key is accepted again)"
@@ -157,15 +158,15 @@ def quota_run_verdict(o_r: str, a: Any, r: Any) -> tuple[bool, str] | None:
     return None
 
 
-def probe_quota_reset(a):
+def probe_quota_reset(a, *, ctx):
     """The key accepted again: a run of a['workflow'] on main created after a['since'] got past its first job
     (a['job'], the preflight) -- or the whole run is green."""
     o_r = a.get("repo") or SHORT["movies"]
     # listing: runs created since the block; none listed keeps the wait (a probe that cannot tell never clears it)
-    runs = main_runs(o_r, a["workflow"], 10)
+    runs = ctx.runs.main_runs(o_r, a["workflow"], 10)
     since = float(a.get("since") or 0)
     for r in runs or []:
-        verdict = created_after(r, since) and quota_run_verdict(o_r, a, r)
+        verdict = created_after(r, since) and quota_run_verdict(o_r, a, r, ctx=ctx)
         if verdict:
             return verdict
     return False, (f"no run of {a['workflow']} since the quota was spent; the next window opens "

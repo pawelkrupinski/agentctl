@@ -7,6 +7,7 @@ import contextlib, io, os, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 
@@ -231,7 +232,7 @@ class RevertNoticeTest(unittest.TestCase):
 
     def test_the_machine_is_ticked_and_no_policy(self):
         self.assertEqual(A.DEADLINE_TICKS["revert"], "tick_reverts")
-        self.assertIn("reverts", [n for n, _ in A.server_steps("/r", tempfile.mkdtemp(), lambda f: f, *on_clock(A.Clock()), registry(A))])
+        self.assertIn("reverts", [n for n, _ in A.server_steps("/r", tempfile.mkdtemp(), lambda f: f, *on_clock(A.Clock()), registry(A), ctx=case_context())])
         self.assertNotIn("revert", A.POLICIES)  # a notification: it holds and rejects nothing
 
 

@@ -14,6 +14,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402,F401 (puts lib on the path)
+from harness import case_context  # noqa: E402
 
 REDGATE_OUT = "NOT LANDED: main is red: only a fix"
 INFRA_OUT = "[error] sbt server disconnected"
@@ -57,6 +58,7 @@ def run_check_batch(module, script):
 
     def record(name, ret=None, show=lambda *a, **k: (a, k)):
         def fake(*a, **k):
+            k.pop("ctx", None)  # the Context is no call data (tests/golden_cases.py)
             log.append(f"{name} {show(*a, **k)}")
             return ret(*a, **k) if callable(ret) else ret
         return fake
@@ -84,7 +86,7 @@ def run_check_batch(module, script):
         "batch_drift_split": lambda repo, d, st, it, mem, tree, out: log.append(f"drift_split {out!r}") or 1,
         "bisect": lambda repo, d, mem, base, tree, clock, st, depth, runs, failed, range_base=None, cls=None:
             log.append(f"bisect {depth} {failed!r} {range_base} {cls}") or script["bisect"],
-        "culprit_own_failure": lambda st, repo, d, e, base, out, now: log.append(f"own {e['id']} {out!r} {now}") or script["own"],
+        "culprit_own_failure": lambda st, repo, d, e, base, out, now, ctx=None: log.append(f"own {e['id']} {out!r} {now}") or script["own"],
         "queue_verdict": record("verdict", show=lambda st, d, e, kind, text, lines: (e["id"], kind, text, lines)),
         "ChangeRecords": lambda st, d: types.SimpleNamespace(save=lambda e, d=d: save(d, e)),
         "wlog": record("wlog", show=lambda d, text: text),
@@ -95,7 +97,7 @@ def run_check_batch(module, script):
     with contextlib.ExitStack() as stack:
         for name, fake in patches.items():
             stack.enter_context(mock.patch.object(module, name, fake))
-        result = module.check_batch("REPO", "b1", FakeClock(), FakeBatchStore(log, script))
+        result = module.check_batch("REPO", "b1", FakeClock(), FakeBatchStore(log, script), ctx=case_context())
     return result, log
 
 

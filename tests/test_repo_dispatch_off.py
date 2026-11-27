@@ -6,6 +6,7 @@ import os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from test_red import run  # noqa: E402
 from test_red_repos import RedReposBase, CORE  # noqa: E402
 
@@ -63,8 +64,8 @@ class HeldOffInvariantTest(RepoDispatchOffTest):
         self.tool("red", "auto", "off", "--repo", "core")
         self.others(advance=60)
         self.assertEqual(self.st.item("red", it["id"])["state"], "dispatch-off")
-        self.assertEqual([x["id"] for x in A.red_unheld(self.st, self.t[0] + 600)], [])
-        A.red_enforce(self.st, {}, self.t[0] + 600)
+        self.assertEqual([x["id"] for x in A.red_unheld(self.st, self.t[0] + 600, ctx=case_context())], [])
+        A.red_enforce(self.st, {}, self.t[0] + 600, ctx=case_context())
         self.assertEqual(self.st.item("red", it["id"])["state"], "dispatch-off")
 
 

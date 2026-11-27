@@ -8,6 +8,7 @@ import os, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh, put_change  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 import test_queue  # noqa: E402
 
@@ -32,7 +33,7 @@ class DifferentialCheckTest(test_queue.QueueTest):
         saved = {n: getattr(A, n) for n in names}
         self.addCleanup(lambda: [setattr(A, n, v) for n, v in saved.items()])
         A.fetch_failed_log = lambda o_r, rid: self.logs[int(rid)]
-        A.gate_runs = lambda o_r, flows=None: [(n, r, None, 1) for n, r in self.main_runs]
+        A.gate_runs = lambda o_r, flows=None, ctx=None: [(n, r, None, 1) for n, r in self.main_runs]
         A.slug = lambda repo: "o/movies"
         A.GATED_REPOS = saved["GATED_REPOS"] + ("o/movies",)
         os.environ["AGENTCTL_REDS_DIR"] = tempfile.mkdtemp(dir=self.tmp.name)
@@ -159,7 +160,7 @@ class DifferentialCheckTest(test_queue.QueueTest):
         self.remote_fails(45, "::error::the pre-push checks ran past 80 minutes and were stopped")
         d, _c, _w = A.waiting_state(self.r.path)
         for n in (1, 2):
-            A.check_entry(self.r.path, eid, *on_clock(self.clock))
+            A.check_entry(self.r.path, eid, *on_clock(self.clock), ctx=case_context())
             e = A.ChangeRecords(A.process_store(), d).get(eid)
             self.assertEqual(e["status"], "queued", f"time cap {n}: infra, re-queued")
             e["retry_after"] = 0

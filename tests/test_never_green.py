@@ -6,6 +6,7 @@ import json, os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, GATING_CHECKS_TEMPLATE  # noqa: E402
+from harness import case_context  # noqa: E402
 from test_red import run, MOVIES  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 
@@ -31,7 +32,7 @@ class NeverGreenTest(RedsBase):
         return [it for it in self.st.items("red") if it["data"]["workflow"] == "Alert backtest"]
 
     def summary(self):
-        return A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), store=A.process_store())[1]
+        return A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), store=A.process_store(), ctx=case_context())[1]
 
     def test_a_never_green_workflows_red_is_untracked_until_its_first_green_run(self):
         self.backtest((903, 3, "failure"), (902, 2, "failure"), (901, 1, "failure"))
@@ -113,7 +114,7 @@ class RegistryGateTest(RedsBase):
     def gate_reds(self):
         saved, A.slug = A.slug, lambda repo: MOVIES
         try:
-            return A.gate_reds(self.r.path)
+            return A.gate_reds(self.r.path, ctx=case_context())
         finally:
             A.slug = saved
 
@@ -123,10 +124,10 @@ class RegistryGateTest(RedsBase):
         self.main_red(40, 20, job="deps")
         self.registry("unproven")
         self.assertEqual(self.gate_reds(), set(), "red only in an unproven job: report only")
-        self.assertEqual(A.gate_report_only(MOVIES, "Main", {"databaseId": 40, "conclusion": "failure"}),
+        self.assertEqual(A.gate_report_only(MOVIES, "Main", {"databaseId": 40, "conclusion": "failure"}, ctx=case_context()),
                          (True, "report only, unproven: deps"))
-        A.ci_runs().clear()
-        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store())
+        case_context().runs.clear()
+        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store(), ctx=case_context())
         self.assertFalse(red, text)
         self.assertIn("Main: RED, REPORT ONLY (run 40 #20, failure): report only, unproven: deps", text)
         self.tick()
@@ -134,10 +135,10 @@ class RegistryGateTest(RedsBase):
         self.assertEqual([(i["data"]["red_kind"], i["data"]["gate"]) for i in main], [("outside", False)],
                          "no gate red: tracked as outside the gate")
         A._gating_rows.clear()
-        A.ci_runs().clear()
+        case_context().runs.clear()
         self.registry("2722")
         self.assertEqual(self.gate_reds(), {"20", "40"}, "a proven row's red holds the push")
-        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store())
+        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store(), ctx=case_context())
         self.assertTrue(red, text)
 
     def test_a_job_with_no_row_is_unproven_as_the_hook_reads_it_and_ci_why_names_the_missing_row(self):
@@ -148,12 +149,12 @@ class RegistryGateTest(RedsBase):
                                  "conclusion": "success", "headSha": self.sha})
         self.main_red(40, 20, job="brand-new")
         self.registry("2722")  # rows for deps and test (rest); none for brand-new
-        report, why = A.gate_report_only(MOVIES, "Main", {"databaseId": 40, "conclusion": "failure"})
+        report, why = A.gate_report_only(MOVIES, "Main", {"databaseId": 40, "conclusion": "failure"}, ctx=case_context())
         self.assertTrue(report, why)
         self.assertIn("no row in .github/gating-checks.tsv: brand-new", why)
         self.assertEqual(self.gate_reds(), set(), "the hook's verdict: report only, no push held")
-        A.ci_runs().clear()
-        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store())
+        case_context().runs.clear()
+        red, text = A.ci_why(MOVIES, repo=self.r.path, store=A.process_store(), ctx=case_context())
         self.assertFalse(red, text)
         self.assertIn("Main: RED, REPORT ONLY", text)
         self.assertIn("no row in .github/gating-checks.tsv: brand-new", text)

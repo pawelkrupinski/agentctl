@@ -14,6 +14,7 @@ import json, os, signal, subprocess, sys, time, types, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, put_change  # noqa: E402
+from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock, RealTimeClock  # noqa: E402
 from agentctl.clock import Clock  # noqa: E402
@@ -81,8 +82,8 @@ class RedsBase(RedBase):
         super().tearDown()
 
     def snap(self):
-        A.ci_runs().clear()
-        return A.ci_state_refresh(MOVIES)  # written: a workflow_green probe reads it
+        case_context().runs.clear()
+        return A.ci_state_refresh(MOVIES, ctx=case_context())  # written: a workflow_green probe reads it
 
     def tool(self, *argv, cwd=None, clock=None):
         return super().tool(*argv, cwd=cwd, clock=clock or TickClock(self.t))
@@ -90,7 +91,7 @@ class RedsBase(RedBase):
     def tick(self, dispatch=False, advance=0, snap=True):
         self.t[0] += advance
         return A.red_tick(self.st, MOVIES, self.r.path, self.snap() if snap else None, now_=self.t[0], dispatch=dispatch,
-                          sync=True, registry=registry(A))  # this process plays both hosts: the server's tick and the sync's claims
+                          sync=True, registry=registry(A), ctx=case_context())  # this process plays both hosts: the server's tick and the sync's claims
 
     def reds(self):
         return {it["data"]["key"]: it for it in self.st.items("red")}
@@ -101,7 +102,7 @@ class RedsBase(RedBase):
         return its[0]
 
     def unheld(self):
-        return A.red_unheld(self.st, self.t[0])
+        return A.red_unheld(self.st, self.t[0], ctx=case_context())
 
     def green(self, rid, num):
         self.put("runs.json", [run(rid, num, "Main", "main.yml", self.sha)] + json.load(open(os.path.join(self.d, "runs.json"))))
@@ -404,7 +405,7 @@ class FixTest(RedsBase):
         self.tick(advance=3 * A.RED_FIX_GIVEUP)  # hours in the queue behind the red gate: still its holder
         self.assertEqual(self.only()["state"], "fix-pending")
         self.assertEqual(self.unheld(), [])
-        self.assertEqual(A.red_enforce(self.st, A.red_fix_facts(self.r.path, self.st), self.t[0]), [])
+        self.assertEqual(A.red_enforce(self.st, A.red_fix_facts(self.r.path, self.st, ctx=case_context()), self.t[0], ctx=case_context()), [])
         e = A.ChangeRecords(self.st, d).get(e["id"])
         self.r.push(at=wt, ref=f"{sha}:main")  # landed: on main (a landed sha main lacks is no fix)
         e.update(status="landed", landed_sha=sha, landed_at=A.iso_at(self.t[0]))
@@ -488,11 +489,11 @@ class FixTest(RedsBase):
         self.st.transition("change", e["id"], "checking", it["version"], event={"cause": "check-running"})
         self.st.merge_item("change", e["id"], {"record": None})
         self.t[0] += 3 * A.RED_FIX_GIVEUP
-        facts = A.red_fix_facts(self.r.path, self.st)
+        facts = A.red_fix_facts(self.r.path, self.st, ctx=case_context())
         self.assertEqual(facts["entries"], [])
         it = self.only()
-        self.assertEqual(A.red_fix_held(it, self.t[0], facts, self.st), f"fix {e['id']} checking")
-        self.assertEqual(A.red_enforce(self.st, facts, self.t[0]), [])
+        self.assertEqual(A.red_fix_held(it, self.t[0], facts, self.st, ctx=case_context()), f"fix {e['id']} checking")
+        self.assertEqual(A.red_enforce(self.st, facts, self.t[0], ctx=case_context()), [])
         self.assertEqual(self.only()["state"], "fix-pending")
 
     def test_an_unread_queue_is_never_read_as_nothing_queued(self):
@@ -503,13 +504,13 @@ class FixTest(RedsBase):
             raise OSError("[Errno 5] Input/output error: entries")
         A.waiting_state = unreadable
         try:
-            facts = A.red_fix_facts(self.r.path, self.st)
+            facts = A.red_fix_facts(self.r.path, self.st, ctx=case_context())
         finally:
             A.waiting_state = real
         self.assertIn("Input/output error", facts["queue_unread"])
         self.t[0] += 3 * A.RED_FIX_GIVEUP
-        self.assertIn(f"fix {e['id']} ", A.red_fix_held(self.only(), self.t[0], facts, self.st) or "")
-        self.assertEqual(A.red_enforce(self.st, facts, self.t[0]), [])
+        self.assertIn(f"fix {e['id']} ", A.red_fix_held(self.only(), self.t[0], facts, self.st, ctx=case_context()) or "")
+        self.assertEqual(A.red_enforce(self.st, facts, self.t[0], ctx=case_context()), [])
 
     def test_a_rejected_fix_past_the_requeue_grace_is_offered_again_naming_its_rejection(self):
         # 2026-11-22, Identity takes #349: its fix ...-779be4 was rejected at 04:28:56 (the landing check's itrest row);
@@ -522,7 +523,7 @@ class FixTest(RedsBase):
         self.tick(advance=60)
         self.assertEqual(self.only()["state"], "fix-pending")  # within the grace: its worktree may queue it again
         self.t[0] += A.RED_FIX_REQUEUE_GRACE  # the invariant meets it first (the red's own step raced the fixer's move)
-        acts = A.red_enforce(self.st, A.red_fix_facts(self.r.path, self.st), self.t[0])
+        acts = A.red_enforce(self.st, A.red_fix_facts(self.r.path, self.st, ctx=case_context()), self.t[0], ctx=case_context())
         self.assertEqual(len(acts), 1, acts)
         it = self.only()
         self.assertEqual(it["state"], "offered")
@@ -1200,9 +1201,9 @@ class OwnerTest(RedsBase):
         it, path = self.held_by_a_fixer("s-mine")
         os.environ.update(CLAUDE_CODE_SESSION_ID="s-mine", AGENTCTL_FIXER_RECORD=path)
         other = run(77, 20, "Report run timings", "timings.yml", self.sha)
-        A.ci_runs().clear()
-        self.addCleanup(A.ci_runs().clear)
-        A.main_runs_of(MOVIES).outside["Report run timings"] = [other]
+        case_context().runs.clear()
+        self.addCleanup(case_context().runs.clear)
+        case_context().runs.main_runs_of(MOVIES).outside["Report run timings"] = [other]
         rc, out = self.tool("red", "block", "20", "--owner-cause", "credentials", "--cmd", "set the key",
                             "--repo", "movies", cwd=self.r.path)
         self.assertNotIn("Report run timings", out)
@@ -1259,8 +1260,8 @@ class OwnerTest(RedsBase):
         A.project_events(self.st)  # the projector writes the escalations into the inbox; the notifier tells
         self.assertTrue(any(str(e.get("verdict")).startswith("RED UNCLAIMED") for e in A.inbox_entries()))
         # one live notification per item (2026-11-03, W6 152): three re-escalations of one red pending at once are ONE
-        self.assertEqual(A.notify_escalations(self.st), 1)
-        self.assertEqual(A.notify_escalations(self.st), 0)  # once
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 1)
+        self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 0)  # once
         wt = self.r.worktree("repo-wt-taker", branch="taker")
         self.assertEqual(self.tool("red", "claim", "20", "--repo", "movies", cwd=wt)[0], 0)
         self.t[0] = A.epoch_now()
@@ -1286,7 +1287,7 @@ class OwnerTest(RedsBase):
         saved = A.notify
         A.notify = lambda title, text, **kw: shown.append(text) or True
         try:
-            A.notify_escalations(self.st)
+            A.notify_escalations(self.st, ctx=case_context())
         finally:
             A.notify = saved
         self.assertEqual([x for x in shown if "UNCLAIMED" in x], [], shown)
@@ -1513,9 +1514,9 @@ class OldRedTest(RedsBase):
         self.made_callable_only([(True, "success")])
         snap = self.snap()
         self.assertEqual([o["name"] for o in snap["outside"]], ["Report run timings"])  # still observed, never re-opened
-        summary = A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path, store=A.process_store())[1]
+        summary = A.ci_why(MOVIES, summary=True, snap=snap, repo=self.r.path, store=A.process_store(), ctx=case_context())[1]
         self.assertNotIn("Report run timings", summary)
-        full = A.ci_why(MOVIES, snap=snap, repo=self.r.path, store=A.process_store())[1]
+        full = A.ci_why(MOVIES, snap=snap, repo=self.r.path, store=A.process_store(), ctx=case_context())[1]
         self.assertNotIn("offered at the next tick", full)
         self.assertIn("fixing: verified: Report run timings runs only when called", full)
 
@@ -1583,7 +1584,7 @@ class OldRedTest(RedsBase):
         it = self.stuck_verify("dispatched")
         A.red_move(self.st, it, "fix-pending", "fix None", data={"fix": None})
         self.assertEqual(len(self.unheld()), 1)
-        acts = A.red_enforce(self.st, {"entries": [], "landed": []}, self.t[0])
+        acts = A.red_enforce(self.st, {"entries": [], "landed": []}, self.t[0], ctx=case_context())
         self.assertTrue(acts)
         self.assertEqual(self.only()["state"], "offered")
         self.assertEqual(self.unheld(), [])
@@ -1635,7 +1636,7 @@ class OldRedTest(RedsBase):
 
 class AttachTest(RedsBase):
     def test_watch_red_attaches_by_run_number_with_its_author(self):
-        its = A.red_attach(self.st, "Main", 20, author={"session": "s1", "worktree": "/w"})
+        its = A.red_attach(self.st, "Main", 20, author={"session": "s1", "worktree": "/w"}, ctx=case_context())
         self.assertEqual(len(its), 1)
         self.assertEqual(self.st.item("red", its[0]["id"])["data"]["author"]["session"], "s1")
 
@@ -1969,9 +1970,9 @@ class AuditTest(RedsBase):
             return real(o_r, *args)
         A.main_workflow_files = lambda o_r: {"Nightly": "nightly.yml"}
         A.gh_json = gh
-        A.ci_runs().clear()
+        case_context().runs.clear()
         try:
-            out = A.outside_gate(MOVIES)
+            out = A.outside_gate(MOVIES, ctx=case_context())
         finally:
             A.main_workflow_files, A.gh_json = saved
         self.assertIn("Nightly", [n for n, *_ in out])
@@ -2082,7 +2083,7 @@ class StuckLimitTest(unittest.TestCase):
             calls.append(name)
             return (history or {}).get(name, [])
         out = A.stuck_runs(lists, now_=self.NOW, o_r=MOVIES, jobs_of=jobs_of, queue=queue or {},
-                           history_of=history_of, timeout_of=lambda name: (timeouts or {}).get(name))
+                           history_of=history_of, timeout_of=lambda name: (timeouts or {}).get(name), ctx=case_context())
         return out, calls
 
     def test_record_scrape_fixtures_172_is_judged_by_its_own_finished_runs(self):
@@ -2248,8 +2249,8 @@ class SetAsideByContentTest(unittest.TestCase):
 
     def test_a_rebased_copy_of_a_refuted_fix_is_no_fix(self):
         facts = {"landed": [("b" * 40, 5000.0, {"2473"}, "fix")], "patches": {"a" * 40: "p1", "b" * 40: "p1"}}
-        self.assertIsNone(A.red_fix_of(self.red(refuted=["a" * 40]), facts))
-        self.assertIsNone(A.red_fix_of(self.red(unverified=["a" * 40]), facts))
+        self.assertIsNone(A.red_fix_of(self.red(refuted=["a" * 40]), facts, ctx=case_context()))
+        self.assertIsNone(A.red_fix_of(self.red(unverified=["a" * 40]), facts, ctx=case_context()))
 
     def test_a_fix_an_earlier_spell_of_the_red_refuted_is_no_fix_of_the_next(self):
         # 2026-11-13, 784badc4406e.4 (Verify scrape recording #26): with the new code live it went fix-pending on
@@ -2261,14 +2262,14 @@ class SetAsideByContentTest(unittest.TestCase):
                               "created": "1970-01-01T00:10:00Z", "updated": "1970-01-01T02:00:00Z"}],
                  "landed": [(new, 9000.0, {"2473"}, "fix")], "key_runs": {"k1": ["999", "2473"]},
                  "key_aside": {"k1": [old]}}
-        self.assertEqual(A.red_fix_of(self.red(opened_at=10000.0), facts)["sha"], new)
+        self.assertEqual(A.red_fix_of(self.red(opened_at=10000.0), facts, ctx=case_context())["sha"], new)
         facts["key_aside"] = {}  # unrefuted, yet landed (its commit's time) long before this spell opened
-        self.assertEqual(A.red_fix_of(self.red(opened_at=10000.0), {**facts, "landed_at": {old: 600.0}})["sha"], new)
+        self.assertEqual(A.red_fix_of(self.red(opened_at=10000.0), {**facts, "landed_at": {old: 600.0}}, ctx=case_context())["sha"], new)
 
     def test_another_change_naming_the_red_is_still_its_fix(self):
         facts = {"landed": [("c" * 40, 5000.0, {"2473"}, "fix")], "patches": {"a" * 40: "p1", "c" * 40: "p2"}}
-        self.assertEqual(A.red_fix_of(self.red(refuted=["a" * 40]), facts)["sha"], "c" * 40)
+        self.assertEqual(A.red_fix_of(self.red(refuted=["a" * 40]), facts, ctx=case_context())["sha"], "c" * 40)
 
     def test_a_patch_that_cannot_be_read_falls_back_to_the_sha(self):
         facts = {"landed": [("a" * 40, 5000.0, {"2473"}, "fix")], "patches": {}}
-        self.assertIsNone(A.red_fix_of(self.red(refuted=["a" * 9]), facts))
+        self.assertIsNone(A.red_fix_of(self.red(refuted=["a" * 9]), facts, ctx=case_context()))

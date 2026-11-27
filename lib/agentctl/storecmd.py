@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from typing import Any
+from agentctl.context import Context
 from agentctl.clock import epoch_now
 from agentctl.storeauth import (
     store_secret, store_secret_path, store_token_issue, store_token_revoke, store_tokens_load)
@@ -16,14 +17,14 @@ from agentctl.changesubmit import store_grace
 from agentctl.storeapi import StoreAPI, store_server
 
 
-def cmd_store(a):
+def cmd_store(a: Any, *, ctx: Context) -> Any:
     """`agentctl store serve --listen ADDR:PORT --allow-user U... --metrics-user U...` (ci-runner);
     `agentctl store use URL` (the laptop: which store its sync and agents use)."""
     if a.scmd == "token":
         return store_token_command(a)
     if a.scmd == "use":
         return store_use_command(a)
-    return store_serve_command(a)
+    return store_serve_command(a, ctx=ctx)
 
 
 def store_token_command(a: Any) -> int:
@@ -52,7 +53,7 @@ def store_use_command(a: Any) -> int:
     return 0
 
 
-def store_serve_command(a: Any) -> int:
+def store_serve_command(a: Any, *, ctx: Context) -> int:
     """`agentctl store serve`: the file store behind its API, its leases extended by the downtime, until stopped."""
     host, _, port = a.listen.rpartition(":")
     st = Store(path=state_root("store.db"))
@@ -62,7 +63,7 @@ def store_serve_command(a: Any) -> int:
     if not store_secret():
         raise SystemExit(f"agentctl store serve: no secret at {store_secret_path()} yet "
                          "(`agentctl store token issue --user <login>` makes it)")
-    api = StoreAPI(st, a.allow_user or [], a.metrics_user or [])
+    api = StoreAPI(st, a.allow_user or [], a.metrics_user or [], ctx=ctx)
     srv = store_server(api, host or "127.0.0.1", int(port or STORE_PORT))
     threading.Thread(target=store_alive_beat, args=(st,), daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=srv.shutdown, daemon=True).start())

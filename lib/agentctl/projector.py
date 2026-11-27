@@ -1,6 +1,7 @@
 # agentctl, part `projector`: the store's projectors, run by the server's tick: inbox entries and alerts from the events, one live notification per escalation, the lease archive.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.context import Context
 from agentctl.ids import stamp
 from agentctl.clock import epoch_now
 import json
@@ -140,7 +141,8 @@ def _escalation_line(ev):
 class EscalationPass:
     """One pass of the notifier over W6's window of events: what to tell, what to mark untold, and what was delivered."""
 
-    def __init__(self, st: Any) -> None:
+    def __init__(self, st: Any, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.st = st
         self.cur = int(st.meta_get("notifier_seq", 0) or 0)
         self.evs = st.events(after=max(0, self.cur - NOTIFY_LOOKBACK), limit=5000)
@@ -205,7 +207,7 @@ class EscalationPass:
             return (tell if ok else []), (1 if ok else 0)
         done: list[Any] = []
         for k, ev, r in tell:
-            url = attempt(lambda: notification_url(ev, self.st), None, catch=(Exception,))
+            url = attempt(lambda: notification_url(ev, self.st, ctx=self.ctx), None, catch=(Exception,))
             if not notify(f"agentctl: {ev['kind']}", _escalation_line(ev)[:220], url=url,
                           group=f"agentctl-{ev.get('item_type')}-{ev.get('item_id')}"):
                 break
@@ -251,7 +253,7 @@ class EscalationPass:
         return shown
 
 
-def notify_escalations(store: Any) -> int:
+def notify_escalations(store: Any, *, ctx: Context) -> int:
     """ONE LIVE NOTIFICATION PER ITEM (2026-11-03, W6: 152 escalations "not notified" -- five reds re-escalating RED
     UNCLAIMED every 10 min for 5 h, each told on its own, 10-20 s apiece, the notifier 3 h behind and telling the owner
     "no taker" about reds held for an hour). Each pass, over W6's window (not only past the cursor: an event the cursor
@@ -265,7 +267,7 @@ def notify_escalations(store: Any) -> int:
         and records notify_failed {at, cause, fix}: invariant WN raises ONE condition naming the failed channel's fix;
         W6 defers to it.
     Returns how many notifications were shown."""
-    return EscalationPass(store).run()
+    return EscalationPass(store, ctx=ctx).run()
 
 
 def maybe_archive_leases(d, st, every: int = 3600):

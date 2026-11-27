@@ -2,10 +2,12 @@
 restructure10-digests.json, recorded from the code BEFORE the split with `R4_RECORD=1`) cover thousands of seeded cases
 each, collaborators faked (golden_cases.py): every call, its order and the result."""
 import builtins, contextlib, io, os, sys, types, unittest
+from functools import partial
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from golden_cases import Probe, cherry_state, check as _check  # noqa: E402
 
 DIGESTS = os.path.join(HERE, "fixtures", "restructure10-digests.json")
@@ -338,7 +340,7 @@ class LandUntilDoneTest(unittest.TestCase):
     def test_land_until_done(self):
         def run(A):
             def go(args, holder):
-                result = printing(holder, A.land_until_done)(*args)
+                result = printing(holder, partial(A.land_until_done, ctx=case_context()))(*args)
                 holder["case"].log.append(["a", sorted(vars(args[3]).items())])
                 return result
             return go
@@ -387,7 +389,7 @@ class OverlapHoldTest(unittest.TestCase):
         return (Probe(case, "st"), "/repo", "/d", e, entries, {"f": 1}, 5.0, r.choice([None, {}, {"e1": "e2"}]))
 
     def test_overlap_hold(self):
-        check(self, "overlap_hold", self.build, lambda A: A.overlap_hold, 6000)
+        check(self, "overlap_hold", self.build, lambda A: partial(A.overlap_hold, ctx=case_context()), 6000)
 
 
 class HoldForOverlapTest(unittest.TestCase):

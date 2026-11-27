@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 from typing import Iterator
+from agentctl.context import Context
 from agentctl.core import err, git, process_cache, remote, state_root, commit_known
 from agentctl.fixchange import fixes_named
 from agentctl.redfixes import commit_fixes
@@ -120,7 +121,7 @@ CommitFixes = tuple[str, bool, set[str]]  # (sha, touches production, the Fixes-
 
 
 def commit_rows(entry: dict[str, Any] | None, repo: str | None, commits: list[str] | None,
-                store: Any) -> list[CommitFixes] | None:
+                store: Any, *, ctx: Context) -> list[CommitFixes] | None:
     """The change's commits as the rule reads them (`commits`, else the entry's when repo is given and it lists any),
     or None: unread (an item's data, an entry that lost its commits)."""
     if commits is None and repo and entry and entry.get("commits"):
@@ -132,7 +133,7 @@ def commit_rows(entry: dict[str, Any] | None, repo: str | None, commits: list[st
         prod = entry_commit_production(repo, entry, c)
         if prod is None:
             return None  # unread: the change is judged by its recorded names, never a dead tick
-        rows.append((c, prod, set(commit_fixes(repo, c, store))))
+        rows.append((c, prod, set(commit_fixes(repo, c, store, ctx=ctx))))
     return rows
 
 
@@ -146,11 +147,11 @@ def entry_commit_production(repo: str, entry: dict[str, Any] | None, c: str) -> 
 
 
 def may_land_on_red(facts: dict[str, Any], entry: dict[str, Any] | None = None, repo: str | None = None,
-                    commits: list[str] | None = None, store: Any = None) -> RedLanding:
+                    commits: list[str] | None = None, store: Any = None, *, ctx: Context) -> RedLanding:
     """THE RULE, for a change under facts (changekind.queue_facts: the gate's reds and the store's open reds). Its
     commits read (commit_rows), each production commit must carry a counting `Fixes-Red:` naming a gate red (the hook's
     rule; tools-only commits land freely). Unread, the change is judged by its entry's recorded names (fixes_named)."""
-    rows = commit_rows(entry, repo, commits, store)
+    rows = commit_rows(entry, repo, commits, store, ctx=ctx)
     names = set().union(*(f for _c, _p, f in rows)) if rows is not None else fixes_named(entry)
     reds = tuple(named_reds(names, set(facts.get("gate") or ()), facts.get("open") or {}))
     gnames = gate_red_names(facts)

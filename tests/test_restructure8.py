@@ -6,6 +6,7 @@ import builtins, contextlib, glob as glob_module, inspect, io, os, shutil, sys, 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 
 
 def change_state_of(ok, via=None):
@@ -566,7 +567,7 @@ class DryRunTest(unittest.TestCase):
                 try:
                     with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()):
                         try:
-                            return A.dry_run(*args)
+                            return A.dry_run(*args, ctx=case_context())
                         finally:
                             holder["case"].log.append(["output", out.getvalue()])
                 finally:

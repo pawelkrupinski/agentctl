@@ -5,6 +5,7 @@ import os
 import re
 import time
 from typing import Any
+from agentctl.context import Context
 from agentctl.statemachines import change_state_of
 from agentctl.timefmt import day_hhmmz, hhmmz
 from agentctl.holdgraph import OPEN_PARENT_STATES, stack_map, waiting_on_changes
@@ -57,22 +58,22 @@ def older_verifying(todo, e, t, kinds=None, waits=frozenset()):
                  and verifying(o, t, waits)), None)
 
 
-def tick_changes(repo: str, d: str, clock: Any, st: Any) -> list[str]:
+def tick_changes(repo: str, d: str, clock: Any, st: Any, *, ctx: Context) -> list[str]:
     """One tick over the change items (_tick_changes), the queue facts read once for it (changekind.py facts_tick)."""
     with facts_tick():
-        return _tick_changes(repo, d, clock, st)
+        return _tick_changes(repo, d, clock, st, ctx=ctx)
 
 
-def _tick_changes(repo: str, d: str, clock: Any, st: Any) -> list[str]:
+def _tick_changes(repo: str, d: str, clock: Any, st: Any, *, ctx: Context) -> list[str]:
     """One tick over the change items: re-queueing re-derived (only the newest entry per worktree and branch runs), an
     executor started for each queued or lease-less checking change (red fixes first, while a slot is free), a
     checking change past its deadline back to queued (infra), a queued one past its deadline escalated, and each
     checked change pushed. Returns what it did."""
     t = clock.time()
-    reds = attempt(lambda: gate_reds(repo), set(), catch=(Exception,))
+    reds = attempt(lambda: gate_reds(repo, ctx=ctx), set(), catch=(Exception,))
     facts = facts_for(reds, st)  # A FIX OF ANY OPEN RED GOES FIRST (above): each change's KIND, recorded on its item
     entries = ChangeRecords(st, d).queued()
-    kinds = classify_queue(repo, d, entries, facts, t, st)
+    kinds = classify_queue(repo, d, entries, facts, t, st, ctx=ctx)
     todo = sorted(entries, key=lambda e: kind_order(kinds, e))  # THE PRIORITY ORDER (changekind.py PRIORITY)
     newest = {}
     for e in sorted(todo, key=lambda e: e["seq"]):  # entries queued before re-queueing replaced: the newest one runs
@@ -91,8 +92,8 @@ def _tick_changes(repo: str, d: str, clock: Any, st: Any) -> list[str]:
     # 40 lone checks, 0 batches). The checked changes are pushed in a first pass; the holds are read again for the
     # second, which starts checks.
     for phase in ("push", "check"):
-        held = backlog_held(repo, d, reds, st, t, facts)
-        pheld = push_held(repo, d, reds, st, t, facts)
+        held = backlog_held(repo, d, reds, st, t, facts, ctx=ctx)
+        pheld = push_held(repo, d, reds, st, t, facts, ctx=ctx)
         # THE BATCH KEEPS ITS AGE-ORDER PLACE (review 2026-11-18): this tick runs before the batch tick, and the
         # changes held for a backlog or push batch take no tree, so a tree freed went to the next YOUNGER lone change
         # and the batch tick found none: with a steady stream of lone changes (identity changes, --no-batch) the batch
@@ -100,15 +101,15 @@ def _tick_changes(repo: str, d: str, clock: Any, st: Any) -> list[str]:
         # batch's (a red fix excepted).
         batch_seq = min((x["seq"] for x in todo if x["id"] in held | pheld), default=None)
         did += _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, runs, todo, held, pheld, batch_seq,
-                                  stacks)
+                                  stacks, ctx=ctx)
     return did
 
 
-def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, held, pheld, batch_seq, stacks):
+def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, held, pheld, batch_seq, stacks, *, ctx):
     """One pass of tick_changes over the newest entries: `push` (the checked and interrupted pushes) or `check` (the
     rest: executors started, deadlines). facts: queue_facts; kinds: each entry's kind (classify_queue); stacks: each
     stacked entry's parent (holdgraph.py stack_map)."""
-    run = ChangePass(repo, d, st, clock, t, facts, kinds, phase, todo, held, pheld, batch_seq, stacks)
+    run = ChangePass(repo, d, st, clock, t, facts, kinds, phase, todo, held, pheld, batch_seq, stacks, ctx=ctx)
     did = []
     for e in mine:
         did += run.entry(e)
@@ -126,7 +127,8 @@ class ChangePass:
     """One pass of tick_changes (`push` or `check`), a method per stage of one entry's walk. A stage that decides the
     entry's tick returns True (the entry goes no further); the lines it says go to `did`."""
 
-    def __init__(self, repo: Any, d: Any, st: Any, clock: Any, t: Any, facts: Any, kinds: Any, phase: Any, todo: Any, held: Any, pheld: Any, batch_seq: Any, stacks: Any) -> None:
+    def __init__(self, repo: Any, d: Any, st: Any, clock: Any, t: Any, facts: Any, kinds: Any, phase: Any, todo: Any, held: Any, pheld: Any, batch_seq: Any, stacks: Any, *, ctx: Context) -> None:
+        self.ctx = ctx
         self.repo, self.d, self.st, self.clock, self.t, self.facts, self.kinds = repo, d, st, clock, t, facts, kinds
         self.statuses = ("checked", "pushing") if phase == "push" else ("queued", "checking")
         self.todo, self.held, self.pheld, self.batch_seq, self.stacks = todo, held, pheld, batch_seq, stacks
@@ -143,7 +145,7 @@ class ChangePass:
         if state == "pushing":  # a tick that died mid-push: verified next, never pushed twice blindly
             set_change(st, self.d, e, "checked", cause="pushing", event={"text": f"{e['id']}: its push was interrupted: verified, then tried again"})
             state = "checked"
-        kind = self.kinds.get(e["id"]) or classify_change(e, self.facts, t)
+        kind = self.kinds.get(e["id"]) or classify_change(e, self.facts, t, ctx=self.ctx)
         record_change_kind(st, e, kind)  # on its item, now that it surely has one (a no-op when unchanged)
         fix = kind["red_fix"]
         if state == "checked":
@@ -157,7 +159,7 @@ class ChangePass:
         if e.get("retry_after", 0) > self.t:
             note_hold(self.st, e, "retry", f"its push is retried at {hhmmz(e['retry_after'])}", self.t)
             return []
-        return _push_checked(self.repo, self.d, self.st, self.clock, self.t, e, fix, self.todo, self.pheld, self.kinds)
+        return _push_checked(self.repo, self.d, self.st, self.clock, self.t, e, fix, self.todo, self.pheld, self.kinds, ctx=self.ctx)
 
     def check(self, e: Any, it: Any, state: Any, fix: Any, did: Any) -> Any:
         """A queued or checking entry: lapsed, held, or its executor started."""
@@ -190,7 +192,7 @@ class ChangePass:
             did.append(f"{e['id']}: rejected (no longer applies on main)")
             return True
         lines, waits = queued_waiting_on_changes(self.repo, self.d, self.st, self.t, e, fix, self.todo, self.facts,
-                                                 self.stacks)
+                                                 self.stacks, ctx=self.ctx)
         did += lines
         return bool(waits)
 
@@ -257,14 +259,14 @@ def stacked_wait(st, t, e, parent):
     return [] if said else [f"{e['id']}: {why}"]
 
 
-def queued_waiting_on_changes(repo, d, st, t, e, fix, todo, facts, stacks):
+def queued_waiting_on_changes(repo, d, st, t, e, fix, todo, facts, stacks, *, ctx):
     """(the tick's lines, whether queued change e waits for its stack parent or an older change it overlaps), its hold
     recorded; a red fix waits for neither (told of a conflict all the same)."""
     parent = None if fix else stacks.get(e["id"])
     if parent is not None and parent.get("status") in OPEN_PARENT_STATES \
             and parent["id"] not in (e.get("cycle_ignore") or []):
         return stacked_wait(st, t, e, parent), True
-    hold, did = live_overlap_hold(repo, d, st, t, e, fix, todo, facts, stacks)
+    hold, did = live_overlap_hold(repo, d, st, t, e, fix, todo, facts, stacks, ctx=ctx)
     if hold and fix:  # a red fix never waits: its author is told of a conflict, and it goes on
         return hold_for_overlap(st, d, e, *hold, waits=False, repo=repo), False
     if not hold:
@@ -278,13 +280,13 @@ def queued_waiting_on_changes(repo, d, st, t, e, fix, todo, facts, stacks):
 
 
 def live_overlap_hold(repo: str, d: str, st: Any, t: float, e: dict[str, Any], fix: object, todo: list[dict[str, Any]],
-                      facts: Any, stacks: dict[str, dict[str, Any]]) -> tuple[OverlapHold | None, list[str]]:
+                      facts: Any, stacks: dict[str, dict[str, Any]], *, ctx: Context) -> tuple[OverlapHold | None, list[str]]:
     """(the overlap hold queued change e waits under, the lines said): every blocker whose hold on it expired (AN IDLE
     HOLDER'S HOLD EXPIRES, queuehold.py) let go of first -- one at a time, each for good, so the walk ends."""
-    hold, did = overlap_hold(st, repo, d, e, todo, facts, t, stacks), []
+    hold, did = overlap_hold(st, repo, d, e, todo, facts, t, stacks, ctx=ctx), []
     while hold and not fix and idle_hold_expired(st, e, hold[0], t):
         did.append(expire_idle_hold(st, d, e, hold[0], t))
-        hold = overlap_hold(st, repo, d, e, todo, facts, t, stacks)
+        hold = overlap_hold(st, repo, d, e, todo, facts, t, stacks, ctx=ctx)
     return hold, did
 
 
@@ -321,7 +323,7 @@ def _note_push_hold(st: Any, e: Any, first: Any, older: Any, pheld: Any, t: Any)
     return did
 
 
-def _push_checked(repo: Any, d: Any, st: Any, clock: Any, t: Any, e: Any, fix: Any, todo: Any, pheld: Any, kinds: Any = None) -> Any:
+def _push_checked(repo: Any, d: Any, st: Any, clock: Any, t: Any, e: Any, fix: Any, todo: Any, pheld: Any, kinds: Any = None, *, ctx: Context) -> Any:
     """The change tick's step for checked entry e: pushed, unless its push is held -- before an open batch it is not
     in (THE BATCH GOES FIRST), for the next push batch, or behind an older change's combined-tree verification; a red
     fix (fix) is held by none of them. The hold is recorded on its item (`land status` prints it) and its deadline laps
@@ -337,7 +339,7 @@ def _push_checked(repo: Any, d: Any, st: Any, clock: Any, t: Any, e: Any, fix: A
     # may fetch, find main moved and re-queue the change for a verification -- left a checked change past its deadline
     # with nothing recorded for the seconds it ran, and the watchdog's pass filed it as unheld
     note_hold(st, e, "push", "its push is under way (re-checked first if main moved)", t)
-    out = push_change(repo, d, e, clock, st)
+    out = push_change(repo, d, e, clock, st, ctx=ctx)
     if out in ("checked", "busy"):  # raced, met the red gate, or the landing lock / push tree was busy: tried again
         note_hold(st, e, "push", "its push waits for the landing lock or a push tree" if out == "busy" else
                   "its last push did not land (a race or the red gate): tried again at the next tick", t)

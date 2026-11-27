@@ -13,6 +13,7 @@ from unittest import mock
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402,F401 (puts lib on the path)
+from harness import case_context  # noqa: E402
 
 
 class Clock:
@@ -35,6 +36,7 @@ def run(module, script):
 
     def rec(name, ret=None):
         def fake(*a, **k):
+            k.pop("ctx", None)  # the Context is no call data (tests/golden_cases.py)
             log.append(f"{name} {a} {sorted(k.items())}")
             if isinstance(ret, BaseException):
                 raise ret
@@ -75,7 +77,7 @@ def run(module, script):
         yield
 
     def steps(*names):
-        def make(*a):
+        def make(*a, ctx=None):
             shared = a[2] if len(a) == 6 and callable(a[2]) else None
             if shared:
                 log.append(f"shared step {shared(lambda: 'ran')()}")
@@ -110,7 +112,7 @@ def run(module, script):
         stack.enter_context(mock.patch.object(module, "TICK_STOP", [bool(script.get("stopped"))]))
         before = list(module._IN_PROCESSOR)
         try:
-            got = module.waiting_run("REPO", Clock(), "ST", "REGISTRY", once=script.get("once", False), service=script.get("service", False))
+            got = module.waiting_run("REPO", Clock(), "ST", "REGISTRY", once=script.get("once", False), service=script.get("service", False), ctx=case_context())
         finally:
             flag = module._IN_PROCESSOR[0]
             module._IN_PROCESSOR[:] = before

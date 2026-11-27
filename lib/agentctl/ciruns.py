@@ -1,11 +1,11 @@
 # agentctl, part `ciruns`: THE ONE READER OF CI RUNS: a workflow's runs on main, main's newest runs across workflows, a
-# run's jobs (CiRuns), and what the gate's reads last listed per repository (MainRuns). cli wires the process's one.
+# run's jobs (CiRuns), and what the gate's reads last listed per repository (MainRuns); cli builds the process's one.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import re
 from typing import Any, Callable
 from agentctl.clock import epoch_now
-from agentctl.core import err, process_cache
+from agentctl.core import err
 from agentctl.forge import RUN_FIELDS, gh_json
 
 Run = dict[str, Any]  # a workflow run as gh lists it (RUN_FIELDS)
@@ -133,40 +133,3 @@ class CiRuns:
     def main_runs_of(self, o_r: str) -> MainRuns:
         """The repository's MainRuns (made empty on first ask)."""
         return self._main.setdefault(o_r, MainRuns())
-
-
-# The process's reader: cli, the composition root, wires the one a process uses (wire_ci_runs); a module reads it with
-# ci_runs(). Its slot is one of the process's caches (core.process_cache): the tests' harness clears it between cases.
-class CiRunsSlot:
-    """The process's CiRuns; clear() forgets what it read."""
-
-    def __init__(self) -> None:
-        self.runs = CiRuns()
-
-    def __len__(self) -> int:
-        return len(self.runs)
-
-    def clear(self) -> None:
-        self.runs.clear()
-
-
-_PROCESS_CI_RUNS = process_cache(CiRunsSlot())
-
-
-def wire_ci_runs(runs: CiRuns) -> None:
-    """Make `runs` the one ci_runs() returns (the composition root's call)."""
-    _PROCESS_CI_RUNS.runs = runs
-
-
-def ci_runs() -> CiRuns:
-    return _PROCESS_CI_RUNS.runs
-
-
-def main_runs(o_r: str, wfile: str, limit: int = 30, status: str | None = None, fresh_for: float = 0) -> list[Run]:
-    """A workflow's runs on main, of the process's reader (CiRuns.main_runs)."""
-    return ci_runs().main_runs(o_r, wfile, limit, status, fresh_for)
-
-
-def main_runs_of(o_r: str) -> MainRuns:
-    """The repository's MainRuns, of the process's reader."""
-    return ci_runs().main_runs_of(o_r)
