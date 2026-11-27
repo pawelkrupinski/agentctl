@@ -10,9 +10,11 @@ def init_path(lib):
 
 
 def module_list(lib):
-    ns = {}
-    exec(open(init_path(lib)).read(), ns)
-    return list(ns["MODULES"])
+    """MODULES of lib/__init__.py, literally evaluated (the one reader: quality/typecheck.py asks it too)."""
+    for node in ast.parse(open(init_path(lib)).read()).body:
+        if isinstance(node, ast.Assign) and [getattr(t, "id", None) for t in node.targets] == ["MODULES"]:
+            return list(ast.literal_eval(node.value))
+    raise SystemExit(f"{init_path(lib)}: no MODULES list")
 
 
 def part_path(lib, part):

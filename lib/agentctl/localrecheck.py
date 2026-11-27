@@ -2,11 +2,11 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import contextlib
-import fcntl
 import os
 import re
 import time
 from agentctl.clock import wall_epoch
+from agentctl.filelock import FileLock
 from typing import Any
 from agentctl.core import _bounded, err, git, git_ok, pid_alive, reds_dir, remote, tilde
 from agentctl.timefmt import ts
@@ -67,13 +67,8 @@ def write_baseline_out(main, out) -> None:
 @contextlib.contextmanager
 def local_lock():
     """One writer of reds/local.json at a time."""
-    os.makedirs(reds_dir(), exist_ok=True)
-    with open(reds_dir("local.lock"), "a+") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+    with FileLock(reds_dir("local.lock")):
+        yield
 
 
 def note_local_red(main, fails, passes) -> None:
@@ -118,14 +113,14 @@ def recheck_local(repo, wait: bool = True):
 
 def _recheck_guarded(repo, main):
     """One recheck at a time across processes (the processor's and a `red patrol`): the second one leaves it."""
-    os.makedirs(reds_dir("local"), exist_ok=True)
     try:
-        with open(reds_dir("local", "recheck.lock"), "a+") as lf:
-            try:
-                fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                return []
+        lock = FileLock(reds_dir("local", "recheck.lock"))
+        if not lock.try_acquire():
+            return []
+        try:
             return run_local_recheck(repo, main)
+        finally:
+            lock.release()
     except (Exception, SystemExit) as e:
         err(f"local recheck: skipped ({str(e).replace('agentctl: ', '')[:200]})")
         return []

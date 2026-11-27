@@ -8,7 +8,7 @@ MODULES is every module in import order, each after every module it imports (dev
 manifest the quality tools (quality/typecheck.py) and the tests' view of the package (tests/agentctl_view.py) read.
 """
 MODULES = ("procrunner", "escalationtable", "psparse", "govpool", "usage", "statefile", "selfcode", "statemachines",
-           "storecalls", "clock", "ids", "timefmt", "livepage", "holdgraph", "configfile", "knobread", "watchknobs",
+           "storecalls", "clock", "filelock", "ids", "timefmt", "livepage", "holdgraph", "configfile", "knobread", "watchknobs",
            "tickknobs", "storeknobs", "storeauth", "redknobs", "blameknobs", "queueknobs", "govknobs", "fixerknobs",
            "leasetable", "offers", "cpu", "core", "ghapp", "ghtally", "repos", "buildview", "config", "workflows",
            "trailers", "claudefiles", "allowedpaths", "procs", "fixerrecords", "actors", "live", "clones", "machine",

@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now
-import fcntl
+from agentctl.filelock import FileLock
 import os
 from agentctl.statefile import read_record, write_json
 from agentctl.redrepos import red_families
@@ -33,9 +33,7 @@ def owner_set_leases(fam, leases):
 
 def owner_change_leases(fam, change):
     """The family's leases read, changed in place by change(leases) and written back, under the family's lock."""
-    os.makedirs(owner_dir(fam), exist_ok=True)
-    with open(os.path.join(owner_dir(fam), ".lock"), "a+") as lf:
-        fcntl.flock(lf, fcntl.LOCK_EX)
+    with FileLock(os.path.join(owner_dir(fam), ".lock")):
         leases = owner_leases(fam)
         change(leases)
         owner_set_leases(fam, leases)

@@ -66,7 +66,10 @@ def run_push(module, script):
 
         class Owned:
             def __init__(self, kind, key):
-                self.lockpath = f"{kind}:{key}"
+                self.key = key
+
+            def live(self):
+                return script.get("held", False) and "e-b" not in self.key
 
         class Store:
             def __repr__(self):
@@ -89,7 +92,7 @@ def run_push(module, script):
             "run_watched": run_watched, "ts": lambda: "TS", "landed_state": lambda repo, main, tip: A.LandState(  # logged as `landed (repo, tip, main)`: the check's old spelling
                 A.LANDED if rec("landed", script.get("landed", True))(repo, tip, main) else A.NOT_LANDED),
             "mark_gate_dirty": rec("mark_gate_dirty"), "queue_verdict": rec("queue_verdict"), "wlog": rec("wlog"),
-            "lock_held": lambda path: script.get("held", False) and "e-b" not in path, "Owned": Owned,
+            "Owned": Owned,
             "start_watch": rec("start_watch"), "batch_fail": rec("batch_fail", lambda st, d_, it, why, n=0: None),
             "batch_move": rec("batch_move", lambda st, it, to, data=None, text=None, severity=None, cause=None: {"id": it["id"]}),
         }

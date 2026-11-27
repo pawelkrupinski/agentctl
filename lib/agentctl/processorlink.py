@@ -17,7 +17,7 @@ from agentctl.storetoken import (
     TOKEN_REQUEST, TOKEN_SHAPE, detached_env, hand_token, token, token_back, token_env_name, token_ns,
     token_sock_path)
 from agentctl.store import StoreUnavailable
-from agentctl.owned import Owned, backoff, lock_held, restart_if_changed
+from agentctl.owned import Owned, backoff, restart_if_changed
 from agentctl.statefile import unlink_file
 
 
@@ -27,7 +27,7 @@ def processor_owned(d: str, repo: str | None = None) -> Owned:
 
 
 def waiting_processor_alive(d: str) -> bool:
-    return lock_held(processor_owned(d).lockpath)
+    return processor_owned(d).live()
 
 
 def spawn_waiting_processor(repo: str) -> None:

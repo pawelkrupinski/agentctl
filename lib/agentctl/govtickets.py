@@ -1,6 +1,7 @@
 # agentctl, part `govtickets`: the governor's ticket directory: its live tickets, its log, the change mark its waiters watch
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.filelock import lock_held
 from agentctl.clock import epoch_now, stopwatch, wall_epoch
 import glob
 import json
@@ -12,7 +13,7 @@ from agentctl.govpool import gov_dir_path
 from agentctl.filelog import note_event
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, note_failure
-from agentctl.owned import lock_held
+
 from agentctl.govknobs import knob_gov_poll
 
 

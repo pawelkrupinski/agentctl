@@ -1,7 +1,6 @@
 # agentctl, part `cistate`: THE SNAPSHOT: state.json at the state root, the processor's one CI-state record every reader reads
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-import fcntl
 import os
 from typing import Any
 from agentctl.core import state_root
@@ -9,6 +8,7 @@ from agentctl.statefile import read_json_file, write_json
 from agentctl.forge import RED_CONCLUSIONS
 from agentctl.storeknobs import knob_state_file
 from agentctl.clock import epoch_now
+from agentctl.filelock import FileLock
 
 
 # THE ONE CI-STATE SNAPSHOT (the owner, 2026-10-27: the watch, the gate summary, ci-why's outside list and the red patrol
@@ -45,8 +45,7 @@ def state_update(**parts: Any) -> dict[str, Any]:
     threads)."""
     path = state_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with _state_lock, open(path + ".lock", "a+") as lk:
-        fcntl.flock(lk, fcntl.LOCK_EX)
+    with _state_lock, FileLock(path + ".lock"):
         d = state_read()
         d.update(parts)
         write_json(path, d, indent=None)

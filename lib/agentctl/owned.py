@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now, wall_epoch
-import fcntl
+from agentctl.filelock import FileLock, lock_held
 import glob
 import json
 import os
@@ -73,19 +73,6 @@ def cancel_run(o_r, rid, why):
         err(f"could not cancel {o_r} run {rid} ({why}): {e}")
 
 
-def lock_held(lockpath: str) -> bool:
-    """Whether a live process holds the flock at lockpath (tried without blocking, released at once)."""
-    if not os.path.exists(lockpath):
-        return False
-    with open(lockpath, "a+") as f:
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-        fcntl.flock(f, fcntl.LOCK_UN)
-        return False
-
-
 class Held(Exception):
     def __init__(self, holder):
         super().__init__(f"held by pid {holder.get('pid')} ({holder.get('owner')}) since {holder.get('started')}")
@@ -100,18 +87,18 @@ class Owned:
         base = os.path.join(owners_dir(), f"{kind}-{self.key}")
         self.lockpath, self.record = base + ".lock", base + ".json"
         self.argv = list(sys.argv[1:] if argv is None else argv)
-        self.f, self.holder, self.started, self._old = None, None, None, {}
+        self.lock, self.holder, self.started, self._old = None, None, None, {}
+
+    def live(self) -> bool:
+        """Whether a live process holds this instance (its lock is held)."""
+        return lock_held(self.lockpath)
 
     def acquire(self) -> bool:
-        os.makedirs(owners_dir(), exist_ok=True)
-        f = open(self.lockpath, "a+")
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            f.close()
+        lock = FileLock(self.lockpath)
+        if not lock.try_acquire():
             self.holder = read_record(self.record) or {}
             return False
-        self.f = f
+        self.lock = lock
         prev = read_record(self.record)
         if prev and prev.get("pid") == os.getpid():  # our own re-exec on new code: still the same start
             self.started = prev.get("started")
@@ -136,16 +123,15 @@ class Owned:
                 pass
 
     def release(self, keep_record: bool = False) -> None:
-        if not self.f:
+        if not self.lock:
             return
         if not keep_record:
             unlink_file(self.record)
         for s, h in self._old.items():
             signal.signal(s, h)
         self._old = {}
-        fcntl.flock(self.f, fcntl.LOCK_UN)
-        self.f.close()
-        self.f = None
+        self.lock.release()
+        self.lock = None
 
     def __enter__(self):
         if not self.acquire():

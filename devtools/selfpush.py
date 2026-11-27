@@ -11,11 +11,13 @@ queue behind it at no cores); that cannot deadlock: a ticket holder that runs th
 hook's steps take none and never wait. A wait past the bound is the hook's "governor busy" refusal, load not a failure. $AGENTCTL_PUSH_LOCK overrides the lock file; the hook's hint is silenced by
 AGENTCTL_SELFPUSH=1, which this tool sets for its push."""
 import argparse
-import fcntl
 import os
 import subprocess
 import sys
-import time
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
+from agentctl.clock import Clock  # noqa: E402
+from agentctl.filelock import FileLock  # noqa: E402
 
 REPORT_EVERY = 30  # s between "waiting for the push lock" lines
 LOCK = os.environ.get("AGENTCTL_PUSH_LOCK") or os.path.expanduser("~/.cache/agentctl/selfpush.lock")
@@ -32,25 +34,17 @@ def rebase_in_progress() -> bool:
     return any(os.path.isdir(p) for p in paths)
 
 
-def take_lock(wait: float):
-    """The lock file, held (LOCK_EX), or None after `wait` seconds; prints who it waits behind every 30 s."""
-    os.makedirs(os.path.dirname(LOCK), exist_ok=True)
-    f = open(LOCK, "a+")
-    start = time.monotonic()  # wall: a wait on a lock another process holds is real time
-    next_report = 0.0
-    while True:
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return f
-        except OSError:
-            waited = time.monotonic() - start  # wall: as above
-            if waited >= wait:
-                f.close()
-                return None
-            if waited >= next_report:  # once per REPORT_EVERY, never skipped for the loop's drift, never repeated
-                print(f"selfpush: waiting for the push lock ({int(waited)} s; another push holds it)", flush=True)
-                next_report = waited + REPORT_EVERY
-            time.sleep(1)
+def take_lock(wait: float) -> FileLock | None:
+    """The push lock, held, or None after `wait` seconds; prints who it waits behind every 30 s."""
+    next_report = [0.0]
+
+    def report(waited: float) -> None:
+        if waited >= next_report[0]:  # once per REPORT_EVERY, never skipped for the loop's drift, never repeated
+            print(f"selfpush: waiting for the push lock ({int(waited)} s; another push holds it)", flush=True)
+            next_report[0] = waited + REPORT_EVERY
+
+    lock = FileLock(LOCK, timeout=wait, clock=Clock(), on_wait=report, poll=1.0)
+    return lock if lock.acquire() else None
 
 
 def push_under_lock() -> int:
@@ -87,8 +81,7 @@ def main() -> int:
     try:
         return push_under_lock()
     finally:
-        fcntl.flock(held, fcntl.LOCK_UN)
-        held.close()
+        held.release()
 
 
 if __name__ == "__main__":

@@ -82,9 +82,9 @@ mypy-errors	orphanpass	7
 mypy-errors	orphanreap	28
 mypy-errors	orphans	15
 mypy-errors	outsideflows	12
-mypy-errors	owned	39
+mypy-errors	owned	38
 mypy-errors	owner	24
-mypy-errors	ownerleases	24
+mypy-errors	ownerleases	23
 mypy-errors	owners	3
 mypy-errors	ownerwrapper	46
 mypy-errors	park	34

@@ -11,7 +11,7 @@ from agentctl.leases import lock_note
 from agentctl.gating import mark_gate_dirty
 from agentctl.waitingdir import waiting_state, wlog
 from agentctl.landwatch import start_watch
-from agentctl.owned import Owned, lock_held
+from agentctl.owned import Owned
 from agentctl.land import RACE, REDGATE, land_lock_if_free, push_argv, push_bounds, run_watched, tool_env
 from agentctl.queueslots import queue_verdict, set_change, tree_slot
 from agentctl.queue import hook_query, range_paths
@@ -158,7 +158,7 @@ class BatchPush:
             kind = "push batch" if it["data"].get("depth") == "verify" else "batch"
             queue_verdict(st, self.d, e, "landed", f"LANDED {e['tip']} ({kind} {self.bid}: {n} change(s) in one push)",
                           code=0, landed_sha=e["tip"], pushed_at=self.pushed_at, batch=n, batch_id=self.bid)
-            if not lock_held(Owned("await", e["id"]).lockpath):  # a `land --follow` waiting on it watches it itself
+            if not Owned("await", e["id"]).live():  # a `land --follow` waiting on it watches it itself
                 start_watch(st, self.repo, e["tip"], self.pushed_at, worktree=e["worktree"],
                             close=e["worktree"] if os.path.isdir(e["worktree"]) else None, session=e.get("session"))
         batch_move(st, st.item("batch", self.bid), "landed", text=f"LANDED {tip} ({n} change(s) in one push)")

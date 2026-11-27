@@ -7,7 +7,6 @@ mypy checks the modules concatenated in MODULES order (lib/agentctl/__init__.py:
 `from agentctl.<module> import` lines blanked: the names they import are the concatenation's own. The measure was
 taken so while the parts shared one namespace, and stays comparable; each error is mapped back to its module's line.
 """
-import ast
 import os
 import re
 import subprocess
@@ -15,15 +14,13 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "devtools"))
+from partlist import module_list  # noqa: E402  (the one reader of MODULES)
 ERROR = re.compile(r"^[^:]+:(\d+): error: (.*)$")
 
 
 def part_order(root):
-    init = os.path.join(root, "lib", "agentctl", "__init__.py")
-    for node in ast.parse(open(init).read()).body:
-        if isinstance(node, ast.Assign) and [getattr(t, "id", None) for t in node.targets] == ["MODULES"]:
-            return list(ast.literal_eval(node.value))
-    raise SystemExit("types: no MODULES in lib/agentctl/__init__.py")
+    return module_list(os.path.join(root, "lib", "agentctl"))
 
 
 def concatenate(root, out):

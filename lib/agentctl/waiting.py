@@ -10,7 +10,7 @@ from agentctl.statefile import read_record, note_failure
 from agentctl.repos import server_repo
 from agentctl.trailers import trailer_values
 from agentctl.waitingdir import save_entry, waiting_entries, waiting_state, wlog
-from agentctl.owned import cancel_run, lock_held
+from agentctl.owned import cancel_run
 from agentctl.queueslots import entry_owned, queue_verdict, set_change
 from agentctl.conflicts import pick
 from agentctl.queuerecheck import queued_entries, same_change_source
@@ -168,7 +168,7 @@ def stop_checker(e: dict[str, Any]) -> None:
     """An entry's running checker stopped (its CI run is cancelled with it): never this process itself, and a checker
     that ended since its lock was read is no error (review 2026-11-26: `land cancel` had its own copy with neither)."""
     h = read_record(entry_owned(e["id"]).record) or {}
-    if lock_held(entry_owned(e["id"]).lockpath) and h.get("pid") and int(h["pid"]) != os.getpid():
+    if entry_owned(e["id"]).live() and h.get("pid") and int(h["pid"]) != os.getpid():
         try:
             os.kill(int(h["pid"]), signal.SIGTERM)
         except ProcessLookupError:  # it ended on its own meanwhile

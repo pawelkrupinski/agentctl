@@ -41,8 +41,7 @@ abbreviation	lib/agentctl/testtmp.py:sweep_test_tmp	1
 abbreviation	lib/agentctl/testtmp.py:user_tmp_dir	1
 effect	devtools/baselinemerge.py	1
 effect	devtools/govstep.py	2
-effect	devtools/rank.py	1
-effect	devtools/selfpush.py	3
+effect	devtools/selfpush.py	2
 effect	devtools/stats.py	1
 effect	devtools/vendor.py	1
 effect	lib/agentctl/actors.py	1
@@ -215,14 +214,14 @@ fanout	lib/agentctl/landdryrun.py	21
 fanout	lib/agentctl/lander.py	12
 fanout	lib/agentctl/landqueue.py	27
 fanout	lib/agentctl/landwatch.py	10
-fanout	lib/agentctl/localrecheck.py	14
+fanout	lib/agentctl/localrecheck.py	15
 fanout	lib/agentctl/maintain.py	16
 fanout	lib/agentctl/netwatch.py	12
 fanout	lib/agentctl/offerdispatch.py	15
 fanout	lib/agentctl/orphanpass.py	16
 fanout	lib/agentctl/orphanreap.py	14
 fanout	lib/agentctl/orphans.py	18
-fanout	lib/agentctl/owned.py	12
+fanout	lib/agentctl/owned.py	13
 fanout	lib/agentctl/owner.py	19
 fanout	lib/agentctl/ownerwrapper.py	23
 fanout	lib/agentctl/processor.py	28
@@ -272,7 +271,7 @@ fanout	lib/agentctl/statuspage.py	13
 fanout	lib/agentctl/superseded.py	11
 fanout	lib/agentctl/syncsteps.py	29
 fanout	lib/agentctl/tools.py	14
-fanout	lib/agentctl/upkeep.py	13
+fanout	lib/agentctl/upkeep.py	14
 fanout	lib/agentctl/waiting.py	12
 fanout	lib/agentctl/watchdog.py	14
 fanout	lib/agentctl/watchtick.py	12

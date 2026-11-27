@@ -10,7 +10,6 @@
 # is down, or older than the call, keeps them for the next tick -- nothing is lost. A drained log past LOG_ROTATE bytes
 # starts again, under the writers' lock.
 
-import fcntl
 import json
 import os
 import sys
@@ -20,6 +19,7 @@ from typing import Any, Optional
 from agentctl.actors import process_actor
 from agentctl.causes import checked_cause
 from agentctl.clock import wall_epoch
+from agentctl.filelock import FileLock
 from agentctl.core import state_root
 from agentctl.eventrows import recorded_row
 
@@ -55,9 +55,7 @@ def note_events(rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
     with suppress(OSError):
-        os.makedirs(os.path.dirname(log_path()), exist_ok=True)
-        with open(log_path(), "a") as f:
-            fcntl.flock(f, fcntl.LOCK_EX)
+        with FileLock(log_path()), open(log_path(), "a") as f:
             f.write("".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows))
 
 
@@ -134,8 +132,7 @@ def _maybe_rotate(end: int) -> None:
     """A fully drained log past LOG_ROTATE starts again (under the writers' lock: no line written meanwhile is lost)."""
     if end < LOG_ROTATE:
         return
-    with suppress(OSError), open(log_path(), "a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
+    with suppress(OSError), FileLock(log_path()):
         if os.path.getsize(log_path()) == end:
-            f.truncate(0)
+            os.truncate(log_path(), 0)
             _write_cursor(0)

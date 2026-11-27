@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now
+from agentctl.filelock import FileLock
 from collections.abc import Iterator
 import glob
 import os
@@ -121,13 +122,10 @@ def rotate_log(path, max_bytes=None, keep=None):
 
 def rotate_logs():
     """Rotate every agentctl log over the size (one rotator at a time: a lock in the state root). Returns the lines."""
-    import fcntl
-    os.makedirs(state_root(), exist_ok=True)
-    with open(state_root("log-rotate.lock"), "w") as lk:
-        try:
-            fcntl.flock(lk, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            return []
+    lock = FileLock(state_root("log-rotate.lock"))
+    if not lock.try_acquire():
+        return []
+    try:
         out = []
         for p in agentctl_logs():
             try:
@@ -137,6 +135,8 @@ def rotate_logs():
             if line:
                 out.append(line)
         return out
+    finally:
+        lock.release()
 
 
 UPKEEP_CLEANUP_BOUND = 1800  # the cleanup process's hard bound (killed past it)

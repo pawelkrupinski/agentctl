@@ -15,7 +15,7 @@ from agentctl.core import attempt, err, pid_alive, probe_output, process_cache
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json, note_failure, unlink_file
 from agentctl.procs import proc_alive, process_start
-from agentctl.owned import lock_held
+from agentctl.filelock import lock_held
 from agentctl.machine import free_gb, machine_cores, machine_sample
 from agentctl.filelog import file_event, note_event, note_events
 from agentctl.causes import governor_cause

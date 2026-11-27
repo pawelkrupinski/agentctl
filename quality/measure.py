@@ -31,6 +31,8 @@ LIMITS = {"cognitive": 10, "cyclomatic": 10, "inner-defs": 2, "method-lines": 50
           "cycle": 0}
 CLONE_TOKENS = 50
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "devtools", "design_rules"))
+from imports import cycles  # noqa: E402  (the vendored rule core: devtools/vendor.py)
 
 
 def sources(root):
@@ -157,37 +159,6 @@ def part_graph(parts):
     return {part: (imports(tree) & set(trees)) - {part} for part, tree in trees.items()}
 
 
-def strong_components(graph):
-    index, low, stack, on, out, counter = {}, {}, [], set(), [], [0]
-
-    def visit(v):
-        index[v] = low[v] = counter[0]
-        counter[0] += 1
-        stack.append(v)
-        on.add(v)
-        for w in graph[v]:
-            if w not in index:
-                visit(w)
-                low[v] = min(low[v], low[w])
-            elif w in on:
-                low[v] = min(low[v], index[w])
-        if low[v] == index[v]:
-            comp = set()
-            while True:
-                w = stack.pop()
-                on.discard(w)
-                comp.add(w)
-                if w == v:
-                    break
-            out.append(comp)
-
-    sys.setrecursionlimit(10000)
-    for v in sorted(graph):
-        if v not in index:
-            visit(v)
-    return out
-
-
 def measure(root, analysers=None):
     """Every row, any value: [(kind, key, value)]. `analysers` defaults to every tool's (ANALYSERS)."""
     parts = sources(root)
@@ -200,8 +171,8 @@ def measure(root, analysers=None):
         copies[key] = copies.get(key, 0) + len(group)
     rows += [("copies", key, n) for key, n in copies.items()]
     graph = part_graph(parts)
-    for comp in strong_components(graph):
-        rows += [("cycle", part, int(len(comp) > 1)) for part in comp]
+    cyclic = {part for comp in cycles(graph) for part in comp}  # the vendored rule core's strongly connected groups
+    rows += [("cycle", part, int(part in cyclic)) for part, _path in parts]
     return rows
 
 

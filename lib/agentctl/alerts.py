@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now, wall_epoch
+from agentctl.filelock import FileLock
 import contextlib
 import os
 import re
@@ -57,15 +58,8 @@ def alert_index_path(d=None):
 
 @contextlib.contextmanager
 def alert_lock(d=None):
-    import fcntl
-    h = alert_home(d)
-    os.makedirs(h, exist_ok=True)
-    with open(os.path.join(h, "lock"), "a") as f:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(f, fcntl.LOCK_UN)
+    with FileLock(os.path.join(alert_home(d), "lock")):
+        yield
 
 
 def alert_index_load(d):
