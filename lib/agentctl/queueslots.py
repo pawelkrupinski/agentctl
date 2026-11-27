@@ -155,19 +155,25 @@ def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any]
     causes.CAUSES (a keyword every caller names: tests/test_causes.py); detail: a short qualifier."""
     event = {**(event or {}), "cause": checked_cause(cause), **({"detail": detail} if detail else {})}
     cur = st.put_item("change", e["id"], change_state_of(e.get("status")) or "queued", change_item_fields(e))
-    data = _item_data(cur, to, data, fields)
-    try:
-        if not machine_state("change", cur["state"]).terminal:
-            st.transition("change", e["id"], to, cur["version"], data=data, event=event)
-    except StaleVersion:  # another writer moved it: re-read once
-        cur = st.item("change", e["id"])
-        if not machine_state("change", cur["state"]).terminal:
-            st.transition("change", e["id"], to, cur["version"], data=data, event=event)
+    cur = _move_item(st, e["id"], cur, to, _item_data(cur, to, data, fields), event)
     e.update(status=to, **fields)
-    if machine_state("change", cur["state"]).terminal and cur["state"] != to:
+    if machine_state("change", cur["state"]).terminal and cur["state"] != to:  # decided already: its decision stands
         why = (cur.get("data") or {}).get("why")
         e.update(status=cur["state"], **({"why": why} if why else {}))
     save_entry(d, e)
+
+
+def _move_item(st: Any, cid: str, cur: dict[str, Any], to: str, data: Any, event: dict[str, Any]) -> dict[str, Any]:
+    """Change item cid (read as cur) moved to `to` unless it is decided; a stale read is read again once. The item as
+    last read (a decided one: as it was decided)."""
+    try:
+        if not machine_state("change", cur["state"]).terminal:
+            st.transition("change", cid, to, cur["version"], data=data, event=event)
+    except StaleVersion:  # another writer moved it: re-read once
+        cur = st.item("change", cid)
+        if not machine_state("change", cur["state"]).terminal:
+            st.transition("change", cid, to, cur["version"], data=data, event=event)
+    return cur
 
 
 def queue_verdict(st, d, e, status, verdict, tail = (), code: int = 1, cause: str | None = None, **fields) -> None:
