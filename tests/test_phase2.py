@@ -188,17 +188,17 @@ class SubmitTest(Phase2Base):
                                 "branch": "x", "head": head, "commits": [head], "fixes": [], "base": "b" * 40})
         self.assertEqual((r["id"], r["seq"], r["ahead"]), ("20261029-0100-movies-wt-x-ab12cd", 1, 0))
         d = A.waiting_state(self.repo)[0]
-        [e] = [e for e in A.waiting_entries(d, open_only=False) if e.get("status") in A.QUEUED]
+        [e] = [e for e in A.ChangeRecords(A.process_store(), d).every() if e.get("status") in A.QUEUED]
         self.assertEqual((e["status"], e["worktree"], e["head"]), ("queued", "/Users/p/projects/movies-wt-x", head))
         again = self.remote.submit({"id": r["id"], "worktree": e["worktree"], "head": head, "commits": [head]})
         self.assertEqual(again["seq"], 1)  # a resubmission (the outbox retried) is the same change
         r2 = self.remote.submit({"worktree": "/Users/p/projects/movies-wt-x", "branch": "x", "head": "c" * 40,
                                  "commits": ["c" * 40]})
-        self.assertEqual([x["id"] for x in [e for e in A.waiting_entries(d, open_only=False) if e.get("status") in A.QUEUED]], [r2["id"]])  # re-queueing replaces
+        self.assertEqual([x["id"] for x in [e for e in A.ChangeRecords(A.process_store(), d).every() if e.get("status") in A.QUEUED]], [r2["id"]])  # re-queueing replaces
         with self.assertRaises(A.StoreUnavailable):
             self.remote.submit({"worktree": "w", "head": "not-a-sha", "commits": ["x"]})
         self.remote.cancel_change(r2["id"])
-        self.assertEqual([e for e in A.waiting_entries(d, open_only=False) if e.get("status") in A.QUEUED], [])
+        self.assertEqual([e for e in A.ChangeRecords(A.process_store(), d).every() if e.get("status") in A.QUEUED], [])
 
     def test_land_keeps_a_change_in_the_outbox_while_the_store_is_down_and_the_sync_sends_it(self):
         down = A.RemoteStore("http://127.0.0.1:9", "tok-pawel", timeout=2)
@@ -206,7 +206,7 @@ class SubmitTest(Phase2Base):
         self.assertTrue(A.submit_remote(down, e).get("outbox"))
         self.assertEqual(A.flush_outbox(down), 0)
         self.assertEqual(A.flush_outbox(self.remote), 1)
-        self.assertEqual([x["id"] for x in [e for e in A.waiting_entries(A.waiting_state(self.repo)[0], open_only=False) if e.get("status") in A.QUEUED]], [e["id"]])
+        self.assertEqual([x["id"] for x in [e for e in A.ChangeRecords(A.process_store(), A.waiting_state(self.repo)[0]).every() if e.get("status") in A.QUEUED]], [e["id"]])
         self.assertEqual(os.listdir(A.sync_outbox_dir()), [])
 
 
@@ -342,7 +342,7 @@ class ServerSideTest(Phase2Base):
         self.assertEqual(names, ["laptop role", "outbox", "file events", "state mirror", "children", "events", "notifier", "alerts", "workspace trust", "landed worktrees", "local queue", "landed changes", "regen holds", "claims", "dispatcher", "escalation dispatcher", "pins", "drift explorer", "revert notes", "fixer landing",
                                  "network watch", "tunnel probe", "red status snapshot", "upkeep", "root checkout", "recovery"])
         server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f, *on_clock(A.Clock()))]
-        self.assertEqual(server, ["clone health", "change items", "landed changes", "stranded changes", "change tick", "land hold", "batch tick", "watches", "land refs",
+        self.assertEqual(server, ["clone health", "landed changes", "stranded changes", "change tick", "land hold", "batch tick", "watches", "land refs",
                                   "lease archive", "children", "gate summary", "red time", "red tick", "recovery", "issues",
                                   "reverts", "queue stall", "file events", "timeline", "quiet deadlines", "stats"])
         laptop_only = {"events", "notifier", "alerts", "network watch", "tunnel probe", "red status snapshot", "upkeep", "fixer landing", "dispatcher", "regen holds",

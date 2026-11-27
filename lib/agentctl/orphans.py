@@ -12,7 +12,7 @@ from agentctl.core import attempt, branch_of, git_ok, hashlib_sha1, remote
 from agentctl.procrunner import process_runner
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import do_not_land, held_commit
-from agentctl.waitingdir import WAITING_BRANCH, waiting_entries, waiting_state
+from agentctl.waitingdir import WAITING_BRANCH, ChangeRecords, waiting_state
 from agentctl.procs import process_cwds
 from agentctl.inboxentry import inbox_entries
 from agentctl.worktrees import gitdir_activity, worktrees
@@ -85,7 +85,7 @@ def orphan_candidates(repo: str, store: Any, now_: Optional[float] = None, dead:
     lands = lands or land_entries_once()
     cwds, landers, live, sessions = worktrees_in_use(repo, store, t)
     records = blame_records(store)
-    live |= queued_worktrees(repo)
+    live |= queued_worktrees(repo, store)
     out = []
     for w in worktrees(repo):
         p = w.get("worktree")
@@ -109,11 +109,11 @@ def worktrees_in_use(repo: str, store: Any, t: float) -> tuple[set[str], set[str
     return cwds, landers, live, sessions
 
 
-def queued_worktrees(repo: str) -> set[str]:
+def queued_worktrees(repo: str, store: Any) -> set[str]:
     """The worktrees of the changes in the land queue (queued, checking, waiting): none of them is orphaned."""
     with suppress(Exception, SystemExit):
         d, _c, _w = waiting_state(repo)
-        return {os.path.realpath(e.get("worktree") or "") for e in waiting_entries(d, open_only=False)
+        return {os.path.realpath(e.get("worktree") or "") for e in ChangeRecords(store, d).every()
                 if e.get("status") in ("queued", "checking", "waiting")}
     return set()
 

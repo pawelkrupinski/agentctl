@@ -286,8 +286,7 @@ class RequeueLoopTest(unittest.TestCase):
         self.assertIn("Not the vault's", text)
         self.assertIn("e1", text)
         self.assertIn("ModuleNotFoundError: No module named 'agentctl'", "".join(kw["tail"]))
-        self.assertIn("could not read Username", A.retry_hold(A.read_record(os.path.join(self.d, "entries",
-                                                                                         "e1.json")))[1])
+        self.assertIn("could not read Username", A.retry_hold(A.ChangeRecords(self.st, self.d).get("e1"))[1])
 
     def credential_probe(self, since):
         return A.run_probe("push_credential", {"d": self.d, "since": since, "host": A.host_role()})

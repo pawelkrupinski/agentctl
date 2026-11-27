@@ -33,7 +33,7 @@ class UntilDoneTest(test_queue.QueueTest):
         if self.before_drive:
             hook, self.before_drive = self.before_drive, None
             hook()
-        for e in A.waiting_entries(self.d, open_only=False):
+        for e in A.ChangeRecords(A.process_store(), self.d).every():
             if e["status"] in ("queued", "checking"):
                 A.check_entry(self.r.path, e["id"], *on_clock(self.clock))
             elif e["status"] == "checked":
@@ -96,7 +96,7 @@ class UntilDoneTest(test_queue.QueueTest):
         self.assertEqual(rc, 0, out)
         self.assertIn(f"RESUMING {eid}", out)
         self.assertNotIn("QUEUED ", out, "the same change is never submitted twice")
-        self.assertEqual(len(A.waiting_entries(self.d, open_only=False)), 1)
+        self.assertEqual(len(A.ChangeRecords(A.process_store(), self.d).every()), 1)
         self.assertRegex(out.strip().splitlines()[-1], r"^DONE ")
         self.assertFalse(os.path.isdir(wt))
         rc, out = self.land(self.r.path, "status")  # and a third call from a gone worktree is no crash: nothing to do
@@ -121,7 +121,7 @@ class UntilDoneTest(test_queue.QueueTest):
         self.assertEqual(rc, 1, out)
         self.assertIn("NOT LANDED: the pre-push checks failed", out)
         self.assertNotIn("QUEUED ", out, "a decided change is reported, never submitted again unchanged")
-        self.assertEqual(len(A.waiting_entries(self.d, open_only=False)), 1)
+        self.assertEqual(len(A.ChangeRecords(A.process_store(), self.d).every()), 1)
         rc, out = self.land(self.r.path, "status", eid.rsplit("-", 1)[-1])
         self.assertEqual(rc, 0, out)
         self.assertIn(f"{eid}  rejected", out)
@@ -146,7 +146,7 @@ class UntilDoneTest(test_queue.QueueTest):
         rc, out = self.until_done(wt)
         self.assertNotIn("DECIDED", out, "a verdict decided on an older main is no verdict on this one")
         self.assertIn("QUEUED ", out, "the change is checked again")
-        self.assertEqual(len(A.waiting_entries(self.d, open_only=False)), 2)
+        self.assertEqual(len(A.ChangeRecords(A.process_store(), self.d).every()), 2)
 
     def test_a_rejection_a_waiter_already_received_is_not_replayed_as_undelivered(self):
         """The same lane: its first `--until-done` had printed the NOT LANDED at 17:02, yet the next call said it was
@@ -161,7 +161,7 @@ class UntilDoneTest(test_queue.QueueTest):
         rc, out = self.until_done(wt)
         self.assertNotIn("while no --until-done waited", out)
         self.assertIn("QUEUED ", out, "the change is checked again")
-        self.assertEqual(len(A.waiting_entries(self.d, open_only=False)), 2)
+        self.assertEqual(len(A.ChangeRecords(A.process_store(), self.d).every()), 2)
 
     def test_land_status_of_a_landed_entry_gives_its_sha(self):
         wt, _ = self.agent("s", "web/src/main/S.scala", "s\n", msg="s: status")
@@ -321,7 +321,7 @@ class UntilDoneTest(test_queue.QueueTest):
                     self.assertIn("did not start", text)
                     self.assertIn(os.path.realpath(log), text)
                     self.assertFalse([l for l in text.splitlines() if A.VERDICT_LINE.match(l)], text)
-                    self.assertEqual(A.waiting_entries(self.d, open_only=False), [], "nothing queued")
+                    self.assertEqual(A.ChangeRecords(A.process_store(), self.d).every(), [], "nothing queued")
         rc = self.land_into(log, wt, "--until-done")  # the earlier land gone: the file is this one's
         self.assertEqual(rc, 0, open(log).read())
         self.assertRegex(open(log).read().strip().splitlines()[-1], r"^DONE ")

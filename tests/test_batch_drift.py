@@ -57,7 +57,7 @@ class DriftBase(unittest.TestCase):
     def entry(self, eid, seq, commits, tip):
         e = {"id": eid, "seq": seq, "commits": commits, "tip": tip, "status": "waiting", "worktree": self.r.path,
              "created": A.ts()}
-        A.save_entry(self.d, e)
+        A.ChangeRecords(self.st, self.d).save(e)
         return e
 
     def calls(self):
@@ -151,7 +151,7 @@ class SplitTest(DriftBase):
         it = self.batch([a, b, c, e], i2)
         A.batch_drift_split(self.r.path, self.d, self.st, it, [a, b, c, e], self.r.path, "DRIFT RED: x")
         self.assertEqual(self.st.item("batch", "k#1")["state"], "assembling")
-        es = {x["id"]: x for x in A.waiting_entries(self.d)}
+        es = {x["id"]: x for x in A.ChangeRecords(self.st, self.d).waiting()}
         self.assertEqual(sorted(k for k, x in es.items() if x.get("drift_split")), ["b", "e"])
         nxt = A.drift_serialize(self.r.path, [es[k] for k in ("a", "b", "c", "e")])
         self.assertEqual([x["id"] for x in nxt], ["a", "b", "c"])  # the non-identity part and ONE identity change
@@ -167,7 +167,7 @@ class SplitTest(DriftBase):
         os.environ["FAKE_DRIFT_RCS"] = "1"
         A.batch_drift_split(self.r.path, self.d, self.st, it, [a, b], self.r.path, "DRIFT RED: x")
         self.assertEqual(self.st.item("batch", "k#1")["state"], "assembling")
-        self.assertEqual(A.read_record(os.path.join(self.d, "entries", "b.json"))["status"], "rejected")
+        self.assertEqual(A.ChangeRecords(self.st, self.d).get("b")["status"], "rejected")
         # the same, but its second run is clean: a flaky first run rejects nobody
         os.remove(os.environ["FAKE_DRIFT_LOG"])
         b2 = self.entry("b2", 3, [i1], i1)

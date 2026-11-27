@@ -48,7 +48,7 @@ class RedAuthorsTest(unittest.TestCase):
         case.fake("red_commits", lambda rng, repo, u: list(shas))
         wts = [f"/wt/{i}" for i in range(4)]
 
-        def heads(rng, repo):
+        def heads(rng, store):
             out = {}
             for s in shas:
                 if rng.random() < 0.3:
@@ -66,7 +66,7 @@ class RedAuthorsTest(unittest.TestCase):
         case.fake("worktree_activity", lambda rng, repo, wt, ents: rng.choice([0.0, NOW - 60, NOW - 900, NOW, NOW - 10 ** 5]))
         case.fake("proc_alive", lambda rng, p: rng.random() < 0.6)
         case.put("wall_epoch", lambda: NOW)
-        return ("/repo" if r.random() < 0.95 else "", {"run": {}}, r.choice([None, NOW, NOW + 100]))
+        return ("/repo" if r.random() < 0.95 else "", "store", {"run": {}}, r.choice([None, NOW, NOW + 100]))
 
     def test_red_authors(self):
         check(self, "red_authors", self.build, lambda A: A.red_authors, 6000)

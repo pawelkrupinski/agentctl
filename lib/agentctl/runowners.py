@@ -148,12 +148,12 @@ def worktree_holding(repo, sha):
     return None
 
 
-def queue_entry_worktree(entry_id):
-    for p in glob.glob(os.path.join(waiting_dir(), "*", "entries", f"{entry_id}.json")):
-        e = read_record(p) or {}
-        if e.get("worktree"):
-            return e["worktree"]
-    return None
+def queue_entry_worktree(store: Any, entry_id: str) -> str | None:
+    """The worktree change entry_id was submitted from (its change item's), or None (no such change; no store: a
+    snapshot read without one)."""
+    it = store.item("change", entry_id) if store is not None and entry_id else None
+    worktree: str | None = ((it or {}).get("data") or {}).get("worktree")
+    return worktree
 
 
 def branch_base(branch, run):
@@ -181,21 +181,21 @@ def rematch_gone_owner(repo: Any, branch: Any, run: Any, rec: Any) -> Any:
     return new
 
 
-def holder_of_branch(repo: Any, branch: Any, base: Any) -> Any:
+def holder_of_branch(repo: Any, store: Any, branch: Any, base: Any) -> Any:
     """(worktree, how) that holds a branch run nobody recorded: a check/ branch's queue entry, else the worktree holding
     its commit; (None, None) when nobody does."""
     wt, how = None, None
     if branch.startswith("check/"):
         # the lane and mode prefixes off (remote_check: check/red-<...>; remote_mode_prefix: check/fast-<id>,
         # check/verify-<sha>-<id>): the entry's own id
-        wt, how = (queue_entry_worktree(re.sub(r"^(red-)?(fast-|verify(areas)?-[0-9a-f]{40}-)?", "", branch[len("check/"):])),
+        wt, how = (queue_entry_worktree(store, re.sub(r"^(red-)?(fast-|verify(areas)?-[0-9a-f]{40}-)?", "", branch[len("check/"):])),
                    "its queue entry")
     if not wt and repo and base:
         wt, how = worktree_holding(repo, base), f"the worktree that holds {base[:9]}"
     return wt, how
 
 
-def match_unrecorded(repo: Any, branch: Any, run: Any) -> Any:
+def match_unrecorded(repo: Any, store: Any, branch: Any, run: Any) -> Any:
     """The owner record of a branch run nobody recorded: matched after the fact and recorded, else an `unmatched` mark
     (None; not tried again for OWNER_REMATCH)."""
     rid = run.get("databaseId")
@@ -204,7 +204,7 @@ def match_unrecorded(repo: Any, branch: Any, run: Any) -> Any:
     if old.get("source") == "unmatched" and epoch_now() - float(old.get("epoch") or 0) < OWNER_REMATCH:
         return None
     base = branch_base(branch, run)
-    wt, how = holder_of_branch(repo, branch, base)
+    wt, how = holder_of_branch(repo, store, branch, base)
     if not wt:
         save_dispatch({"branch": branch, "run_id": rid, "workflow": run.get("workflowName"), "source": "unmatched",
                        "at": ts(), "epoch": epoch_now()}, key)
@@ -214,12 +214,12 @@ def match_unrecorded(repo: Any, branch: Any, run: Any) -> Any:
                           "at": ts(), "epoch": epoch_now()}, key)
 
 
-def owner_of(repo, branch, run):
+def owner_of(repo, store, branch, run):
     """The owner record of a branch run, matched after the fact (and recorded) when nobody recorded one."""
     rec = dispatch_for(branch, run.get("databaseId"))
     if rec and owner_gone(rec):  # its worktree removed / pid dead: a live worktree holding its commit takes it over
         return rematch_gone_owner(repo, branch, run, rec) or rec  # nobody holds it: orphan_why closes it, naming the gone owner
-    return rec or match_unrecorded(repo, branch, run)
+    return rec or match_unrecorded(repo, store, branch, run)
 
 
 def owner_gone(rec):
@@ -314,7 +314,7 @@ def finished_runs(runs_for: Any, b: Any, out: Any) -> Any:
 def gone_owner_what(repo: Any, o_r: Any, store: Any, b: Any, sha: Any, runs: Any) -> Any:
     """What says branch b (head sha, its finished runs) has no owner left -- the owner gone, or its red closed as an
     orphan -- else None."""
-    rec = owner_of(repo, b, (runs or [{}])[0] | {"headSha": sha}) if runs else dispatch_for(b)
+    rec = owner_of(repo, store, b, (runs or [{}])[0] | {"headSha": sha}) if runs else dispatch_for(b)
     gone = owner_gone(rec)
     orphan = None if gone or rec else orphaned_red(store, o_r, runs)
     if not gone and not orphan:

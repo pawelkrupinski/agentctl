@@ -301,16 +301,17 @@ class GateReport:
         return [outage_line(c, u_, ns, q_) for c, (u_, ns, q_) in causes.items()] + reds
 
 
-def ci_state_refresh(o_r: str, write: bool = True) -> dict[str, Any]:
+def ci_state_refresh(o_r: str, write: bool = True, store: Any = None) -> dict[str, Any]:
     """Read the gate and every other workflow on main once, write the snapshot (unless write=False: ci_state_write
-    later), return it. Raises when the gate cannot be read (nothing is written: the old snapshot ages out)."""
+    later), return it. Raises when the gate cannot be read (nothing is written: the old snapshot ages out). store: the
+    change items a check/ branch run's owner is read from (none: matched by the worktree holding its commit)."""
     gate = gate_runs(o_r)
     snap = {"at": epoch_now(), "repo": o_r, "outside_error": None, "outside": [],
             "gate": gate_snap_rows(o_r, gate)}
     if gated_repo(o_r):
         snap.update(outside_snap(o_r))
         snap["callable_only"] = sorted(main_callable_flows(o_r))  # their reds wait for red_callable_evidence
-    snap.update(branches_snap(o_r))
+    snap.update(branches_snap(o_r, store))
     snap["latest"] = latest_decided(o_r)
     snap["stuck"] = stuck_runs({**main_runs_of(o_r).outside, **main_runs_of(o_r).gate}, o_r=o_r)  # audit #8: undecided far past their workflow's p90
     if write:
@@ -326,11 +327,11 @@ def outside_snap(o_r: str) -> dict[str, Any]:
         return {"outside_error": str(e)[:200]}
 
 
-def branches_snap(o_r: str) -> dict[str, Any]:
+def branches_snap(o_r: str, store: Any) -> dict[str, Any]:
     """The branch runs: measure/*, check/*, red fixers' and every recorded dispatch's (after the main lists)."""
     try:
         prev = (state_read().get("ci") or {}).get("branches") or []
-        return {"branches": branch_state(o_r, scan_repo_for(o_r), prev)}
+        return {"branches": branch_state(o_r, scan_repo_for(o_r), store, prev)}
     except (Exception, SystemExit) as e:
         return {"branches_error": str(e)[:200]}
 

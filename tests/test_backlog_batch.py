@@ -49,7 +49,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         super().tearDown()
 
     def entry(self, eid):
-        return A.read_record(os.path.join(self.d, "entries", f"{eid}.json"))
+        return A.ChangeRecords(A.process_store(), self.d).get(eid)
 
     def queue(self, name, path, *extra):
         wt, _ = self.agent(name, path, f"{name}\n", msg=f"{name}: {path}")
@@ -281,7 +281,7 @@ class PushBatchTest(test_queue.QueueTest):
         A.spawn_batch_executor = lambda repo, d_, bid: A.check_batch(repo, bid, *on_clock(self.clock))
 
     def entry(self, eid):
-        return A.read_record(os.path.join(self.d, "entries", f"{eid}.json"))
+        return A.ChangeRecords(A.process_store(), self.d).get(eid)
 
     def checked(self, name, path, text=None, msg=None):
         wt, _ = self.agent(name, path, text or f"{name}\n", msg=msg or f"{name}: {path}")

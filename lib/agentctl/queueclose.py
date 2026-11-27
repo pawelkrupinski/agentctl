@@ -13,7 +13,7 @@ from agentctl.clock import Clock
 from agentctl.landstate import UNKNOWN, LandState, landed_state
 from agentctl.core import fmt_age, git_ok, host_role, process_cache, remote
 from agentctl.repos import movies_repo_path, precheck_hook, waiting_supported
-from agentctl.waitingdir import ChangeRecords, drop_entry, entry_final, waiting_entries, waiting_state, wlog
+from agentctl.waitingdir import ChangeRecords, drop_entry, entry_final, waiting_state, wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_write
 from agentctl.clones import clone_shared
@@ -138,7 +138,7 @@ def probe_change_source(a, store):
 def _migrate_landed(st: Any, d: Any, e: Any, via: Any) -> str:
     """Entry e's commits are on main (via): it is LANDED, here and in the store. The line saying so."""
     e.update(status="landed", landed_sha=via, decided=ts(), why="its commits are on main (by content)")
-    ChangeRecords(st, d).save(e)
+    ChangeRecords(None, d).save(e)  # the laptop's outbox
     close_item_landed(st, e["id"], "its commits are on main (by content)", via)
     return f"{e['id']}: its commits are on main (by content): landed"
 
@@ -172,9 +172,7 @@ def migrate_local_queue(repo: Any, store: Any) -> Any:
         return []
     d = waiting_state(repo)[0]
     did: list[str] = []
-    for e in waiting_entries(d, open_only=False):
-        if entry_final(e.get("status")):
-            continue
+    for e in ChangeRecords(None, d).open():  # the outbox
         state = change_state(repo, e.get("head"), e.get("commits"))
         if state.landed:  # unknown: migrated to ci-runner's queue like an unlanded one, which decides there
             did.append(_migrate_landed(store, d, e, state.via))

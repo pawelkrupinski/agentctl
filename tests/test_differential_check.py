@@ -7,7 +7,7 @@ import os, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, sh  # noqa: E402
+from test_agentctl import A, sh, put_change  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 import test_queue  # noqa: E402
 
@@ -160,10 +160,10 @@ class DifferentialCheckTest(test_queue.QueueTest):
         d, _c, _w = A.waiting_state(self.r.path)
         for n in (1, 2):
             A.check_entry(self.r.path, eid, *on_clock(self.clock))
-            e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+            e = A.ChangeRecords(A.process_store(), d).get(eid)
             self.assertEqual(e["status"], "queued", f"time cap {n}: infra, re-queued")
             e["retry_after"] = 0
-            A.save_entry(d, e)
+            put_change(A.CurrentStore(A.process_store), d, e)
         self.assertEqual(self.verdicts("NOT_LANDED"), [])
         self.assertEqual(self.check(eid, rounds=1), 1, "the third time it is the change's")
         self.assertIn("time cap", self.verdicts("NOT_LANDED")[0])

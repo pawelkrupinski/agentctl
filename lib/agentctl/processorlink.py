@@ -201,7 +201,7 @@ def _settled(it: dict[str, Any]) -> tuple[int, str | None, float | None] | None:
 def _await_entry(repo: str, eid: str, own: Owned, clock: Clock, store: Any) -> tuple[int, str | None, float | None]:
     """The change's STORE ITEM decides (a RemoteStore on the laptop): an entry's JSON is only on the host whose queue
     runs it -- ci-runner's for every change since ONE QUEUE (2026-11-16: `waiting await` on the laptop crashed with
-    FileNotFoundError on one). A joined change's item follows its waiting entry (project_changes)."""
+    FileNotFoundError on one)."""
     t0, delays = clock.time(), backoff(15, 60)
     timeout = knob_waiting_timeout()
     said = None

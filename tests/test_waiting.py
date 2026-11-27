@@ -92,7 +92,7 @@ class WaitingTest(Base):
 
     def entries(self):
         d, _c, _w = A.waiting_state(self.r.path)
-        return {e["id"].rsplit("-", 1)[-1]: e for e in A.waiting_entries(d, open_only=False)}
+        return {e["id"].rsplit("-", 1)[-1]: e for e in A.ChangeRecords(A.process_store(), d).every()}
 
     def drive(self, n=10):
         """The batch to rest, as the processor's ticks drive it, its executors run in-process (step 8). ONE CLOCK: the
@@ -229,7 +229,7 @@ class WaitingTest(Base):
         self.land(wa)
         d, _c, wt = A.waiting_state(self.r.path)
         e = {"id": "x-9", "seq": 9, "worktree": wa, "head": "", "commits": [], "fixes": ["7"], "status": "waiting"}
-        self.assertEqual([x["id"] for x in A.batch_order(self.r.path, A.waiting_entries(d) + [e], {"7"}, A.CurrentStore(A.process_store))][0], "x-9")
+        self.assertEqual([x["id"] for x in A.batch_order(self.r.path, A.ChangeRecords(A.process_store(), d).waiting() + [e], {"7"}, A.CurrentStore(A.process_store))][0], "x-9")
 
     def test_a_conflict_is_found_when_the_batch_is_assembled_and_rejects_that_change_alone(self):
         """Step 8: waiting is no branch; a change that no longer applies is rejected when the batch is assembled."""
@@ -401,8 +401,7 @@ class WaitingTest(Base):
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         self.land(wa)
         d, _c, _w = A.waiting_state(self.r.path)
-        eid = A.waiting_entries(d)[0]["id"]
-        A.project_changes(d, A.CurrentStore(A.process_store))
+        eid = A.ChangeRecords(A.process_store(), d).waiting()[0]["id"]
         st = A.process_store()
         it = st.put_item("batch", "var_lib_agentctl_movies_.git#4", "checking", {"retries": 0})
         st.update_item("batch", it["id"], it["version"], {"members": [eid], "tip": "340057e4d3c7", "base": "24e95ec1a217"})
@@ -553,7 +552,7 @@ class WaitingTest(Base):
                          "unchecked here (no store): the reconciler checks the trailer again at the push")
         os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"  # the sync's own token (the server thread's process_store() too)
         self.assertEqual(A.flush_outbox(A.CurrentStore(A.process_store)), 1)
-        [e] = [e for e in A.waiting_entries(A.waiting_state(server_repo)[0], open_only=False) if e.get("status") in A.QUEUED]
+        [e] = [e for e in A.ChangeRecords(server_store, A.waiting_state(server_repo)[0]).every() if e.get("status") in A.QUEUED]
         self.assertEqual((e["worktree"], e["commits"]), (wt, [sha]))
 
     def test_the_token_is_handed_to_a_listening_processor(self):
@@ -648,7 +647,6 @@ class WaitingTest(Base):
             def decide(_s, e=e, verdict=verdict, status=status, fields=fields):  # the queue's host decides it ...
                 ticks.append(1)
                 A.queue_verdict(A.CurrentStore(A.process_store), d, dict(e), status, verdict, code=0 if status == "landed" else 1, **fields)
-                os.unlink(os.path.join(d, "entries", f"{e['id']}.json"))  # ... its entry on ITS disk, not this one
             self.clock.on_sleep = decide
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):

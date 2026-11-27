@@ -3,7 +3,7 @@ import json, os, subprocess, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, put_change  # noqa: E402
 from test_red import run  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 
@@ -45,7 +45,7 @@ class AlreadyFixedGuardTest(RedsBase):
         d = A.waiting_state(self.r.path)[0]
         e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": "repo-wt-queued", "head": sha, "commits": [sha]})
         e["status"] = status
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         return e
 
 
@@ -56,7 +56,7 @@ class AlreadyFixedGuardTest(RedsBase):
         d = A.waiting_state(self.r.path)[0]
         e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": "repo-wt-queued", "head": sha, "commits": [sha]})
         e["status"] = status
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         return e
 
 
@@ -80,7 +80,7 @@ class AlreadyFixedGuardTest(RedsBase):
         for status in ("waiting", "checking"):
             d = A.waiting_state(self.r.path)[0]
             e["status"] = status
-            A.save_entry(d, e)
+            put_change(A.CurrentStore(A.process_store), d, e)
             self.tick(advance=120)
             it = self.only()
             self.assertEqual((it["state"], (it["data"].get("fix") or {}).get("entry")), ("fix-pending", e["id"]), status)

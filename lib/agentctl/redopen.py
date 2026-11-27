@@ -129,7 +129,7 @@ def red_open(store, ob, repo, t, o_r=None):
     data.update(red_identity(data))
     if ob["kind"] == "test" and ob["red_kind"] in ("gate", "outside"):
         try:
-            data["author"] = red_author(repo, ob, t)
+            data["author"] = red_author(repo, store, ob, t)
         except (Exception, SystemExit) as e:
             err(f"red: no author for {key} ({str(e)[:120]})")
     data.update(red_culprit_search(store, ob, repo, t, o_r))
@@ -223,11 +223,11 @@ def red_attach(store, workflow, run, author=None, o_r=None):
     return out
 
 
-def red_author(repo, ob, t):
+def red_author(repo, store, ob, t):
     """The live author of the red run's newest commit, from the change that landed it (its recorded session and
     worktree; audit #15: never an inherited environment), live = an agent process in that worktree, active lately."""
     u = {"run": ob["run"], "runs": ob["runs_list"]}
-    for a in red_authors(repo, u, t):
+    for a in red_authors(repo, store, u, t):
         if a["live"] and a.get("session"):  # a change item's recorded author, never a worktree that merely holds the commit
             return {"worktree": a["worktree"], "session": a.get("session"), "shas": a["shas"][:5]}
     return None

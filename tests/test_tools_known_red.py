@@ -9,7 +9,7 @@ import os, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, put_change  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 import test_queue  # noqa: E402
 
@@ -23,11 +23,11 @@ class ToolsKnownRedTest(test_queue.QueueTest):
         wt, _ = self.agent("c", path, "a\n", msg="a change")
         eid, _ = self.queued(wt)
         A.check_entry(self.r.path, eid, *on_clock(self.clock))
-        e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        e = A.ChangeRecords(A.process_store(), d).get(eid)
         e["known_red"] = dict(known, base=e.get("checked_base"))
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         A.push_change(self.r.path, d, e, *on_clock(A.Clock()))
-        return A.read_record(os.path.join(d, "entries", f"{eid}.json")), d
+        return A.ChangeRecords(A.process_store(), d).get(eid), d
 
     def test_a_tools_only_change_failing_only_as_main_s_gate_fails_lands(self):
         e, _d = self.known_red_change("scripts/tool.sh", KNOWN)

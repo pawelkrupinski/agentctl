@@ -1,57 +1,25 @@
-# agentctl, part `projector`: the store's projectors, run by the server's tick: change items from the queue, inbox entries and alerts from the events, one live notification per escalation, the lease archive.
+# agentctl, part `projector`: the store's projectors, run by the server's tick: inbox entries and alerts from the events, one live notification per escalation, the lease archive.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.causes import PROJECTED_CAUSE, reject_cause
 from agentctl.ids import stamp
 from agentctl.clock import epoch_now
 import json
 import os
 import re
-import time
 from typing import Any
-from contextlib import suppress
 from agentctl.core import attempt, err
 from agentctl.timefmt import iso_at
 from agentctl.notifyurl import notification_url
-from agentctl.waitingdir import RECORD_KEY, entry_final, entry_record, new_change_data, waiting_entries, wlog
+from agentctl.waitingdir import wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_dir, inbox_kind
 from agentctl.notifier import notify, notify_cause, notify_fix
-from agentctl.statemachines import StaleVersion, TerminalState, change_state_of, machine_state
-from agentctl.store import LEASE_ARCHIVE_AFTER, Store
+from agentctl.statemachines import machine_state
+from agentctl.store import LEASE_ARCHIVE_AFTER
 from agentctl.redask import ask_interval
 from agentctl.alerts import alert_write
 from agentctl.alertroute import event_audience
 from agentctl.blameknobs import knob_ask_remind_max
-
-
-def project_changes(d, store):
-    """Each queue entry's change item: created in its state, moved (a transition, with its event) when the entry's
-    status moved, and an open entry's copy on it (waitingdir.RECORD_KEY) made current -- the copy a change gets when
-    its item is made after its entry, and of any write that missed it. Returns the items."""
-    st = store
-    out = []
-    for e in waiting_entries(d, open_only=False):
-        state = change_state_of(e.get("status"))
-        if not state:
-            continue
-        cur = st.put_item("change", e["id"], state, new_change_data(st, e))
-        if cur["state"] != state and not machine_state("change", cur["state"]).terminal:
-            event = {"text": f"{e['id']}: {cur['state']} -> {state}", "refs": {"entry": e["id"]},
-                     "cause": PROJECTED_CAUSE.get(state) or reject_cause(""), "detail": "projected"}
-            with suppress(StaleVersion, TerminalState):
-                st.transition("change", e["id"], state, cur["version"], event=event)
-            cur = st.item("change", e["id"])
-        out.append(_carry_record(st, e, cur))
-    return out
-
-
-def _carry_record(st: Store, e: dict[str, Any], cur: dict[str, Any]) -> dict[str, Any]:
-    """Open entry e's copy on its item (cur) made current (waitingdir.RECORD_KEY); a decided one's is left as it was
-    last written. The item as it now is."""
-    if entry_final(e.get("status")) or (cur.get("data") or {}).get(RECORD_KEY) == entry_record(e):
-        return cur
-    return st.merge_item("change", e["id"], {RECORD_KEY: entry_record(e)}) or cur
 
 
 # ---------------------------------------------------------------- events -> the inbox (design §8.2; phase 1 step 7)

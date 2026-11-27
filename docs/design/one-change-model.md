@@ -1,4 +1,8 @@
-# One change, one record (R3, 2026-11-27)
+# One change, one record (R3, 2026-11-27) -- DONE
+
+Status: DONE (2026-11-27, steps 1-6 landed). The store item is the only record of a server's change; the entry
+files are the laptop's outbox alone. "Where each fact lives today" below is the state before the work, kept as its
+rationale.
 
 Review 2 finding A1 (`agentctl-review2/A.md` D1): a change lives twice, as a QUEUE ENTRY FILE
 (`<state root>/waiting/<clone>/entries/<id>.json`, `waitingdir.py`) and as a STORE ITEM (`items`, type `change`),
@@ -128,6 +132,19 @@ copies converge.
    `ENTRY_FINAL`, the projector's `project_changes`, `change_item_fields`, `entry_created_at`,
    `entry_queued_since`, `_landed_fields`, `_item_data` and the entries directory on the server (kept read-only one
    more release as a backup, then removed by the cleanup sweep). The laptop's outbox stays (rule above).
+   As built: `ChangeRecords.save` with the server's store writes the item alone (no file: the rollback cache goes), and
+   `set_change` saves nothing after a move that carried the record (only a decided item's decision is taken and
+   merged). The projector's `project_changes` and its tick step go. The last direct readers of the files read the
+   items: `redauthors.landed_heads(store)` (a landed change's `landed_sha`, `worktree`, `session` on its item),
+   `orphans.queued_worktrees(repo, store)` (`ChangeRecords`), `runowners.queue_entry_worktree(store, id)` (the item's
+   `worktree`; the store threaded down from the gate publish through `ci_state_refresh`, `branch_state`, `owner_of`);
+   `land status`'s outbox line and the outbox's drain (`migrate_local_queue`) read the outbox through
+   `ChangeRecords(None, d)`. KEPT, deliberately: `save_entry` / `waiting_entries` / `drop_entry` as the OUTBOX's writer,
+   reader and drain (rule above); `change_item_fields`, `entry_created_at`, `entry_queued_since`, `_landed_fields` and
+   `_item_data`, which write the item's own top-level keys (`worktree`, `session`, `why`, `landed_sha`, ...) that every
+   reader on any host reads -- removing them would break an older client reading a newer server's items (rule 2), and
+   moving those readers to the record is a change of its own. The server's existing entries directory is left in
+   place, unread and unwritten, for the cleanup sweep. The simulator reads the records (I6, IS, IC redefined).
 
 `analyze` on a fresh read-only store copy must show the same numbers after each step (no step rewrites history:
 the events and their causes are written as before).

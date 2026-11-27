@@ -41,6 +41,7 @@ def waiting_state(repo: str) -> tuple[str, str, str]:
 
 
 def waiting_entries(d: str, open_only: bool = True) -> list[dict[str, Any]]:
+    """THE LAPTOP'S OUTBOX, read (ChangeRecords with no local store): its entry files, in seq order."""
     out = []
     for p in sorted(glob.glob(os.path.join(d, "entries", "*.json"))):
         e = read_record(p)
@@ -62,8 +63,9 @@ def entry_final(status: Any) -> bool:
 
 
 def save_entry(d: str, e: dict[str, Any]) -> None:
-    """The entry, written atomically. A final status on disk is never overwritten by a racing writer's non-final one
-    (audit S2: `supersede` raced the checker's save): the disk's status and verdict stand."""
+    """THE LAPTOP'S OUTBOX, written (ChangeRecords with no local store): the entry, atomically. A final status on disk
+    is never overwritten by a racing writer's non-final one (audit S2: `supersede` raced the checker's save): the
+    disk's status and verdict stand."""
     p = os.path.join(d, "entries", f"{e['id']}.json")
     disk = read_record(p) or {}
     if disk.get("status") and entry_final(disk.get("status")) and not entry_final(e.get("status")):
@@ -77,9 +79,9 @@ def save_entry(d: str, e: dict[str, Any]) -> None:
 # THE ITEM IS THE CHANGE (docs/design/one-change-model.md): every entry the queue writes is its change item's data too,
 # whole but for its status (the item's state), under RECORD_KEY -- one added key, so an older revision reading the item
 # sees the keys it knew (the design's rule 2). The copy is merged without a new version (Store.merge_item): no writer's
-# compare-and-set is disturbed by it. Since step 4 the queue READS its changes from the items (ChangeRecords' readers);
-# since step 5 every writer writes the item FIRST and the file after it, as the item's cache (rule 3: a rollback finds
-# it current).
+# compare-and-set is disturbed by it. Since step 6 the item is the ONLY record of a server's change: the queue reads
+# and writes its items alone, and the entry files are the laptop's OUTBOX (a `land --follow` while main is red, which it
+# must keep offline) and nothing else.
 RECORD_KEY = "record"
 QUEUED = ("queued", "checking", "checked", "pushing")  # the states of a change in the land queue (not waiting for green)
 
@@ -101,37 +103,38 @@ def change_seq_key(d: str) -> str:
 
 
 class ChangeRecords:
-    """THE RECORD OF A QUEUE'S CHANGES: its writer (the item, then the entry's file) and its readers. store: the queue's
-    own (the server's local database, needs_token False): the changes are its change items, each read as the entry it
-    carries (RECORD_KEY) with the item's state as its status. None (or a remote store) for the laptop's OUTBOX (a `land
-    --follow` while main is red, slots.join: no item until ci-runner takes it): the entry files alone."""
+    """THE RECORD OF A QUEUE'S CHANGES: its writer and its readers. store: the queue's own (the server's local
+    database, needs_token False): the changes are its change items, each read as the entry it carries (RECORD_KEY)
+    with the item's state as its status. None (or a remote store) for the laptop's OUTBOX (a `land
+    --follow` while main is red, slots.join: no item until ci-runner takes it, queueclose.migrate_local_queue drains
+    it): the entry files alone."""
 
     def __init__(self, store: Any, d: str) -> None:
         self.store: Any = store if store is not None and not store.needs_token else None
         self.d = d
 
     def save(self, e: dict[str, Any]) -> None:
-        """Change e written: THE ITEM FIRST (docs/design/one-change-model.md, step 5) -- created carrying its record when
-        the store has none, else its record merged, e first taking a decision its item already holds (THE RACE RULE is
-        the item's: a writer of a stale copy never reopens a decided change) -- then its file, a cache of the item for a
-        rollback (the design's rule 3), in the item's state. The outbox (no local store): the file alone."""
-        cur = self._carry(e) if self.store is not None else None
-        save_entry(self.d, e if cur is None else {**e, "status": cur["state"]})
+        """Change e written: ITS ITEM (docs/design/one-change-model.md) -- created carrying its record when the store has
+        none, else its record merged, e first taking a decision its item already holds (THE RACE RULE is the item's: a
+        writer of a stale copy never reopens a decided change). The outbox (no local store): its file."""
+        if self.store is None:
+            save_entry(self.d, e)
+        else:
+            self._carry(e)
 
-    def _carry(self, e: dict[str, Any]) -> dict[str, Any] | None:
-        """Change e's item made current with e's record (created when absent); None when e has no item and no change
-        state to make one in (a retired status an older revision wrote)."""
-        cur: dict[str, Any] | None = self.store.item("change", str(e["id"]))
+    def _carry(self, e: dict[str, Any]) -> None:
+        """Change e's item made current with e's record (created when absent; nothing when e has no item and no change
+        state to make one in)."""
+        cur = self.store.item("change", str(e["id"]))
         if cur is None:
             state = change_state_of(e.get("status"))
-            if not state:
-                return None
-            cur = self.store.put_item("change", str(e["id"]), state,
-                                      {**new_change_data(self.store, e), RECORD_KEY: entry_record(e)})
+            if state:
+                self.store.put_item("change", str(e["id"]), state,
+                                    {**new_change_data(self.store, e), RECORD_KEY: entry_record(e)})
+            return
         take_decision(e, cur)
         if (cur.get("data") or {}).get(RECORD_KEY) != entry_record(e):
-            cur = self.store.merge_item("change", str(e["id"]), {RECORD_KEY: entry_record(e)}) or cur
-        return cur
+            self.store.merge_item("change", str(e["id"]), {RECORD_KEY: entry_record(e)})
 
     def every(self) -> list[dict[str, Any]]:
         """Every change of the queue that has its record, as its entry, in seq order (one with no seq last). A change
@@ -165,12 +168,12 @@ class ChangeRecords:
     def draw_seq(self) -> int:
         """The next change number (THE COUNTER NEVER GOES BACK: an entry that took a bounced entry's place keeps an old
         seq, so a number is the highest ever drawn). The store's atomic counter (Store.next_seq), started once above
-        every number the queue's entries hold; the outbox: above its entries'."""
+        every number the queue's records hold; the outbox: above its entries'."""
         if self.store is None:
             return drawn_max(waiting_entries(self.d, open_only=False)) + 1
         key = change_seq_key(self.d)
         if self.store.meta_get(key) is None:
-            self.store.meta_set(key, drawn_max(waiting_entries(self.d, open_only=False) + self.every()))
+            self.store.meta_set(key, drawn_max(self.every()))
         return int(self.store.next_seq(key))
 
 

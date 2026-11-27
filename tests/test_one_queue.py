@@ -57,7 +57,7 @@ class LandedByContentTest(OneQueueBase):
         via = self.land_rebased(head)
         did = A.close_landed_changes(self.r.path, A.Clock(), self.st, self.d)
         self.assertEqual(len(did), 1, did)
-        e = A.read_record(os.path.join(self.d, "entries", "20261028-162641-movies-wt-proxy-park-92.json"))
+        e = A.ChangeRecords(self.st, self.d).get("20261028-162641-movies-wt-proxy-park-92")
         self.assertEqual((e["status"], e["landed_sha"]), ("landed", via))
         it = self.st.item("change", "20261028-162641-movies-wt-proxy-park-92")
         self.assertEqual(it["state"], "landed")
@@ -180,7 +180,6 @@ class StrandedTest(OneQueueBase):
         self.st.put_item("change", "x-101", "waiting", {"worktree": "/w", "head": "2" * 40})
         wa, ha = self.change("a", "a\n")
         self.entry("carried-1", wa, ha)
-        A.project_changes(self.d, self.st)
         self.assertEqual(A.stranded_changes(self.r.path, self.d, self.st), ["x-101"])
         [c] = [c for c in A.open_conditions(self.st) if c["key"].startswith("change-stranded")]
         self.assertIn("STRANDED CHANGE x-101", c["text"])

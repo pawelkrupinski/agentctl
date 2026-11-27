@@ -14,7 +14,7 @@ import os, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, put_change  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 import test_queue  # noqa: E402
 from test_waiting import assert_queued_line_names_no_verdict  # noqa: E402
@@ -48,11 +48,11 @@ class RedFixLandsFastTest(test_queue.QueueTest):
 
     def entry(self, eid):
         d, _c, _w = A.waiting_state(self.r.path)
-        return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        return A.ChangeRecords(A.process_store(), d).get(eid)
 
     def only_entry_id(self):
         d, _c, _w = A.waiting_state(self.r.path)
-        es = A.waiting_entries(d, open_only=False)
+        es = A.ChangeRecords(A.process_store(), d).every()
         self.assertEqual(len(es), 1, es)
         return es[0]["id"]
 
@@ -60,7 +60,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         """The processor, run whenever the fixer's await sleeps: the queued change's checks, then its push."""
         def sleep(_s):
             d, _c, _w = A.waiting_state(self.r.path)
-            for e in A.waiting_entries(d, open_only=False):
+            for e in A.ChangeRecords(A.process_store(), d).every():
                 if e["status"] in ("queued", "checking"):
                     A.check_entry(self.r.path, e["id"], *on_clock(self.clock))
                 elif e["status"] == "checked":
@@ -193,7 +193,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         A.check_entry(self.r.path, ef, *on_clock(self.clock))
         e = self.entry(ef)
         e["known_red"] = {"keys": ["Local checks"], "where": ["plain main"], "base": e.get("checked_base")}
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         A.push_change(self.r.path, d, e, *on_clock(A.Clock()))
         self.assertEqual(self.entry(ef)["status"], "landed", "a red fix is never parked on `waiting` for green")
 
@@ -205,7 +205,7 @@ class RedFixLandsFastTest(test_queue.QueueTest):
         A.check_entry(self.r.path, eo, *on_clock(self.clock))
         e = self.entry(eo)
         e["known_red"] = {"keys": ["Local checks"], "where": ["plain main"], "base": e.get("checked_base")}
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         A.push_change(self.r.path, d, e, *on_clock(A.Clock()))
         self.assertEqual(self.entry(eo)["status"], "waiting")
 

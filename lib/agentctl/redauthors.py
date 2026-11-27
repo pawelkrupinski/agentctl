@@ -6,7 +6,6 @@ import os
 import re
 from typing import Any
 from agentctl.core import attempt, err, git, git_ok
-from agentctl.waitingdir import waiting_entries, waiting_state
 from agentctl.allowedpaths import allowed_path
 from agentctl.procs import lsof_cwds, proc_alive, ps
 from agentctl.inboxentry import inbox_entries
@@ -42,17 +41,17 @@ def red_commits(repo, u, limit=30):
     return [s for s in r.stdout.split() if s] if r.returncode == 0 else [red]
 
 
-def landed_heads(repo):
-    """{pushed head sha: {worktree, session}}: the changes that landed, as their queue entries recorded them at
+def landed_heads(store: Any) -> dict[str, dict[str, Any]]:
+    """{pushed head sha: {worktree, session}}: the changes that landed, as their change items recorded them at
     submission (audit #15: the author comes from the change item, never from an inherited environment)."""
     out = {}
     try:
-        d, _c, _w = waiting_state(repo)
-        for e in waiting_entries(d, open_only=False):
-            if e.get("landed_sha"):
-                out[e["landed_sha"]] = {"worktree": e.get("worktree"), "session": e.get("session")}
+        for it in store.items("change"):
+            data = it.get("data") or {}
+            if data.get("landed_sha"):
+                out[data["landed_sha"]] = {"worktree": data.get("worktree"), "session": data.get("session")}
     except (Exception, SystemExit) as e:
-        err(f"red authors: the waiting entries could not be read ({str(e)[:160]}); no authors named")
+        err(f"red authors: the change items could not be read ({str(e)[:160]}); no authors named")
     return out
 
 
@@ -92,10 +91,10 @@ def _landed_head(heads: Any, c: Any) -> Any:
     return heads.get(c) or next((v for k, v in heads.items() if c.startswith(k) or k.startswith(c)), None)
 
 
-def _commit_owners(repo: Any, commits: Any) -> Any:
+def _commit_owners(repo: Any, store: Any, commits: Any) -> Any:
     """{commit: the landed head (or the holding worktree) that owns it}: a change's commits (oldest first) end at its
     landed head; the ones not landed belong to the worktree holding them."""
-    heads = landed_heads(repo)
+    heads = landed_heads(store)
     owner: dict[Any, Any] = {}
     pending: list[Any] = []
     for c in reversed(commits):  # oldest first: a change's commits end at its landed head
@@ -142,11 +141,11 @@ def _author_liveness(repo: Any, by_wt: Any, t: Any) -> Any:
     return out
 
 
-def red_authors(repo, u, now_=None):
+def red_authors(repo, store, u, now_=None):
     """[{worktree, session, shas, pids, live, activity}] for the commits of the red run, the newest commit's author
     first. Live: an agent process works in that worktree now and it was active lately."""
     t = now_ if now_ is not None else wall_epoch()  # against git times and mtimes
     commits = red_commits(repo, u)
     if not repo or not commits:
         return []
-    return _author_liveness(repo, _by_worktree(commits, _commit_owners(repo, commits)), t)
+    return _author_liveness(repo, _by_worktree(commits, _commit_owners(repo, store, commits)), t)

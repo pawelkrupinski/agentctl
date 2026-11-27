@@ -119,31 +119,33 @@ def _item_data(cur, to, data, fields):
 def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any] | None = None,
                event: dict[str, Any] | None = None, *, cause: str, detail: str | None = None,
                **fields: Any) -> None:
-    """THE writer of a change's state: ONE transition of its item carrying its record (state + data + event), then
-    its entry's file as the item's cache (docs/design/one-change-model.md, step 5). An item decided already (by a
-    writer of the item alone: a cancel through the store, a stranded supersede) keeps its decision, and the entry takes
-    it: one state whichever reader asks (tests/queue_sim.py IS). cause: why it moved, one of causes.CAUSES (a keyword
-    every caller names: tests/test_causes.py); detail: a short qualifier."""
+    """THE writer of a change's state: ONE transition of its item carrying its record (state + data + event;
+    docs/design/one-change-model.md). An item decided already (by a writer of the item alone: a cancel through the
+    store, a stranded supersede) keeps its decision, and e takes it, its record merged (ChangeRecords.save). cause: why
+    it moved, one of causes.CAUSES (a keyword every caller names: tests/test_causes.py); detail: a short qualifier."""
     cur = st.put_item("change", e["id"], change_state_of(e.get("status")) or "queued", change_item_fields(e))
     e.update(status=to, **fields)
     data = {**(_item_data(cur, to, data, fields) or {}), RECORD_KEY: entry_record(e)}
-    _move_item(st, e["id"], cur, to, data, event, cause, detail)
-    ChangeRecords(st, d).save(e)  # a decided item's decision taken, its record merged if the move did not carry it
+    if not _move_item(st, e["id"], cur, to, data, event, cause, detail):
+        ChangeRecords(st, d).save(e)
 
 
 def _move_item(st: Any, cid: str, cur: dict[str, Any], to: str, data: Any, event: dict[str, Any] | None, cause: str,
-               detail: str | None) -> dict[str, Any]:
+               detail: str | None) -> bool:
     """Change item cid (read as cur) moved to `to` for `cause` unless it is decided; a stale read is read again once.
-    The item as last read (a decided one: as it was decided)."""
+    Whether it moved."""
     event = {**(event or {}), "cause": checked_cause(cause), **({"detail": detail} if detail else {})}
+    if machine_state("change", cur["state"]).terminal:
+        return False
     try:
-        if not machine_state("change", cur["state"]).terminal:
-            st.transition("change", cid, to, cur["version"], data=data, event=event)
+        st.transition("change", cid, to, cur["version"], data=data, event=event)
+        return True
     except StaleVersion:  # another writer moved it: re-read once
         cur = st.item("change", cid)
-        if not machine_state("change", cur["state"]).terminal:
-            st.transition("change", cid, to, cur["version"], data=data, event=event)
-    return cur
+    if machine_state("change", cur["state"]).terminal:
+        return False
+    st.transition("change", cid, to, cur["version"], data=data, event=event)
+    return True
 
 
 def queue_verdict(st, d, e, status, verdict, tail = (), code: int = 1, cause: str | None = None, **fields) -> None:

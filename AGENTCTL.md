@@ -2144,7 +2144,7 @@ Use it for every push to main. Don't use it for `measure/` branches: `identity-m
 
 `tests/queue_sim.py` simulates the land queue, deterministically per seed, over the REAL queue, batch and push code
 (tick_changes, tick_batch, check_entry, check_batch and bisect, push_change, push_batch_item, backlog_reconcile,
-project_changes, close_landed_changes, queue_change, the store's items, leases and events). Only the world is faked:
+close_landed_changes, queue_change, the store's items, leases and events). Only the world is faked:
 git is a model of (parent, patch) commits answering the queue's git calls; the forge's main, its push (a race, the
 hook's red gate) and the gate's red episodes; CI's verdicts (a breaking patch names its failing test; infra failures
 drawn); the agents (identity, plain, red-fix and `--no-batch` arrivals, re-lands after NOT LANDED, supersedes,

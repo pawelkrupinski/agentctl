@@ -121,35 +121,19 @@ class OneLoopTest(unittest.TestCase):
             self.assertIn(s_, A.MACHINES["batch"])
 
 
-class ProjectionTest(unittest.TestCase):
-    def test_the_queue_entries_project_to_change_items_with_their_transitions(self):
-        root = tempfile.mkdtemp()
-        st = A.Store(path=os.path.join(root, "store.db"))
-        d = os.path.join(root, "w")
-        os.makedirs(os.path.join(d, "entries"))
-        A.write_json(os.path.join(d, "entries", "e1.json"), {"id": "e1", "seq": 1, "status": "queued"})
-        A.write_json(os.path.join(d, "entries", "e2.json"), {"id": "e2", "seq": 2, "status": "landed"})
-        self.assertEqual({i["id"]: i["state"] for i in A.project_changes(d, st)}, {"e1": "queued", "e2": "landed"})
-        A.write_json(os.path.join(d, "entries", "e1.json"), {"id": "e1", "seq": 1, "status": "checking"})
-        self.assertEqual(A.project_changes(d, st)[0]["state"], "checking")
-        self.assertEqual([e["kind"] for e in st.events() if e["from_state"] is not None], ["change.checking"])
-
+class RetiredStatusTest(unittest.TestCase):
     def test_an_entry_of_a_retired_status_is_decided_never_an_open_change(self):
         """ONE CHANGE, ONE RECORD (docs/design/one-change-model.md, step 1): `joined` (no writer since 6d206ed,
-        2026-11-18) and `migrated` (the laptop outbox's "sent") are no change states. An entry file still carrying one
-        is decided: no item is made or moved for it -- the projector made a joined entry whose waiting entry was gone
-        a LANDED item with no sha -- and the queue never picks it."""
+        2026-11-18) and `migrated` (the laptop outbox's "sent") are no change states. An outbox file still carrying one
+        is decided: the outbox's drain never picks it."""
         root = tempfile.mkdtemp()
-        st = A.Store(path=os.path.join(root, "store.db"))
         d = os.path.join(root, "w")
         os.makedirs(os.path.join(d, "entries"))
         for i, status in ((1, "joined"), (2, "migrated"), (3, "bogus")):
             A.write_json(os.path.join(d, "entries", f"q{i}.json"),
                          {"id": f"q{i}", "seq": i, "status": status, "waiting_id": "gone", "worktree": "/wt/q"})
         A.write_json(os.path.join(d, "entries", "w1.json"), {"id": "w1", "seq": 4, "status": "waiting", "worktree": "/wt/w"})
-        self.assertEqual({i["id"]: i["state"] for i in A.project_changes(d, st)}, {"w1": "waiting"})
-        self.assertIsNone(st.item("change", "q1"))
-        self.assertEqual([e["id"] for e in A.waiting_entries(d)], ["w1"])
+        self.assertEqual([e["id"] for e in A.ChangeRecords(None, d).open()], ["w1"])
         self.assertEqual([e for e in A.waiting_entries(d, open_only=False) if e.get("status") in A.QUEUED], [])
         self.assertEqual([s for s in ("queued", "checking", "checked", "pushing", "waiting", "joined", "migrated", "bogus", None)
                           if A.entry_final(s)], ["joined", "migrated", "bogus", None])
@@ -167,13 +151,13 @@ class ProjectionTest(unittest.TestCase):
         st.transition("change", "e1", "cancelled", it["version"], data={"why": "cancelled by `agentctl land cancel`"},
                       event={"cause": "agent"})
         A.set_change(st, d, e, "rejected", cause="check-failed-test", why="NOT LANDED: the pre-push checks failed")
-        disk = A.read_record(os.path.join(d, "entries", "e1.json"))
-        self.assertEqual((st.item("change", "e1")["state"], e["status"], disk["status"]), ("cancelled",) * 3)
-        self.assertEqual(disk["why"], "cancelled by `agentctl land cancel`")
+        rec = A.ChangeRecords(st, d).get("e1")
+        self.assertEqual((st.item("change", "e1")["state"], e["status"], rec["status"]), ("cancelled",) * 3)
+        self.assertEqual(rec["why"], "cancelled by `agentctl land cancel`")
 
     def test_a_final_status_on_disk_stands_against_a_racing_open_write(self):
-        """save_entry's race rule (audit S2), characterised before the files go: a decided entry on disk keeps its
-        status and verdict when a racing writer saves the entry open."""
+        """save_entry's race rule (audit S2), the laptop outbox's: a decided entry on disk keeps its status and verdict
+        when a racing writer saves the entry open."""
         d = tempfile.mkdtemp()
         os.makedirs(os.path.join(d, "entries"))
         A.save_entry(d, {"id": "e1", "seq": 1, "status": "superseded", "why": "by e2", "superseded_by": "e2"})

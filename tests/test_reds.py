@@ -404,7 +404,7 @@ class FixTest(RedsBase):
         self.assertEqual(self.only()["state"], "fix-pending")
         self.assertEqual(self.unheld(), [])
         self.assertEqual(A.red_enforce(self.st, A.red_fix_facts(self.r.path, self.st), self.t[0]), [])
-        e = json.load(open(os.path.join(d, "entries", f"{e['id']}.json")))
+        e = A.ChangeRecords(self.st, d).get(e["id"])
         self.r.push(at=wt, ref=f"{sha}:main")  # landed: on main (a landed sha main lacks is no fix)
         e.update(status="landed", landed_sha=sha, landed_at=A.iso_at(self.t[0]))
         put_change(A.CurrentStore(A.process_store), d, e)
@@ -477,15 +477,14 @@ class FixTest(RedsBase):
         put_change(A.CurrentStore(A.process_store), d, e)
         self.tick()
         self.assertEqual((self.only()["state"], self.only()["data"]["fix"]["entry"]), ("fix-pending", e["id"]))
-        return e, os.path.join(d, "entries", f"{e['id']}.json"), wt, sha
+        return e, wt, sha
 
     def test_a_fix_the_store_holds_checking_is_on_its_way_though_the_queue_files_lack_it(self):
         # 2026-11-22, Identity takes #349: the queue's entry files live on ci-runner alone; a change the store holds
         # queued or checking is the red's fix on its way whatever the facts' entries read -- never "no fix on its way".
-        e, path, wt, sha = self.queued_fix_pending("store-only")
+        e, wt, sha = self.queued_fix_pending("store-only")
         it = self.st.item("change", e["id"])  # the item is made at its queueing (ChangeRecords.save)
         self.st.transition("change", e["id"], "checking", it["version"], event={"cause": "check-running"})
-        os.remove(path)  # the facts' queue no longer has it: neither its entry file nor its item's record
         self.st.merge_item("change", e["id"], {"record": None})
         self.t[0] += 3 * A.RED_FIX_GIVEUP
         facts = A.red_fix_facts(self.r.path, self.st)
@@ -496,7 +495,7 @@ class FixTest(RedsBase):
         self.assertEqual(self.only()["state"], "fix-pending")
 
     def test_an_unread_queue_is_never_read_as_nothing_queued(self):
-        e, _path, _wt, _sha = self.queued_fix_pending("unread")
+        e, _wt, _sha = self.queued_fix_pending("unread")
         real = A.waiting_state
 
         def unreadable(repo):
@@ -514,7 +513,7 @@ class FixTest(RedsBase):
     def test_a_rejected_fix_past_the_requeue_grace_is_offered_again_naming_its_rejection(self):
         # 2026-11-22, Identity takes #349: its fix ...-779be4 was rejected at 04:28:56 (the landing check's itrest row);
         # at 04:44 the invariant said "no fix on its way for 23 min in fix-pending" -- read as a queued fix overlooked.
-        e, _path, wt, sha = self.queued_fix_pending("rejected")
+        e, wt, sha = self.queued_fix_pending("rejected")
         ch = self.st.put_item("change", e["id"], "checking", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
         self.st.transition("change", e["id"], "rejected", ch["version"],
                            data={"why": "NOT LANDED: the pre-push checks failed: deploy.LauncherJvmFlagsSpec"}, event={"cause": "agent"})
@@ -956,8 +955,8 @@ class FixTest(RedsBase):
         c = self.r.commit("CI kick fix\n\nFixes-Red: 20\nRed-Unrelated: CI kick fix, unrelated to the identity red", at=wt)
         d, _c, _w = A.waiting_state(self.r.path)
         os.makedirs(os.path.join(d, "entries"), exist_ok=True)
-        A.write_json(os.path.join(d, "entries", "e9.json"), {"id": "e9", "seq": 9, "status": "checking", "fixes": ["20"],
-                                                             "commits": [c], "worktree": wt})
+        A.ChangeRecords(self.st, d).save({"id": "e9", "seq": 9, "status": "checking", "fixes": ["20"], "commits": [c],
+                                          "worktree": wt})
         self.tick()
         self.assertEqual(self.only()["state"], "offered")  # not fix-pending: the red keeps its own fixers
 
@@ -1319,13 +1318,11 @@ class LadderTest(RedsBase):
 class AuthorTest(RedsBase):
     def test_the_author_comes_from_the_change_item_never_the_inherited_environment(self):
         wt = self.r.worktree("repo-wt-author", branch="author")
-        d, _c, _w = A.waiting_state(self.r.path)
-        os.makedirs(os.path.join(d, "entries"), exist_ok=True)
-        A.write_json(os.path.join(d, "entries", "e1.json"), {"id": "e1", "seq": 1, "status": "landed", "landed_sha": self.sha,
-                                                             "worktree": wt, "session": "sess-author", "claude_pid": 1})
+        it = self.st.put_item("change", "e1", "pushing", {"worktree": wt, "session": "sess-author", "claude_pid": 1})
+        self.st.transition("change", "e1", "landed", it["version"], data={"landed_sha": self.sha}, event={"cause": "landed"})
         os.environ["CLAUDE_PID"] = str(os.getpid())  # an inherited pid names nobody
         try:
-            heads = A.landed_heads(self.r.path)
+            heads = A.landed_heads(self.st)
         finally:
             os.environ.pop("CLAUDE_PID")
         self.assertEqual(heads[self.sha], {"worktree": wt, "session": "sess-author"})

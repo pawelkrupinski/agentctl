@@ -47,8 +47,8 @@ CAUSES = {
     "unattributed": "a legacy client that sent no cause (server.py's shim); never written by this code",
 }
 
-# the cause of a move the projector mirrors from a waiting entry's status (projector.py): the entry's own writer
-# (set_change) named the real one on the item already; the projection says the state it took
+# the cause of a change's move by the state it took, where no writer named one: a laptop outbox entry's event
+# (waitingdir.save_entry, entry_cause) and the backfill's derived moves (backfill.py)
 PROJECTED_CAUSE = {"queued": "submitted", "checking": "check-running", "checked": "check-passed", "waiting": "gate-red",
                    "pushing": "pushing", "landed": "landed", "superseded": "superseded", "cancelled": "agent"}
 

@@ -74,7 +74,7 @@ class QueueTest(WaitingTest):
         (step 6: they are two steps now), round after round while main moves. 1 when it ends rejected."""
         d, _c, _w = A.waiting_state(self.r.path)
         for _ in range(rounds):
-            e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+            e = A.ChangeRecords(A.process_store(), d).get(eid)
             if e["status"] in ("queued", "checking") and not e.get("retry_after", 0) > self.clock.time():
                 A.check_entry(self.r.path, eid, *on_clock(self.clock))
             elif e["status"] == "checked":
@@ -82,7 +82,7 @@ class QueueTest(WaitingTest):
             else:
                 break
         A.project_events(A.CurrentStore(A.process_store))  # the processor's projector: the events become the inbox entries
-        e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        e = A.ChangeRecords(A.process_store(), d).get(eid)
         return 1 if e["status"] == "rejected" else 0
 
     def pushed(self):
@@ -132,7 +132,7 @@ class QueueTest(WaitingTest):
         return d, eid
 
     def entry_of(self, d, eid):
-        return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        return A.ChangeRecords(A.process_store(), d).get(eid)
 
     def push_fails(self, words):
         """The push's own pre-push hook prints words and refuses."""
@@ -174,7 +174,7 @@ class QueueTest(WaitingTest):
         again; then the change tick took its freed check tree for another change: the batch never landed. While the
         batch is open, a checked change does not push, and no change takes a tree the batch needs."""
         def entry(eid):
-            return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+            return A.ChangeRecords(A.process_store(), d).get(eid)
 
         def tick():
             started = []
@@ -229,7 +229,7 @@ class QueueTest(WaitingTest):
         older change verifies its combined tree, a younger checked change waits, so the verification lands; its own
         verification comes after."""
         def entry(eid):
-            return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+            return A.ChangeRecords(A.process_store(), d).get(eid)
 
         def tick():
             started = []
@@ -296,7 +296,6 @@ class QueueTest(WaitingTest):
             self.assertEqual(self.check(eid), 0)
             wts.append(wt)
             ids.append(eid)
-        A.project_changes(d, A.CurrentStore(A.process_store))  # the server tick's projection of every entry
         rows = A.change_rows(A.CurrentStore(A.process_store))
         self.assertEqual([(r["id"], r["state"]) for r in rows], [(i, "waiting") for i in ids], "one item per change")
         A.write_snapshot(d, A.CurrentStore(A.process_store))
@@ -507,8 +506,8 @@ class QueueTest(WaitingTest):
         d, _c, _w = A.waiting_state(self.r.path)
         self.moves_once(("worker/src/main/W.scala", "w\n"))
         A.check_entry(self.r.path, eid, *on_clock(self.clock))  # the full check, main moving under it
-        A.push_change(self.r.path, d, A.read_record(os.path.join(d, "entries", f"{eid}.json")), *on_clock(self.clock))
-        e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        A.push_change(self.r.path, d, A.ChangeRecords(A.process_store(), d).get(eid), *on_clock(self.clock))
+        e = A.ChangeRecords(A.process_store(), d).get(eid)
         self.assertEqual((e["status"], e.get("verify")), ("queued", True), "no overlap yet: queued to be verified")
         other, _ = self.agent("t", "docs/notes.md", "".join(f"line {i}\n" for i in range(11)) + "theirs\n")
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
@@ -909,7 +908,7 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.calls_of("--range"), [], "nothing checked in a ci-runner tree")
         self.assertEqual(self.pushed(), [])
         d, _c, _w = A.waiting_state(self.r.path)
-        e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        e = A.ChangeRecords(A.process_store(), d).get(eid)
         # what stalled it is kept (2026-11-17: two 13-s "stalls" whose cause no record named)
         self.assertEqual(e["why"], "infra: its checks stalled (on ci-runner (no verdict): push of check/x failed: "
                                    "remote: boom)")
@@ -919,7 +918,7 @@ class QueueTest(WaitingTest):
         self.assertLessEqual(e.get("retry_after", 0), self.clock.time())
         for _ in range(A.STALL_KEEP_PLACE):  # stalling on and on: backed off like any infra cause
             self.check(eid, rounds=1)
-        e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+        e = A.ChangeRecords(A.process_store(), d).get(eid)
         self.assertGreater(e["retry_after"], self.clock.time() + 60)
 
     def fake_github(self, status, head, ref="check/e1"):
@@ -961,7 +960,7 @@ class QueueTest(WaitingTest):
         on red waited behind it ("its push waits for batch #5 (assembling)"). A batch with nothing that may land on red
         is blocked-red (it holds no solo change), and stays so until the gate or its changes let it build."""
         def entry(eid):
-            return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+            return A.ChangeRecords(A.process_store(), d).get(eid)
         d, _c, _w = A.waiting_state(self.r.path)
         self.reds = {"7"}
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: the fix\n\nFixes-Red: 7")
@@ -991,7 +990,7 @@ class QueueTest(WaitingTest):
         could bring. A fix of an open gate red names it by any of the red's names; the batch splits and the fix lands
         alone, the non-fix change staying behind."""
         def entry(eid):
-            return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+            return A.ChangeRecords(A.process_store(), d).get(eid)
         d, _c, _w = A.waiting_state(self.r.path)
         self.reds = {"8", "98000"}  # the gate reads Main #8; the red item below also names the older run 7
         wb, _ = self.agent("b", "web/src/main/B.scala", "b\n", msg="b: a production change naming no red")
@@ -1017,7 +1016,7 @@ class QueueTest(WaitingTest):
         episode): the tick sends that fix back to the queue while the gate is still red, first and alone. The other
         names a red OUTSIDE the gate -- the rule still holds it, and says which rule on its item."""
         def entry(eid):
-            return A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+            return A.ChangeRecords(A.process_store(), d).get(eid)
         d, _c, _w = A.waiting_state(self.r.path)
         self.reds = {"8", "98000"}
         fixes = {}
@@ -1092,7 +1091,7 @@ class QueueTest(WaitingTest):
         self.assertEqual([x for x in self.inbox() if x["kind"] == "NOT_LANDED"], [])
         d, _c, _w = A.waiting_state(self.r.path)
         for _ in range(A.QUEUE_INFRA_RETRIES):
-            e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
+            e = A.ChangeRecords(A.process_store(), d).get(eid)
             e["retry_after"] = 0
             put_change(A.CurrentStore(A.process_store), d, e)
             self.check(eid, rounds=1)
@@ -1162,15 +1161,14 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.remote_refs(), [])
 
     def test_sweep_keeps_the_ref_of_a_change_only_the_store_holds_open(self):
-        """Phase 2: the change lives in the store, not in entries/ -- its land ref must survive the sweep."""
+        """Phase 2: the change lives in the store, not in the queue's records -- its land ref must survive the sweep."""
         saved = A.land_refs_supported
         A.land_refs_supported = lambda repo: True
         self.addCleanup(setattr, A, "land_refs_supported", saved)
         wt, sha = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _out = self.queued(wt)
         d, _c, _w = A.waiting_state(self.r.path)
-        os.remove(os.path.join(d, "entries", f"{eid}.json"))  # held by the store alone
-        A.process_store().put_item("change", eid, "queued", {"worktree": wt, "head": sha})
+        A.process_store().merge_item("change", eid, {"record": None})  # held by the store alone: no queue record
         A._last_ref_sweep[0] = 0
         self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)), [], "open in the store: its ref stays")
         self.assertEqual(self.remote_refs(), [f"refs/heads/land/{eid}"])
@@ -1628,7 +1626,7 @@ class RemotePickupTest(QueueTest):
         real = A.run_entry_checks
 
         def spy(repo, d_, e_, *a, **k):
-            seen.append(A.read_record(os.path.join(d_, "entries", f"{e_['id']}.json")))
+            seen.append(A.ChangeRecords(A.process_store(), d_).get(e_['id']))
             return real(repo, d_, e_, *a, **k)
         A.run_entry_checks = spy
         self.addCleanup(setattr, A, "run_entry_checks", real)

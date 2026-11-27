@@ -8,7 +8,7 @@ import json, os, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, sh  # noqa: E402
+from test_agentctl import A, sh, put_change  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 import test_backlog_batch, test_derived, test_generated  # noqa: E402
 from test_derived import CATALOGUE, CLASSES, tool  # noqa: E402
@@ -94,7 +94,7 @@ class ConflictHoldTest(test_derived.DerivedTest):
         es = self.lane_of("scalafix", "s", row=8)
         e = self.entry(es)
         e["batch_alone"] = "regen"
-        A.save_entry(self.d, e)
+        put_change(A.CurrentStore(A.process_store), self.d, e)
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertIn(es, self.started, f"checked now, beside the older: {self.hold_of(es)}")
         self.check_and_push(ei, es)
@@ -109,7 +109,7 @@ class ConflictHoldTest(test_derived.DerivedTest):
         ey = self.lane_of("younger", "y", line=(4, "younger's line 5"))
         e = self.entry(ey)
         e["batch_alone"] = "regen"
-        A.save_entry(self.d, e)
+        put_change(A.CurrentStore(A.process_store), self.d, e)
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertNotIn(ey, self.started, "never checked on a tree it cannot land on")
         self.assertEqual((self.hold_of(ey).get("blocker"), self.hold_of(ey).get("files")), (ei, [SOURCE]))

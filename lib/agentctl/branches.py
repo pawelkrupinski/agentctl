@@ -110,14 +110,14 @@ def branch_exists(o_r, name):
         return not re.search(r"HTTP 404|Not Found", str(e))
 
 
-def branch_state(o_r, repo, prev=None):
+def branch_state(o_r, repo, store, prev=None):
     """[entry] per tracked (branch, workflow): the newest completed run, its owner, whether its branch is alive, and for
     a red one whether it PREDICTS MAIN RED (why not). A red no longer listed carries over from prev until its branch
     is gone."""
     latest, newest_main = newest_branch_runs(o_r)
     carry_over_reds(latest, prev)
     reds = {k: r for k, r in latest.items() if r.get("conclusion") in RED_CONCLUSIONS}
-    recs = {r["databaseId"]: owner_of(repo, b, r) for (b, _wf), r in reds.items()}
+    recs = {r["databaseId"]: owner_of(repo, store, b, r) for (b, _wf), r in reds.items()}
     mains = {wf: newest_main.get(wf) for (_b, wf) in reds}
     inputs = run_inputs(list(reds.values()) + [m for m in mains.values() if m], recs)
     out = []

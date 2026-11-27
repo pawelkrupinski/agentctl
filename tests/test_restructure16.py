@@ -385,29 +385,6 @@ class LaptopRoleRefusalTest(unittest.TestCase):
         check(self, "laptop_role_refusal", self.build, lambda A: A.laptop_role_refusal, 4000)
 
 
-# ------------------------------------------------------------------------------------------------ projector
-class ProjectChangesTest(unittest.TestCase):
-    def build(self, case):
-        r = case.rng
-        every = [{"id": f"e{i}", "status": r.choice(["queued", "checking", "waiting", "joined", "bogus", "landed"]),
-                  "waiting_id": r.choice([None, "e0", "e1", "zz"])} for i in range(r.randint(0, 5))]
-        case.fake("waiting_entries", lambda rng, d, open_only=True: every)
-        case.fake("change_item_fields", lambda rng, e: {"head": e["id"]})
-        case.fake("machine_state", lambda rng, k, s: NS(terminal=s in ("landed", "rejected")))
-        states = ["queued", "checking", "waiting", "landed", "rejected"]
-
-        def transition(rng, *a, **k):
-            if rng.random() < 0.3:
-                raise rng.choice([A.StaleVersion, A.TerminalState])("x")
-        st = Probe(case, "st", put_item=lambda rng, kind, eid, state, data: {"id": eid, "state": rng.choice(states + [state]), "version": 2},
-                   clock=lambda rng: NOW, meta_get=lambda rng, k, d=None: rng.choice([0, None, "3.5"]),
-                   transition=transition, item=lambda rng, kind, eid: {"id": eid, "state": "queued", "version": 3})
-        return ("/d", st)
-
-    def test_project_changes(self):
-        check(self, "project_changes", self.build, lambda A: A.project_changes, 3000)
-
-
 # ------------------------------------------------------------------------------------------------ remotestore
 class CallOnceTest(unittest.TestCase):
     def build(self, case):

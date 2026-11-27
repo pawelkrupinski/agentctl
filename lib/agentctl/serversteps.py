@@ -20,7 +20,7 @@ from agentctl.issues import tick_issues
 from agentctl.queuesubmit import sweep_land_refs
 from agentctl.serverclone import clone_heal_tick
 from agentctl.landhold import tick_land_hold
-from agentctl.projector import maybe_archive_leases, project_changes
+from agentctl.projector import maybe_archive_leases
 from agentctl.stats import maybe_stats_pass
 from agentctl.queueclose import close_landed_changes, stranded_changes
 from agentctl.watchtick import tick_watches
@@ -110,7 +110,6 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
     the recovery registry. Never the laptop's duties (events -> inbox, the notifier, the network and tunnel watches, the
     fixers, upkeep): those are sync_steps. clock and store: the process's (cli's), every step's time and store."""
     return (("clone health", lambda: clone_health_step(repo, d, store)),
-            ("change items", lambda: project_changes(d, store)),
             ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, clock, store,
                                                                                                   d)])),
             ("stranded changes", lambda: stranded_changes(repo, d, store)),

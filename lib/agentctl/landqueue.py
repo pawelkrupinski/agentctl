@@ -12,7 +12,7 @@ from agentctl.core import fmt_age, git, git_ok, host_role
 from agentctl.timefmt import hhmmz, ts
 from agentctl.statefile import read_json_file, unlink_file
 from agentctl.repos import movies_repo_path
-from agentctl.waitingdir import ChangeRecords, entry_final, waiting_entries, waiting_state
+from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.procs import safe_cwd
 from agentctl.clones import main_clone
 from agentctl.queueslots import set_change
@@ -148,7 +148,7 @@ def land_status_tail(d: str, rows: list[dict[str, Any]]) -> None:
         print(f"stall at green: {prog['ticks']} tick(s): {prog.get('why')}")
     if not rows:
         print("  (no change queued or waiting)")
-    local = [e for e in waiting_entries(d, open_only=False) if not entry_final(e.get("status"))]
+    local = ChangeRecords(None, d).open()  # the laptop's outbox
     if host_role() == "sync" and local:
         print(f"LOCAL QUEUE: {len(local)} entr(ies) in {d}, which nothing runs; the sync moves them to ci-runner's "
               f"queue: {', '.join(e['id'] for e in local)}")

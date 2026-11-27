@@ -235,7 +235,6 @@ fanout	lib/agentctl/queueenter.py	27
 fanout	lib/agentctl/queuepush.py	17
 fanout	lib/agentctl/queuesubmit.py	11
 fanout	lib/agentctl/recovery.py	15
-fanout	lib/agentctl/redauthors.py	10
 fanout	lib/agentctl/redblock.py	15
 fanout	lib/agentctl/redclaim.py	18
 fanout	lib/agentctl/redcli.py	29

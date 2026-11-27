@@ -1,6 +1,7 @@
-"""ONE CHANGE, ONE RECORD, step 3 (docs/design/one-change-model.md): the change item carries every field of its queue
-entry -- written by THE writer of an entry (waitingdir.ChangeRecords) and made current by the projector -- through a
-store merge that never bumps the item's version, so no writer's compare-and-set is disturbed."""
+"""ONE CHANGE, ONE RECORD (docs/design/one-change-model.md): the change item carries every field of its queue entry
+-- written by THE writer of a change (waitingdir.ChangeRecords) through a store merge that never bumps the item's
+version, so no writer's compare-and-set is disturbed -- and since step 6 it is the server's only record of a change:
+the entry files are the laptop's outbox alone."""
 import os, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -48,7 +49,6 @@ class ChangeRecordsTest(Base):
         A.ChangeRecords(self.st, self.d).save(self.entry(tip="t1", rounds=2))
         rec = self.st.item("change", "e1")["data"]["record"]
         self.assertEqual(rec, {"id": "e1", "seq": 1, "worktree": "/wt", "head": "a" * 40, "tip": "t1", "rounds": 2})
-        self.assertEqual(A.read_record(os.path.join(self.d, "entries", "e1.json"))["tip"], "t1")
 
     def test_the_race_rule_is_the_items_a_stale_copy_never_reopens_a_decided_change(self):
         """STEP 5: a writer of a stale copy (the checker's save racing a supersede, audit S2) meets the ITEM's decision,
@@ -65,36 +65,20 @@ class ChangeRecordsTest(Base):
         self.assertEqual((it["state"], it["data"]["record"]["why"], it["data"]["record"]["tip"]),
                          ("cancelled", "cancelled: by agent", "t2"))
         self.assertEqual(stale["status"], "cancelled")
-        disk = A.read_record(os.path.join(self.d, "entries", "e1.json"))
-        self.assertEqual((disk["status"], A.entry_record(disk)), ("cancelled", it["data"]["record"]))
 
-    def test_the_item_is_written_first_a_failed_file_write_leaves_it_current(self):
-        """STEP 5: the item, then its file (a cache): a file that cannot be written leaves the item current."""
-        self.st.put_item("change", "e1", "queued")
-        real = A.write_json
-
-        def full_disk(path, obj):
-            raise OSError("no space left on device")
-        A.write_json = full_disk
-        try:
-            with self.assertRaises(OSError):
-                A.ChangeRecords(self.st, self.d).save(self.entry(tip="t1"))
-        finally:
-            A.write_json = real
-        self.assertEqual(self.st.item("change", "e1")["data"]["record"]["tip"], "t1")
-
-    def test_the_file_is_the_items_cache_in_the_items_state(self):
-        """STEP 5: a copy read before the item moved on writes its keys, never its stale status: the file says the
-        item's state (the projector, reading it, moves nothing back)."""
+    def test_the_server_writes_no_entry_file_the_item_is_the_record(self):
+        """STEP 6: a change of the server's queue is its item alone -- queued, moved and saved, it never writes an entry
+        file (the files are the laptop's outbox) -- and a copy read before the item moved on writes its keys, never
+        its stale status."""
         e, _ = A.queue_change(self.st, self.d, {"worktree": "/wt", "head": "a" * 40, "commits": ["a" * 40]})
         copy = dict(e)
         A.set_change(self.st, self.d, e, "checking", cause="check-running")
         copy["tip"] = "t9"
         A.ChangeRecords(self.st, self.d).save(copy)  # its status still `queued`
-        A.project_changes(self.d, self.st)
         it = self.st.item("change", e["id"])
         self.assertEqual((it["state"], it["data"]["record"]["tip"]), ("checking", "t9"))
-        self.assertEqual(A.read_record(os.path.join(self.d, "entries", f"{e['id']}.json"))["status"], "checking")
+        self.assertEqual(os.listdir(os.path.join(self.d, "entries")), [])
+        self.assertEqual(A.ChangeRecords(self.st, self.d).get(e["id"])["status"], "checking")
 
     def test_a_move_is_one_transition_carrying_the_record(self):
         """STEP 5: set_change moves the item and its record in ONE store write (no separate merge of the record)."""
@@ -118,18 +102,6 @@ class ChangeRecordsTest(Base):
         A.ChangeRecords(None, self.d).save(self.entry(tip="t"))
         self.assertEqual(A.read_record(os.path.join(self.d, "entries", "e1.json"))["tip"], "t")
         self.assertIsNone(self.st.item("change", "e1"))
-
-    def test_the_projector_gives_an_open_entry_its_record_and_leaves_a_decided_one(self):
-        A.save_entry(self.d, self.entry(tip="t1"))  # written before its item exists
-        A.save_entry(self.d, {**self.entry("landed"), "id": "e2", "seq": 2})
-        A.project_changes(self.d, self.st)
-        self.assertEqual(self.st.item("change", "e1")["data"]["record"]["tip"], "t1")
-        self.assertNotIn("record", self.st.item("change", "e2")["data"])
-        v = self.st.item("change", "e1")["version"]
-        A.save_entry(self.d, self.entry(tip="t2"))  # a write that missed its item
-        A.project_changes(self.d, self.st)
-        it = self.st.item("change", "e1")
-        self.assertEqual((it["data"]["record"]["tip"], it["version"]), ("t2", v))
 
 
 class ItemFirstTest(Base):
@@ -156,11 +128,11 @@ class ItemFirstTest(Base):
         self.assertEqual([x["id"] for x in A.ChangeRecords(self.st, self.d).queued()], [e["id"]])
         self.assertEqual([ev["kind"] for ev in self.st.item_events("change", e["id"])][:1], ["change.queued"])
 
-    def test_the_number_is_the_stores_counter_started_above_the_entries(self):
-        A.save_entry(self.d, {"id": "old", "seq": 40, "drawn": 41, "status": "landed"})  # a file of before step 3
+    def test_the_number_is_the_stores_counter_started_above_the_records(self):
+        self.st.put_item("change", "old", "landed", {"record": {"id": "old", "seq": 40, "drawn": 41}})
+        A.save_entry(self.d, {"id": "older", "seq": 90, "status": "landed"})  # a file of before step 6: not read
         e1, _ = A.queue_change(self.st, self.d, self.fields())
         self.assertEqual(e1["seq"], 42)
-        os.remove(os.path.join(self.d, "entries", "old.json"))
         e2, _ = A.queue_change(self.st, self.d, self.fields("/wt/b"))
         self.assertEqual((e2["seq"], e2["drawn"]), (43, 43))  # the counter, not the entries, numbers it
         self.assertEqual(self.st.meta_get(A.change_seq_key(self.d)), "43")
@@ -174,7 +146,6 @@ class ItemFirstTest(Base):
         e, _ = A.queue_change(self.st, self.d, self.fields())
         it = self.st.item("change", e["id"])
         self.st.transition("change", e["id"], "cancelled", it["version"], event={"cause": "agent"})  # the item alone
-        self.assertEqual(A.read_record(os.path.join(self.d, "entries", f"{e['id']}.json"))["status"], "queued")
         recs = A.ChangeRecords(self.st, self.d)
         self.assertEqual((recs.queued(), recs.get(e["id"])["status"]), ([], "cancelled"))
 
@@ -195,6 +166,31 @@ class ItemFirstTest(Base):
         A.save_entry(self.d, {"id": "w1", "seq": 3, "status": "waiting"})
         recs = A.ChangeRecords(None, self.d)
         self.assertEqual(([e["id"] for e in recs.waiting()], recs.draw_seq()), (["w1"], 4))
+
+
+class ItemReadersTest(Base):
+    """STEP 6: the last direct readers of the entry files read the change items -- the files are the laptop's outbox."""
+
+    def setUp(self):
+        super().setUp()
+        self.st = A.Store(path=os.path.join(self.tmp.name, "store.db"))
+        self.d = os.path.join(self.tmp.name, "w")
+        os.makedirs(os.path.join(self.d, "entries"))
+
+    def test_a_check_branch_runs_owner_is_its_change_items_worktree(self):
+        self.st.put_item("change", "20261127-wt-a-7", "checking", {"worktree": "/wt/a"})
+        self.assertEqual(A.queue_entry_worktree(self.st, "20261127-wt-a-7"), "/wt/a")
+        self.assertEqual((A.queue_entry_worktree(self.st, "nope"), A.queue_entry_worktree(None, "x")), (None, None))
+
+    def test_a_queued_change_with_no_file_keeps_its_worktree_from_being_orphaned(self):
+        e, _ = A.queue_change(self.st, self.d, {"worktree": self.r.path, "head": "a" * 40, "commits": ["a" * 40]})
+        saved = A.waiting_state
+        A.waiting_state = lambda repo: (self.d, repo, repo + "-wt-waiting")
+        try:
+            got = A.queued_worktrees(self.r.path, self.st)
+        finally:
+            A.waiting_state = saved
+        self.assertEqual(got, {os.path.realpath(self.r.path)})
 
 
 class FixOpenTest(unittest.TestCase):

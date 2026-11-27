@@ -346,7 +346,7 @@ class OrphanBranchesTest(unittest.TestCase):
             return [{"status": rng.choice(["completed"] * 5 + ["in_progress"]), "databaseId": 10 + i} for i in range(rng.choice([0, 1, 2, 3]))]
         case.fake("gh_json", runs)
         rec = lambda rng: rng.choice([None, {"worktree": "/w/x", "agent": "a"}, {"pid": 5}])
-        case.fake("owner_of", lambda rng, repo, b, run: rec(rng))
+        case.fake("owner_of", lambda rng, repo, st, b, run: rec(rng))
         case.fake("dispatch_for", lambda rng, b, *a: rec(rng))
         case.fake("owner_gone", lambda rng, rc: rng.choice([None, True, False]))
         case.fake("orphaned_red", lambda rng, st, o_r, runs: rng.choice([None, None, "no owner", ""]))
@@ -387,9 +387,9 @@ class OwnerOfTest(unittest.TestCase):
         case.patch(os.path, "exists", lambda rng, p: rng.random() < 0.5)
         case.fake("write_json", lambda rng, path, data: None)
         case.fake("read_record", lambda rng, path: old)
-        case.fake("queue_entry_worktree", lambda rng, eid: rng.choice([None, "/w/q"]))
+        case.fake("queue_entry_worktree", lambda rng, st, eid: rng.choice([None, "/w/q"]))
         case.fake("save_dispatch", lambda rng, rec_, key=None: rec_)
-        return (r.choice(["/repo", None, ""]), branch, run)
+        return (r.choice(["/repo", None, ""]), "store", branch, run)
 
     def test_owner_of(self):
         check(self, "owner_of", self.build, lambda A: with_state(A.owner_of), 8000)

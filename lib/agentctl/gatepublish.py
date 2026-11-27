@@ -20,7 +20,7 @@ def gate_publish_cycle(repo: str, store: Any) -> None:
     settled and routed."""
     try:
         o_r = slug(repo)
-        snap = ci_state_refresh(o_r, write=False)  # ONE read of GitHub per cycle; everything below reads it
+        snap = ci_state_refresh(o_r, write=False, store=store)  # ONE read of GitHub per cycle; everything below reads it
         refresh_pinned_recording(o_r, repo, store)  # what PREDICTS MAIN RED compares a branch run's recording with
         ci_state_write(snap)
         # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or

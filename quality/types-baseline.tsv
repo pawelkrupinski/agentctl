@@ -94,7 +94,7 @@ mypy-errors	pressure	16
 mypy-errors	processor	9
 mypy-errors	processorlink	16
 mypy-errors	procwatch	2
-mypy-errors	projector	16
+mypy-errors	projector	15
 mypy-errors	queue	26
 mypy-errors	queuebatch	38
 mypy-errors	queuebatchsel	19
@@ -112,7 +112,7 @@ mypy-errors	recordingpins	30
 mypy-errors	recovery	32
 mypy-errors	red	29
 mypy-errors	redask	18
-mypy-errors	redauthors	11
+mypy-errors	redauthors	9
 mypy-errors	redblock	16
 mypy-errors	redclaim	17
 mypy-errors	redcli	44
@@ -145,12 +145,12 @@ mypy-errors	remotestore	25
 mypy-errors	repos	26
 mypy-errors	reverts	46
 mypy-errors	runexplain	15
-mypy-errors	runowners	44
+mypy-errors	runowners	42
 mypy-errors	runqueue	2
 mypy-errors	runsigs	9
 mypy-errors	server	53
 mypy-errors	serverclone	36
-mypy-errors	serversteps	23
+mypy-errors	serversteps	22
 mypy-errors	sessionpaths	9
 mypy-errors	slots	51
 mypy-errors	statemachines	25
