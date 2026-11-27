@@ -170,7 +170,7 @@ class RedRetiredTest(unittest.TestCase):
                         "V": (".github/workflows/v.yml", rng.choice([texts[1], "name: v\non:\n  workflow_call:\njobs:\n  a:\n    steps: []"]))})),
                     ("retire_run", lambda rng, o_r, rid: {"path": rng.choice([".github/workflows/w.yml@main", ".github/workflows/v.yml", "dynamic/x", ""]),
                                                           "created_at": date(), "head_sha": rng.choice(["h", "a" * 12, None])}),
-                    ("retire_newest", lambda rng, o_r, path: maybe(rng, {"created_at": date(), "head_sha": rng.choice(["h", "a" * 12])}, 0.7)),
+                    ("retire_newest", lambda rng, runs, o_r, path: maybe(rng, {"created_at": date(), "head_sha": rng.choice(["h", "a" * 12])}, 0.7)),
                     ("retire_file", lambda rng, o_r, sha, path: maybe(rng, rng.choice(texts), 0.8)),
                     ("retire_jobs", lambda rng, o_r, rid: [{"name": rng.choice(NAMES), "conclusion": rng.choice(["failure", "success", "timed_out"]),
                                                             "steps": [{"name": "s1", "conclusion": "failure"}]} for _ in range(rng.randint(0, 3))]),

@@ -9,6 +9,7 @@ from typing import Any
 from agentctl.core import process_cache
 from agentctl.timefmt import parse_time
 from agentctl.forge import gh_json
+from agentctl.ciruns import CiRuns
 from agentctl.workflows import fix_workflow_jobs, workflow_triggers
 from agentctl.redknobs import knob_red_stale_days
 
@@ -87,12 +88,10 @@ def retire_jobs(o_r, rid, *, ctx):
     return ctx.runs.run_jobs(o_r, rid)
 
 
-def retire_newest(o_r, path):
-    """The newest run on main of the workflow file (its API record), or None."""
-    def read():
-        r = gh_json(o_r, "api", f"repos/{o_r}/actions/workflows/{os.path.basename(path)}/runs?branch=main&per_page=1")
-        return ((r or {}).get("workflow_runs") or [None])[0]
-    return _retire_get(("newest", o_r, path), 600, read)
+def retire_newest(runs: CiRuns, o_r: str, path: str) -> dict[str, Any] | None:
+    """The newest run on main of the workflow file (its created_at and head_sha), or None: read through `runs`."""
+    listed = runs.main_runs(o_r, os.path.basename(path), 1, fresh_for=600)
+    return {"created_at": listed[0].get("createdAt"), "head_sha": listed[0].get("headSha")} if listed else None
 
 
 def _yaml_scalar(v: Any) -> Any:
@@ -315,7 +314,7 @@ class RetiredRun:
         t = self.now if self.now is not None else self.ctx.clock.time()
         if workflow_triggers(ctext) == {"workflow_call"}:
             return None
-        newest = retire_newest(self.o_r, cpath) or self.r
+        newest = retire_newest(self.ctx.runs, self.o_r, cpath) or self.r
         at = newest.get("created_at") or self.r.get("created_at")
         days = knob_red_stale_days()
         if at and self.main_date and t - parse_time(at).timestamp() > days * 86400 \

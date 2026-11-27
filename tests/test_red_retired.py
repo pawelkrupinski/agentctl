@@ -130,11 +130,34 @@ class JobRetiredTest(unittest.TestCase):
         self.assertIsNone(A.retire_jobs_of("name: W\non: push\n"))
 
 
+class NewestRunTest(unittest.TestCase):
+    """retire_newest reads the workflow's newest run on main through the CiRuns it is handed (no gh of its own)."""
+
+    class Runs(A.CiRuns):
+        def __init__(self, listed):
+            super().__init__()
+            self.listed, self.asked = listed, []
+
+        def main_runs(self, o_r, wfile, limit=30, status=None, fresh_for=0):
+            self.asked.append((o_r, wfile, limit, fresh_for))
+            return self.listed
+
+    def test_the_newest_run_is_the_first_listed_in_the_retire_fields(self):
+        runs = self.Runs([{"createdAt": "2026-10-30T10:00:00Z", "headSha": "abc"}, {"createdAt": "2026-10-01T00:00:00Z", "headSha": "old"}])
+        self.assertEqual(A.retire_newest(runs, "o/r", ".github/workflows/x.yml"),
+                         {"created_at": "2026-10-30T10:00:00Z", "head_sha": "abc"})
+        self.assertEqual(runs.asked, [("o/r", "x.yml", 1, 600)])
+
+    def test_a_workflow_with_no_run_on_main_has_no_newest(self):
+        self.assertIsNone(A.retire_newest(self.Runs([]), "o/r", ".github/workflows/x.yml"))
+
+
 class RetiredTickTest(RedReposBase):
     def setUp(self):
         super().setUp()
         A._retire_cache.clear()
         self.addCleanup(A._retire_cache.clear)
+        self.core_newest = {}
         self.main_at(MAIN, "2026-10-31T21:05:16Z")
         # the ticks' clock at the fixtures' day: on the wall clock, from 2026-11-14 on, every fixture run of 10-31 was
         # past RED_STALE_DAYS and its red cleared `stale` instead of what each test reads
@@ -153,12 +176,13 @@ class RetiredTickTest(RedReposBase):
             self.api(f"repos/{CORE}/contents/.github/workflows/{n}?ref={sha}",
                      {"content": base64.b64encode(txt.encode()).decode()})
 
-    def core_run(self, rid, num, wf, file, sha, jobs, created="2026-10-31T21:01:48Z", newest=None):
+    def core_run(self, rid, num, wf, file, sha, jobs, created="2026-10-31T21:01:48Z"):
         self.api(f"repos/{CORE}/actions/runs/{rid}", {"id": rid, "path": f".github/workflows/{file}", "head_sha": sha,
                                                       "created_at": created})
         self.put(f"run-{rid}.json", {"jobs": jobs})  # its jobs, as `gh run view --json jobs` reads them (CiRuns)
-        self.api(f"repos/{CORE}/actions/workflows/{file}/runs?branch=main&per_page=1",
-                 {"workflow_runs": [newest or {"id": rid, "head_sha": sha, "created_at": created}]})
+        self.core_newest[file] = {"databaseId": rid, "number": num, "headSha": sha, "createdAt": created, "workflowName": wf,
+                                  "workflowFile": file, "headBranch": "main", "status": "completed", "conclusion": "failure"}
+        self.put(f"runs-{CORE.replace('/', '_')}.json", list(self.core_newest.values()))  # `gh run list`'s newest per file (CiRuns)
 
     def open_red(self, rid, num, wf, job, line, sha=OLD, created="2026-10-31T21:01:48Z"):
         """A core red claimed by its run (red_targets opens it): outside core's gate, so no tick observes it."""
@@ -219,6 +243,21 @@ class RetiredTickTest(RedReposBase):
         it = self.core_reds()["Run Post Deployment Tests"]
         self.assertEqual(it["state"], "cleared", acts)
         self.assertTrue(any("stale: no run of Run Post Deployment Tests on main since 2026-10-01" in a for a in acts), acts)
+
+    def test_a_recent_run_of_the_workflow_on_main_keeps_its_old_red_from_going_stale(self):
+        self.flows(MAIN, {"post-deployment-tests.yml": POST_NEW})
+        self.flows(OLD, {"post-deployment-tests.yml": POST_NEW})
+        then = "2026-10-01T10:00:00Z"
+        self.core_run(41000000001, 1300, "Run Post Deployment Tests", "post-deployment-tests.yml", OLD,
+                      [{"name": "Run Post Deployment Tests", "conclusion": "failure", "steps": [
+                          {"name": "Run post deployment tests", "conclusion": "failure"}]}], created=then)
+        self.core_newest["post-deployment-tests.yml"].update(databaseId=41000000009, headSha=MAIN, createdAt="2026-10-30T10:00:00Z")
+        self.put(f"runs-{CORE.replace('/', '_')}.json", list(self.core_newest.values()))  # the newest run of the file, a day old
+        self.open_red(41000000001, 1300, "Run Post Deployment Tests", "Run Post Deployment Tests", "E boom", created=then)
+        self.t[0] = A.parse_time("2026-10-31T22:00:00Z").timestamp()
+        acts = self.others()
+        self.assertNotEqual(self.core_reds()["Run Post Deployment Tests"]["state"], "cleared", acts)
+        self.assertFalse(any("stale" in a for a in acts), acts)
 
     def test_a_workflow_gone_from_main_retires_and_a_forge_made_one_never_does(self):
         self.flows(MAIN, {"post-deployment-tests.yml": POST_NEW})

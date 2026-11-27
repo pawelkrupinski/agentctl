@@ -17,7 +17,7 @@ DIGESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "
 
 
 def stable(x):
-    """repr with sets sorted and functions by name, so neither a hash seed nor an address moves a digest."""
+    """repr with sets sorted and functions by name and plain objects by class, so neither a hash seed nor an address moves a digest."""
     if isinstance(x, (set, frozenset)):
         return "{" + ", ".join(sorted(stable(i) for i in x)) + "}"
     if isinstance(x, dict):
@@ -26,6 +26,8 @@ def stable(x):
         return "(" + ", ".join(stable(i) for i in x) + ")"
     if callable(x) and hasattr(x, "__qualname__"):  # a function passed on (sync_steps' `refused=`): by name, never its address
         return f"<function {x.__qualname__}>"
+    if type(x).__repr__ is object.__repr__:  # an object with the default repr (a CiRuns passed on): its class, never its address
+        return f"<{type(x).__qualname__}>"
     return repr(x)
 
 
