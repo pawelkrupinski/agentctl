@@ -144,6 +144,7 @@ class TokenResolutionTest(Base):
         for _ in range(2):
             with self.assertRaises(A.NoToken) as cm:
                 A.token(MOVIES)
+        A.note_missing_tokens(A.CurrentStore(A.process_store))  # the tick's recovery step, the end of the command
         msg = str(cm.exception)
         self.assertIn("no `secrets` command found", msg)
         self.assertIn("processor holds none", msg)
@@ -228,20 +229,42 @@ class TokenRequestRaceTest(unittest.TestCase):
 
 class TokenNoteRecursionTest(unittest.TestCase):
     def test_noting_a_missing_token_on_a_remote_store_does_not_recurse(self):
-        # the sync's store is remote: noting the missing token calls the store, which reads the token, which is missing
+        # the sync's store is remote: noting the missing token calls the store, which reads the token, which is missing:
+        # that read leaves a note for a later take, never a note now
         calls, saved = [], A.open_condition
+        A._token_missing.clear()
 
         def needs_token(*a, **k):
             calls.append(1)
-            A.token_unavailable_note("movies", "again", A.CurrentStore(A.process_store))
+            A.token_missing("movies", "again", now_=1)
             raise SystemExit("no token")
         A.open_condition = needs_token
         try:
-            A.token_unavailable_note("movies", "none", A.CurrentStore(A.process_store))
+            A.token_missing("movies", "none", now_=0)
+            A.note_missing_tokens(A.CurrentStore(A.process_store))
         finally:
             A.open_condition = saved
+            A._token_missing.clear()
         self.assertEqual(calls, [1])
-        self.assertFalse(A._noting_token[0])
+
+
+class MissingTokenNotedThroughTheStoreTest(unittest.TestCase):
+    """NO SERVICE LOCATOR (tests/test_no_service_locators.py): the missing token's condition is pulled -- a tick's
+    recovery step, the end of a command -- into the store it is handed, never a note cli wires into storetoken."""
+
+    def test_the_recovery_step_opens_the_condition_once_per_note(self):
+        st, opened, saved = object(), [], (A.open_condition, A.recovery_tick)
+        A._token_missing.clear()
+        A.open_condition = lambda *a, **k: opened.append((a[1].split(":")[1], k["key"], k["store"]))
+        A.recovery_tick = lambda store: None
+        try:
+            A.token_missing("movies", "locked", now_=1000)
+            A.maybe_recovery_tick(st, 0.0)
+            A.maybe_recovery_tick(st, 0.0)  # taken: once
+        finally:
+            A.open_condition, A.recovery_tick = saved
+            A._token_missing.clear()
+        self.assertEqual(opened, [(" token unavailable (locked)", "token-movies", st)])
 
 
 class BackgroundTouchesOnlyAllowedRootsTest(unittest.TestCase):
@@ -308,16 +331,14 @@ class TokenSaidOnTransitionTest(unittest.TestCase):
 
     def setUp(self):
         import io
-        self.saved = list(A._token_missing_notes), A.interactive_foreground, sys.stderr
-        self.notes, self.err = [], io.StringIO()
-        A.wire_token_missing_note(lambda ns, why: self.notes.append(why))  # the seam cli wires the condition through
+        self.saved = A.interactive_foreground, sys.stderr
+        self.err = io.StringIO()
         A.interactive_foreground = lambda: False
         sys.stderr = self.err
         A._token_missing.clear()
 
     def tearDown(self):
-        notes, A.interactive_foreground, sys.stderr = self.saved
-        A._token_missing_notes[:] = notes
+        A.interactive_foreground, sys.stderr = self.saved
         A._token_missing.clear()
 
     def lines(self):
@@ -328,7 +349,8 @@ class TokenSaidOnTransitionTest(unittest.TestCase):
             A.token_missing("movies", "locked", now_=1000 + i)
         self.assertEqual(len(self.lines()), 1, self.lines())
         self.assertIn("the movies token is missing (locked)", self.lines()[0])
-        self.assertEqual(self.notes, ["locked"])  # the inbox condition: on the transition, not per read
+        self.assertEqual(A.take_token_notes(), [("movies", "locked")])  # the inbox condition: on the transition, not per read
+        self.assertEqual(A.take_token_notes(), [])
         A.token_missing("movies", "locked", now_=1000 + 600)
         self.assertEqual(len(self.lines()), 2)
         self.assertIn("still missing: 51 read(s) failed", self.lines()[1])

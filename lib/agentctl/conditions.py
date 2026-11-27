@@ -98,16 +98,6 @@ def condition_key(kind: Any, probe: Any) -> Any:
                                                                            if _k != "since"))[:150]
 
 
-_last_recovery = [0.0]
-
-
-def maybe_recovery_tick(store: Any) -> None:
-    if epoch_now() - _last_recovery[0] < 5:
-        return
-    _last_recovery[0] = epoch_now()
-    recovery_tick(store)
-
-
 # -- conditions are items (design §5.4; phase 1 step 12): the store's "condition" machine, open -> closed
 CONDITION_ESCALATE_EVERY = 2 * 3600  # an open condition escalates 10 min after opening, then every 2 h
 

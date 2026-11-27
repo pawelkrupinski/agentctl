@@ -15,7 +15,6 @@ from agentctl.timefmt import age_since
 from agentctl.ghapp import cmd_github_app
 from agentctl.config import cmd_config
 from agentctl.actors import process_actor
-from agentctl.storetoken import wire_token_missing_note
 from agentctl.inboxentry import wire_inbox_writer
 from agentctl.hookoutput import check_failures
 from agentctl.inbox import inbox_command, with_inbox
@@ -51,7 +50,7 @@ from agentctl.watchtick import cmd_watch
 from agentctl.recovery import (
     probe_gate_read, probe_git_fetch, probe_http, probe_red_read, probe_route, probe_tcp, probe_token,
     probe_tunnel, probe_waiting_ok, probe_workflow_green, recover_clear_flag, recover_clear_hold,
-    recover_tunnel_reset, token_unavailable_note)
+    recover_tunnel_reset, note_missing_tokens)
 from agentctl.tools import cmd_env, cmd_prepush, cmd_queue_retired, cmd_state
 from agentctl.orphans import probe_orphan_landed
 from agentctl.invariants import probe_invariant
@@ -94,7 +93,6 @@ def wire_collaborators(clock: Clock, store: Any) -> None:
                  "red_newer_verdict": lambda a: probe_red_newer_verdict(a, store),
                  "queue_moving": lambda a: probe_queue_moving(store, clock.time())})
     wire_inbox_writer(condition_guarded(lambda rec: alert_write(rec, store)), clock.time)
-    wire_token_missing_note(lambda ns, why: token_unavailable_note(ns, why, store))
 
 
 wire_collaborators(Clock(), CurrentStore(process_store))
@@ -129,7 +127,10 @@ def main(argv: list[str] | None = None, clock: Clock | None = None, runner: Proc
     handler: Callable[[argparse.Namespace], Any] = {"maintain": with_store(cmd_maintain, store), "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
                "red": lambda a: cmd_red(a, clock, store), "decide": with_store(cmd_decide, store), "config": cmd_config, "issue": with_store(cmd_issue, store), "revert": with_store(cmd_revert, store), "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": with_store(cmd_inbox, store), "recover": with_store(cmd_recover, store), "watchdog": lambda a: cmd_watchdog(a, clock, store), "lease": with_store(cmd_lease, store), "laptop": with_store(cmd_laptop, store), "status": with_store(cmd_status, store), "queue": cmd_queue_retired, "tick": lambda a: cmd_tick(a, clock, store), "store": cmd_store, "github-app": cmd_github_app, "waiting": lambda a: cmd_waiting(a, clock, store), "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": with_store(cmd_supersede, store), "park": with_store(cmd_park, store), "unpark": cmd_unpark, "watch": lambda a: cmd_watch(a, clock, store), "sweep": with_store(cmd_sweep, store), "ci-why": with_store(cmd_ci_why, store), "land": lambda a: cmd_land(a, clock, store), "land-precheck": with_store(cmd_land_precheck, store), "env": cmd_env, "history": lambda a: cmd_history(a, store, clock.time), "analyze": lambda a: cmd_analyze(a, store, clock.time)}[a.cmd]
     command = inbox_command(a)
-    return with_inbox(command, handler, a) if command else handler(a)
+    try:
+        return with_inbox(command, handler, a) if command else handler(a)
+    finally:
+        note_missing_tokens(store)  # what a missing token left to note: a condition, in the command's store
 
 
 def selftest():

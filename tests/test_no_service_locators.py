@@ -21,7 +21,6 @@ FROZEN = {
     "inboxentry.wire_inbox_writer": "36 modules that write an inbox entry take the writer",
     "conditions.wire_probes": "30 `run_probe` callers take the probe registry",
     "conditions.wire_recover_actions": "open_condition / close_condition take the recovery registry",
-    "storetoken.wire_token_missing_note": "the store opener (server.process_store) takes the token source",
 }
 
 

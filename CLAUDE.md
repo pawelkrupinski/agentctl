@@ -69,9 +69,10 @@ movies model (movies "Code quality ratchets" and "Coupling"), on the movies repo
   the modules before it in `MODULES` (import order, written by `devtools/placemodules.py`), so a part's coupling is the
   modules it imports (a FOUNDATION -- a module importing no module but other foundations, a leaf helper like
   `statefile` -- is no collaborator: extracting a concept into its own module never raises its users' fan-out), and
-  mypy checks the modules concatenated in `MODULES` order. What a module must not import -- the remote store, a
-  missing token's inbox condition -- is wired at the composition root (cli: `CurrentStore(process_store)`,
-  `wire_token_missing_note(token_unavailable_note)`), never reached by a module calling up. The tests read and patch
+  mypy checks the modules concatenated in `MODULES` order. What a module must not import -- the remote store -- is
+  wired at the composition root (cli: `CurrentStore(process_store)`) and passed in, never reached by a module calling up
+  nor kept in a cell a `wire_*` fills (`tests/test_no_service_locators.py`); a lower module's event for a higher one is
+  pulled, not called back (a missing token's note: `storetoken.take_token_notes`, taken by the tick's recovery step). The tests read and patch
   the modules as one object, `A` (`tests/agentctl_view.py`: `A.<name> = fake` replaces the name in every module
   binding it), until the collaborators are injected.
 - The restructuring's tools (`devtools/`, tested by `tests/test_devtools.py`): `intra.py` (each top-level definition's

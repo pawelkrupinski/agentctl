@@ -127,7 +127,7 @@ state	lib/agentctl/ciruns.py	1
 state	lib/agentctl/ciwhy.py	1
 state	lib/agentctl/clock.py	1
 state	lib/agentctl/clones.py	1
-state	lib/agentctl/conditions.py	4
+state	lib/agentctl/conditions.py	3
 state	lib/agentctl/configfile.py	2
 state	lib/agentctl/core.py	4
 state	lib/agentctl/fixerblockers.py	1
@@ -175,7 +175,7 @@ state	lib/agentctl/serverclone.py	1
 state	lib/agentctl/status.py	3
 state	lib/agentctl/statusagents.py	3
 state	lib/agentctl/statuspage.py	1
-state	lib/agentctl/storetoken.py	3
+state	lib/agentctl/storetoken.py	2
 state	lib/agentctl/syncsteps.py	1
 state	lib/agentctl/upkeep.py	1
 import-io	devtools/mkmodule.py	6
@@ -198,7 +198,7 @@ fanout	lib/agentctl/checkround.py	14
 fanout	lib/agentctl/checkslot.py	11
 fanout	lib/agentctl/cireport.py	24
 fanout	lib/agentctl/cleanup.py	14
-fanout	lib/agentctl/cli.py	55
+fanout	lib/agentctl/cli.py	54
 fanout	lib/agentctl/cliparser.py	10
 fanout	lib/agentctl/culpritfix.py	15
 fanout	lib/agentctl/entrychecks.py	13

@@ -7,7 +7,7 @@ import os
 import re
 import sys
 import time
-from typing import Any, Callable
+from typing import Any
 from agentctl.core import (
     HOME, NoReadAccess, NoToken, _tokens, err, fmt_age, on_ci_runner, process_cache, run_cmd, slug)
 from agentctl.ghapp import ghapp_config, ghapp_enabled, ghapp_token
@@ -211,31 +211,23 @@ def token(o_r):
     return _tokens[ns]
 
 
-# THE MISSING-TOKEN SEAM: what else a missing token does is wired at the composition root (cli: recovery's
-# token_unavailable_note, a condition in the inbox); unwired -- a part loaded on its own -- only the log line.
-_token_missing_notes: list[Callable[[str, str], None]] = []
-
-
-def wire_token_missing_note(note: Callable[[str, str], None]) -> None:
-    _token_missing_notes[:] = [note]
-
-
-def note_token_missing(ns: str, why: str) -> None:
-    for note in _token_missing_notes:
-        note(ns, why)
+def take_token_notes() -> list[tuple[str, str]]:
+    """THE MISSING TOKEN'S NOTES, pulled (no callback wired into this module): each namespace whose token went missing,
+    or is still missing at a summary, since the last take, with why -- once each. The tick and the end of a command
+    (cli) hand them to recovery's token_unavailable_note with the process's store."""
+    return [(ns, m.pop("note")) for ns, m in _token_missing.items() if "note" in m]
 
 
 _token_missing = process_cache({})  # ns -> {"since", "reads", "said"}
 
 
 def token_missing(ns, why, now_=None):
-    """A failed token read: said (and noted in the inbox) on the transition to missing, then a summary at most every
+    """A failed token read: said (and its note left for take_token_notes) on the transition to missing, then a summary at most every
     TOKEN_MISSING_SUMMARY s ($AGENTCTL_TOKEN_SUMMARY). Returns the line said, or None."""
     t = now_ if now_ is not None else epoch_now()
     m = _token_missing.get(ns)
     if m is None:
-        _token_missing[ns] = {"since": t, "reads": 1, "said": t}
-        note_token_missing(ns, why)
+        _token_missing[ns] = {"since": t, "reads": 1, "said": t, "note": why}
         line = f"the {ns} token is missing ({why}); said again only as a summary every " \
                f"{knob_token_summary() / 60:.0f} min"
     else:
@@ -244,8 +236,7 @@ def token_missing(ns, why, now_=None):
             return None
         line = f"the {ns} token is still missing: {m['reads']} read(s) failed in the " \
                f"{fmt_age(t - m['since'])} since it went ({why})"
-        m["said"] = t
-        note_token_missing(ns, why)  # the condition again, in case the first note could not be written
+        m["said"], m["note"] = t, why  # the condition again, in case the first note could not be written
     if not interactive_foreground():  # a foreground command prints its NoToken itself: the log is the long-lived ones'
         err(line)
     return line

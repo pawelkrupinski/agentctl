@@ -10,7 +10,7 @@ from agentctl.filelog import drain_event_log
 from agentctl.waitingdir import wlog
 from agentctl.inboxentry import inbox_write
 from agentctl.cistate import snapshot_gate_reds
-from agentctl.conditions import maybe_recovery_tick
+from agentctl.recovery import maybe_recovery_tick
 from agentctl.serverclone import clone_heal_tick
 from agentctl.queuestall import queue_stall_step
 from agentctl.stats import maybe_stats_pass
@@ -122,7 +122,7 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
             ("gate summary", lambda: maybe_publish_gate(repo, store)),
             ("red time", lambda: track_red_time(store, gate_is_red_now())),
             ("red tick", lambda: maybe_red_tick(repo, store)),
-            ("recovery", lambda: maybe_recovery_tick(store)),
+            ("recovery", lambda: maybe_recovery_tick(store, clock.time())),
             ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues(store)]),
             ("reverts", lambda: [wlog(d, f"tick: {x}") for x in tick_reverts(repo, store)]),  # reverts.py: told their landers
             ("queue stall", lambda: logged(d, queue_stall_step(store))),

@@ -18,7 +18,7 @@ from agentctl.procs import safe_cwd
 from agentctl.filelog import drain_event_log
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import trust_asks
-from agentctl.conditions import maybe_recovery_tick
+from agentctl.recovery import maybe_recovery_tick
 from agentctl.recordingpins import refresh_pinned_recording
 from agentctl.store import StoreLacksCall, StoreUnavailable
 from agentctl.laptoprole import laptop_role_step
@@ -154,7 +154,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequenc
             ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store), 1)),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep(store)]),
             ("root checkout", lambda: [err(x) for x in root_checkout_ff(repo)]),
-            ("recovery", lambda: maybe_recovery_tick(store)))
+            ("recovery", lambda: maybe_recovery_tick(store, clock.time())))
 
 
 # THE LAPTOP ANSWERS A REGEN HOLD ITSELF (2026-11-20, phase8-units: held a day for `cd <worktree> && agentctl land`, a

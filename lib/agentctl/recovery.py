@@ -16,10 +16,10 @@ from agentctl.statefile import read_json_file, read_record, write_json_file, unl
 from agentctl.selfcode import TOOL_PATH
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import held_commit
-from agentctl.storetoken import red_read_token, token_env_name, token_from_processor, token_vault_key
+from agentctl.storetoken import red_read_token, token_env_name, no_vault, take_token_notes, token_from_processor, token_vault_key
 from agentctl.worktrees import mark_internal
 from agentctl.cistate import ci_state_load
-from agentctl.conditions import open_condition, recovery_dir, run_probe
+from agentctl.conditions import open_condition, recovery_dir, recovery_tick, run_probe
 from agentctl.tunnel import default_route, tunnel_ports, tunnel_probe, tunnel_state_path
 from agentctl.blamerecords import blame_land_refusal
 from agentctl.batchitem import batch_move, current_batch
@@ -182,22 +182,38 @@ def recover_clear_hold(cond: dict[str, Any] | None, a: dict[str, Any], st: Any) 
 
 def token_unavailable_note(ns: str, why: str, store: Any) -> None:
     """No source had the token: ONE condition per spell (UNKNOWN in the inbox), cleared by the token probe -- the
-    processor holds one again -- with its entry acked."""
-    if ns != "movies" or _noting_token[0]:  # the sync's store is remote: its call needs this very token -- once
+    processor holds one again -- with its entry acked. The remote store's own call needs this very token: its read
+    fails again, which only leaves a note for a later take (storetoken.take_token_notes), so this never recurses."""
+    if ns != "movies":
         return
-    _noting_token[0] = True
     try:
-        open_condition("UNKNOWN", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {token_vault_key('pawelkrupinski/movies')[0]}` in any session (the store token's vault); the "
-                                  "next land or `land status` re-seeds the processor",
-                       run_probe("token", {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2,
-                       store=store)
+        with no_vault():  # the note's own store call never prompts for the token it notes missing
+            open_condition("UNKNOWN", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {token_vault_key('pawelkrupinski/movies')[0]}` in any session (the store token's vault); the "
+                                      "next land or `land status` re-seeds the processor",
+                           run_probe("token", {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2,
+                           store=store)
     except (Exception, SystemExit) as e:
         err(f"token: could not note the missing token ({str(e)[:120]})")
-    finally:
-        _noting_token[0] = False
 
 
-_noting_token = [False]  # token_unavailable_note is running: the remote store's own token read must not recurse
+def note_missing_tokens(store: Any) -> None:
+    """The missing tokens' notes this process left since the last take (every tick's recovery step, and the end of
+    every command: cli), each a condition in store."""
+    for ns, why in take_token_notes():
+        token_unavailable_note(ns, why, store)
+
+
+_last_recovery = [0.0]
+
+
+def maybe_recovery_tick(store: Any, now: float) -> None:
+    """A tick's recovery step at now (the tick's clock): the missing tokens' notes, then the condition machine's
+    recheck at most every 5 s."""
+    note_missing_tokens(store)
+    if now - _last_recovery[0] < 5:
+        return
+    _last_recovery[0] = now
+    recovery_tick(store)
 
 
 def red_no_read_access(repos, store):
