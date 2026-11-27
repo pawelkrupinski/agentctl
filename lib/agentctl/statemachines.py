@@ -150,8 +150,6 @@ def change_state_of(status: Any) -> str | None:
     return status if status in MACHINES["change"] else None
 
 
-ENTRY_STATE = {name: name for name in MACHINES["change"]}  # the simulator's name until its invariants read change_state_of
-
 
 # A CHANGE NEVER LEAVES THE QUEUE SILENTLY (2026-10-30: `…-76336e`'s NOT LANDED reached the inbox without its item id,
 # so a search by id found nothing and it looked vanished; and terminal moves written without an audience -- a cancel
