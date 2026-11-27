@@ -10,7 +10,7 @@ from agentctl.core import scratch
 from agentctl.forge import forge_argv, forge_env, gh_json
 from agentctl.workflows import job_inner
 from agentctl.procs import ps
-from agentctl.wait import failure_detail
+from agentctl.joblog import failure_detail
 
 
 MEASURE_WORKFLOWS = {"Identity takes", "Identity model convergence"}  # takes rows: Identity takes (2026-11-08); a --full measure starts it from convergence

@@ -14,7 +14,7 @@ from agentctl.classify import (
     UNKNOWN_LOG, WEAK, classify_job, log_verdict_version, norm_line)
 from agentctl.forge import RED_CONCLUSIONS
 from agentctl.workflows import STEP_TIMED_OUT
-from agentctl.wait import (
+from agentctl.joblog import (
     ANNOTATION, DRIFT_LINE, FLIP_HEADER, FLIP_KEY_MAX, FLIP_ROW, FLIP_TAKES, choose_job_lines, drift_key,
     failed_jobs_log, flip_key_line, flip_listings, job_log_lines, relevant_lines, step_window_lines)
 from agentctl.ciwhy import VERDICT_COMPLETE_JOB, job_is_phantom, job_is_verdict_report, jobs_no_verdict, resolve_run

@@ -12,7 +12,7 @@ from agentctl.networksignatures import check_push_failure, credential_failure
 from agentctl.forge import api, forge_actions_run, forge_actions_runs, forge_delete_branch, forge_find_run
 from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
 from agentctl.procs import Terminated
-from agentctl.wait import fetch_failed_log, job_log_lines, relevant_lines
+from agentctl.joblog import fetch_failed_log, job_log_lines, relevant_lines
 from agentctl.leases import lock_beat
 from agentctl.runowners import record_dispatch, save_dispatch
 from agentctl.checkrows import check_run_record, with_run

@@ -1,4 +1,4 @@
-# agentctl, part `wait`: wait.
+# agentctl, part `joblog`: the failed CI jobs' logs: fetched, cut to the failed step, and the lines that say what failed
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import re

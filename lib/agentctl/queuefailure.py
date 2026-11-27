@@ -10,7 +10,7 @@ from agentctl.core import err, reds_dir, slug
 from agentctl.classify import ANSI, norm_line
 from agentctl.repos import gated_repo
 from agentctl.waitingdir import ChangeRecords
-from agentctl.wait import fetch_failed_log, log_entries
+from agentctl.joblog import fetch_failed_log, log_entries
 from agentctl.ciwhy import gate_runs
 from agentctl.land import HOOK_STATUS
 

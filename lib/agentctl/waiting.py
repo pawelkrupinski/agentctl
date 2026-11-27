@@ -1,4 +1,4 @@
-# agentctl, part `waiting`: waiting.
+# agentctl, part `waiting`: the waiting changes' rules: who waits for a red main, applying an entry to a clone, superseding, cancelling, the batch order
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os

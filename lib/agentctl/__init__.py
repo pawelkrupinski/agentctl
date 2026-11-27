@@ -16,7 +16,7 @@ MODULES = ("procrunner", "escalationtable", "psparse", "govpool", "usage", "stat
            "sdnotify", "policy", "generated", "livestream", "backfillexact", "eventtrace", "statsrecords",
            "statsepisodes", "timeline", "checkrows", "runqueue", "networksignatures", "netretry", "classify",
            "causes", "eventrows", "forge", "gating", "filelog", "waitingdir", "storetoken", "inboxentry",
-           "escalations", "wait", "fixersession", "fixerenv", "deletions", "testtmp", "inbox", "worktrees",
+           "escalations", "joblog", "fixersession", "fixerenv", "deletions", "testtmp", "inbox", "worktrees",
            "redrepos", "cistate", "gatesummary", "lander", "conditions", "sessionpaths", "serverclone",
            "recordingpins", "queuehold", "runverdict", "owned", "govtickets", "procwatch", "maint", "govbudget",
            "pressure", "govusage", "govfits", "queuestall", "fixerblockers", "stats", "remotejobs", "backfill",

@@ -10,7 +10,7 @@ from agentctl.core import err, tilde
 from agentctl.workflows import STEP_TIMED_OUT, workflow_jobs
 from agentctl.classify import SETUP_STEP, classify_job, job_log_verdict
 from agentctl.forge import GH_CLI, RED_CONCLUSIONS, gh_json, runner_queue
-from agentctl.wait import (
+from agentctl.joblog import (
     MAX_JOB_LOG_FETCHES, choose_job_lines, drift_key, failed_jobs_log, failed_steps, hook_lines, job_log_lines,
     log_entries, raw_tails, relevant_lines)
 from agentctl.ciwhy import commit_line, job_is_verdict_report, jobs_no_verdict, timed_out_jobs

@@ -61,6 +61,7 @@ mypy-errors	inbox	14
 mypy-errors	inboxcli	17
 mypy-errors	invariants	30
 mypy-errors	issues	12
+mypy-errors	joblog	46
 mypy-errors	jvmreap	7
 mypy-errors	land	24
 mypy-errors	landdryrun	36
@@ -177,7 +178,6 @@ mypy-errors	tools	55
 mypy-errors	trailers	2
 mypy-errors	tunnel	3
 mypy-errors	upkeep	7
-mypy-errors	wait	46
 mypy-errors	waiting	24
 mypy-errors	watchdog	16
 mypy-errors	watchtick	52

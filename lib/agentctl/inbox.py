@@ -1,4 +1,4 @@
-# agentctl, part `inbox`: the inbox.
+# agentctl, part `inbox`: the verdict-capturing wrapper of the commands whose verdict goes to the inbox (VerdictTee, InboxRun, with_inbox), `agentctl inbox` and an entry's line
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import re
