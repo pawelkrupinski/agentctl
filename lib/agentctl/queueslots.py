@@ -153,9 +153,8 @@ def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any]
     already (by a writer of the item alone: a cancel through the store, a stranded supersede) keeps its decision, and
     the entry takes it: one state whichever reader asks (tests/queue_sim.py IS). cause: why it moved, one of
     causes.CAUSES (a keyword every caller names: tests/test_causes.py); detail: a short qualifier."""
-    event = {**(event or {}), "cause": checked_cause(cause), **({"detail": detail} if detail else {})}
     cur = st.put_item("change", e["id"], change_state_of(e.get("status")) or "queued", change_item_fields(e))
-    cur = _move_item(st, e["id"], cur, to, _item_data(cur, to, data, fields), event)
+    cur = _move_item(st, e["id"], cur, to, _item_data(cur, to, data, fields), event, cause, detail)
     e.update(status=to, **fields)
     if machine_state("change", cur["state"]).terminal and cur["state"] != to:  # decided already: its decision stands
         why = (cur.get("data") or {}).get("why")
@@ -163,9 +162,11 @@ def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any]
     save_entry(d, e)
 
 
-def _move_item(st: Any, cid: str, cur: dict[str, Any], to: str, data: Any, event: dict[str, Any]) -> dict[str, Any]:
-    """Change item cid (read as cur) moved to `to` unless it is decided; a stale read is read again once. The item as
-    last read (a decided one: as it was decided)."""
+def _move_item(st: Any, cid: str, cur: dict[str, Any], to: str, data: Any, event: dict[str, Any] | None, cause: str,
+               detail: str | None) -> dict[str, Any]:
+    """Change item cid (read as cur) moved to `to` for `cause` unless it is decided; a stale read is read again once.
+    The item as last read (a decided one: as it was decided)."""
+    event = {**(event or {}), "cause": checked_cause(cause), **({"detail": detail} if detail else {})}
     try:
         if not machine_state("change", cur["state"]).terminal:
             st.transition("change", cid, to, cur["version"], data=data, event=event)
