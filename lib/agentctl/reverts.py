@@ -1,21 +1,22 @@
 # agentctl, part `reverts`: a reverted change gets back to the agent that wrote it.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.statemachines import ARCHIVE, IllegalTransition, MACHINES, StaleVersion, StateSpec, TerminalState
 from agentctl.clock import epoch_now
+from agentctl.timefmt import ts
+from agentctl.core import git, is_ancestor, remote, tilde
+from agentctl.repos import RED_PRIMARY
+from agentctl.trailers import fixes_red_in_message, trailer_format, trailer_values
+from agentctl.allowedpaths import allowed_path
+from agentctl.lander import lander_index, lander_name, lander_of_commit, lander_records, patch_ids
+from agentctl.store import StoreUnavailable
+from agentctl.worktrees import claimant, worktree_exclude
+from agentctl.agewords import fmt_age
 import os
 import re
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.core import fmt_age, git, remote, tilde, is_ancestor
-from agentctl.timefmt import ts
-from agentctl.store import StoreUnavailable
-from agentctl.repos import RED_PRIMARY
-from agentctl.trailers import fixes_red_in_message, trailer_format, trailer_values
-from agentctl.lander import lander_index, lander_name, lander_of_commit, lander_records, patch_ids
-from agentctl.allowedpaths import allowed_path
-from agentctl.worktrees import claimant, worktree_exclude
-from agentctl.statemachines import ARCHIVE, IllegalTransition, MACHINES, StaleVersion, StateSpec, TerminalState
 
 
 # ---------------------------------------------------------------- THE REVERT NOTICE (the owner, 2026-11-21)

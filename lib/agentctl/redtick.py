@@ -1,42 +1,43 @@
 # agentctl, part `redtick`: the tick's red step (the processor; ci-why never acts).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.context import Context
+from agentctl.conditionregistry import ConditionRegistry
+from agentctl.statemachines import StaleVersion, is_terminal, open_items
 from agentctl.clock import epoch_now
-import functools
-import threading
-from typing import Any
-from agentctl.statemachines import StaleVersion, open_items, is_terminal
-from agentctl.core import NoReadAccess, err, process_cache, run_bounded, slug
+from agentctl.tickknobs import knob_step_bound
+from agentctl.redknobs import RED_TICK_INTERVAL, knob_red_others_every, knob_red_skip_say, knob_red_tick
+from agentctl.core import err, process_cache, run_bounded, slug
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos
-from agentctl.redretired import red_retired
 from agentctl.storetoken import red_read_token
 from agentctl.redrepos import red_gate_flows, red_is_other
-from agentctl.ciwhy import gate_from_snap, gate_runs, gate_snap_rows
-
 from agentctl.cistate import ci_state_load
-from agentctl.redrecord import red_active_of, red_obs_for, red_what
 from agentctl.lander import lander_note_landed
+from agentctl.context import Context
+from agentctl.redretired import red_retired
+from agentctl.ciwhy import gate_from_snap, gate_runs, gate_snap_rows
 from agentctl.redfixread import red_main_current
-from agentctl.redfixes import red_fix_facts
-from agentctl.redknobs import knob_red_others_every, knob_red_skip_say, knob_red_tick, RED_TICK_INTERVAL
+from agentctl.redrecord import red_active_of, red_obs_for, red_what
 from agentctl.red import red_settled_runs
+from agentctl.redfixes import red_fix_facts
+from agentctl.orphanreap import red_reap_orphans
 from agentctl.redseen import gate_red_units, red_merge_rekeyed, red_obs_of_units, red_observe, stuck_obs
 from agentctl.reduntracked import red_active_untracked, red_note_untracked, red_split_untracked, red_untrack
 from agentctl.redblock import gate_unread_spell, red_renew_blocks
+from agentctl.localrecheck import recheck_local
 from agentctl.redopen import red_attach_obs, red_open
 from agentctl.redearly import early_attach, early_observed, early_opened, early_unobserved
-from agentctl.localrecheck import recheck_local
-from agentctl.orphanreap import red_reap_orphans
-from agentctl.ask import red_owner_reminders
+from agentctl.redwaits import red_quota_waits
 from agentctl.reddispatch import RED_MODEL, red_migrate, red_renew_holders
+from agentctl.ask import red_owner_reminders
 from agentctl.offerdispatch import red_dispatcher
+from agentctl.recovery import red_no_read_access
 from agentctl.redstep import red_step
 from agentctl.redhold import red_enforce
-from agentctl.redwaits import red_quota_waits
-from agentctl.tickknobs import knob_step_bound
-from agentctl.recovery import red_no_read_access
-from agentctl.conditionregistry import ConditionRegistry
+from agentctl.tokenerrors import NoReadAccess
+import functools
+import threading
+from typing import Any
+
 
 
 # -- the tick's red step (the processor; ci-why never acts)

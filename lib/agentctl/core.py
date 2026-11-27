@@ -1,55 +1,6 @@
-# agentctl, part `core`: the help texts, imports, constants and helpers every part uses.
+# agentctl, part `core`: the process-cache registry, err and attempt, and the git, path and process helpers every part uses.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and procrunner's only.
 
-WAIT_RUN_HELP = """Block until GitHub Actions runs finish; print only the verdicts.
-
-Agents: start this with the Bash tool's run_in_background=true and END YOUR TURN -- you are re-invoked when it
-exits. Never wrap it (or gh run watch) in a foreground sleep/until loop. A second `wait run` on the same id attaches to
-the first waiter (single waiter per target), so it is safe to call again after a resume.
-
-Examples:
-  agentctl wait run 1961 --until landable          # a measure run: stop when the takes rows end
-  agentctl wait run 1976 1984 --repo movies --tail 12
-Exit: 0 all green, 1 any red/cancelled, 2 timeout. A waiter that vanished is taken over."""
-CI_WHY_HELP = """Why is main red? For movies: the newest DECIDED run on main (success/failure; cancelled and skipped say
-nothing) of exactly the three workflows the gate reads (the owner, 2026-10-27; Identity takes 2026-11-08) -- Main, Identity model convergence and Identity takes;
-every other red on main is listed after, as information only. Other repos: every workflow seen on main. For each red one: failed jobs, their relevant log lines, the commit
-and author, INFRA-SHAPED (setup-step failure, 0-length log, artifact already exists, ENOENT, ...) vs TEST FAILURE, and
-the gate's clearing rule (a later green run, or `Fixes-Red: <#number|run id>` on every production commit).
-  agentctl ci-why                 # movies (or the cwd's repo)
-  agentctl ci-why 1934            # explain one run
-Exit: 0 green, 1 red (or a run explained)."""
-LAND_HELP = """Land the current commit(s) on origin/main, safely, in one command.
-MOVIES (the reconciler, ~/bin/AGENTCTL.md "land"): fetch -> rebase onto origin/main -> prepush-check (the squash
-guard) -> a queued change item, its commits pushed to refs/heads/land/<id> -> `QUEUED <id> (<sha>)` at once: END YOUR
-TURN. The processor's tick checks it in a check tree (an executor holding check/<id>, within the governor; on ci-runner
-under pressure), pushes it under the land/<repo> lease -> LANDED and a watch item (Main and the convergence for the sha:
-WATCH OK / RED / UNKNOWN); main red and the change must wait (a production path, no Fixes-Red: for the red run):
-WAITING, landed with the batch checked once at green. Every verdict goes to `agentctl inbox`, naming your worktree.
---UNTIL-DONE (movies agents' last step, run in the background): submit -- or resume this worktree's entry at HEAD, never
-queued twice -- the fast precheck in the foreground, wait for the verdict (--deadline, default 4h), then: NOT LANDED:
-<why> + `next: <command>` (exit 1); LANDED, every local commit's patch on origin/main and the worktree clean and this
-agent's own -> worktree and branch removed, `DONE <sha> ... worktree removed` (exit 0); landed but kept (dirty,
-foreign, root, unproven) exit 3; the deadline exit 2 (call it again to resume).
-THE FAST PRECHECK: a repo with an executable scripts/land-precheck (movies) has it run beside the queue, never before
-QUEUED; a refusal cancels the queued change with `NOT LANDED: the fast precheck refused <id>` in the inbox, minutes
-before the landing check would say it. --no-fast-precheck starts none.
-IN-PROCESS (--follow, --no-watch, AGENTCTL_QUEUE=0; other repos always; a red fixer queues and waits): the checks here
-(movies: the hook's dry run --range origin/main..<sha>), then under the land/<repo> lease fetch, push (the repo's
-pre-push hook runs, reusing the dry run's pass), on a race refetch, rebase and retry up to 3 times, verify with
-merge-base / git cherry: `LANDED <sha>` or `NOT LANDED: <exact reason>` (red gate: + the ci-why summary). --follow then
-waits for a WAITING change's batch and watches in-process; --no-watch exits at LANDED.
-Never passes --no-verify and refuses to run with PREPUSH_SKIP set. Refuses a dirty tree unless --stash (a named stash,
-restored afterwards, found by its sha -- the stash list is shared by every worktree).
-Exit: 0 queued / landed (and watched green), 1 not landed, 2 landed but the watch could not tell, 3 landed and main's CI
-RED."""
-ENV_HELP = """Agent environment, without secrets.
-  eval "$(agentctl env --print)"   # sdkman's sbt + java first on PATH, JAVA_HOME; exit 1 (one line on stderr) on a locked vault
-  agentctl env --check            # sbt, a java that runs, `secrets status <ns>`, the tunnel's localhost:3014 (the
-                                  # agentctl store) and gh
-A locked vault prints exactly: vault <ns> locked: ask the user to run `! secrets unlock <ns>`  -- and exits 1.
-An agentctl fixer holding its credentials (AGENTCTL_RED_FIXER, the store token) reads it as not needed: exit 0.
-agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""
 import glob
 import os
 import re
@@ -62,7 +13,6 @@ import time
 from typing import Any, Callable, Sequence, TypeVar
 from agentctl.procrunner import process_runner
 from agentctl.psparse import parse_ps
-from agentctl.configfile import config_load
 from agentctl.redknobs import knob_dispatch_dir, knob_reds_dir
 from agentctl.storeknobs import knob_host, knob_remote, knob_role, knob_scratch, knob_state_root
 from agentctl.blameknobs import knob_recovery_dir
@@ -89,7 +39,6 @@ def tilde(path: str) -> str:
     return path.replace(HOME, "~")
 
 
-config_load()
 REPOS = [f"{HOME}/bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")] + [
     f"{HOME}/projects/movies"
 ]
@@ -212,125 +161,6 @@ def commit_known(repo: str, rev: str | None) -> bool:
     return git_ok(repo, "cat-file", "-e", f"{rev}^{{commit}}")
 
 
-# IS IT LANDED: ONE ANSWER (2026-10-30: movies-wt-identity-impact's 67c68416e escalated UNLANDED ORPHAN three days
-# after it landed as 2883073d1 -- same subject, author and author date, the same +/- lines, but main had since changed
-# the lines AROUND them, so its patch-id (context included) differed and `git cherry` said "+"). A commit is on main
-# when main has a patch-equivalent commit (git cherry's "-") OR a TWIN: the same subject, author and author date with
-# identical changed lines per file (context and line numbers left out). Every "is it landed" check asks this: the
-# orphans, the queue's entries and change items (W1 with them), the fixers' worktrees, the closers.
-_changed_lines_cache, _main_index_cache = process_cache({}), process_cache({})
-
-
-def file_change_lines(section: list[str]) -> list[str]:
-    """The +/- lines of one file's section of a `git show -U0` text: its header keeps its modes and binary-ness (its
-    index line is dropped, its blob id kept for a binary change), its hunks their +/- lines."""
-    out, in_hunk, blob = [], False, None
-    for line in section:
-        if in_hunk:
-            if line[:1] in ("+", "-", "\\"):
-                out.append(line)
-        elif line.startswith("@@"):
-            in_hunk = True
-        elif line.startswith("index "):
-            blob = line.split()[1].split("..")[-1]
-        elif line.startswith(("new file mode", "deleted file mode", "old mode", "new mode")):
-            out.append(line)
-        elif line.startswith(("Binary files", "GIT binary patch")):
-            out.append(f"{line} {blob}")
-    return out
-
-
-def parse_changed_lines(diff: str) -> dict[str, list[str]]:
-    """{file header: [the +/- lines, in order]} of a `git show -U0` text."""
-    sections: dict[str, list[str]] = {}
-    cur = None
-    for line in diff.splitlines():
-        if line.startswith("diff --git "):
-            cur = sections[line] = []
-        elif cur is not None:
-            cur.append(line)
-    return {header: file_change_lines(section) for header, section in sections.items()}
-
-
-def changed_lines(repo, c):
-    """{file header: [the +/- lines, in order]} of commit c against its first parent: no context, no line numbers, no
-    blob ids of a text change (they name the whole file, context included); a binary change keeps its new blob id."""
-    if c in _changed_lines_cache:
-        return _changed_lines_cache[c]
-    r = run_cmd(["git", "-C", repo, "show", "--format=", "-U0", "--no-color", "--no-ext-diff", "--no-renames",
-                 "--diff-merges=first-parent", c], timeout=120, text=False)
-    if r.returncode != 0:
-        return None
-    out = parse_changed_lines(r.stdout.decode(errors="replace"))
-    if len(_changed_lines_cache) > 4000:
-        _changed_lines_cache.clear()
-    _changed_lines_cache[c] = out
-    return out
-
-
-def _index_main_log(log: str) -> dict[tuple[str, ...], list[str]]:
-    """{(author name, email, author date, subject): [sha]} of a `%H%x00%an%x00%ae%x00%at%x00%s` log."""
-    idx: dict[tuple[str, ...], list[str]] = {}
-    for line in log.splitlines():
-        p = line.split("\x00")
-        if len(p) == 5:
-            idx.setdefault(tuple(p[1:]), []).append(p[0])
-    return idx
-
-
-def _main_index(repo, main, since):
-    """{(author name, email, author date, subject): [sha]} of main's commits since `since` (cached per main head)."""
-    key = (os.path.realpath(repo), main, since)
-    if key not in _main_index_cache:
-        rng = f"{since}..{main}" if since else main
-        r = git(repo, "log", "--no-merges", "-n", "20000", "--format=%H%x00%an%x00%ae%x00%at%x00%s", rng, check=False)
-        if len(_main_index_cache) > 32:
-            _main_index_cache.clear()
-        _main_index_cache[key] = _index_main_log(r.stdout if r.returncode == 0 else "")
-    return _main_index_cache[key]
-
-
-def content_twin(repo: str, c: str, main: str) -> str | None:
-    """main's commit (since its merge-base with c) with c's subject, author and author date and identical changed
-    lines, or None."""
-    meta = git(repo, "log", "-1", "--format=%an%x00%ae%x00%at%x00%s", c, check=False)
-    p = meta.stdout.rstrip("\n").split("\x00") if meta.returncode == 0 else []
-    head = git(repo, "rev-parse", "--verify", "-q", f"{main}^{{commit}}", check=False).stdout.strip()
-    if len(p) != 4 or not head:
-        return None
-    mb = git(repo, "merge-base", c, head, check=False).stdout.strip()
-    mine = inked_lines(changed_lines(repo, c))
-    if mine is None:
-        return None
-    return next((u for u in _main_index(repo, head, mb).get(tuple(p), [])
-                 if u != c and inked_lines(changed_lines(repo, u)) == mine), None)
-
-
-def inked_lines(changed):
-    """changed_lines without its blank +/- lines (issue 20261104T002213-cc3b4a: a blank line moved in a doc hunk on the
-    way to main made a landed commit's twin unrecognised, and its worktree got an orphan fixer); None stays None."""
-    if changed is None:
-        return None
-    return {f: [l for l in lines if not (l[:1] in "+-" and not l[1:].strip())] for f, lines in changed.items()}
-
-
-def cherry_landed(repo: str, main: str, head: str = "HEAD", *limit: str) -> tuple[list[str], list[str]] | tuple[None, None]:
-    """(commits, left): head's commits not in main's history (git cherry's list, oldest first) and those of them NOT
-    landed -- neither patch-equivalent on main nor with a content twin there. (None, None) when git cannot tell."""
-    ch = git(repo, "cherry", main, head, *limit, check=False)
-    if ch.returncode != 0:
-        return None, None
-    commits, left = [], []
-    for line in ch.stdout.splitlines():
-        if line[:2] not in ("+ ", "- "):
-            continue
-        sha = line[2:].strip()
-        commits.append(sha)
-        if line.startswith("+ ") and not content_twin(repo, sha, main):
-            left.append(sha)
-    return commits, left
-
-
 def slug(repo_arg: str) -> str:
     if repo_arg in SHORT:
         return SHORT[repo_arg]
@@ -343,9 +173,6 @@ def slug(repo_arg: str) -> str:
     if re.fullmatch(r"[\w.-]+/[\w.-]+", repo_arg):
         return repo_arg
     raise SystemExit(f"agentctl: unknown repo {repo_arg!r}")
-
-
-_tokens = process_cache({})
 
 
 # DETACHED CHILDREN ARE REAPED (2026-10-29: the processor, pid 77145, carried ~17 <defunct> children, some 6 h old --
@@ -409,24 +236,6 @@ def pid_alive(pid: int) -> bool:
         return True
 
 
-def fmt_age(secs: float) -> str:
-    secs = max(0, int(secs))
-    return f"{secs // 86400} d" if secs >= 86400 else f"{secs // 3600} h" if secs >= 3600 else f"{secs // 60} min"
-
-
-class NoToken(SystemExit):
-    """The vault would not give the token. A process whose launching session ended (a detached watch once land
-    exits, a launchd service) is never authorized: `secrets` anchors an unlock to the session's processes (2026-10-27:
-    two detached watches died on it with no verdict, and the waiting processor read the gate as green)."""
-
-
-# THE READ-ONLY RED READER (2026-10-30). On ci-runner the reconciler lands movies as the lander App, which can read no
-# other repository; another repo's runs (infra, core: the red tick) are read there with the agentctl-reader App's
-# installation token (ghapp.py), never the lander's.
-class NoReadAccess(NoToken):
-    """ci-runner has no read credential for a repo other than movies (the agentctl-reader App is not configured)."""
-
-
 def on_ci_runner() -> bool:
     """The reconciler's own host (infra's agentctl.nix sets AGENTCTL_HOST=ci-runner), not a test's server role."""
     return knob_host() == "ci-runner"
@@ -479,13 +288,4 @@ def run_bounded(name, fn, secs):
     return not t.is_alive()
 
 
-def hashlib_sha1(text: str) -> str:
-    import hashlib
-    return hashlib.sha1(text.encode()).hexdigest()
-
-
-def pct(vals: Any, q: float) -> Any:
-    vals = sorted(vals)
-    if not vals:
-        return None
-    return vals[min(len(vals) - 1, int(round(q * (len(vals) - 1))))]
+_tokens: dict[str, str] = process_cache({})

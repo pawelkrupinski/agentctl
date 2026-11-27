@@ -1,7 +1,17 @@
 # agentctl, part `fixersession`: a fixer is a background Claude session: launching it, workspace trust, reading its session's state.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.procrunner import process_runner
+from agentctl.escalationtable import escalation_repos
+from agentctl.statefile import mtime, note_failure, read_record, write_json
 from agentctl.clock import epoch_now, wall_epoch
+from agentctl.fixerknobs import knob_bg_idle_grace
+from agentctl.core import HOME, SHORT, _tokens, git, state_root, tilde
+from agentctl.repos import escalation_repo_path, red_repo_clone, red_repos
+from agentctl.claudefiles import bg_transcript, claude_jobs_root, fixer_verdict
+from agentctl.procs import proc_alive
+from agentctl.storetoken import no_vault, token, token_ns
+from agentctl.inboxentry import inbox_write
 import json
 import os
 import re
@@ -10,16 +20,6 @@ import subprocess
 import time
 from typing import Any
 from contextlib import suppress
-from agentctl.procrunner import process_runner
-from agentctl.procs import proc_alive
-from agentctl.core import HOME, SHORT, _tokens, git, state_root, tilde
-from agentctl.statefile import mtime, read_record, write_json, note_failure
-from agentctl.repos import escalation_repo_path, red_repo_clone, red_repos
-from agentctl.escalationtable import escalation_repos
-from agentctl.inboxentry import inbox_write
-from agentctl.storetoken import no_vault, token, token_ns
-from agentctl.claudefiles import bg_transcript, claude_jobs_root, fixer_verdict
-from agentctl.fixerknobs import knob_bg_idle_grace
 
 
 BG_STARTED = re.compile(r"backgrounded\W+([0-9a-f]{6,})")

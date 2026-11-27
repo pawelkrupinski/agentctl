@@ -5,7 +5,6 @@
 from typing import Any
 from agentctl.timefmt import iso_at, parse_time, ts
 from agentctl.redknobs import knob_red_fix_giveup, knob_red_fix_requeue_grace
-from agentctl.core import fmt_age
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.redrepos import verify_dispatchable
 from agentctl.context import Context
@@ -30,6 +29,7 @@ from agentctl.redverify import (
 from agentctl.blame import blame_refuted
 from agentctl.redwaits import RED_WAITS_ON, red_waits_on_step
 from agentctl.ask import red_decision_failed
+from agentctl.agewords import fmt_age
 
 
 class FixPending:

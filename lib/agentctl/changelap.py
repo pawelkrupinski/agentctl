@@ -5,12 +5,12 @@ from contextlib import suppress
 from typing import Any
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.queueknobs import knob_regen_recovery_wait
-from agentctl.core import fmt_age
 from agentctl.causes import hold_attribution
 from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.queuehold import change_hold_stuck, restart_hold, stuck_recovery
 from agentctl.conflicts import CONFLICT_PLACE_KEPT
 from agentctl.changekind import change_hold_visible, file_unheld_change
+from agentctl.agewords import fmt_age
 
 
 def _regen_round(e: Any, h: Any, it: Any, t: Any, files: str, cmd: Any) -> Any:

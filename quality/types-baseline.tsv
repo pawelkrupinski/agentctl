@@ -39,7 +39,7 @@ mypy-errors	conditions	2
 mypy-errors	config	17
 mypy-errors	configfile	8
 mypy-errors	conflicts	24
-mypy-errors	core	21
+mypy-errors	core	9
 mypy-errors	culpritfix	29
 mypy-errors	entrychecks	13
 mypy-errors	eventprojection	13
@@ -93,7 +93,7 @@ mypy-errors	notifier	26
 mypy-errors	notifyurl	12
 mypy-errors	offerdispatch	17
 mypy-errors	orphanpass	5
-mypy-errors	orphanreap	28
+mypy-errors	orphanreap	26
 mypy-errors	orphans	15
 mypy-errors	outsideflows	12
 mypy-errors	overlapcheck	24

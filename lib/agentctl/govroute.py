@@ -2,13 +2,13 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-from agentctl.core import pct
 from agentctl.forge import runner_queue
 from agentctl.govtickets import gov_tickets
 from agentctl.govbudget import GOV_MEM_GB
-from agentctl.gov import GOV_CLASSES, gov_machine, gov_waiters
-from agentctl.govfits import gov_fits
 from agentctl.govusage import GOV_JOB_CORES, gov_job_cores
+from agentctl.govfits import gov_fits
+from agentctl.gov import GOV_CLASSES, gov_machine, gov_waiters
+from agentctl.percentile import pct
 
 
 # THE ROUTE of a heavy job (the owner, 2026-11-18: "stop the laptop being the bottleneck"): a whole-module test run or

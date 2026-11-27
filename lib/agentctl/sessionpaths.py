@@ -1,7 +1,13 @@
 # agentctl, part `sessionpaths`: the worktrees the live Claude sessions work in, read from their transcripts' tool calls
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.statefile import read_record, write_json
 from agentctl.clock import wall_epoch
+from agentctl.fixerknobs import knob_owner_active
+from agentctl.core import HOME, attempt, recovery_dir
+from agentctl.claudefiles import claude_projects_root
+from agentctl.live import live_slug
+from agentctl.texthash import hashlib_sha1
 import glob
 import json
 import os
@@ -9,11 +15,6 @@ import re
 import time
 from contextlib import suppress
 from typing import Any, Iterator
-from agentctl.core import attempt, hashlib_sha1, HOME, recovery_dir
-from agentctl.statefile import read_record, write_json
-from agentctl.claudefiles import claude_projects_root
-from agentctl.live import live_slug
-from agentctl.fixerknobs import knob_owner_active
 
 
 SESSION_PATHS = "session-paths.json"

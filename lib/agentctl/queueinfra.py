@@ -9,13 +9,14 @@ from agentctl.statemachines import change_event
 from agentctl.clock import epoch_now
 from agentctl.timefmt import iso_at
 from agentctl.queueknobs import knob_infra_same_max
-from agentctl.core import err, fmt_age, host_role
+from agentctl.core import err, host_role
 from agentctl.repos import repo_of_waiting
 from agentctl.networksignatures import credential_failure, redact_credentials
 from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.conditions import open_condition, run_probe
 from agentctl.serverclone import probe_clone_health
 from agentctl.queueslots import set_change
+from agentctl.agewords import fmt_age
 
 
 # a backlog batch (batch.py, THE BACKLOG BATCH) is up to BACKLOG_BATCH_MAX of them checked in ONE tree.

@@ -1,17 +1,18 @@
 # agentctl, part `issues`: the issues anyone files for the owner: opened, closed, escalated weekly; `agentctl issue`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
-import datetime as dt
-from typing import Any, Optional
-from agentctl.core import fmt_age, hashlib_sha1
-from agentctl.timefmt import ts
-from agentctl.store import StoreUnavailable
-from agentctl.procs import safe_cwd
-from agentctl.worktrees import claimant
 from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec, TerminalState
+from agentctl.clock import epoch_now
+from agentctl.timefmt import ts
 from agentctl.blameknobs import knob_issue_escalate_gap
 from agentctl.core import claude_session_id
+from agentctl.texthash import hashlib_sha1
+from agentctl.procs import safe_cwd
+from agentctl.store import StoreUnavailable
+from agentctl.worktrees import claimant
+from agentctl.agewords import fmt_age
+import datetime as dt
+from typing import Any, Optional
 
 
 ISSUE_TEXT_MAX = 4000

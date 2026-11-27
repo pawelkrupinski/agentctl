@@ -1,7 +1,23 @@
 # agentctl, part `maintain`: `agentctl maintain`: the periodic pass -- the iOS simulators' sweep, the caches' expiry, the orphans' duty
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.procrunner import process_runner
+from agentctl.statefile import read_record, write_json
 from agentctl.clock import epoch_now, wall_epoch
+from agentctl.timefmt import ts
+from agentctl.tickknobs import MAINTAIN_SWEEP_HOUR, knob_cache_expire_days, knob_sweep_hour
+from agentctl.core import REPOS, state_root
+from agentctl.allowedpaths import allowed_path
+from agentctl.notifier import notify
+from agentctl.launchd import launch_agents_dir
+from agentctl.beats import beat_age, write_beat
+from agentctl.inboxentry import inbox_write
+from agentctl.maint import cmd_orphans, spotlight_exclude
+from agentctl.logrotate import rotate_logs
+from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
+from agentctl.orphanpass import orphan_duty
+from agentctl.entryfiles import decided_entry_files
+from agentctl.agewords import fmt_age
 from typing import Any, Callable
 import argparse
 import datetime as dt
@@ -12,22 +28,6 @@ import shutil
 import subprocess
 import sys
 from contextlib import suppress
-from agentctl.procrunner import process_runner
-from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json
-from agentctl.core import REPOS, fmt_age, state_root
-from agentctl.allowedpaths import allowed_path
-from agentctl.inboxentry import inbox_write
-from agentctl.maint import cmd_orphans, spotlight_exclude
-from agentctl.tickknobs import MAINTAIN_SWEEP_HOUR
-from agentctl.entryfiles import decided_entry_files
-from agentctl.notifier import notify
-from agentctl.launchd import launch_agents_dir
-from agentctl.beats import beat_age, write_beat
-from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
-from agentctl.logrotate import rotate_logs
-from agentctl.orphanpass import orphan_duty
-from agentctl.tickknobs import knob_cache_expire_days, knob_sweep_hour
 
 
 IOS_SWEEP_TIMEOUT = 120  # seconds: one `scripts/ios-simulators sweep` (it calls xcrun simctl, which can hang)

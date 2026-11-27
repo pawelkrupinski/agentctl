@@ -1,7 +1,19 @@
 # agentctl, part `conditions`: THE CONDITION MACHINE: a non-green condition opened with the probe that closes it, rechecked with backoff, escalated, closed with its recovery actions; the ConditionRegistry cli builds, and the world probes
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.conditionregistry import (
+    Check, ConditionBypass, ConditionRegistry, PROBE_EVERY, RECOVER_ACTION_NAMES, probe_kind)
+from agentctl.statefile import read_record, unlink_file
+from agentctl.statemachines import StaleVersion, TerminalState
 from agentctl.clock import epoch_now
+from agentctl.timefmt import iso_at, ts
+from agentctl.blameknobs import knob_condition_pending_lapse, knob_recover_max, knob_unknown_grace
+from agentctl.core import SHORT, attempt, err, git, host_role, recovery_dir, remote
+from agentctl.repos import movies_repo_path
+from agentctl.gating import mark_gate_dirty
+from agentctl.inboxentry import inbox_dir, inbox_write
+from agentctl.cistate import ci_state_load
+from agentctl.agewords import fmt_age
 import glob
 import json
 import os
@@ -9,18 +21,8 @@ import re
 import time
 from typing import Any, Callable
 from contextlib import suppress
-from agentctl.core import SHORT, attempt, err, fmt_age, git, host_role, recovery_dir, remote
-from agentctl.timefmt import iso_at, ts
-from agentctl.statefile import read_record, unlink_file
-from agentctl.gating import mark_gate_dirty
-from agentctl.inboxentry import inbox_dir, inbox_write
-from agentctl.statemachines import StaleVersion, TerminalState
-from agentctl.blameknobs import knob_condition_pending_lapse, knob_recover_max, knob_unknown_grace
 import urllib.error
 import urllib.request
-from agentctl.repos import movies_repo_path
-from agentctl.cistate import ci_state_load
-from agentctl.conditionregistry import PROBE_EVERY, RECOVER_ACTION_NAMES, Check, ConditionBypass, ConditionRegistry, probe_kind
 
 
 class ProbeResult:

@@ -4,20 +4,21 @@
 from typing import Any
 import glob
 import os
-from agentctl.core import fmt_age, on_ci_runner, pid_alive, reds_dir
-from agentctl.clock import wall_epoch
 from agentctl.statefile import mtime, read_record
+from agentctl.clock import wall_epoch
+from agentctl.redknobs import knob_red_orphan_grace, knob_red_stall
+from agentctl.fixerknobs import knob_bg_spent_grace
+from agentctl.core import on_ci_runner, pid_alive, reds_dir
 from agentctl.procs import record_alive, socket_host
 from agentctl.fixerrecords import fixer_records
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import bg_rows, bg_session, bg_stop, bg_turn_over, bg_waiting
-from agentctl.fixerblockers import claude_cli
 from agentctl.redrecord import lease_is_live
 from agentctl.leases import lease_meta
 from agentctl.owners import owner_record_path
 from agentctl.red import tail_lines
-from agentctl.redknobs import knob_red_orphan_grace, knob_red_stall
-from agentctl.fixerknobs import knob_bg_spent_grace
+from agentctl.fixerblockers import claude_cli
+from agentctl.agewords import fmt_age
 
 
 def _wrapper_verdict(rec: Any, pid: Any, holder_pid: Any) -> Any:

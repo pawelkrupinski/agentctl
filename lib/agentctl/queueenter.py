@@ -6,23 +6,26 @@ import os
 import subprocess
 import time
 from typing import Any
-from agentctl.context import Context
 from agentctl.procrunner import process_runner
 from agentctl.statemachines import machine_state
 from agentctl.ids import stamp
 from agentctl.queueknobs import knob_land_before_queue_seconds, knob_max_foreign, knob_until_done_deadline
-from agentctl.core import NO_SIGN, branch_of, err, fmt_age, git, git_ok, host_role, process_cache, remote, scratch, is_ancestor
+from agentctl.core import (
+    NO_SIGN, branch_of, claude_session_id, err, git, git_ok, host_role, is_ancestor, process_cache, remote,
+    scratch)
 from agentctl.trailers import do_not_land, held_commit
-from agentctl.onmain import landed_state
 from agentctl.policy import policy_blocks
 from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.storetoken import no_vault
 from agentctl.inboxentry import inbox_write
-from agentctl.worktrees import WorktreeGuard
+from agentctl.hookoutput import precheck_reason
 from agentctl.lander import commit_keys, lander_record
-from agentctl.fixerblockers import in_fixer
 from agentctl.processorlink import offer_token, spawn_waiting_processor
+from agentctl.context import Context
 from agentctl.land import run_watched, tool_env
+from agentctl.onmain import landed_state
+from agentctl.worktrees import WorktreeGuard
+from agentctl.fixerblockers import in_fixer
 from agentctl.conflicts import conflict_resolve
 from agentctl.redfixes import fixes_of
 from agentctl.redland import fix_replay_refusal, run_fix_replays
@@ -35,11 +38,8 @@ from agentctl.blamerecords import blame_land_refusal, blame_records_quiet
 from agentctl.tools import check_range
 from agentctl.changesubmit import queue_change
 from agentctl.syncsteps import submit_remote
-from agentctl.processorlink import offer_token, spawn_waiting_processor
-from agentctl.hookoutput import precheck_reason
 from agentctl.landqueue import queue_command
-from agentctl.syncsteps import submit_remote
-from agentctl.core import claude_session_id
+from agentctl.agewords import fmt_age
 
 
 def change_fields(repo, main_ref, head, a, store, *, ctx):

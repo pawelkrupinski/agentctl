@@ -4,23 +4,23 @@
 import os
 import re
 from typing import Any
-from agentctl.core import HOME, PROTECTED_BRANCHES, _tokens, err, git, remote
+from agentctl.statemachines import is_terminal, machine_state
 from agentctl.timefmt import ts
+from agentctl.core import HOME, PROTECTED_BRANCHES, _tokens, err, git, remote
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import fixes_red_in_message
-from agentctl.redrecord import red_what
-from agentctl.lander import blame_change_key, blame_change_name
 from agentctl.procs import process_cwds
 from agentctl.inboxentry import inbox_write
-from agentctl.worktrees import worktrees
 from agentctl.deletions import log_deletion
-from agentctl.cleanup import own_ancestry
-from agentctl.fixerland import red_dispatch_log
+from agentctl.lander import blame_change_key, blame_change_name
+from agentctl.redrecord import red_what
 from agentctl.red import red_stop_holder
-from agentctl.waiting import cancel_submitted
-from agentctl.redopen import red_offer
+from agentctl.worktrees import worktrees
+from agentctl.fixerland import red_dispatch_log
 from agentctl.culpritfix import blame_culprit
-from agentctl.statemachines import machine_state, is_terminal
+from agentctl.waiting import cancel_submitted
+from agentctl.cleanup import own_ancestry
+from agentctl.redopen import red_offer
 
 
 # -- a withdrawn or refuted revert never lands again (2026-11-01: blame's wrong revert of ...-retained-input for #629 was

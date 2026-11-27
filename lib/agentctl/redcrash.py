@@ -5,25 +5,26 @@
 import os
 import re
 from typing import Any
-from agentctl.claudefiles import claude_limit
-from agentctl.core import SHORT, fmt_age, remote, tilde
+from agentctl.statefile import read_record
 from agentctl.timefmt import parse_time, ts
+from agentctl.redknobs import knob_red_crash_block_max, knob_red_decision_block_max, knob_red_old_run
+from agentctl.core import SHORT, remote, tilde
 from agentctl.repos import RED_PRIMARY, red_repo_of
 from agentctl.workflows import workflow_file_of
-from agentctl.leases import block_lease, lease_meta
-from agentctl.redrecord import red_what
-from agentctl.issues import issue_open
+from agentctl.claudefiles import claude_limit
 from agentctl.redrepos import red_family
+from agentctl.cistate import ci_state_load
+from agentctl.redrecord import red_what
+from agentctl.leases import block_lease, lease_meta
+from agentctl.owners import owner_record_path
+from agentctl.hostsleep import lapse_in_sleep
 from agentctl.redask import ask_held_until, ask_refusal, ask_split, decide_cmd, red_ask_mark
 from agentctl.red import red_move
-from agentctl.cistate import ci_state_load
+from agentctl.issues import issue_open
 from agentctl.redblock import BLOCK_TTL
 from agentctl.workflowdispatch import red_verify_dispatch
 from agentctl.redopen import red_offer
-from agentctl.redknobs import knob_red_crash_block_max, knob_red_decision_block_max, knob_red_old_run
-from agentctl.hostsleep import lapse_in_sleep
-from agentctl.statefile import read_record
-from agentctl.owners import owner_record_path
+from agentctl.agewords import fmt_age
 
 
 RED_CRASH_OUTCOME = re.compile(r"(NOT STARTED|ended with no|exit -?\d+ with no|TIMED OUT|lease expired|"

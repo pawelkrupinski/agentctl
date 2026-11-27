@@ -3,29 +3,30 @@
 
 import os
 from typing import Any
-from agentctl.core import SHORT, attempt, err, fmt_age, git, remote, tilde
-from agentctl.timefmt import iso_at, parse_time, ts
 from agentctl.statefile import read_record
+from agentctl.statemachines import StaleVersion
+from agentctl.timefmt import iso_at, parse_time, ts
+from agentctl.redknobs import knob_red_join_idle
+from agentctl.blameknobs import BLAME_MAX, knob_blame_max
+from agentctl.core import SHORT, attempt, err, git, remote, tilde
 from agentctl.repos import RED_PRIMARY
 from agentctl.allowedpaths import allowed_path
 from agentctl.redrepos import red_gate_flows, red_identity, red_is_other
-from agentctl.onmain import contains_local
 from agentctl.ciwhy import resolve_run
+from agentctl.blameopen import blame_open, culprit_of
+from agentctl.outsideflows import main_flow_meta
 from agentctl.runsigs import classifier_version, run_sigs
-from agentctl.statemachines import StaleVersion
 from agentctl.redrecord import red_active, red_names, red_obs_for, red_what
 from agentctl.leases import lease_meta
 from agentctl.owners import owner_record_path
 from agentctl.redask import red_decision
 from agentctl.red import (
-    decided_revert, red_keep_holder, red_move, RED_OFFER, red_offer_class, red_put_offer, red_tier, tail_lines)
-from agentctl.workflowdispatch import red_verify_dispatch
-from agentctl.blameopen import blame_open, culprit_of
-from agentctl.blameknobs import BLAME_MAX, knob_blame_max
-from agentctl.redseen import red_obs_of_units, red_units, sigs_no_verdict
+    RED_OFFER, decided_revert, red_keep_holder, red_move, red_offer_class, red_put_offer, red_tier, tail_lines)
+from agentctl.onmain import contains_local
 from agentctl.redauthors import red_authors
-from agentctl.outsideflows import main_flow_meta
-from agentctl.redknobs import knob_red_join_idle
+from agentctl.redseen import red_obs_of_units, red_units, sigs_no_verdict
+from agentctl.workflowdispatch import red_verify_dispatch
+from agentctl.agewords import fmt_age
 
 
 def _offer_deadline(store: Any, d: dict[str, Any], tier: str) -> Any:

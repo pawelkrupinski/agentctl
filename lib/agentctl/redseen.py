@@ -2,29 +2,30 @@
 # and everything red on main (red_observe) with main's own local-checks red (reds/local.json)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.context import Context
+from agentctl.procrunner import process_runner
+from agentctl.statefile import read_record
 from agentctl.statemachines import is_terminal
 from agentctl.clock import wall_epoch
+from agentctl.timefmt import parse_time
+from agentctl.redknobs import knob_unkicked_after
+from agentctl.core import attempt, commit_known, err, git, reds_dir, remote, slug
+from agentctl.repos import gated_repo
+from agentctl.workflows import LOCAL_FLOW
+from agentctl.classify import norm_line
+from agentctl.forge import RED_CONCLUSIONS
+from agentctl.context import Context
+from agentctl.ciwhy import gate_from_snap, gate_report_only, gate_runs, outside_from_snap
+from agentctl.runsigs import classifier_version, run_names, signature
+from agentctl.redrecord import RedEpisode, red_key, red_what, streak_budget
+from agentctl.red import STUCK_FACTOR, red_close
+from agentctl.waiting import UnreadGate
+from agentctl.branches import branch_reds, entry_predicts
+from agentctl.agewords import fmt_age
 import os
 import subprocess
 import time
 from typing import Any
-from agentctl.procrunner import process_runner
-from agentctl.core import attempt, err, fmt_age, git, reds_dir, remote, slug, commit_known
-from agentctl.timefmt import parse_time
-from agentctl.classify import norm_line
-from agentctl.forge import RED_CONCLUSIONS
-from agentctl.repos import gated_repo
-from agentctl.workflows import LOCAL_FLOW
-from agentctl.ciwhy import gate_from_snap, gate_report_only, gate_runs, outside_from_snap
 
-from agentctl.runsigs import classifier_version, run_names, signature
-from agentctl.redrecord import red_key, red_what, RedEpisode, streak_budget
-from agentctl.red import red_close, STUCK_FACTOR
-from agentctl.waiting import UnreadGate
-from agentctl.branches import branch_reds, entry_predicts
-from agentctl.redknobs import knob_unkicked_after
-from agentctl.statefile import read_record
 
 
 # -- what is red now: one observation per key, from the CI-state snapshot

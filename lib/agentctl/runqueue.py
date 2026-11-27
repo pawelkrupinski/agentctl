@@ -3,7 +3,8 @@
 
 from typing import Any
 import json
-from agentctl.core import attempt, fmt_age
+from agentctl.core import attempt
+from agentctl.agewords import fmt_age
 
 
 def serving_runners(q: dict[str, Any], want: set[str]) -> dict[str, Any]:

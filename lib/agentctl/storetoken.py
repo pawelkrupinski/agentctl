@@ -1,24 +1,24 @@
 # agentctl, part `storetoken`: the store token and the vault: where agentctl's credentials come from (the processor's socket, the vault, the GitHub App), and noting a missing one.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.statefile import note_failure
 from agentctl.clock import epoch_now
+from agentctl.storeknobs import TOKEN_MISSING_SUMMARY, knob_sock_dir, knob_token_summary
+from agentctl.blameknobs import knob_no_secrets
+from agentctl.fixerknobs import knob_detached, knob_interactive
+from agentctl.core import HOME, claude_session_id, err, on_ci_runner, process_cache, run_cmd, slug
+from agentctl.tokenerrors import NoReadAccess, NoToken
+from agentctl.ghapp import ghapp_config, ghapp_enabled, ghapp_token
+from agentctl.repos import movies_repo_path
+from agentctl.waitingdir import waiting_state
+from agentctl.agewords import fmt_age
 import contextlib
 import os
 import re
 import sys
 import time
 from typing import Any
-from agentctl.core import (
-    HOME, NoReadAccess, NoToken, _tokens, err, fmt_age, on_ci_runner, process_cache, run_cmd, slug)
-from agentctl.ghapp import ghapp_config, ghapp_enabled, ghapp_token
-from agentctl.repos import movies_repo_path
-from agentctl.waitingdir import waiting_state
-from agentctl.storeknobs import TOKEN_MISSING_SUMMARY, knob_token_summary
-from agentctl.fixerknobs import knob_detached, knob_interactive
-from agentctl.blameknobs import knob_no_secrets
-from agentctl.storeknobs import knob_sock_dir
-from agentctl.statefile import note_failure
-from agentctl.core import claude_session_id
+from agentctl.core import _tokens
 
 
 def token_ns(o_r):
@@ -309,3 +309,5 @@ def hand_token(path, tok):
         return True
     except OSError:
         return None
+
+

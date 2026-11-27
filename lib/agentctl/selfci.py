@@ -15,14 +15,15 @@ import os
 import re
 import time
 from typing import Any, Callable
-from agentctl.context import Context
-from agentctl.core import fmt_age, git, host_role, run_cmd, state_root
-from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record, write_json
-from agentctl.cistate import state_read
-from agentctl.redrepos import diagnosis, read_failure
-from agentctl.repos import bin_repo
+from agentctl.timefmt import iso_epoch
 from agentctl.watchknobs import knob_wa_read_every, knob_wa_red_max, knob_wa_undecided_max, knob_wa_unpinned_max
+from agentctl.core import git, host_role, run_cmd, state_root
+from agentctl.repos import bin_repo
+from agentctl.redrepos import diagnosis, read_failure
+from agentctl.cistate import state_read
+from agentctl.context import Context
+from agentctl.agewords import fmt_age
 
 
 SELF_REPO = "pawelkrupinski/agentctl"

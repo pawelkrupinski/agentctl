@@ -1,19 +1,20 @@
 # agentctl, part `ghapp`: THE RECONCILER'S GITHUB IDENTITY -- GitHub App installation tokens (forge = github).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.procrunner import process_runner
+from agentctl.statefile import read_record, write_json
+from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import epoch_now
+from agentctl.timefmt import parse_time
+from agentctl.storeknobs import knob_github_api, knob_github_app, knob_github_lander_repos, knob_identity
+from agentctl.core import err, process_cache, state_root
+from agentctl.tokenerrors import NoReadAccess
 import json
 import os
 import re
 import sys
 import urllib.error
 import urllib.request
-from agentctl.procrunner import process_runner
-from agentctl.core import NoReadAccess, err, process_cache, state_root
-from agentctl.timefmt import parse_time
-from agentctl.statefile import read_record, write_json
-from agentctl.selfcode import TOOL_PATH
-from agentctl.storeknobs import knob_github_api, knob_github_app, knob_github_lander_repos, knob_identity
 
 
 # ---------------------------------------------------------------- github-app (github-return plan §4.1 W5b, §4.2)

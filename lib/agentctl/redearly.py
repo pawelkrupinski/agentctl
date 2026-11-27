@@ -4,19 +4,20 @@
 import os
 import re
 from typing import Any, Callable
-from agentctl.core import err, fmt_age, reds_dir
+from agentctl.statefile import note_failure, read_json_file, write_json_file
 from agentctl.timefmt import ts
-from agentctl.statefile import read_json_file, write_json_file, note_failure
-from agentctl.forge import RED_CONCLUSIONS, api
+from agentctl.redknobs import knob_early_max_runs
+from agentctl.core import err, reds_dir
 from agentctl.allowedpaths import allowed_path
+from agentctl.forge import RED_CONCLUSIONS, api
 from agentctl.inboxentry import inbox_write
+from agentctl.runexplain import explain_run_jobs
 from agentctl.redrecord import lease_is_live, red_active_of, red_lease, red_obs_for, red_what
 from agentctl.leases import lease_meta
 from agentctl.red import red_close
 from agentctl.redseen import red_obs_of_units, red_units
 from agentctl.redopen import red_culprit_search
-from agentctl.runexplain import explain_run_jobs
-from agentctl.redknobs import knob_early_max_runs
+from agentctl.agewords import fmt_age
 
 
 EARLY_BACKOFF_FIRST = 60      # s the early reads pause after a rate-limit or 5xx answer; doubled each time

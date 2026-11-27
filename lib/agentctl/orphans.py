@@ -1,29 +1,30 @@
 # agentctl, part `orphans`: orphaned work: a worktree with commits nothing lands, found, offered to a fixer or escalated
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.procrunner import process_runner
 from agentctl.clock import epoch_now, wall_epoch
+from agentctl.fixerknobs import knob_orphan_idle
+from agentctl.core import attempt, branch_of, commit_known, remote
+from agentctl.repos import movies_repo_path
+from agentctl.trailers import do_not_land, held_commit
+from agentctl.procs import process_cwds
+from agentctl.waitingdir import ChangeRecords, WAITING_BRANCH, waiting_state
+from agentctl.inboxentry import inbox_entries
+from agentctl.sessionpaths import session_worktrees
+from agentctl.onmain import landed_state
+from agentctl.worktrees import gitdir_activity, worktrees
+from agentctl.fixerblockers import land_cwds
+from agentctl.runowners import internal_tree
+from agentctl.blamerecords import blame_land_refusal, blame_records
+from agentctl.recovery import reland_tree_path
+from agentctl.superseded import superseded_mark, worktree_change_items
+from agentctl.park import parked_mark
+from agentctl.texthash import hashlib_sha1
 from typing import Any, Callable, Optional, TypeGuard
 import json
 import os
 import re
 from contextlib import suppress
-from agentctl.onmain import landed_state
-from agentctl.core import attempt, branch_of, hashlib_sha1, remote, commit_known
-from agentctl.procrunner import process_runner
-from agentctl.repos import movies_repo_path
-from agentctl.trailers import do_not_land, held_commit
-from agentctl.waitingdir import WAITING_BRANCH, ChangeRecords, waiting_state
-from agentctl.procs import process_cwds
-from agentctl.inboxentry import inbox_entries
-from agentctl.worktrees import gitdir_activity, worktrees
-from agentctl.runowners import internal_tree
-from agentctl.sessionpaths import session_worktrees
-from agentctl.fixerblockers import land_cwds
-from agentctl.recovery import reland_tree_path
-from agentctl.superseded import superseded_mark, worktree_change_items
-from agentctl.park import parked_mark
-from agentctl.blamerecords import blame_land_refusal, blame_records
-from agentctl.fixerknobs import knob_orphan_idle
 
 
 def orphan_key(repo: str, wt: str) -> tuple[Any, Optional[str]]:

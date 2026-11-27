@@ -1,40 +1,40 @@
 # agentctl, part `fixerlife`: one fixer lifecycle: the wrapper a dispatched fixer and a family owner share.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.statefile import read_record, write_json
 from agentctl.clock import wall_epoch
+from agentctl.timefmt import ts
+from agentctl.redknobs import RED_RENEW_EVERY, RED_STALL, knob_red_fixer_wall, knob_red_renew, knob_red_stall
+from agentctl.fixerknobs import knob_bg_poll, knob_fixer_claim_within
+from agentctl.repos import red_repo_of
+from agentctl.claudefiles import bg_transcript, fixer_verdict
+from agentctl.procs import process_start, socket_host
+from agentctl.inboxentry import inbox_write
+from agentctl.fixersession import (
+    SESSION_DENIED_TOOLS, bg_failure, bg_final_text, bg_row_brief, bg_session, bg_start, bg_stop, bg_turn,
+    bg_turn_over, bg_wait_mark, fixer_label, store_reauth)
+from agentctl.inbox import INBOX_TAIL
+from agentctl.redrepos import red_owner_only
+from agentctl.store import StoreAuthFailed, StoreUnavailable
+from agentctl.redrecord import lease_is_live, red_lease
+from agentctl.leases import lease_meta
+from agentctl.hostsleep import keep_awake
+from agentctl.red import RED_FIXER_MAX, RED_FIXER_TTL, RED_RELEASE_ASKS
+from agentctl.worktrees import mark_internal
+from agentctl.fixerblockers import claude_cli, interactive_mode
+from agentctl.fixerland import fixer_mark, fixer_meta_sent
+from agentctl.sessionroll import fixer_rollover
+from agentctl.redland import sync_brief
+from agentctl.fixerprompt import FIXER_IDENTITY_ENV, OWNER_ONLY_DENIED, fixer_prompt
+from agentctl.redclaim import bind_fixer_session
+from agentctl.redcrash import verdict_cut
+from agentctl.agewords import fmt_age
 import json
 import os
 import re
 import signal
 import time
 from typing import Any
-from agentctl.core import fmt_age
-from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json
-from agentctl.store import StoreAuthFailed, StoreUnavailable
-from agentctl.repos import red_repo_of
-from agentctl.redrecord import lease_is_live, red_lease
-from agentctl.claudefiles import bg_transcript, fixer_verdict
-from agentctl.procs import process_start, socket_host
-from agentctl.leases import lease_meta
-from agentctl.inboxentry import inbox_write
-from agentctl.fixersession import (
-    SESSION_DENIED_TOOLS, bg_failure, bg_final_text, bg_row_brief, bg_session, bg_start, bg_stop, bg_turn,
-    bg_turn_over, bg_wait_mark, fixer_label, store_reauth)
-from agentctl.redknobs import knob_red_fixer_wall, knob_red_renew, knob_red_stall, RED_RENEW_EVERY, RED_STALL
-from agentctl.worktrees import mark_internal
-from agentctl.inbox import INBOX_TAIL
-from agentctl.redland import sync_brief
-from agentctl.redrepos import red_owner_only
-from agentctl.fixerland import fixer_mark, fixer_meta_sent
-from agentctl.fixerprompt import FIXER_IDENTITY_ENV, OWNER_ONLY_DENIED, fixer_prompt
-from agentctl.red import RED_FIXER_MAX, RED_FIXER_TTL, RED_RELEASE_ASKS
-from agentctl.redclaim import bind_fixer_session
-from agentctl.hostsleep import keep_awake
-from agentctl.redcrash import verdict_cut
-from agentctl.fixerblockers import claude_cli, interactive_mode
-from agentctl.sessionroll import fixer_rollover
-from agentctl.fixerknobs import knob_bg_poll, knob_fixer_claim_within
 
 
 # ONE FIXER LIFECYCLE (2026-11-04): a dispatched fixer's wrapper (red_fixer) and a family owner's (owner.red_owner) keep

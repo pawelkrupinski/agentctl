@@ -1,20 +1,20 @@
 # agentctl, part `alerts`: THE ALERT MODEL -- who must act on what: the alert index (written, acked, closed, reconciled each tick) and `inbox wait`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.statefile import read_record, unlink_file, write_json
 from agentctl.clock import epoch_now
 from agentctl.filelock import FileLock
+from agentctl.watchknobs import knob_alert_quiet_max, knob_alert_reconcile
+from agentctl.core import attempt, err
+from agentctl.inboxentry import inbox_dir, inbox_entries
+from agentctl.alertroute import ALERT_AUTHOR_VERDICT_KINDS, alert_kind_of, alert_norm, alert_route, alert_tier
+from agentctl.alertclear import alert_probe
+from agentctl.texthash import hashlib_sha1
 import contextlib
 import os
 import re
 import time
 from typing import Any
-from agentctl.core import attempt, err, hashlib_sha1
-from agentctl.statefile import read_record, write_json, unlink_file
-from agentctl.inboxentry import inbox_dir, inbox_entries
-from agentctl.alertroute import ALERT_AUTHOR_VERDICT_KINDS, alert_kind_of, alert_norm, alert_route, alert_tier
-from agentctl.alertclear import alert_probe
-from agentctl.watchknobs import knob_alert_quiet_max
-from agentctl.watchknobs import knob_alert_reconcile
 
 
 # ---------------------------------------------------------------- the alert model (the owner, 2026-11-04)

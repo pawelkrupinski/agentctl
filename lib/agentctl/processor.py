@@ -6,14 +6,13 @@ import contextlib
 import os
 import signal
 from typing import Any, Callable, Sequence
-from agentctl.context import Context
+from agentctl.conditionregistry import ConditionRegistry
 from agentctl.statefile import write_json
 from agentctl.selfcode import code_version
 from agentctl.statemachines import MACHINES, machine_state
 from agentctl.clock import Clock, epoch_now
 from agentctl.tickknobs import knob_step_join, knob_tick
-from agentctl.core import (
-    NoToken, SHORT, _bounded, attempt, err, git, git_ok, host_role, process_cache, run_bounded, slug)
+from agentctl.core import SHORT, _bounded, attempt, err, git, git_ok, host_role, process_cache, run_bounded, slug
 from agentctl.repos import movies_repo_path
 from agentctl.procs import safe_cwd
 from agentctl.clones import clone_shared
@@ -23,20 +22,21 @@ from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.storetoken import _IN_PROCESSOR
 from agentctl.cistate import state_update
 from agentctl.conditions import open_condition, probe_waiting_ok, run_probe
-from agentctl.conditionregistry import ConditionRegistry
 from agentctl.serverclone import ensure_server_clone
 from agentctl.owned import restart_if_changed, start_rev
 from agentctl.processorlink import TokenDrop, processor_owned
+from agentctl.context import Context
 from agentctl.hostsleep import keep_awake
 from agentctl.landhold import hold_row, land_hold
 from agentctl.reverts import revert_brief
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.ask import owner_asks
 from agentctl.statuspage import status_page_start
-from agentctl.syncsteps import sync_steps
 from agentctl.changerows import change_rows
+from agentctl.syncsteps import sync_steps
 from agentctl.serversteps import server_steps
 from agentctl.landqueue import land_await, queue_checker, queue_command, waiting_repo
+from agentctl.tokenerrors import NoToken
 
 
 class ProcessorLoop:

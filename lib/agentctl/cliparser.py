@@ -2,17 +2,17 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import argparse
-from agentctl.timelinecmd import add_timeline_commands
-from agentctl.core import CI_WHY_HELP, ENV_HELP, LAND_HELP, WAIT_RUN_HELP, remote
+from agentctl.storeauth import STORE_AUTHS
+from agentctl.core import remote
 from agentctl.ghapp import GHAPP_ROLES
+from agentctl.timelinecmd import add_timeline_commands
+from agentctl.remotestore import DEFAULT_STORE_URL, STORE_PORT
+from agentctl.waiting import WAITING_HELP
 from agentctl.cleanup import SWEEP_IDLE_DAYS
 from agentctl.queueuntil import parse_duration
-from agentctl.waiting import WAITING_HELP
-from agentctl.remotestore import DEFAULT_STORE_URL, STORE_PORT
 from agentctl.cliops import (
     Subparsers, add_config, add_decide, add_dispatch, add_gov, add_inbox, add_issue, add_laptop, add_lease,
     add_maintain, add_park, add_reap, add_recover, add_red, add_revert, add_status, add_supersede, add_unpark)
-from agentctl.storeauth import STORE_AUTHS
 from agentctl.slots import LAND_SUBCOMMANDS
 
 
@@ -315,3 +315,60 @@ Full reference, examples and the standard agent workflow: ~/bin/AGENTCTL.md
 Scratchpad: $AGENTCTL_SCRATCH, else /private/tmp/claude-<uid>/*/<$CLAUDE_CODE_SESSION_ID>/scratchpad, else
 ~/.cache/agentctl. gh reads GitHub with its own auth ($GH_TOKEN, else `gh auth login`'s). The store token comes from $AGENTCTL_STORE_TOKEN, else the waiting processor's private socket, else `secrets get bitcashier AGENTCTL_STORE_TOKEN` (absolute path); never printed.
 """
+
+
+WAIT_RUN_HELP = """Block until GitHub Actions runs finish; print only the verdicts.
+
+Agents: start this with the Bash tool's run_in_background=true and END YOUR TURN -- you are re-invoked when it
+exits. Never wrap it (or gh run watch) in a foreground sleep/until loop. A second `wait run` on the same id attaches to
+the first waiter (single waiter per target), so it is safe to call again after a resume.
+
+Examples:
+  agentctl wait run 1961 --until landable          # a measure run: stop when the takes rows end
+  agentctl wait run 1976 1984 --repo movies --tail 12
+Exit: 0 all green, 1 any red/cancelled, 2 timeout. A waiter that vanished is taken over."""
+
+
+CI_WHY_HELP = """Why is main red? For movies: the newest DECIDED run on main (success/failure; cancelled and skipped say
+nothing) of exactly the three workflows the gate reads (the owner, 2026-10-27; Identity takes 2026-11-08) -- Main, Identity model convergence and Identity takes;
+every other red on main is listed after, as information only. Other repos: every workflow seen on main. For each red one: failed jobs, their relevant log lines, the commit
+and author, INFRA-SHAPED (setup-step failure, 0-length log, artifact already exists, ENOENT, ...) vs TEST FAILURE, and
+the gate's clearing rule (a later green run, or `Fixes-Red: <#number|run id>` on every production commit).
+  agentctl ci-why                 # movies (or the cwd's repo)
+  agentctl ci-why 1934            # explain one run
+Exit: 0 green, 1 red (or a run explained)."""
+
+
+LAND_HELP = """Land the current commit(s) on origin/main, safely, in one command.
+MOVIES (the reconciler, ~/bin/AGENTCTL.md "land"): fetch -> rebase onto origin/main -> prepush-check (the squash
+guard) -> a queued change item, its commits pushed to refs/heads/land/<id> -> `QUEUED <id> (<sha>)` at once: END YOUR
+TURN. The processor's tick checks it in a check tree (an executor holding check/<id>, within the governor; on ci-runner
+under pressure), pushes it under the land/<repo> lease -> LANDED and a watch item (Main and the convergence for the sha:
+WATCH OK / RED / UNKNOWN); main red and the change must wait (a production path, no Fixes-Red: for the red run):
+WAITING, landed with the batch checked once at green. Every verdict goes to `agentctl inbox`, naming your worktree.
+--UNTIL-DONE (movies agents' last step, run in the background): submit -- or resume this worktree's entry at HEAD, never
+queued twice -- the fast precheck in the foreground, wait for the verdict (--deadline, default 4h), then: NOT LANDED:
+<why> + `next: <command>` (exit 1); LANDED, every local commit's patch on origin/main and the worktree clean and this
+agent's own -> worktree and branch removed, `DONE <sha> ... worktree removed` (exit 0); landed but kept (dirty,
+foreign, root, unproven) exit 3; the deadline exit 2 (call it again to resume).
+THE FAST PRECHECK: a repo with an executable scripts/land-precheck (movies) has it run beside the queue, never before
+QUEUED; a refusal cancels the queued change with `NOT LANDED: the fast precheck refused <id>` in the inbox, minutes
+before the landing check would say it. --no-fast-precheck starts none.
+IN-PROCESS (--follow, --no-watch, AGENTCTL_QUEUE=0; other repos always; a red fixer queues and waits): the checks here
+(movies: the hook's dry run --range origin/main..<sha>), then under the land/<repo> lease fetch, push (the repo's
+pre-push hook runs, reusing the dry run's pass), on a race refetch, rebase and retry up to 3 times, verify with
+merge-base / git cherry: `LANDED <sha>` or `NOT LANDED: <exact reason>` (red gate: + the ci-why summary). --follow then
+waits for a WAITING change's batch and watches in-process; --no-watch exits at LANDED.
+Never passes --no-verify and refuses to run with PREPUSH_SKIP set. Refuses a dirty tree unless --stash (a named stash,
+restored afterwards, found by its sha -- the stash list is shared by every worktree).
+Exit: 0 queued / landed (and watched green), 1 not landed, 2 landed but the watch could not tell, 3 landed and main's CI
+RED."""
+
+
+ENV_HELP = """Agent environment, without secrets.
+  eval "$(agentctl env --print)"   # sdkman's sbt + java first on PATH, JAVA_HOME; exit 1 (one line on stderr) on a locked vault
+  agentctl env --check            # sbt, a java that runs, `secrets status <ns>`, the tunnel's localhost:3014 (the
+                                  # agentctl store) and gh
+A locked vault prints exactly: vault <ns> locked: ask the user to run `! secrets unlock <ns>`  -- and exits 1.
+An agentctl fixer holding its credentials (AGENTCTL_RED_FIXER, the store token) reads it as not needed: exit 0.
+agentctl never runs `secrets unlock` (Touch ID is the user's). Output never contains a token: tools read it at use."""

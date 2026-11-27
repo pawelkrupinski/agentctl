@@ -9,6 +9,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "lib"))
+from agentctl.configfile import config_load  # noqa: E402
+
+config_load()  # the config files' knobs into the environment, before any module reads one at import
 from agentctl.cli import main  # noqa: E402
 
 if __name__ == "__main__":

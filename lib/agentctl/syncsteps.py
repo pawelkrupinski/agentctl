@@ -7,21 +7,20 @@ import subprocess
 import sys
 from typing import Any, Callable, Sequence
 from contextlib import suppress
-from agentctl.context import Context
+from agentctl.conditionregistry import ConditionRegistry
 from agentctl.statefile import read_record, write_json
 from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import Clock
 from agentctl.tickknobs import knob_step_bound, knob_sync_mirror
 from agentctl.core import (
-    NoToken, err, git, is_ancestor, process_cache, reap_children, reds_dir, remote, run_bounded, spawn_detached,
-    state_root)
+    err, git, is_ancestor, process_cache, reap_children, reds_dir, remote, run_bounded, spawn_detached, state_root)
 from agentctl.procs import safe_cwd
 from agentctl.filelog import drain_event_log
 from agentctl.inboxentry import inbox_write
 from agentctl.fixersession import trust_asks
-from agentctl.recovery import maybe_recovery_tick
 from agentctl.recordingpins import refresh_pinned_recording
 from agentctl.store import StoreLacksCall, StoreUnavailable
+from agentctl.context import Context
 from agentctl.laptoprole import laptop_role_step
 from agentctl.land import tool_env
 from agentctl.storestate import mirror_state
@@ -36,10 +35,11 @@ from agentctl.cleanup import close_worktree
 from agentctl.upkeep import maybe_upkeep
 from agentctl.reddispatch import red_renew_holders
 from agentctl.offerdispatch import red_dispatcher
+from agentctl.recovery import maybe_recovery_tick
 from agentctl.netwatch import network_watch, tunnel_watch
-from agentctl.redcli import write_red_status_snapshot
 from agentctl.landedchange import close_landed_changes, migrate_local_queue
-from agentctl.conditionregistry import ConditionRegistry
+from agentctl.redcli import write_red_status_snapshot
+from agentctl.tokenerrors import NoToken
 
 
 # ---- the laptop's sync (role "sync")

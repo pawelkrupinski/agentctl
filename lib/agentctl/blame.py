@@ -1,7 +1,20 @@
 # agentctl, part `blame`: the culprit search: the boundaries of a red's range, probed one by one until the change that turned it red is found
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.statefile import note_failure, read_record
+from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import epoch_now
+from agentctl.blameknobs import knob_blame_max, knob_blame_probe_wall, knob_blame_probes
+from agentctl.core import git, reds_dir, spawn_detached
+from agentctl.procs import process_start, record_alive
+from agentctl.inboxentry import inbox_write
+from agentctl.redrepos import red_repo_tag
+from agentctl.lander import blame_change_name, blame_decision
+from agentctl.blameopen import CONVERGENCE_FLOWS, PATHISH, TEST_TOKEN
+from agentctl.redrecord import red_what
+from agentctl.fixerland import red_dispatch_log
+from agentctl.redopen import red_offer
+from agentctl.agewords import fmt_age
 import os
 import re
 import signal
@@ -9,19 +22,6 @@ import subprocess
 import sys
 import time
 from typing import Any
-from agentctl.core import fmt_age, git, reds_dir, spawn_detached
-from agentctl.statefile import read_record, note_failure
-from agentctl.procs import process_start, record_alive
-from agentctl.selfcode import TOOL_PATH
-from agentctl.inboxentry import inbox_write
-from agentctl.lander import blame_change_name, blame_decision
-from agentctl.redrecord import red_what
-from agentctl.redrepos import red_repo_tag
-from agentctl.fixerland import red_dispatch_log
-from agentctl.blameopen import CONVERGENCE_FLOWS, PATHISH, TEST_TOKEN
-from agentctl.redopen import red_offer
-from agentctl.blameknobs import knob_blame_max, knob_blame_probe_wall
-from agentctl.blameknobs import knob_blame_probes
 
 
 def blame_boundary(b, i):

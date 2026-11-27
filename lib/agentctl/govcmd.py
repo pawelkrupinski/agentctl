@@ -2,6 +2,17 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now
+from agentctl.govknobs import knob_gov_cpu_factor, knob_max_checks
+from agentctl.core import attempt
+from agentctl.machine import machine_cores, machine_load1
+from agentctl.govtickets import gov_dir, gov_tickets
+from agentctl.govbudget import cap_state, check_runs, checks_cap, gov_budget, slot_holders
+from agentctl.pressure import pressure_report
+from agentctl.govusage import GOV_USAGE_MIN_WALL, gov_job_cores, gov_measured_cores, gov_record_usage, gov_usage
+from agentctl.govfits import gov_capacity, gov_charged, gov_committed, gov_ramp
+from agentctl.gov import GOV_CLASSES, gov_admit, gov_evict, gov_machine, gov_waiters, idle_servers
+from agentctl.govroute import gov_replay, gov_route
+from agentctl.percentile import pct
 import argparse
 import datetime as dt
 import json
@@ -9,17 +20,6 @@ import os
 import time
 from typing import Any
 from contextlib import suppress
-from agentctl.core import attempt, pct
-from agentctl.machine import machine_cores, machine_load1
-from agentctl.govtickets import gov_dir, gov_tickets
-from agentctl.govbudget import cap_state, check_runs, checks_cap, gov_budget, slot_holders
-from agentctl.gov import GOV_CLASSES, gov_admit, gov_evict, gov_machine, gov_waiters, idle_servers
-from agentctl.govfits import gov_capacity, gov_charged, gov_committed, gov_ramp
-from agentctl.pressure import pressure_report
-from agentctl.govusage import GOV_USAGE_MIN_WALL, gov_job_cores, gov_measured_cores, gov_record_usage, gov_usage
-from agentctl.govroute import gov_replay, gov_route
-from agentctl.govknobs import knob_gov_cpu_factor
-from agentctl.govknobs import knob_max_checks
 
 
 # THE GOVERNOR'S FEATURES, for a caller in another repository (movies' scripts/jvm-gate.sh governor_bin, bitcashier's

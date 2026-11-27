@@ -3,7 +3,6 @@
 
 import os
 from typing import Any, Optional
-from agentctl.context import Context
 from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import change_exits_unannounced
 from agentctl.clock import Clock
@@ -11,7 +10,7 @@ from agentctl.timefmt import hhmmz, parse_time
 from agentctl.watchknobs import (
     knob_w1_max, knob_w2_max, knob_w5_max, knob_w6_max, knob_w7_max, knob_w8_window, knob_wb_max, knob_wf_pct,
     knob_wm_max)
-from agentctl.core import SHORT, fmt_age, git, host_role, run_cmd, state_root
+from agentctl.core import SHORT, git, host_role, run_cmd, state_root
 from agentctl.repos import bin_repo, movies_repo_path
 from agentctl.procs import process_cwds, ps
 from agentctl.launchd import SERVICE_LABEL, launch_agents_dir
@@ -20,6 +19,7 @@ from agentctl.cistate import ci_state_load, snapshot_gate_reds
 from agentctl.conditions import open_conditions
 from agentctl.queuehold import hold_recovers_itself
 from agentctl.procwatch import inv_wp, inv_wt
+from agentctl.context import Context
 from agentctl.selfci import inv_wa
 from agentctl.redrecord import red_what
 from agentctl.eventprojection import notify_failure
@@ -28,6 +28,7 @@ from agentctl.netwatch import inv_wu
 from agentctl.redhold import W1_HARD_FACTOR, change_progress, inv_wr, red_unheld
 from agentctl.landedchange import close_landed_changes
 from agentctl.changerows import change_rows
+from agentctl.agewords import fmt_age
 
 
 def watchdog_state():

@@ -1,33 +1,33 @@
 # agentctl, part `redvault`: vault asks, blocks nobody can see clear.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.context import Context
+from agentctl.conditionregistry import ConditionRegistry
+from agentctl.statefile import read_record
+from agentctl.statemachines import StaleVersion
 from agentctl.clock import epoch_now
+from agentctl.timefmt import iso_at, iso_epoch
+from agentctl.core import git
+from agentctl.repos import RED_PRIMARY, repo_signs
+from agentctl.procs import safe_cwd
+from agentctl.fixerrecords import own_fixer_record_path
+from agentctl.classify import QUOTA_LOG
+from agentctl.conditions import probe_http, probe_tcp, probe_words, probe_workflow_green, run_probe
+from agentctl.context import Context
+from agentctl.ciwhy import resolve_run
+from agentctl.redrecord import lease_is_live, red_lease, red_of_key, red_what
+from agentctl.leases import block_lease, lease_meta, red_block_of
+from agentctl.redask import OWNER_CAUSES, OWNER_CAUSE_CATEGORY, red_decision, vault_decide_cmd
+from agentctl.ownerleases import owner_holder
+from agentctl.red import red_move
+from agentctl.worktrees import claimant
+from agentctl.redblock import BLOCK_MAX, BLOCK_TTL, owner_cmd_unsafe, owner_details, red_run_units
+from agentctl.redopen import red_offer
+from agentctl.redclaim import red_targets
+from agentctl.agewords import fmt_age
 import re
 import time
 from dataclasses import dataclass
 from typing import Any
-from agentctl.core import fmt_age, git
-from agentctl.timefmt import iso_at, iso_epoch
-from agentctl.statefile import read_record
-from agentctl.classify import QUOTA_LOG
-from agentctl.repos import RED_PRIMARY, repo_signs
-from agentctl.procs import safe_cwd
-from agentctl.fixerrecords import own_fixer_record_path
-from agentctl.worktrees import claimant
-from agentctl.ciwhy import resolve_run
-from agentctl.statemachines import StaleVersion
-from agentctl.redrecord import lease_is_live, red_lease, red_of_key, red_what
-from agentctl.leases import block_lease, lease_meta, red_block_of
-from agentctl.conditions import probe_words, run_probe
-from agentctl.conditionregistry import ConditionRegistry
-from agentctl.redask import OWNER_CAUSES, OWNER_CAUSE_CATEGORY, red_decision, vault_decide_cmd
-from agentctl.red import red_move
-from agentctl.redblock import BLOCK_MAX, BLOCK_TTL, owner_cmd_unsafe, owner_details, red_run_units
-from agentctl.redopen import red_offer
-from agentctl.redclaim import red_targets
-from agentctl.ownerleases import owner_holder
-from agentctl.conditions import probe_http, probe_tcp, probe_workflow_green
 
 
 # A VAULT ASK IS ONE OWNER ITEM PER VAULT, ANSWERED BY ONE LINE (2026-11-16, Order independence #77 [ios]: its fixer's

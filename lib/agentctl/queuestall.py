@@ -13,9 +13,9 @@ from functools import partial
 from typing import Any, Callable, Optional
 
 from agentctl.statemachines import machine_state
-from agentctl.conditions import open_condition, run_probe
-from agentctl.core import fmt_age
 from agentctl.queueknobs import QUEUE_STALL_AFTER, knob_queue_stall_after
+from agentctl.conditions import open_condition, run_probe
+from agentctl.agewords import fmt_age
 
 def _open_changes(changes: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [c for c in changes if not machine_state("change", c["state"]).terminal]

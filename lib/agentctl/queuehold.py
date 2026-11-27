@@ -4,11 +4,12 @@
 from contextlib import suppress
 from typing import Any, Optional
 from agentctl.statemachines import StaleVersion, machine_state
-from agentctl.holdgraph import HOLDER_IN_FLIGHT, cycle_breaker, cycle_text, hold_cycles, hold_record, recorded_hold_edges
-from agentctl.core import fmt_age
-from agentctl.waitingdir import ChangeRecords, wlog
-from agentctl.policy import HOLDS, hold_kind
+from agentctl.holdgraph import (
+    HOLDER_IN_FLIGHT, cycle_breaker, cycle_text, hold_cycles, hold_record, recorded_hold_edges)
 from agentctl.queueknobs import knob_change_hold_max, knob_hold_idle_ttl, knob_unheld_grace
+from agentctl.policy import HOLDS, hold_kind
+from agentctl.waitingdir import ChangeRecords, wlog
+from agentctl.agewords import fmt_age
 
 
 def note_hold(st: Any, e: Any, kind: Any, why: Any, t: Any, blocker: Any = None, files: Any = None, batch: Any = None) -> None:

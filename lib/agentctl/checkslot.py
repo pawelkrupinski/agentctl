@@ -1,24 +1,24 @@
 # agentctl, part `checkslot`: a check slot: its lease (Slot, check_slot), a check's record, and the slot cap adjusted to the machine's memory pressure
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.govpool import WIDTH_ENV
+from agentctl.statefile import write_json
 from agentctl.clock import epoch_now
+from agentctl.timefmt import ts
+from agentctl.govknobs import knob_gov_admit_max, knob_max_checks
+from agentctl.core import err
+from agentctl.machine import machine_sample
+from agentctl.inboxentry import inbox_write
+from agentctl.govbudget import (
+    CHECKS_DEFAULT_CAP, GOV_MEM_GB, cap_state, check_runs, checks_cap, checks_dir, gov_max_checks, slot_holders)
+from agentctl.govusage import GOV_JOB_CORES
+from agentctl.gov import gov_admit
+from agentctl.percentile import pct
 import contextlib
 import json
 import os
 import time
 from typing import Any
-from agentctl.core import err, pct
-from agentctl.timefmt import ts
-from agentctl.statefile import write_json
-from agentctl.inboxentry import inbox_write
-from agentctl.machine import machine_sample
-from agentctl.govbudget import (
-    CHECKS_DEFAULT_CAP, GOV_MEM_GB, cap_state, check_runs, checks_cap, checks_dir, gov_max_checks, slot_holders)
-from agentctl.gov import gov_admit
-from agentctl.govpool import WIDTH_ENV
-from agentctl.govusage import GOV_JOB_CORES
-from agentctl.govknobs import knob_gov_admit_max
-from agentctl.govknobs import knob_max_checks
 
 
 class Slot:

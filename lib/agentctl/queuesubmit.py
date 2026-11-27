@@ -1,25 +1,26 @@
 # agentctl, part `queuesubmit`: submitting a change: by ref, without the vault, the queued line, the fast precheck, a red fix's land.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.selfcode import TOOL_PATH
+from agentctl.statemachines import MACHINES, StaleVersion, machine_state
 from agentctl.clock import epoch_now
+from agentctl.ids import entry_id_age
+from agentctl.queueknobs import (
+    knob_fixer_land_wait, knob_land_ref_sweep, knob_land_ref_unknown_age, knob_note_precheck_wait)
+from agentctl.core import err, git, git_ok, remote, scratch, spawn_detached
+from agentctl.networksignatures import credential_failure, is_transient_network, redact_credentials
+from agentctl.netretry import TransientNetwork, net_retry
+from agentctl.waitingdir import ChangeRecords, entry_final
+from agentctl.owned import backoff
+from agentctl.store import StoreUnavailable
+from agentctl.land import push_bounds, run_watched, tool_env
+from agentctl.waiting import tail_of
+from agentctl.agewords import fmt_age
 import os
 import subprocess
 import sys
 import time
 from typing import Any, Optional
-from agentctl.core import err, fmt_age, git, git_ok, remote, scratch, spawn_detached
-from agentctl.netretry import TransientNetwork, net_retry
-from agentctl.networksignatures import credential_failure, is_transient_network, redact_credentials
-from agentctl.store import StoreUnavailable
-from agentctl.selfcode import TOOL_PATH
-from agentctl.waitingdir import ChangeRecords, entry_final
-from agentctl.land import push_bounds, run_watched, tool_env
-from agentctl.owned import backoff
-from agentctl.waiting import tail_of
-from agentctl.statemachines import MACHINES, StaleVersion, machine_state
-from agentctl.queueknobs import (
-    knob_fixer_land_wait, knob_land_ref_sweep, knob_land_ref_unknown_age, knob_note_precheck_wait)
-from agentctl.ids import entry_id_age
 
 
 _last_ref_sweep = [0.0]

@@ -1,14 +1,14 @@
 # agentctl, part `govusage`: a job's cores: its class's default, else what its recorded runs measured; each run's usage recorded
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.statefile import note_failure
 from agentctl.clock import epoch_now
+from agentctl.machine import machine_cores, machine_load1
+from agentctl.govtickets import gov_dir
+from agentctl.percentile import pct
 from typing import Any
 import json
 import os
-from agentctl.core import pct
-from agentctl.machine import machine_cores, machine_load1
-from agentctl.govtickets import gov_dir
-from agentctl.statefile import note_failure
 
 
 # A job's expected cores, by its name (scripts/jvm-gate.sh passes --job: sbt-warm classifies its command); measured
