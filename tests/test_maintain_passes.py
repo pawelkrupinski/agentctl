@@ -241,7 +241,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                           "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': 'TS'}) "
                           '[]',
                           "orphan_duty ('ST',) [('dry_run', False)]",
-                          "expire_cache () [('dry_run', False)]"]),
+                          "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'dry run': (0,
                       '== agentctl maintain TS (DRY RUN)\n'
                       '== reap\n'
@@ -259,7 +259,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                        "ios_simulator_sweep () [('dry_run', True)]",
                        "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=True, no_report=True), 'ST') []",
                        "orphan_duty ('ST',) [('dry_run', True)]",
-                       "expire_cache () [('dry_run', True)]"]),
+                       "expire_cache () [('dry_run', True), ('store', 'ST')]"]),
           'watchdog never ran': (0,
                                  '== agentctl maintain TS\n'
                                  '== the watchdog last ran never: notified\n'
@@ -285,7 +285,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                   "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, "
                                   "'sweep_at': 'TS'}) []",
                                   "orphan_duty ('ST',) [('dry_run', False)]",
-                                  "expire_cache () [('dry_run', False)]"]),
+                                  "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'watchdog stale': (0,
                              '== agentctl maintain TS\n'
                              '== the watchdog last ran 15 min ago: notified\n'
@@ -311,7 +311,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                               "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                               "'TS'}) []",
                               "orphan_duty ('ST',) [('dry_run', False)]",
-                              "expire_cache () [('dry_run', False)]"]),
+                              "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'watchdog fresh': (0,
                              '== agentctl maintain TS\n'
                              '== reap\n'
@@ -335,7 +335,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                               "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                               "'TS'}) []",
                               "orphan_duty ('ST',) [('dry_run', False)]",
-                              "expire_cache () [('dry_run', False)]"]),
+                              "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'no watchdog service': (0,
                                   '== agentctl maintain TS\n'
                                   '== reap\n'
@@ -359,7 +359,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                    "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, "
                                    "'sweep_at': 'TS'}) []",
                                    "orphan_duty ('ST',) [('dry_run', False)]",
-                                   "expire_cache () [('dry_run', False)]"]),
+                                   "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'logs rotated': (0,
                            '== agentctl maintain TS\n'
                            '== reap\n'
@@ -383,7 +383,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                             "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                             "'TS'}) []",
                             "orphan_duty ('ST',) [('dry_run', False)]",
-                            "expire_cache () [('dry_run', False)]"]),
+                            "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'trees marked': (0,
                            '== agentctl maintain TS\n'
                            '== reap\n'
@@ -406,7 +406,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                             "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                             "'TS'}) []",
                             "orphan_duty ('ST',) [('dry_run', False)]",
-                            "expire_cache () [('dry_run', False)]"]),
+                            "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'spotlight fails': (0,
                               '== agentctl maintain TS\n'
                               '== reap\n'
@@ -430,7 +430,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                                "'TS'}) []",
                                "orphan_duty ('ST',) [('dry_run', False)]",
-                               "expire_cache () [('dry_run', False)]"]),
+                               "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'spotlight exits': (0,
                               '== agentctl maintain TS\n'
                               '== reap\n'
@@ -454,7 +454,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                                "'TS'}) []",
                                "orphan_duty ('ST',) [('dry_run', False)]",
-                               "expire_cache () [('dry_run', False)]"]),
+                               "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'ios fails': (0,
                         '== agentctl maintain TS\n'
                         '== reap\n'
@@ -478,7 +478,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                          "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': 'TS'}) "
                          '[]',
                          "orphan_duty ('ST',) [('dry_run', False)]",
-                         "expire_cache () [('dry_run', False)]"]),
+                         "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'sweep before the hour': (0,
                                     '== agentctl maintain TS\n'
                                     '== reap\n'
@@ -498,7 +498,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                      'spotlight_exclude () []',
                                      "ios_simulator_sweep () [('dry_run', False)]",
                                      "orphan_duty ('ST',) [('dry_run', False)]",
-                                     "expire_cache () [('dry_run', False)]"]),
+                                     "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'sweep at the hour': (0,
                                 '== agentctl maintain TS\n'
                                 '== reap\n'
@@ -522,7 +522,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                  "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                                  "'TS'}) []",
                                  "orphan_duty ('ST',) [('dry_run', False)]",
-                                 "expire_cache () [('dry_run', False)]"]),
+                                 "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'sweep done today': (0,
                                '== agentctl maintain TS\n'
                                '== reap\n'
@@ -542,7 +542,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                 'spotlight_exclude () []',
                                 "ios_simulator_sweep () [('dry_run', False)]",
                                 "orphan_duty ('ST',) [('dry_run', False)]",
-                                "expire_cache () [('dry_run', False)]"]),
+                                "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'sweep done yesterday': (0,
                                    '== agentctl maintain TS\n'
                                    '== reap\n'
@@ -566,7 +566,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                     "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'x': 1, 'sweep_rc': 3, "
                                     "'sweep_at': 'TS'}) []",
                                     "orphan_duty ('ST',) [('dry_run', False)]",
-                                    "expire_cache () [('dry_run', False)]"]),
+                                    "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'sweep forced': (0,
                            '== agentctl maintain TS\n'
                            '== reap\n'
@@ -589,7 +589,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                             "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_at': 'TS', 'sweep_rc': "
                             '0}) []',
                             "orphan_duty ('ST',) [('dry_run', False)]",
-                            "expire_cache () [('dry_run', False)]"]),
+                            "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'sweep dry': (0,
                         '== agentctl maintain TS (DRY RUN)\n'
                         '== reap\n'
@@ -607,7 +607,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                          "ios_simulator_sweep () [('dry_run', True)]",
                          "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=True, no_report=True), 'ST') []",
                          "orphan_duty ('ST',) [('dry_run', True)]",
-                         "expire_cache () [('dry_run', True)]"]),
+                         "expire_cache () [('dry_run', True), ('store', 'ST')]"]),
           'orphans listed': (0,
                              '== agentctl maintain TS\n'
                              '== reap\n'
@@ -632,7 +632,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                               "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                               "'TS'}) []",
                               "orphan_duty ('ST',) [('dry_run', False)]",
-                              "expire_cache () [('dry_run', False)]"]),
+                              "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'orphans fail': (0,
                            '== agentctl maintain TS\n'
                            '== reap\n'
@@ -655,7 +655,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                             "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                             "'TS'}) []",
                             "orphan_duty ('ST',) [('dry_run', False)]",
-                            "expire_cache () [('dry_run', False)]"]),
+                            "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'expiry one': (0,
                          '== agentctl maintain TS\n'
                          '== reap\n'
@@ -678,7 +678,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                           "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': 'TS'}) "
                           '[]',
                           "orphan_duty ('ST',) [('dry_run', False)]",
-                          "expire_cache () [('dry_run', False)]"]),
+                          "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'expiry several': (0,
                              '== agentctl maintain TS\n'
                              '== reap\n'
@@ -702,7 +702,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                               "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                               "'TS'}) []",
                               "orphan_duty ('ST',) [('dry_run', False)]",
-                              "expire_cache () [('dry_run', False)]"]),
+                              "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'expiry fails': (0,
                            '== agentctl maintain TS\n'
                            '== reap\n'
@@ -725,7 +725,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                             "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                             "'TS'}) []",
                             "orphan_duty ('ST',) [('dry_run', False)]",
-                            "expire_cache () [('dry_run', False)]"]),
+                            "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
           'expiry dry': (0,
                          '== agentctl maintain TS (DRY RUN)\n'
                          '== reap\n'
@@ -743,7 +743,7 @@ EXPECTED = {'pass': {'quiet pass': (0,
                           "ios_simulator_sweep () [('dry_run', True)]",
                           "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=True, no_report=True), 'ST') []",
                           "orphan_duty ('ST',) [('dry_run', True)]",
-                          "expire_cache () [('dry_run', True)]"])},
+                          "expire_cache () [('dry_run', True), ('store', 'ST')]"])},
  'expiry': {'empty root': ([], []),
             'old and young log': ([('agentctl-land-1.log', 'older than 7 days'),
                                    ('phase2-apply-3.log', 'older than 7 days')],

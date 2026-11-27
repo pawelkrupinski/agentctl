@@ -20,6 +20,8 @@ from agentctl.allowedpaths import allowed_path
 from agentctl.inboxentry import inbox_write
 from agentctl.maint import cmd_orphans, spotlight_exclude
 from agentctl.tickknobs import MAINTAIN_SWEEP_HOUR
+from agentctl.statemachines import open_states
+from agentctl.waitingdir import entry_final
 from agentctl.notifier import notify
 from agentctl.launchd import launch_agents_dir
 from agentctl.beats import beat_age, write_beat
@@ -142,7 +144,7 @@ def _orphans_section(a: Any, store: Any) -> None:
 
 def _cache_section(a: Any, store: Any) -> None:
     def expire() -> None:
-        gone = expire_cache(dry_run=a.dry_run)
+        gone = expire_cache(dry_run=a.dry_run, store=store)
         print(f"  {'would remove' if a.dry_run else 'removed'} {len(gone)} cache entr{'y' if len(gone) == 1 else 'ies'} older "
               f"than {knob_cache_expire_days():g} days")
     print("== cache expiry")
@@ -201,8 +203,9 @@ class CacheExpiry:
     """One pass over the state root: a method per kind of entry (the files by pattern, the red runs' dirs, the internal-tree
     tags), each dropping what is older than the cutoff -- or, dry, only naming it."""
 
-    def __init__(self, root: str, days: float, cutoff: float, dry_run: bool) -> None:
+    def __init__(self, root: str, days: float, cutoff: float, dry_run: bool, store: Any = None) -> None:
         self.root, self.days, self.cutoff, self.dry_run = root, days, cutoff, dry_run
+        self.store = store if store is not None and not store.needs_token else None  # a remote store is no local item reader
         self.gone: list[tuple[str, str]] = []
 
     def _inside(self, p: str) -> bool:
@@ -227,6 +230,25 @@ class CacheExpiry:
             if m is not None and not os.path.isdir(p) and m < self.cutoff:
                 self.drop(p, f"older than {self.days:g} days")
 
+    def _entry_decided(self, p: str) -> bool:
+        """Whether the entry file at p is of a decided change: its own status is final, or its change item (the record
+        since one-change-model step 6: ci-runner's files were left open by it) is in a terminal state."""
+        e = read_record(p)
+        if not e or not e.get("status"):
+            return False
+        if entry_final(e["status"]):
+            return True
+        it = self.store.item("change", os.path.basename(p)[:-5]) if self.store else None
+        return bool(it) and it["state"] not in open_states("change")
+
+    def entry_files(self) -> None:
+        """The queue directories' entry files of decided changes, untouched for the window (ci-runner kept 1,897 from before
+        the item became the only record)."""
+        for p in glob.glob(os.path.join(glob.escape(os.path.join(self.root, "waiting")), "*", "entries", "*.json")):
+            m = _lstat_mtime(p)
+            if m is not None and m < self.cutoff and self._entry_decided(p):
+                self.drop(p, f"entry file of a decided change, untouched for {self.days:g} days")
+
     def red_dirs(self) -> None:
         for p in glob.glob(os.path.join(glob.escape(os.path.join(self.root, "reds")), "[0-9]*")):
             if os.path.islink(p) or not os.path.isdir(p) or not os.path.basename(p).isdigit():
@@ -246,14 +268,15 @@ class CacheExpiry:
 
 
 def expire_cache(root: str | None = None, days: float | None = None, now: float | None = None,
-                 dry_run: bool = False) -> list[tuple[str, str]]:
+                 dry_run: bool = False, store: Any = None) -> list[tuple[str, str]]:
     """[(path, why)] of what this pass removed (or, dry_run, would remove) under the state root."""
     root = os.path.realpath(root or state_root())
     days = knob_cache_expire_days() if days is None else days
     if not allowed_path(root):
         return []
-    expiry = CacheExpiry(root, days, (wall_epoch() if now is None else now) - days * 86400, dry_run)
+    expiry = CacheExpiry(root, days, (wall_epoch() if now is None else now) - days * 86400, dry_run, store)
     expiry.files()
     expiry.red_dirs()
     expiry.tree_tags()
+    expiry.entry_files()
     return expiry.gone

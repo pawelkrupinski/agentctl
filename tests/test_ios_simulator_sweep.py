@@ -92,7 +92,7 @@ class IosSimulatorSweepTest(unittest.TestCase):
         A.orphan_duty = lambda store, dry_run=False: []
         A.write_beat = lambda name: None
         A.cmd_sweep = lambda a, st: 0
-        A.expire_cache = lambda dry_run=False: []
+        A.expire_cache = lambda dry_run=False, store=None: []
         A.ios_simulator_sweep = lambda root=None, dry_run=False: calls.append(dry_run) or print("SIMSWEEP")
         saved_root = os.environ.get("AGENTCTL_STATE_ROOT")
         os.environ["AGENTCTL_STATE_ROOT"] = tempfile.mkdtemp()

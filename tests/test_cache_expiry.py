@@ -41,6 +41,23 @@ class CacheExpiryTest(unittest.TestCase):
         self.assertFalse(any(os.path.exists(p) for p in old))
         self.assertTrue(all(os.path.exists(p) for p in keep))
 
+    def test_a_decided_changes_entry_file_goes_after_the_window_an_open_ones_stays(self):
+        """ci-runner's leftovers from before one-change-model step 6: the entry file of a change whose item is decided (the
+        store's, or the file's own final status) goes once untouched past the window; an open change's, a new one, an
+        unreadable one and a decided one with no store to ask stay."""
+        d = "waiting/r/entries/"
+        store = A.Store(os.path.join(self.root, "s.db"))
+        for iid in ("c-decided", "c-open"):
+            store.put_item("change", iid, "queued")
+        store.transition("change", "c-decided", "cancelled", 1, event={"cause": "agent", "text": "test"})
+        gone = {self.put(d + "a.json", 9, json.dumps({"id": "a", "status": "landed"})),
+                self.put(d + "c-decided.json", 9, json.dumps({"id": "c-decided", "status": "queued"}))}
+        keep = {self.put(d + "b.json", 2, json.dumps({"id": "b", "status": "landed"})),
+                self.put(d + "c-open.json", 9, json.dumps({"id": "c-open", "status": "queued"})),
+                self.put(d + "e.json", 9, "not json"), self.put(d + "f.json", 9, json.dumps({"id": "f", "status": "waiting"}))}
+        self.assertEqual({os.path.relpath(p, self.root) for p in gone}, self.expire(store=store))
+        self.assertTrue(all(os.path.exists(p) for p in keep))
+
     def test_dry_run_lists_and_removes_nothing(self):
         p = self.put("agentctl-land-a-1.log", 8)
         self.assertEqual(self.expire(dry_run=True), {"agentctl-land-a-1.log"})
