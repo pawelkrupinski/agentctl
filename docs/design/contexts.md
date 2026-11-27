@@ -1,7 +1,11 @@
 # The process's context
 
 Status: the design of the DI lane's last four locators (2026-11-27). `tests/test_no_service_locators.py` holds the
-ones left.
+ones left. **`Context` is TRANSITIONAL** (the owner, 2026-11-27): whenever a method is changed, it and every downstream
+function on its call path take ONE PARAMETER PER DEPENDENCY (`clock`, `runner`, `inbox`, `runs`, `store`) instead of
+`ctx`; callers unpack from `ctx` only at a boundary that still holds one, and no new function takes `ctx`
+(`tests/test_no_new_ctx_parameters.py`: 276 functions at its start, a ceiling per module that only falls). The sections
+below describe what exists until the last reader is migrated.
 
 ## What it is
 

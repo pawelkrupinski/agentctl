@@ -112,6 +112,10 @@ proves each rule's removal is caught.
   `Manager` / `Handler` / `Util` / `Helper` names. A read-only caller gets a reader. A new red family or check kind is a
   new entry, not edits across modules. A fake shares the real logic and differs only at the IO boundary (movies'
   `writing-fakes` skill).
+- **One parameter per dependency** (the owner, 2026-11-27): whenever a method is changed, migrate it, and every downstream
+  function on its call path, to ONE PARAMETER PER DEPENDENCY (`clock`, `runner`, `inbox`, `runs`, `store`, ...) instead of
+  `ctx` / `Context` or an ambient `wire_*` locator. A caller unpacks from `ctx` only at a boundary that still holds one.
+  No NEW function takes `ctx`: `tests/test_no_new_ctx_parameters.py` freezes the per-module count, which only falls.
 - **One source of truth per concept** (movies "Extract repeated patterns at two uses"): no two pieces of code doing
   the same job differently -- deciding whether the gate is red, classifying a transient error, running `gh` / `git`
   with a timeout and retries, reading or writing a state file, formatting a time, an age or a verdict, finding a
