@@ -125,7 +125,7 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
             ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues(store)]),
             ("reverts", lambda: [wlog(d, f"tick: {x}") for x in tick_reverts(repo, store)]),  # reverts.py: told their landers
             ("queue stall", lambda: logged(d, queue_stall_step(store, clock.time))),
-            ("crash loops", lambda: logged(d, crash_loop_step(store, clock.time, registry.check("fixer_crash_loop")))),  # crashloop.py
+            ("crash loops", lambda: logged(d, crash_loop_step(store, registry.check("fixer_crash_loop")))),  # crashloop.py
             ("file events", lambda: drain_event_log(store)),  # filelog.py: this host's file-held state's moves
             ("timeline", lambda: logged(d, timeline_step(store, clock.time(), owner_summary,
                                                          lambda run: remote_run_jobs(slug(repo), run), clock.sleep))),

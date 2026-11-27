@@ -64,7 +64,7 @@ class CrashLoopConditionBase(unittest.TestCase):
 
     def step(self):
         check = partial(A.probe_fixer_crash_loop, store=self.st, code=lambda: self.code[0])
-        return A.crash_loop_step(self.st, lambda: self.t[0], check)
+        return A.crash_loop_step(self.st, check)
 
     def loops(self):
         return [it for it in self.st.items("condition", ["open"]) if it["data"]["kind"] == "CRASH_LOOP"]

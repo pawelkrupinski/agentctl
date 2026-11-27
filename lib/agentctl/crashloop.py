@@ -44,9 +44,9 @@ def knob_crash_loop_quick() -> float:
 
 @dataclass(frozen=True)
 class Launch:
-    """One fixer launch as the crash loop reads it: its start and end (epoch s; start None when not recorded), how it
-    ended, its cause line (launch_cause), its log and its wrapper's last words."""
-    started: Optional[float]
+    """One fixer launch as the crash loop reads it: how long it lived (s; None when not recorded), its end (epoch s), how
+    it ended, its cause line (launch_cause), its log, its wrapper's last words, and whether it ended with no result."""
+    lived: Optional[float]
     ended: float
     outcome: str
     cause: str
@@ -59,9 +59,9 @@ class Launch:
         mark of it)."""
         if not self.crashed:
             return False
-        if self.started is None:
+        if self.lived is None:
             return self.outcome.startswith("NOT STARTED")
-        return self.ended - self.started < within
+        return self.lived < within
 
 
 def red_launches(d: dict[str, Any]) -> list[Launch]:
@@ -71,9 +71,9 @@ def red_launches(d: dict[str, Any]) -> list[Launch]:
 
 
 def red_launch(h: dict[str, Any]) -> Launch:
-    """One history entry as a launch: its lease's start (redopen.py red_history), its end, how it ended."""
+    """One history entry as a launch: its lease's lifetime (redopen.py red_history), its end, how it ended."""
     outcome = str(h.get("outcome") or "")
-    return Launch(float(h["started"]) if h.get("started") else None, iso_epoch(h.get("at")) or 0.0, outcome,
+    return Launch(float(h["lived"]) if h.get("lived") is not None else None, iso_epoch(h.get("at")) or 0.0, outcome,
                   launch_cause(h), str(h.get("log") or ""), str(h.get("notes") or ""),
                   crashed=bool(RED_CRASH_OUTCOME.match(outcome)))
 
@@ -83,7 +83,8 @@ def escalation_launches(d: dict[str, Any]) -> list[Launch]:
     out = []
     for x in (d.get("escalation") or {}).get("tries") or []:
         outcome = str(x.get("outcome") or "")
-        out.append(Launch(float(x["started"]) if x.get("started") else None, float(x.get("ended") or 0), outcome,
+        lived = float(x["ended"]) - float(x["started"]) if x.get("started") and x.get("ended") else None
+        out.append(Launch(lived, float(x.get("ended") or 0), outcome,
                           launch_cause({"outcome": outcome}), str(x.get("worktree") or "")))
     return out
 
@@ -137,10 +138,10 @@ def subject_words(subject: str, it: dict[str, Any]) -> str:
 
 
 def evidence(launches: list[Launch]) -> list[str]:
-    """Each launch, oldest first: when it started and ended, how, its log, its wrapper's last lines."""
+    """Each launch, oldest first: how it ended, how long it lived, its log, its wrapper's last lines."""
     out = []
     for x in launches:
-        lived = f"{int(x.ended - x.started)} s" if x.started is not None else "at launch"
+        lived = f"{int(x.lived)} s" if x.lived is not None else "at launch"
         out.append(f"{x.outcome[:300]} (lived {lived}" + (f"; log {x.log}" if x.log else "") + ")")
         out += [f"    {line[:200]}" for line in x.notes.splitlines()[-4:] if line.strip()]
     return out[-EVIDENCE_LINES:]
@@ -164,6 +165,8 @@ def probe_fixer_crash_loop(a: dict[str, Any], store: Any, code: Callable[[], str
     if live is None:
         return True, f"{subject} cleared (or went to the owner)"
     it, launches = live
+    a.setdefault("state", it["state"])  # the subject's state when the loop opened, and since when (its store's clock)
+    a.setdefault("entered", float(it.get("entered_at") or 0))
     moved = moved_on(a, it, code(), subject.startswith("red:"))
     if moved:
         return True, f"{subject}: {moved}: one launch judges it"
@@ -175,11 +178,12 @@ def probe_fixer_crash_loop(a: dict[str, Any], store: Any, code: Callable[[], str
 
 
 def moved_on(a: dict[str, Any], it: dict[str, Any], code: str, red: bool) -> Optional[str]:
-    """What changed since the loop opened (at a["at"], under code a["code"]) that may let a launch live: agentctl's code
-    (a fix deployed), or the red offered again (its block lifted: the owner's answer, or its bound); else None."""
+    """What changed since the loop opened (under code a["code"], its subject in a["state"] since a["entered"]) that may
+    let a launch live: agentctl's code (a fix deployed), or the red offered again (its block lifted: the owner's answer,
+    or its bound); else None."""
     if code not in ("", a["code"]):
         return f"agentctl's code changed since the loop opened ({str(a['code'])[:8]} -> {code[:8]})"
-    if red and it["state"] == "offered" and float(it.get("entered_at") or 0) > float(a.get("at") or 0):
+    if red and it["state"] == "offered" and (a["state"] != "offered" or float(it.get("entered_at") or 0) > float(a["entered"])):
         return "offered again after the loop opened (its block lifted)"
     return None
 
@@ -187,7 +191,7 @@ def moved_on(a: dict[str, Any], it: dict[str, Any], code: str, red: bool) -> Opt
 MARK = "crash_loop:"
 
 
-def crash_loop_step(store: Any, now: Callable[[], float], check: Callable[[dict[str, Any]], tuple[bool, str]]) -> list[str]:
+def crash_loop_step(store: Any, check: Callable[[dict[str, Any]], tuple[bool, str]]) -> list[str]:
     """The server tick's look: each subject newly crash-looping opens its CRASH_LOOP condition -- an alert routed by
     the escalation table, whose being open holds the fixer (escalationtable.py crash_loop_hold); its lines. check: the
     registry's probe_fixer_crash_loop, its store and code bound."""
@@ -196,7 +200,7 @@ def crash_loop_step(store: Any, now: Callable[[], float], check: Callable[[dict[
         live = subject_launches(store, subject)
         loop = crash_loop_of(live[1], n, quick) if live else None
         if loop is not None and float(store.meta_get(MARK + subject) or 0) < loop[1][-1].ended:
-            line = open_loop(store, subject, loop[1], check, {"subject": subject, "at": now(), "n": n, "quick": quick})
+            line = open_loop(store, subject, loop[1], check, {"subject": subject, "n": n, "quick": quick})
             out += [line] if line else []
     return out
 

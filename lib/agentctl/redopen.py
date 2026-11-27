@@ -323,7 +323,14 @@ def red_history(row, t):
     return {"at": iso_at(t), "holder": row.get("holder") if row else None, "outcome": m.get("outcome") or "lease expired",
             "notes": notes[:600], "session": m.get("session"),
             "worktree": wt, "log": log, "dispatched": m.get("kind") in ("fixer", "owned"),
-            "started": row.get("acquired_at") if row else None}  # its lease's start: how long it lived (crashloop.py)
+            "lived": red_lived(row, m, t)}  # how long its lease lived (crashloop.py: a launch dying at launch)
+
+
+def red_lived(row: Any, m: dict[str, Any], t: float) -> float | None:
+    """The ended lease's lifetime (s), on the store's own clock as redlease.red_end_outcome reads it; None unknown."""
+    if not row or not row.get("acquired_at"):
+        return None
+    return round(float(m.get("released_at") or t) - float(row["acquired_at"]), 1)
 
 
 def _callable_only_outside_red(d: dict[str, Any], snap: Any, repo: Any) -> bool:
