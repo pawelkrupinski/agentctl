@@ -59,7 +59,7 @@ from agentctl.storecmd import cmd_store
 from agentctl.processstore import process_store
 from agentctl.invariants import probe_invariant
 from agentctl.watchdog import cmd_watchdog
-from agentctl.status import cmd_ci_why
+from agentctl.ciwhycmd import cmd_ci_why
 from agentctl.statuspage import cmd_status
 from agentctl.queueenter import cmd_land_precheck
 from agentctl.slots import cmd_land

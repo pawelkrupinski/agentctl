@@ -24,6 +24,7 @@ mypy-errors	checkslot	24
 mypy-errors	cireport	37
 mypy-errors	cistate	1
 mypy-errors	ciwhy	36
+mypy-errors	ciwhycmd	2
 mypy-errors	cleanup	12
 mypy-errors	cleanuppass	3
 mypy-errors	cli	15
@@ -155,7 +156,7 @@ mypy-errors	sessionpaths	9
 mypy-errors	slots	51
 mypy-errors	statemachines	25
 mypy-errors	stats	33
-mypy-errors	status	81
+mypy-errors	status	79
 mypy-errors	statusagents	34
 mypy-errors	statusline	4
 mypy-errors	statuspage	30
