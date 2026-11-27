@@ -25,6 +25,7 @@ IT	10	cbafe4d45d4b	0	no overlap hold outlives its TTL while its holder is not in
 IE	7	ba98ecc35b2e	0	never two escalation fixers of one kind, nor more than the cap in all
 IO	7	ba98ecc35b2e	0	an owner-only escalation kind never dispatches
 IG	7	ba98ecc35b2e	0	every dispatched escalation ends cleared or handed to the owner within its budget
+IA	1	f447c2766252	0	an agent kind's owner escalation never fires while its agent works, and says why no agent took it
 IL	6	7d3b5e78ceed	0	a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer
 IN	1	c546e76a2629	0	no relaunch storm: a fixer whose CRASH_LOOP condition is open is never launched
 IQ	1	71a23522b5f1	0	every crash loop reaches the owner or clears within its escalation budget

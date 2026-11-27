@@ -55,6 +55,7 @@ INVARIANT_KINDS = {
     "IE": "never two escalation fixers of one kind, nor more than the cap in all",
     "IO": "an owner-only escalation kind never dispatches",
     "IG": "every dispatched escalation ends cleared or handed to the owner within its budget",
+    "IA": "an agent kind's owner escalation never fires while its agent works, and says why no agent took it",
     "IL": "a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer",
     "IN": "no relaunch storm: a fixer whose CRASH_LOOP condition is open is never launched",
     "IQ": "every crash loop reaches the owner or clears within its escalation budget",
@@ -1363,6 +1364,22 @@ class Sim:
                 self.violate("IG", f"escalation {c['kind']} ({key}) neither cleared nor handed to the owner "
                              f"{int(self.clock[0] - c['first_dispatch']) // TICK} ticks after its first dispatch")
 
+    def check_owner_escalations(self):
+        """IA. THE OWNER HEARS OF AN AGENT'S ESCALATION ONLY WHEN NO AGENT HAS IT (2026-11-27, vendor-drift: told
+        "ESCALATED: open for 10 min" 5 s after its agent was dispatched): no server escalation of an agent kind while
+        one of its sessions is alive, and each says why no agent took it."""
+        w = self.escalations
+        for key, c in w.conditions.items():
+            if c["owner"] or c["route"].mode != A.TO_AGENT:
+                continue
+            told = w.owner_escalations(key)
+            for line in told[c.get("ia_seen", 0):]:
+                if any(x["alive"] and x["key"] == key for x in w.sessions.values()):
+                    self.violate("IA", f"{c['kind']} ({key}): the owner told while its agent works: {line[:120]}")
+                elif "no agent took it" not in line and "agent tries" not in line:
+                    self.violate("IA", f"{c['kind']} ({key}): the owner told without why no agent took it: {line[:120]}")
+            c["ia_seen"] = len(told)
+
     def name_older_run(self):
         """The red's item names its older run now (a tick attached it)."""
         st = A.process_store()
@@ -2009,8 +2026,20 @@ class SimEscalations:
         return any(not self.settled(k) and not v["owner"] for k, v in self.conditions.items())
 
     def tick(self):
-        """The dispatcher's pass, then each live agent's work this tick."""
+        """The dispatcher's pass, each live agent's work this tick, then the server's condition look (its owner
+        escalations: conditions.py escalate_if_due)."""
         A.escalation_pass(self.sim.store, self.sim.clock[0], self)
+        self.agents_work()
+        for it in self.sim.store.items("condition", ["open"]):  # the server's escalation, as its recovery tick runs it
+            A.escalate_if_due(self.sim.store, it, self.sim.clock[0])
+        self.sim.check_owner_escalations()  # IA, here: its moment is right after the server's look
+
+    def owner_escalations(self, key):
+        """The owner escalations (the server's `timeout` self-transitions) of the condition of `key`."""
+        return [e["text"] for e in self.sim.store.item_events("condition", self.conditions[key]["id"]) or []
+                if e.get("cause") == "timeout"]
+
+    def agents_work(self):
         for sid, x in self.sessions.items():
             if not x["alive"]:
                 continue
