@@ -54,6 +54,7 @@ INVARIANT_KINDS = {
     "IO": "an owner-only escalation kind never dispatches",
     "IG": "every dispatched escalation ends cleared or handed to the owner within its budget",
     "IL": "a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer",
+    "IS": "a change reads one state whichever reader asks: its entry's status is its item's state after every tick",
 }
 MAIN_FAILS_LINE = "[info] - main already fails *** FAILED ***"  # the test the open gate red's run fails (main_fails)
 VIOLATIONS_MAX = 50  # lines one scenario keeps in the gate's count mode
@@ -1007,7 +1008,7 @@ class Sim:
         # A TEXTUAL CONFLICT needs a file both change, and is mutual: whichever lands second no longer applies. A change
         # marked to conflict conflicts with the youngest open change sharing a module (a file of it added to its own
         # paths), else ("*future*") with the next change to arrive in one of its modules -- or with an outside push.
-        opened = [c for c in self.changes if (self.entry(c) or {}).get("status") not in A.ENTRY_FINAL
+        opened = [c for c in self.changes if not A.entry_final((self.entry(c) or {}).get("status", "queued"))
                   and c.worktree != worktree]  # its own older version is no collision
         self.open_at_arrival[cid] = {c.cid for c in opened}
         self.waiting_at_arrival[cid] = {c.cid for c in opened if (self.entry(c) or {}).get("status") == "waiting"}
@@ -1346,7 +1347,7 @@ class Sim:
         if self.tick >= self.drain_from and self.reds and self.red_clears_at is None:
             self.red_clears_at = self.tick + 1  # the drain: the gate goes green
         if self.tick >= self.drain_from:  # and every red outside it no open fix is on its way for clears (a later run)
-            named = {str(f) for e in A.waiting_entries(self.d, open_only=False) if e.get("status") not in A.ENTRY_FINAL
+            named = {str(f) for e in A.waiting_entries(self.d, open_only=False) if not A.entry_final(e.get("status"))
                      for f in e.get("fixes") or []}
             for name in set(self.outside) - named:
                 self.outside_clears.setdefault(name, self.tick + 1)
@@ -1463,7 +1464,7 @@ class Sim:
 
     def quiet(self):
         return not self.reds and not self.outside and not [e for e in A.waiting_entries(self.d, open_only=False)
-                                      if e.get("status") not in A.ENTRY_FINAL] and not self.arrivals \
+                                      if not A.entry_final(e.get("status"))] and not self.arrivals \
             and not (self.escalations and self.escalations.open())
 
     # ---------------------------------------------------------------- the invariants
@@ -1491,7 +1492,7 @@ class Sim:
         open_now = set(self.reds) | set(self.outside)
         for eid, e in entries.items():
             named = {str(x) for x in e.get("fixes") or []}
-            if e.get("status") in A.ENTRY_FINAL or not named & open_now & self.open_before or reds != self.reds:
+            if A.entry_final(e.get("status")) or not named & open_now & self.open_before or reds != self.reds:
                 continue
             if e.get("backlog_batch"):
                 self.violate("I3", f"red fix {eid} is a member of batch {e['backlog_batch']}")
@@ -1544,7 +1545,7 @@ class Sim:
                 self.violate("I4", f"batch {bt['id']} {bt['state']} for {n} ticks without landing, bisecting or holding")
         for ch in self.changes:
             e = self.entry(ch) or {}
-            if ch.cid not in self.done_at and e.get("status") in A.ENTRY_FINAL:
+            if ch.cid not in self.done_at and A.entry_final(e.get("status")):
                 self.done_at[ch.cid] = self.tick
                 if e.get("status") == "rejected" and "no longer applies" in (e.get("why") or ""):
                     self.saw_conflict_rejection(st, ch, e)
@@ -1553,7 +1554,7 @@ class Sim:
             bound = self.profile.get("land_bound", 60)
             for ch in self.changes:
                 e = self.entry(ch)
-                if e and e.get("status") not in A.ENTRY_FINAL and self.tick - ch.arrived > bound:
+                if e and not A.entry_final(e.get("status")) and self.tick - ch.arrived > bound:
                     self.violate("I5", f"change {ch.eid} ({ch.kind}) unlanded {self.tick - ch.arrived} ticks after it arrived "
                                  f"with nothing failing (bound {bound})")
                     break
@@ -1561,20 +1562,23 @@ class Sim:
         by_id = {it["id"]: it for it in items}
         for eid, e in entries.items():
             it = by_id.get(eid)
-            if e.get("status") == "joined":
-                continue
             if it is None:
                 if eid in self.known_entries:  # one written this tick gets its item at the next projection
                     self.violate("I6", f"entry {eid} ({e.get('status')}) has no store item")
                 continue
-            if e.get("status") in A.ENTRY_FINAL and not A.machine_state("change", it["state"]).terminal:
+            if A.entry_final(e.get("status")) and not A.machine_state("change", it["state"]).terminal:
                 self.violate("I6", f"entry {eid} is {e['status']} but its item is {it['state']}")
-            if A.machine_state("change", it["state"]).terminal and e.get("status") not in A.ENTRY_FINAL \
-                    and A.ENTRY_STATE.get(e.get("status")) != it["state"]:
+            if A.machine_state("change", it["state"]).terminal and not A.entry_final(e.get("status")) \
+                    and A.change_state_of(e.get("status")) != it["state"]:
                 self.violate("I6", f"item {eid} is {it['state']} but its entry is {e.get('status')}")
         for it in items:
             if it["id"] not in entries:
                 self.violate("I6", f"item {it['id']} ({it['state']}) has no queue entry: stranded")
+        # S. ONE STATE PER CHANGE (docs/design/one-change-model.md): the entry and the item a change has both say the same
+        for eid, e in entries.items():
+            it = by_id.get(eid)
+            if it is not None and A.change_state_of(e.get("status")) != it["state"]:
+                self.violate("IS", f"change {eid}: its entry says {e.get('status')}, its item {it['state']}")
         for ch in self.changes:
             e = self.entry(ch)
             if e and e.get("status") == "landed":
@@ -1645,7 +1649,7 @@ class Sim:
             if e is None:
                 self.violate("I6", f"change {ch.cid} was never queued")
                 continue
-            if e.get("status") not in A.ENTRY_FINAL:
+            if not A.entry_final(e.get("status")):
                 self.violate("I6", f"change {ch.eid} still {e.get('status')} after the drain (gate green, nothing arriving)")
             if e.get("status") == "cancelled" and not ch.cancelled:
                 self.violate("I6", f"change {ch.eid} cancelled, but no agent cancelled it")
