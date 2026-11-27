@@ -10,9 +10,9 @@ import re
 from typing import Any, Callable
 
 from agentctl.timeline import analyze, as_json, find_items, history_lines, render_text, render_tsv, top_sinks
-from agentctl.checkrows import change_rows_lines, change_runs, rows_lines, rows_report
+from agentctl.checkrows import change_rows_lines, rows_lines, rows_report
 from agentctl.eventtrace import EventQuery, traces
-from agentctl.eventreader import old_check_runs, read_events
+from agentctl.eventreader import check_runs_since, read_events
 from agentctl.filelog import undrained_rows
 
 ITEM_TYPES = ("change", "red", "watch", "batch", "condition", "hold", "revert", "issue", "branch-red",
@@ -80,7 +80,7 @@ def cmd_analyze(a: argparse.Namespace, store: Any, now: Callable[[], float]) -> 
         return 0
     rep = analyze(events, t, since, a.type)
     if a.type == "change":  # the CI rows the check time went to (checkrows.py)
-        rep["check_rows"] = rows_report(change_runs(store.items("change"), old_check_runs(store)), since)
+        rep["check_rows"] = rows_report(check_runs_since(store, since), since)
     print(as_json(rep) if a.json else "\n".join([render_text(rep)] + (
         ["", *rows_lines(rep["check_rows"])] if "check_rows" in rep else [])))
     return 0

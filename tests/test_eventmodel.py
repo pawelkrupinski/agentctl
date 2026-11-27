@@ -90,6 +90,42 @@ class IndexedQueryTest(TempStore):
         self.assertTrue({"events_type_at", "events_kind", "derived_events_item", "derived_events_type_at"} <= names)
 
 
+class CheckRunsTest(TempStore):
+    """analyze's check rows read the check runs of the window, not every change item (review 2026-11-27: 4.2 MB)."""
+
+    def setUp(self):
+        super().setUp()
+        for iid, run, decided in (("c-old", "9", 50), ("c-new", "10", SINCE + 10), ("c-new", "11", SINCE + 20)):
+            item = self.st.item("change", iid)
+            runs = (item["data"].get("check_runs") or []) + [{"run": run, "decided_at": decided, "rows": [
+                {"name": "unit", "seconds": 60, "conclusion": "success"}]}]
+            self.st.update_item("change", iid, item["version"], {"check_runs": runs})
+        item = self.st.item("change", "c-open")
+        self.st.update_item("change", "c-open", item["version"], {"check_runs": [{"run": "12", "rows": []}]})  # no decided_at
+
+    @staticmethod
+    def report(runs, since):
+        return json.dumps(A.rows_report(runs, since), sort_keys=True)  # a distribution of nothing holds a nan
+
+    def whole_items(self, since):
+        """What analyze read before: every change item, the window cut in rows_report."""
+        return A.change_runs(self.st.items("change"), A.old_check_runs(self.st))
+
+    def test_the_window_returns_its_runs_alone(self):
+        self.assertEqual([(c, r["run"]) for c, r in A.check_runs_since(self.st, SINCE)], [("c-new", "10"), ("c-new", "11")])
+        self.assertEqual({r["run"] for _c, r in A.check_runs_since(self.st, 0.0)}, {"9", "10", "11", "12"},
+                         "no window: every run, one without a decided_at too")
+
+    def test_the_report_is_the_one_every_item_gave(self):
+        for since in (0.0, SINCE, NOW):
+            self.assertEqual(self.report(A.check_runs_since(self.st, since), since),
+                             self.report(self.whole_items(since), since), since)
+
+    def test_no_change_item_is_read_for_it(self):
+        self.st.items = lambda *a, **k: self.fail("a change item was read")
+        self.assertEqual(len(A.check_runs_since(self.st, SINCE)), 2)
+
+
 class FileRowsTest(TempStore):
     def setUp(self):
         super().setUp()
@@ -132,6 +168,17 @@ class SkewTest(Phase2Base):
         self.assertEqual(self.report(A.RemoteStore(self.url, "tok-pawel")), here, "read the old way, the same report")
         self.assertEqual(A.read_events(self.remote, A.EventQuery("change", "c-new")), item)
         self.assertEqual(A.old_check_runs(self.remote), runs)
+
+    def test_check_runs_read_the_same_from_a_store_without_the_call_and_through_the_api(self):
+        item = self.st.item("change", "c-new")
+        self.st.update_item("change", "c-new", item["version"], {"check_runs": [{"run": "10", "decided_at": SINCE + 10,
+                                                                                  "rows": [{"name": "unit", "seconds": 5}]}]})
+        here = A.check_runs_since(self.st, SINCE)
+        self.assertEqual(len(here), 1)
+        self.assertEqual(A.check_runs_since(self.remote, SINCE), here)
+        self.api.calls = A.served_calls(2)  # a store pinned before the call: its items, filtered here
+        self.assertEqual(CheckRunsTest.report(A.check_runs_since(A.RemoteStore(self.url, "tok-pawel"), SINCE), SINCE),
+                         CheckRunsTest.report(here, SINCE))
 
     def test_an_old_clients_reads_of_a_new_store_are_unchanged(self):
         """An old client: the whole feed (events), the backfill (derived), one item's events (item_events)."""

@@ -290,6 +290,15 @@ class Store(OfferTable):
     def derived_check_runs(self) -> dict[str, Any]:  # the old check runs' fetched rows (backfill.py), by run
         return check_run_rows(self.db)
 
+    def change_check_runs(self, since: float) -> list[list[Any]]:
+        """[change id, run record] of every check run the change items hold that was decided at or after `since`: the runs
+        alone, read inside the database (json_each), not every change item (analyze's check rows)."""
+        with closing(self.db()) as c:
+            rows = c.execute("SELECT items.id, j.value FROM items, json_each(items.data, '$.check_runs') AS j "
+                             "WHERE items.type='change' AND COALESCE(json_extract(j.value, '$.decided_at'), 0) >= ? "
+                             "ORDER BY items.id, j.key", (since,)).fetchall()
+        return [[r[0], json.loads(r[1])] for r in rows]
+
     def backfill_check_runs(self, fetch: Any, now: float, pause: Any) -> int:  # old runs' rows (backfill.py; server)
         return backfill_check_runs(self.db, fetch, now, pause)
 

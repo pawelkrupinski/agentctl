@@ -52,15 +52,14 @@ def change_runs(items: Iterable[dict[str, Any]], fetched: Any = None
                 ) -> list[tuple[str, dict[str, Any]]]:
     """(change id, run record) of every check run the change items hold, and of the runs the backfill fetched
     (`fetched`: run id -> record with its change) the items do not hold themselves."""
-    out, seen = [], set()
-    for it in items:
-        for r in (it.get("data") or {}).get("check_runs") or ():
-            out.append((it["id"], r))
-            seen.add(str(r.get("run")))
-    for run, rec in (fetched or {}).items():
-        if str(run) not in seen:
-            out.append((str(rec.get("change")), rec))
-    return out
+    held = [(it["id"], r) for it in items for r in (it.get("data") or {}).get("check_runs") or ()]
+    return with_fetched(held, fetched)
+
+
+def with_fetched(held: list[tuple[str, dict[str, Any]]], fetched: Any = None) -> list[tuple[str, dict[str, Any]]]:
+    """`held` (change id, run record) and the backfill's fetched runs (run id -> record with its change) it lacks."""
+    seen = {str(r.get("run")) for _change, r in held}
+    return held + [(str(rec.get("change")), rec) for run, rec in (fetched or {}).items() if str(run) not in seen]
 
 
 class RowTally:

@@ -33,7 +33,8 @@ class StoreCall(NamedTuple):
         return self.kind != WRITE
 
 
-# version 1: every call up to this table (2026-11-26); 2: the event model's indexed reads (eventtrace.py)
+# version 1: every call up to this table (2026-11-26); 2: the event model's indexed reads (eventtrace.py); 3: the
+# change items' check runs of a window, not the items (change_check_runs: analyze's check rows)
 STORE_CALLS = (
     StoreCall("acquire", "name holder ttl max_hold progress item meta", WRITE, 1),
     StoreCall("renew", "name epoch secret progress ttl note", IDEMPOTENT, 1),
@@ -66,6 +67,7 @@ STORE_CALLS = (
     StoreCall("derived", "", READ, 1),
     StoreCall("trace_events", "query", READ, 2),
     StoreCall("derived_check_runs", "", READ, 2),
+    StoreCall("change_check_runs", "since", READ, 3),
 )
 
 # Store's public methods no client calls: the server's own (its tick, its API's contact clock, the connection, the

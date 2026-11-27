@@ -9,6 +9,7 @@
 
 from typing import Any, Iterable
 
+from agentctl.checkrows import change_runs, with_fetched
 from agentctl.eventtrace import EventQuery, merge, with_file_rows
 from agentctl.store import StoreLacksCall
 
@@ -57,3 +58,13 @@ def old_check_runs(store: Any) -> dict[str, Any]:
         return store.derived_check_runs() or {}
     except StoreLacksCall:
         return derived_of(store).get("check_runs") or {}
+
+
+def check_runs_since(store: Any, since: float) -> list[tuple[str, dict[str, Any]]]:
+    """(change id, run record) of the check runs decided at or after `since`, and the old runs the backfill fetched: the
+    store's own call (the runs alone, 4 MB of change items not read), else a store older than it gives its items."""
+    try:
+        held = [(change, run) for change, run in store.change_check_runs(since)]
+    except StoreLacksCall:
+        return change_runs(store.items("change"), old_check_runs(store))
+    return with_fetched(held, old_check_runs(store))

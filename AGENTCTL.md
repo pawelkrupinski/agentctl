@@ -3052,7 +3052,9 @@ a run, the newest 10: the run, the tip it checked, its verdict, and each row's r
 conclusion; a run decided by its conclusion reads its jobs once more for their ends). The runs decided before this (an
 item's `check.run`) are fetched from GitHub by the hourly backfill, 30 a pass, 0.5 s apart, cached in
 `derived_check_runs` (a run that gave no jobs asked again a day later). `analyze` ranks the rows (`check rows`: n,
-p50, p90, total, runner-wait p50, failures, the slowest change); `history <change>` lists its runs and rows.
+p50, p90, total, runner-wait p50, failures, the slowest change) from the store's `change_check_runs` (API version 3: the
+window's runs read inside the database, not every change item, 4.2 MB on the 2026-11-26 copy; a store older than it gives its
+items and the runs are cut here); `history <change>` lists its runs and rows.
 
 FILE-HELD STATE AS EVENTS (filelog.py): the governor's tickets (`gov-ticket`: opened `waiting` when it asked -- cause
 `check-slot` for a class's cap, else `governor`, the hold in `detail` -- then `admitted`, `released`), an idle sbt
