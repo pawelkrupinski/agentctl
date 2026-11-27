@@ -26,4 +26,4 @@ IE	5	c432b52f0639	0	never two escalation fixers of one kind, nor more than the c
 IO	5	c432b52f0639	0	an owner-only escalation kind never dispatches
 IG	5	c432b52f0639	0	every dispatched escalation ends cleared or handed to the owner within its budget
 IL	4	3761039d9ec4	0	a red whose fixer launches all died at launch of one cause is blocked, never offered to another fixer
-IS	1	88dc06d1bde3	7	a change reads one state whichever reader asks: its entry's status is its item's state after every tick
+IS	1	88dc06d1bde3	0	a change reads one state whichever reader asks: its entry's status is its item's state after every tick
