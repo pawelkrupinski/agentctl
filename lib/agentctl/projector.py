@@ -13,13 +13,12 @@ from contextlib import suppress
 from agentctl.core import attempt, err
 from agentctl.timefmt import iso_at
 from agentctl.notifyurl import notification_url
-from agentctl.waitingdir import RECORD_KEY, entry_final, entry_record, waiting_entries, wlog
+from agentctl.waitingdir import RECORD_KEY, change_item_fields, entry_final, entry_record, waiting_entries, wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_dir, inbox_kind
 from agentctl.notifier import notify, notify_cause, notify_fix
 from agentctl.statemachines import StaleVersion, TerminalState, change_state_of, machine_state
 from agentctl.store import LEASE_ARCHIVE_AFTER, Store
-from agentctl.queueslots import change_item_fields
 from agentctl.redask import ask_interval
 from agentctl.alerts import alert_write
 from agentctl.alertroute import event_audience

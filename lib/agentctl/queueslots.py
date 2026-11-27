@@ -6,16 +6,16 @@ import subprocess
 from typing import Any
 from agentctl.procrunner import process_runner
 from agentctl.statemachines import StaleVersion, change_event, change_state_of, machine_state
-from agentctl.timefmt import parse_time, ts
+from agentctl.timefmt import ts
 from agentctl.govknobs import QUEUE_POOL, knob_check_lease_ttl, knob_check_trees
 from agentctl.core import err, git
 from agentctl.causes import checked_cause, reject_cause, reject_class
 from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
 from agentctl.worktrees import mark_internal
-from agentctl.lander import lander_fields
 from agentctl.leases import LeaseHold, lease_live
 from agentctl.land import tool_env
 from agentctl.owned import Owned
+from agentctl.waitingdir import change_item_fields
 
 
 CHECK_LEASE_MAX = 3 * 3600
@@ -95,36 +95,6 @@ def entry_owned(eid: str) -> Owned:
 # checked change under the landing lease: pushing -> landed, or back to checked (a push never rejects; after 3
 # failures a condition on the git route). Main moving with an overlap is a new round (queued), never an attempt.
 PUSH_ATTEMPTS_MAX = 3
-
-
-def change_item_fields(e):
-    """A change item's data at its creation, from its queue entry: where it is, its lander, the reds it claims to fix
-    (`fixes`: the watchdog's WR reads them; a red fix never waits for green), and when it was submitted (`submitted_at`:
-    its queue age -- an entry queued again after a conflict keeps its first one, entry_queued_since)."""
-    since = entry_queued_since(e)
-    created = entry_created_at(e)
-    return {"worktree": e.get("worktree"), "head": e.get("head"), **lander_fields(e),
-            **({"fixes": sorted(e["fixes"])} if e.get("fixes") else {}),
-            **({"diagnoses": sorted(e["diagnoses"])} if e.get("diagnoses") else {}),
-            **({"replays": e["replays"]} if e.get("replays") else {}),
-            **({"submitted_at": since} if since else {}),
-            **({"entry_created_at": created} if created else {})}
-
-
-def entry_created_at(e: dict[str, Any]) -> float | None:
-    """When this very entry was created (epoch), whatever place and queue age it inherited; None when it does not read."""
-    try:
-        return parse_time(e["created"]).timestamp() if e.get("created") else None
-    except (ValueError, TypeError):
-        return None
-
-
-def entry_queued_since(e: dict[str, Any]) -> float | None:
-    """When the change was first queued (epoch): `queued_since` (carried over a re-queue that kept its place), else
-    its `created`; None when neither reads."""
-    if e.get("queued_since"):
-        return float(e["queued_since"])
-    return entry_created_at(e)
 
 
 def _landed_fields(fields):

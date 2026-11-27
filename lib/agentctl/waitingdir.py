@@ -12,6 +12,7 @@ from agentctl.core import git, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import open_states
+from agentctl.timefmt import parse_time
 
 
 # ---------------------------------------------------------------- waiting: production changes held while main is red
@@ -114,3 +115,37 @@ def wlog(d: str, msg: str) -> None:
     with open(os.path.join(d, "processor.log"), "a") as f:
         f.write(f"{ts()} {msg}\n")
 
+
+def change_item_fields(e: dict[str, Any]) -> dict[str, Any]:
+    """A change item's data at its creation, from its queue entry: where it is, its lander, the reds it claims to fix
+    (`fixes`: the watchdog's WR reads them; a red fix never waits for green), and when it was submitted (`submitted_at`:
+    its queue age -- an entry queued again after a conflict keeps its first one, entry_queued_since)."""
+    since = entry_queued_since(e)
+    created = entry_created_at(e)
+    return {"worktree": e.get("worktree"), "head": e.get("head"), **lander_fields(e),
+            **({"fixes": sorted(e["fixes"])} if e.get("fixes") else {}),
+            **({"diagnoses": sorted(e["diagnoses"])} if e.get("diagnoses") else {}),
+            **({"replays": e["replays"]} if e.get("replays") else {}),
+            **({"submitted_at": since} if since else {}),
+            **({"entry_created_at": created} if created else {})}
+
+
+def entry_created_at(e: dict[str, Any]) -> float | None:
+    """When this very entry was created (epoch), whatever place and queue age it inherited; None when it does not read."""
+    try:
+        return parse_time(e["created"]).timestamp() if e.get("created") else None
+    except (ValueError, TypeError):
+        return None
+
+
+def entry_queued_since(e: dict[str, Any]) -> float | None:
+    """When the change was first queued (epoch): `queued_since` (carried over a re-queue that kept its place), else
+    its `created`; None when neither reads."""
+    if e.get("queued_since"):
+        return float(e["queued_since"])
+    return entry_created_at(e)
+
+
+def lander_fields(e: dict[str, Any]) -> dict[str, Any]:
+    """The lander fields a change item carries from its queue entry (its creation copies them)."""
+    return {k: e[k] for k in ("branch", "session", "lander", "commit_keys") if e.get(k)}

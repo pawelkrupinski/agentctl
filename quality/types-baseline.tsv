@@ -62,7 +62,7 @@ mypy-errors	issues	12
 mypy-errors	jvmreap	7
 mypy-errors	land	24
 mypy-errors	landdryrun	36
-mypy-errors	lander	33
+mypy-errors	lander	32
 mypy-errors	landhold	4
 mypy-errors	landqueue	5
 mypy-errors	landwatch	18
@@ -94,7 +94,7 @@ mypy-errors	pressure	16
 mypy-errors	processor	9
 mypy-errors	processorlink	16
 mypy-errors	procwatch	2
-mypy-errors	projector	17
+mypy-errors	projector	16
 mypy-errors	queue	27
 mypy-errors	queuebatch	38
 mypy-errors	queuebatchsel	19
@@ -103,9 +103,9 @@ mypy-errors	queueclose	19
 mypy-errors	queuediff	29
 mypy-errors	queueenter	72
 mypy-errors	queuefailure	5
-mypy-errors	queuepush	43
+mypy-errors	queuepush	42
 mypy-errors	queuerecheck	43
-mypy-errors	queueslots	18
+mypy-errors	queueslots	15
 mypy-errors	queuesubmit	31
 mypy-errors	queueuntil	10
 mypy-errors	recordingpins	30

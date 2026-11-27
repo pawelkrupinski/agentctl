@@ -225,7 +225,7 @@ fanout	lib/agentctl/owned.py	13
 fanout	lib/agentctl/owner.py	19
 fanout	lib/agentctl/ownerwrapper.py	23
 fanout	lib/agentctl/processor.py	28
-fanout	lib/agentctl/projector.py	15
+fanout	lib/agentctl/projector.py	14
 fanout	lib/agentctl/queue.py	11
 fanout	lib/agentctl/queuebatch.py	21
 fanout	lib/agentctl/queuecheck.py	17
@@ -233,7 +233,6 @@ fanout	lib/agentctl/queueclose.py	24
 fanout	lib/agentctl/queuediff.py	22
 fanout	lib/agentctl/queueenter.py	27
 fanout	lib/agentctl/queuepush.py	17
-fanout	lib/agentctl/queueslots.py	10
 fanout	lib/agentctl/queuesubmit.py	11
 fanout	lib/agentctl/recovery.py	15
 fanout	lib/agentctl/redauthors.py	10
@@ -260,7 +259,7 @@ fanout	lib/agentctl/redview.py	19
 fanout	lib/agentctl/redwaits.py	13
 fanout	lib/agentctl/remote.py	14
 fanout	lib/agentctl/runowners.py	11
-fanout	lib/agentctl/server.py	21
+fanout	lib/agentctl/server.py	20
 fanout	lib/agentctl/serverclone.py	11
 fanout	lib/agentctl/serversteps.py	25
 fanout	lib/agentctl/slots.py	27

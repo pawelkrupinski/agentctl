@@ -20,9 +20,8 @@ from agentctl.eventrows import legacy_cause
 from agentctl.store import Store, store_errors
 from agentctl.repos import server_repo
 from agentctl.trailers import do_not_land
-from agentctl.waitingdir import ChangeRecords, waiting_entries, waiting_state
+from agentctl.waitingdir import ChangeRecords, entry_queued_since, waiting_entries, waiting_state
 from agentctl.redrecord import red_lease
-from agentctl.queueslots import entry_queued_since
 from agentctl.conflicts import CONFLICT_PLACE_KEPT
 from agentctl.queuerecheck import queued_entries, same_change_source
 from agentctl.cistate import state_read

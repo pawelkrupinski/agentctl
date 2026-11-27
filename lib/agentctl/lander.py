@@ -222,11 +222,6 @@ def commit_keys(repo, base, head):
             for s, at, subj in rows]
 
 
-def lander_fields(e):
-    """The lander fields a change item carries from its queue entry (its creation copies them)."""
-    return {k: e[k] for k in ("branch", "session", "lander", "commit_keys") if e.get(k)}
-
-
 def lander_put(store, change_id, lander, keys, landed_sha=None):
     """A direct land's record (no change item carries it): a `lander` item."""
     data = {"change": change_id, "lander": lander, "commit_keys": keys, "repo": lander.get("repo")}

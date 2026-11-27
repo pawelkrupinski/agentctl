@@ -10,10 +10,10 @@ from agentctl.timefmt import day_hhmmz, hhmmz
 from agentctl.holdgraph import OPEN_PARENT_STATES, stack_map, waiting_on_changes
 from agentctl.core import attempt, host_role, remote
 from agentctl.policy import policy_blocks
-from agentctl.waitingdir import waiting_entries
+from agentctl.waitingdir import change_item_fields, waiting_entries
 from agentctl.queuehold import break_hold_cycles, expire_idle_hold, idle_hold_expired, note_hold
 from agentctl.conflicts import conflict_cause, conflict_paths
-from agentctl.queueslots import change_item_fields, check_tree_slot, checker_alive, queue_verdict, set_change
+from agentctl.queueslots import check_tree_slot, checker_alive, queue_verdict, set_change
 from agentctl.queue import requeue_infra
 from agentctl.queuerecheck import queued_entries, same_change_source
 from agentctl.changekind import classify_change, classify_queue, facts_for, facts_tick, kind_order, record_change_kind
