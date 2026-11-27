@@ -16,6 +16,7 @@ from agentctl.waitingdir import waiting_dir
 from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
 from agentctl.worktrees import CACHE_TREES, internal_trees_dir, worktree_of, worktrees
 from agentctl.onmain import MainContainment
+from agentctl.core import claude_session_id
 
 
 # ---------------------------------------------------------------- branch runs: every dispatch has an owner, every branch red a route
@@ -79,7 +80,7 @@ def record_dispatch(branch=None, run_id=None, workflow=None, purpose="", inputs=
     pid = pid or _claude_pid()
     return save_dispatch({"branch": branch, "run_id": int(run_id) if str(run_id or "").isdigit() else None,
                           "workflow": workflow, "purpose": purpose, "inputs": inputs, "worktree": wt, "sha": sha,
-                          "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
+                          "session": claude_session_id(),
                           "agent": agent or agent_name(), "pid": pid,
                           "process_start": process_start(pid) if pid else None, "at": ts(), "epoch": epoch_now(),
                           "source": source}, key)

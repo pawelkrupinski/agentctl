@@ -19,6 +19,7 @@ from agentctl.procs import safe_cwd
 from agentctl.fixerrecords import agent_name
 from agentctl.watchknobs import knob_inbox_dir
 from agentctl.fixerknobs import knob_owners_dir
+from agentctl.core import claude_session_id
 
 
 # ---------------------------------------------------------------- inbox
@@ -43,7 +44,7 @@ def inbox_dir() -> str:
 def caller_owner(cwd: str | None = None) -> str:
     """Who is calling, as a record's `owner`: the Claude session, else `<user>@<cwd>` (the one copy: Owned's record and
     every inbox entry)."""
-    return os.environ.get("CLAUDE_CODE_SESSION_ID") or f"{os.environ.get('USER', '?')}@{cwd or safe_cwd()}"
+    return claude_session_id() or f"{os.environ.get('USER', '?')}@{cwd or safe_cwd()}"
 
 
 INBOX_KINDS = [("REVERTED", r"REVERTED: "), ("REVERT_NOTICE", r"REVERT (NOTICE|UNACKED): "),  # reverts.py: whole revert messages

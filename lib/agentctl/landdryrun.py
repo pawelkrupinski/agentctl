@@ -17,7 +17,7 @@ from agentctl.worktrees import mark_internal
 from agentctl.processorlink import spawn_waiting_processor
 from agentctl.leases import lock_note
 from agentctl.land import REDGATE, TUNNEL_TROUBLE, run_watched, stall_reason, tool_env
-from agentctl.queue import requeue_infra
+from agentctl.queueinfra import requeue_infra
 from agentctl.waiting import must_wait, tail_of, waiting_commits
 from agentctl.queuesubmit import queued_tail, submit_ref
 from agentctl.gov import GovTimeout, gov_class_of

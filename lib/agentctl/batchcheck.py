@@ -19,7 +19,7 @@ from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
 from agentctl.land import REDGATE, run_watched, tool_env
 from agentctl.queuefailure import CHECK_TIMEOUT, judge_failure
 from agentctl.queueslots import queue_verdict, tree_slot
-from agentctl.queue import INFRA_CHECK_FAILURE
+from agentctl.queueinfra import INFRA_CHECK_FAILURE
 from agentctl.identitychange import change_paths_of, identity_model_commits
 from agentctl.waiting import tail_of, waiting_commits
 from agentctl.batchrun import batch_check, bisect

@@ -20,7 +20,7 @@ from agentctl.runsigs import run_names
 from agentctl.redfixes import red_refuted
 from agentctl.red import red_settled_runs
 from agentctl.redseen import red_obs_of_units
-from agentctl.ask import red_decided_view, trim_words
+from agentctl.ask import clean_cut, red_decided_view
 from agentctl.reddispatch import REPO_DISPATCH_OFF, red_owned_progress_at, repo_dispatch_off_all
 from agentctl.redwaits import RED_WAITS_ON
 
@@ -181,7 +181,7 @@ class RedViewer:
         more = "" if str(b.get("text") or "").startswith("WAITING ON YOU") else f" -- {b.get('text')}"
         until = f"; auto-clears when {ask['until']}" if ask.get("until") else ""
         return (f"WAITING ON YOU: {ask['q']} -- {ask['how']}{until}{more}",
-                f"WAITING ON YOU: {trim_words(ask['q'])} -- {ask['how']}")
+                f"WAITING ON YOU: {clean_cut(ask['q'], 160)} -- {ask['how']}")
 
 
 def red_view_state(store: Any, it: dict[str, Any], t: float | None = None) -> tuple[Any, Any]:

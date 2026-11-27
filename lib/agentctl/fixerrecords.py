@@ -10,6 +10,7 @@ from agentctl.core import reds_dir
 from agentctl.statefile import read_record
 from agentctl.procs import record_alive
 from agentctl.statefile import mtime
+from agentctl.core import claude_session_id
 
 
 def fixer_name(rec: dict[str, Any]) -> str:
@@ -30,7 +31,7 @@ def agent_name() -> str | None:
         rec = read_record(own) or {}
         if rec.get("run") is not None:
             return fixer_name({**rec, "path": own})
-    if not os.environ.get("CLAUDE_CODE_SESSION_ID"):
+    if not claude_session_id():
         return os.environ.get("AGENTCTL_AGENT_NAME") or None
     return None
 
@@ -72,7 +73,7 @@ def own_fixer_record_path() -> str | None:
     process spawned with ANOTHER fixer's environment (2026-10-29: #2426's fixer carried #2432's AGENTCTL_FIXER_RECORD
     and wrote its notes onto #2432's lease), so the environment's record counts only when its session is this one, or
     when no record names this session (a record not yet told its session id)."""
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    sid = claude_session_id()
     return _session_fixer_record(sid) if sid else os.environ.get("AGENTCTL_FIXER_RECORD") or None
 
 

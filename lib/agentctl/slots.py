@@ -41,6 +41,7 @@ from agentctl.landqueue import queue_command
 from agentctl.queueenter import enqueue, land_until_done, sync
 from agentctl.processorlink import await_entry, offer_token, spawn_waiting_processor
 from agentctl.landdryrun import dry_run, precheck, refused, stalled
+from agentctl.core import claude_session_id
 
 
 class Interrupted(BaseException):
@@ -299,7 +300,7 @@ def land_watched(repo: str, a: Any, clock: Any, store: Any, *, ctx: Context) -> 
     close = None if getattr(a, "keep_worktree", False) else repo
     if not getattr(a, "follow", False):  # land ends at LANDED; its watch item's verdict goes to the inbox
         start_watch(store, repo, a.landed_sha, a.pushed_at, worktree=repo, close=close,
-                    session=os.environ.get("CLAUDE_CODE_SESSION_ID"))
+                    session=claude_session_id())
         print(f"watching {a.landed_sha[:10]}: its WATCH verdict goes to `agentctl inbox`", flush=True)
         return 0
     # the lock is free again: the next lander goes while this one watches main's CI; on WATCH OK the worktree it ran

@@ -12,6 +12,7 @@ from agentctl.procs import safe_cwd
 from agentctl.fixerrecords import agent_name
 from agentctl.waitingdir import waiting_state
 from agentctl.onmain import landed_state
+from agentctl.core import claude_session_id
 
 
 def internal_trees_dir(*parts: str) -> str:
@@ -40,8 +41,9 @@ def claimant(cwd: str | None = None) -> str:
     name = agent_name()
     if name:
         return name
-    if os.environ.get("CLAUDE_CODE_SESSION_ID"):
-        return f"session {os.environ['CLAUDE_CODE_SESSION_ID'][:8]}"
+    sid = claude_session_id()
+    if sid:
+        return f"session {sid[:8]}"
     return os.path.basename(worktree_of(cwd or safe_cwd()) or safe_cwd())
 
 

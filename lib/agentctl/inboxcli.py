@@ -17,6 +17,7 @@ from agentctl.alertroute import alert_audience, alert_condition_audience, alert_
 from agentctl.inboxwait import inbox_wait
 import argparse
 from agentctl.redview import red_view
+from agentctl.core import claude_session_id
 
 
 # THE ESCALATION THAT WAKES SOMEBODY is an event (severity escalate) the notifier delivers once (notified_at). What is
@@ -136,7 +137,7 @@ def caller_identity():
     top = os.path.realpath(r.stdout.strip()) if r is not None and r.returncode == 0 and r.stdout.strip() else None
     if top in (os.path.realpath(HOME), "/"):
         top = None
-    return os.environ.get("CLAUDE_CODE_SESSION_ID") or None, top, agent_name()
+    return claude_session_id(), top, agent_name()
 
 
 def _inside_worktree(e: Any, top: str) -> bool:

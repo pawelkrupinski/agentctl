@@ -14,3 +14,4 @@ def env_num(name: str, default: float) -> float:
 def env_text(name: str, default: str = "") -> str:
     """A knob's text: the environment's (or the config file's) when set and not empty, else the default."""
     return os.environ.get(name) or default
+

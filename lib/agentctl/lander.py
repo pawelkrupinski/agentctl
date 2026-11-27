@@ -21,6 +21,7 @@ from agentctl.claudefiles import claude_projects_root
 from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec
 from agentctl.redknobs import knob_red_fixer
 from agentctl.queueknobs import knob_lander_landed_every
+from agentctl.core import claude_session_id
 
 
 # ---------------------------------------------------------------- the lander (the owner, 2026-11-01: "remember which
@@ -179,7 +180,7 @@ def lander_record(repo):
     """Who runs this `agentctl land`: {session, agent, transcript, session_cwd, worktree, branch, cwd, host, at,
     claude_pid, repo}. Read from this process's own environment -- land runs in the lander's session -- never from a
     daemon's."""
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or None
+    sid = claude_session_id()
     rec = {"session": sid, "worktree": repo, "branch": branch_of(repo), "cwd": os.getcwd(), "host": os.uname().nodename,
            "at": ts(), "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None}
     try:

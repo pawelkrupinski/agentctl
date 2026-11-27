@@ -3,7 +3,6 @@
 
 from agentctl.clock import epoch_now
 import datetime as dt
-import os
 from typing import Any, Optional
 from agentctl.core import fmt_age, hashlib_sha1
 from agentctl.timefmt import ts
@@ -12,6 +11,7 @@ from agentctl.procs import safe_cwd
 from agentctl.worktrees import claimant
 from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec, TerminalState
 from agentctl.blameknobs import knob_issue_escalate_gap
+from agentctl.core import claude_session_id
 
 
 ISSUE_TEXT_MAX = 4000
@@ -23,7 +23,7 @@ def issue_open(st: Any, text: Any, by: str, cwd: Optional[str] = None, now_: Opt
     text = str(text or "").strip()[:ISSUE_TEXT_MAX]
     iid = f"{dt.datetime.fromtimestamp(t, dt.timezone.utc):%Y%m%dT%H%M%S}-{hashlib_sha1(f'{by}|{text}|{t}')[:6]}"
     return st.put_item("issue", iid, "open", {"text": text, "by": by, "at": ts(), "cwd": cwd,
-                                              "session": os.environ.get("CLAUDE_CODE_SESSION_ID")})
+                                              "session": claude_session_id()})
 
 
 def issue_close(st: Any, iid: str, note: str, by: str) -> Any:

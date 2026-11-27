@@ -12,6 +12,7 @@ from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.onmain import landed_state
 from agentctl.worktrees import worktrees
 from agentctl.cleanup import close_worktree, free_worktree
+from agentctl.core import claude_session_id
 
 
 def parse_duration(text):
@@ -77,7 +78,7 @@ def _report_held_worktree(repo: Any, eid: Any, sha: Any, held: Any) -> Any:
 def _left_alone_reason(repo: Any, item: Any) -> Any:
     """Why `land --until-done` must not clean up worktree repo (another session's, the root checkout), or None."""
     data = (item or {}).get("data") or {}
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    sid = claude_session_id()
     if data.get("session") and sid and data["session"] != sid:
         return f"not this session's (the change was landed by session {data['session']}); its own agent cleans up"
     try:

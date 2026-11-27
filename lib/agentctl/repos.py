@@ -233,6 +233,12 @@ def red_repo_of(d: Any) -> str:
     return str((d or {}).get("repo") or RED_PRIMARY)
 
 
+def red_job_names(d: dict[str, Any]) -> list[str]:
+    """The names of the jobs red data d failed: its `jobs`, else its one `job` (the one reading of them: what a red
+    says, what a fix is matched on)."""
+    return [str(j) for j in d.get("jobs") or [d.get("job")] if j]
+
+
 def red_repo_short(o_r: str) -> str:
     return o_r.split("/", 1)[-1]
 

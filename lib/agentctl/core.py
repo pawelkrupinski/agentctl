@@ -134,10 +134,15 @@ def state_root(*parts: str) -> str:
     return os.path.join(knob_state_root() or os.path.join(HOME, ".cache", "agentctl"), *parts)
 
 
+def claude_session_id() -> str | None:
+    """The Claude session this process runs in ($CLAUDE_CODE_SESSION_ID), None outside one: the one reader of it."""
+    return os.environ.get("CLAUDE_CODE_SESSION_ID") or None
+
+
 def scratch() -> str:
     d = knob_scratch()
     if not d:
-        sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+        sid = claude_session_id()
         hits = sorted(glob.glob(f"/private/tmp/claude-{os.getuid()}/*/{sid}/scratchpad")) if sid else []
         d = hits[0] if hits else state_root()
     os.makedirs(d, exist_ok=True)

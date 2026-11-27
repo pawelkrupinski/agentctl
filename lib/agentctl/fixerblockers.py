@@ -13,6 +13,7 @@ from agentctl.fixerrecords import own_fixer_record_path
 from agentctl.worktrees import worktree_of
 from agentctl.fixerknobs import knob_claude, knob_claude_settings
 from agentctl.redknobs import knob_red_fixer
+from agentctl.core import claude_session_id
 
 
 def in_fixer():
@@ -20,7 +21,7 @@ def in_fixer():
     environment and no Claude session of its own."""
     if own_fixer_record_path():
         return True
-    return not os.environ.get("CLAUDE_CODE_SESSION_ID") and bool(knob_red_fixer())
+    return not claude_session_id() and bool(knob_red_fixer())
 
 
 def land_cwds():

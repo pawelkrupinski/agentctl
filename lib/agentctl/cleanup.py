@@ -27,6 +27,7 @@ from agentctl.runowners import orphan_branches
 from agentctl.govknobs import knob_sbt_reap, SBT_STALL_MIN
 from agentctl.queueknobs import knob_free_wait
 from agentctl.tickknobs import knob_cleanup_item_timeout, knob_fetch_timeout
+from agentctl.core import claude_session_id
 
 
 def cleanup_left(until: Stopwatch | None) -> float:
@@ -272,7 +273,7 @@ def process_session(pid: int) -> str | None:
 
 def stop_session_holders(held: dict[int, str], out: Any) -> None:
     """SIGTERM the holders {pid: command} that belong to this Claude session (never a NEVER_SIGNAL one)."""
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    sid = claude_session_id()
     for pid, cmd in sorted(held.items()):
         if sid and not NEVER_SIGNAL.search(cmd) and process_session(pid) == sid:
             with contextlib.suppress(OSError):

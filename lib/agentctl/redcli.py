@@ -38,6 +38,7 @@ from agentctl.clock import epoch_now
 from agentctl.reverts import revert_line
 from agentctl.status import status_data, status_store
 from agentctl.redhold import red_fix_liveness
+from agentctl.core import claude_session_id
 
 
 def red_am_fixer():
@@ -94,7 +95,7 @@ def red_cmd_lease(a: Any, st: Any, o_r: Any, *, ctx: Context) -> Any:
 def claimed_by_its_fixer(a: Any) -> Any:
     """The dispatched fixer says who it is (its prompt): its record must be a live one of this session (bound to it).
     False, said, when it is not; True for a claim naming no fixer."""
-    sid = os.environ.get("CLAUDE_CODE_SESSION_ID")
+    sid = claude_session_id()
     if getattr(a, "fixer", None) and sid and not bind_fixer_session(sid, os.path.realpath(a.fixer)):
         print(f"NOT CLAIMED: {a.fixer} is no live fixer record of this session ({sid[:8]})")
         return False

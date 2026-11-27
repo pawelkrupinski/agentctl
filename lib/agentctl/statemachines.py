@@ -207,7 +207,8 @@ def change_exits_unannounced(store, since=0):
             if not any(_reaches_inbox(e, it["state"]) for e in evs.get(it["id"], []))]
 
 
-def change_event(e, verdict, tail=(), code=1, final=True, severity="info", **refs):
+def change_event(e: dict[str, Any], verdict: str, tail: Any = (), code: int | None = 1, final: bool = True,
+                 severity: str = "info", **refs: Any) -> dict[str, Any]:
     """The event a change's transition carries to its author (the projector makes it their inbox entry)."""
     return {"text": verdict.splitlines()[0], "severity": severity,
             "audience": {"worktree": e.get("worktree"), "session": e.get("session"), "claude_pid": e.get("claude_pid")},

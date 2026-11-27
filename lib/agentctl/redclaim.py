@@ -22,6 +22,7 @@ from agentctl.redseen import red_obs_of_units
 from agentctl.redblock import red_run_units
 from agentctl.redopen import red_attach_obs, red_open
 from agentctl.fixerland import unlanded_commits
+from agentctl.core import claude_session_id
 
 
 # -- interactive: claim, beat, release
@@ -111,7 +112,7 @@ def _fixer_claim(store: Any, o_r: Any, target: Any, note: str, own: str, *, ctx:
 
 
 def _claim_meta(it: dict[str, Any], wt: str, who: str, note: str, own: str | None) -> dict[str, Any]:
-    return {"kind": "claim", "worktree": wt, "who": who, "note": note, "session": os.environ.get("CLAUDE_CODE_SESSION_ID"),
+    return {"kind": "claim", "worktree": wt, "who": who, "note": note, "session": claude_session_id(),
             "gate": bool(it["data"].get("gate")),
             # made inside a dispatched fixer: its family's holder (red_family_holder); an
             # interactive session's claim takes only its red (the owner, 2026-11-08)

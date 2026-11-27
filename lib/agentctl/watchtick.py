@@ -20,6 +20,7 @@ from agentctl.redopen import red_attach
 from agentctl.cireport import ci_why
 from agentctl.statemachines import StaleVersion, TerminalState
 from agentctl.clock import Clock
+from agentctl.core import claude_session_id
 
 
 def landed_fixes(repo: str, sha: str, fixes: Sequence[str], store: Any, *, ctx: Context) -> list[str]:
@@ -111,7 +112,7 @@ class WatchClaim:
         try:
             st = self.store
             it = start_watch(st, self.repo, self.sha, self.pushed_at, worktree=self.repo, close=self.close, o_r=self.o_r,
-                             session=os.environ.get("CLAUDE_CODE_SESSION_ID"), follower=self.lease(t))
+                             session=claude_session_id(), follower=self.lease(t))
             for _ in range(3):
                 held = self.held(it, t)
                 if held:

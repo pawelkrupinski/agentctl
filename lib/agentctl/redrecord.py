@@ -18,6 +18,7 @@ from agentctl.cistate import ci_state_load
 from agentctl.ciwhy import streak_runs
 from agentctl.ciruns import Run
 from agentctl.runsigs import classifier_version, run_names, run_sigs
+from agentctl.repos import red_job_names
 
 
 
@@ -35,7 +36,7 @@ def red_names(d: dict[str, Any]) -> set[Any]:
 
 
 def red_what(d: dict[str, Any]) -> str:
-    jobs = [str(j) for j in d.get("jobs") or [d.get("job")] if j]
+    jobs = red_job_names(d)
     o_r = red_repo_of(d)
     return ("" if o_r == RED_PRIMARY else f"{red_repo_short(o_r)} ") + f"{d.get('workflow')} #{(d.get('last_run') or {}).get('number')}" + (f" [{', '.join(jobs)}]" if jobs else "")
 
@@ -51,21 +52,24 @@ def red_active(store: Any) -> dict[str, dict[str, Any]]:
 RED_RECURRING = 3            # landed fixes the same failure outlived: `recurring`, and its fixer hunts the root cause
 
 
-def red_of_key(store, key):
+def red_of_key(store: Any, key: str) -> Any:
     """The red item of key now: its open spell, else its newest closed one. A store that does not answer raises
     (review 2026-11-26: it read as "no such red", and a wait on that red was ended as if the red were gone)."""
-    for it in store.items("red"):
+    items = store.items("red")
+    for it in items:
         if it["data"].get("key") == key and not is_terminal("red", it["state"]):
             return it
-    return red_closed_of(store, key)
+    return red_closed_of(store, key, items)
 
 
-def red_closed_of(store, key):
-    """The newest closed (terminal) red item of a red key or id -- `key`, `key.2`, ... -- or None."""
+def red_closed_of(store: Any, key: str, items: list[dict[str, Any]] | None = None) -> Any:
+    """The newest closed (terminal) red item of a red key or id -- `key`, `key.2`, ... -- or None. The spells are read
+    from ONE listing (items, when the caller has it), never one store read each (review 2026-11-26, B 19)."""
     base = re.sub(r"\.\d+$", "", key)
+    spells = {it["id"]: it for it in (store.items("red") if items is None else items)}
     last, n = None, 1
     while n < 200:
-        it = store.item("red", base if n == 1 else f"{base}.{n}")
+        it = spells.get(base if n == 1 else f"{base}.{n}")
         if it is None:
             break
         last, n = it, n + 1

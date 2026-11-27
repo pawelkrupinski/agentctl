@@ -15,9 +15,8 @@ from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.clones import fetch_main, note_clone_suspect
 from agentctl.policy import policy_blocks
 from agentctl.queueslots import check_tree, queue_verdict, set_change
-from agentctl.queue import (
-    FETCH_MAIN_FAILED, INFRA_CHECK_FAILURE, STALLED_REASON, STALL_KEEP_PLACE, VERIFY_MODE, module_overlap,
-    range_paths, requeue_infra, verify_areas_supported, verify_supported)
+from agentctl.queue import VERIFY_MODE, module_overlap, range_paths, verify_areas_supported, verify_supported
+from agentctl.queueinfra import FETCH_MAIN_FAILED, INFRA_CHECK_FAILURE, STALLED_REASON, STALL_KEEP_PLACE, requeue_infra
 from agentctl.generated import generated_entry
 from agentctl.conflicts import CONFLICT_PLACE_KEPT, conflict_cause, conflict_paths
 from agentctl.queuerecheck import recheck_reason

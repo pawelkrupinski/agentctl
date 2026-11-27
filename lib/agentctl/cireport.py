@@ -22,7 +22,7 @@ from agentctl.redseen import gate_red_units, local_red, local_stale, local_units
 from agentctl.stuckruns import stuck_runs
 from agentctl.reduntracked import red_untracked_runs
 from agentctl.redcrash import CRASH_LOOP_CAUSE, DECISION_CAUSE
-from agentctl.ask import trim_words
+from agentctl.ask import clean_cut
 from agentctl.redview import red_lines, red_view, red_view_of_units
 from agentctl.runexplain import explain_run, explain_run_jobs
 from agentctl.outsideflows import main_callable_flows, outside_gate
@@ -81,7 +81,7 @@ def outage_cause(st: Optional[dict[str, Any]]) -> Optional[str]:
 def outage_line(cause: str, until: Any, names: list[str], ask: tuple[Any, Any]) -> str:
     """ONE line per outage, naming the reds it blocks."""
     return (f"{cause} down \u2192 blocks: {', '.join(names)}" + (f" (auto-clears when {until})" if until else "")
-            + (f" -- WAITING ON YOU: {trim_words(ask[0])} -- {ask[1]}" if ask and ask[0] else ""))
+            + (f" -- WAITING ON YOU: {clean_cut(ask[0], 160)} -- {ask[1]}" if ask and ask[0] else ""))
 
 
 def capped(reds: list[str]) -> list[str]:

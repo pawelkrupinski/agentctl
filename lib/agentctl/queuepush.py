@@ -16,7 +16,7 @@ from agentctl.queuehold import break_hold_cycles, expire_idle_hold, idle_hold_ex
 from agentctl.batchitem import current_batch
 from agentctl.conflicts import conflict_cause, conflict_paths
 from agentctl.queueslots import check_tree_slot, checker_alive, queue_verdict, set_change
-from agentctl.queue import requeue_infra
+from agentctl.queueinfra import requeue_infra
 from agentctl.queuerecheck import same_change_source
 from agentctl.changekind import classify_change, classify_queue, facts_for, facts_tick, kind_order, record_change_kind
 from agentctl.waiting import supersede

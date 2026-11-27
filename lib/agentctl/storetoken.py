@@ -18,6 +18,7 @@ from agentctl.fixerknobs import knob_detached, knob_interactive
 from agentctl.blameknobs import knob_no_secrets
 from agentctl.storeknobs import knob_sock_dir
 from agentctl.statefile import note_failure
+from agentctl.core import claude_session_id
 
 
 def token_ns(o_r):
@@ -63,7 +64,7 @@ def interactive_foreground():
         return False
     if knob_interactive():
         return True
-    if os.environ.get("CLAUDECODE") and os.environ.get("CLAUDE_CODE_SESSION_ID"):
+    if os.environ.get("CLAUDECODE") and claude_session_id():
         return True
     try:
         return sys.stdin.isatty() or sys.stderr.isatty()

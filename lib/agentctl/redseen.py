@@ -273,7 +273,7 @@ def red_merge_rekeyed(store, active, obs):
     return acts
 
 
-def red_job_names(d: dict[str, Any]) -> set[str]:
+def red_seen_job_names(d: dict[str, Any]) -> set[str]:
     """The names of the jobs a red's data holds (those seen, else its jobs, else its one job), `?` aside."""
     return {str(j) for j in d.get("jobs_seen") or d.get("jobs") or [d.get("job")] if j and j != "?"}
 
@@ -287,7 +287,7 @@ def rekey_target(active: dict[str, Any], obs: dict[str, Any], key: str, d: dict[
     """The observation of another open red of the workflow that red `key` (data d) is now the same failure as -- one of
     its own runs' names, and one of its jobs, among that red's -- or None."""
     runs = set(map(str, d.get("runs") or []))
-    jobs = red_job_names(d)
+    jobs = red_seen_job_names(d)
     into = [o for o in obs.values() if o["key"] != key and o["key"] in active and o["workflow"] == d.get("workflow")]
     return next((o for o in into if shares_run_and_job(o, runs, jobs)), None)
 

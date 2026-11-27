@@ -37,7 +37,7 @@ from agentctl.processstore import process_store
 from agentctl.reverts import cmd_revert
 from agentctl.issues import cmd_issue
 from agentctl.alerts import alert_write
-from agentctl.queue import probe_infra_requeue, probe_push_credential
+from agentctl.queueinfra import probe_infra_requeue, probe_push_credential
 from agentctl.gov import cmd_suite
 from agentctl.govcmd import cmd_checks, cmd_gov
 from agentctl.cleanup import cmd_sweep

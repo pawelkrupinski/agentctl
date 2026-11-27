@@ -35,7 +35,7 @@ GETTERS = {
 READER_CEILINGS = {
     "clock.wire_clock": (88, 127),
     "procrunner.wire_runner": (40, 55),
-    "inboxentry.wire_inbox_writer": (32, 39),
+    "inboxentry.wire_inbox_writer": (31, 39),
 }
 
 

@@ -137,8 +137,8 @@ class LongQuestionTest(AskBase):
         d = blk["data"]
         ask = {"q": self.Q, "how": "answer: `! agentctl decide k \"x\"`", "until": None}
         self.assertIn(self.Q, A.red_ask_line(d, ask))
-        self.assertEqual(A.trim_words(self.Q).split(" ")[-1][-1], "\u2026")
-        self.assertIn(A.trim_words(self.Q)[:-1].split(" ")[-1], self.Q.split(" "))
+        self.assertEqual(A.clean_cut(self.Q, 160).split(" ")[-1][-1], "\u2026")
+        self.assertIn(A.clean_cut(self.Q, 160)[:-1].split(" ")[-1], self.Q.split(" "))
 
 
 class ReminderTest(AskBase):

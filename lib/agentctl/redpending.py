@@ -3,32 +3,33 @@
 
 
 from typing import Any
-from agentctl.context import Context
 from agentctl.timefmt import iso_at, parse_time, ts
+from agentctl.redknobs import knob_red_fix_giveup, knob_red_fix_requeue_grace
 from agentctl.core import fmt_age
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.redrepos import verify_dispatchable
-from agentctl.onmain import contains_local
-from agentctl.redrecord import RED_RECURRING, lease_is_live, red_lease, red_what
+from agentctl.context import Context
 from agentctl.redfixread import FIX_OPEN
-from agentctl.fixchange import red_change, red_fix_fresh
-from agentctl.redfixes import (
-    red_entry_status, red_fix_is_set_aside, red_fix_of, red_fix_on_main, red_refuted_with,
-    fix_failed_said, red_set_aside)
+from agentctl.redrecord import RED_RECURRING, lease_is_live, red_lease, red_what
+from agentctl.redfixcheck import fix_reaches_red
 from agentctl.redask import red_decision
+from agentctl.fixchange import red_change, red_fix_fresh
 from agentctl.red import (
-    red_close, red_fix_giveup, RED_FIX_RUN_START, red_keep_holder, red_move, red_stop_holder, red_waits_for_its_run)
-from agentctl.redverify import (
-    red_fix_since, red_fix_unverifiable, red_verify_await, red_verify_plan, red_verify_run_on_way, red_verify_scheduled)
+    RED_FIX_RUN_START, fix_failed_said, red_close, red_fix_giveup, red_keep_holder, red_move, red_stop_holder,
+    red_waits_for_its_run)
+from agentctl.onmain import contains_local
 from agentctl.landwatch import WATCH_SLACK
+from agentctl.redfixes import (
+    red_entry_status, red_fix_follow, red_fix_is_set_aside, red_fix_of, red_fix_on_main, red_fix_requeue_wait,
+    red_refuted_with, red_set_aside)
 from agentctl.workflowdispatch import red_verify_dispatch
 from agentctl.redopen import red_offer
-from agentctl.ask import red_decision_failed
+from agentctl.redverify import (
+    red_fix_since, red_fix_unverifiable, red_verify_await, red_verify_plan, red_verify_run_on_way,
+    red_verify_scheduled)
 from agentctl.blame import blame_refuted
 from agentctl.redwaits import RED_WAITS_ON, red_waits_on_step
-from agentctl.redfollow import red_fix_follow, red_fix_requeue_wait
-from agentctl.redfixcheck import fix_reaches_red
-from agentctl.redknobs import knob_red_fix_giveup
+from agentctl.ask import red_decision_failed
 
 
 class FixPending:
@@ -278,7 +279,7 @@ class FixPending:
         moved, ended = red_fix_follow(self.store, f, self.repo, self.t)
         if moved:
             return self.followed(moved, ended)
-        if ended and red_fix_requeue_wait(self.store, f, self.t):
+        if ended and red_fix_requeue_wait(self.store, f, self.t, knob_red_fix_requeue_grace()):
             return []
         return self.change_state(ended or status)
 

@@ -22,14 +22,6 @@ from agentctl.statemachines import StaleVersion, is_terminal
 DECISION_FAILED = re.compile(r"\W*(NOT LANDED|GAVE UP|DIAGNOSED)\b")
 
 
-def trim_words(text, n=160):
-    """text shortened at a word boundary with an ellipsis (whole when it fits n): never cut mid-word."""
-    text = str(text)
-    if len(text) <= n:
-        return text
-    return text[:n].rsplit(" ", 1)[0].rstrip(" ,;:-") + "\u2026"
-
-
 def clean_cut(text, n=60):
     """text at most n characters, cut at a word boundary with an ellipsis, never mid-word."""
     text = " ".join(str(text or "").split())

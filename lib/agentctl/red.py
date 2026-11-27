@@ -308,3 +308,10 @@ def red_settled_runs(store):
     as verified, never "offering" (Report run timings #38 read "offering" in the status line after its FIX OK)."""
     return {(it["data"].get("key"), str(it["data"]["settled_run"])): it for it in store.items("red")
             if it["state"] == "verified" and it["data"].get("settled_run") is not None}
+
+
+def fix_failed_said(d: dict[str, Any], sha: str, last: dict[str, Any]) -> str:
+    """The FIX FAILED line of red data d (its fix `sha` still fails in run `last`), said to the inbox; the line."""
+    line = f"FIX FAILED: {red_what(d)}: #{last.get('number')} still fails this way (fix {sha[:10]})"
+    inbox_write("red", line, [line], [d.get("line") or ""], 1)
+    return line

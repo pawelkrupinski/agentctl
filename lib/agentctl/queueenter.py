@@ -39,6 +39,7 @@ from agentctl.processorlink import offer_token, spawn_waiting_processor
 from agentctl.hookoutput import precheck_reason
 from agentctl.landqueue import queue_command
 from agentctl.syncsteps import submit_remote
+from agentctl.core import claude_session_id
 
 
 def change_fields(repo, main_ref, head, a, store, *, ctx):
@@ -49,7 +50,7 @@ def change_fields(repo, main_ref, head, a, store, *, ctx):
             "keep_worktree": bool(getattr(a, "keep_worktree", False)),
             "no_batch": bool(getattr(a, "no_batch", False)),
             "claude_pid": int(os.environ["CLAUDE_PID"]) if (os.environ.get("CLAUDE_PID") or "").isdigit() else None,
-            "session": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
+            "session": claude_session_id(),
             "base": git(repo, "rev-parse", main_ref).strip(), "host": os.uname().nodename,
             # THE LANDER (lander.py): who landed it, and each commit's keys to find it on main after the rebase
             "lander": lander_record(repo), "commit_keys": commit_keys(repo, main_ref, head),

@@ -55,7 +55,6 @@ effect	lib/agentctl/config.py	1
 effect	lib/agentctl/core.py	2
 effect	lib/agentctl/culpritfix.py	1
 effect	lib/agentctl/entrychecks.py	1
-effect	lib/agentctl/fixerblockers.py	1
 effect	lib/agentctl/fixerenv.py	1
 effect	lib/agentctl/fixerland.py	1
 effect	lib/agentctl/fixerlife.py	2
@@ -68,10 +67,8 @@ effect	lib/agentctl/govknobs.py	1
 effect	lib/agentctl/govpool.py	2
 effect	lib/agentctl/govtickets.py	1
 effect	lib/agentctl/hostsleep.py	1
-effect	lib/agentctl/inboxcli.py	1
 effect	lib/agentctl/inboxentry.py	1
 effect	lib/agentctl/inboxwait.py	1
-effect	lib/agentctl/issues.py	1
 effect	lib/agentctl/jvmreap.py	3
 effect	lib/agentctl/land.py	2
 effect	lib/agentctl/lander.py	1
@@ -90,9 +87,8 @@ effect	lib/agentctl/processorlink.py	1
 effect	lib/agentctl/procs.py	1
 effect	lib/agentctl/procwatch.py	1
 effect	lib/agentctl/queueenter.py	1
-effect	lib/agentctl/queueuntil.py	1
 effect	lib/agentctl/recovery.py	1
-effect	lib/agentctl/redclaim.py	2
+effect	lib/agentctl/redclaim.py	1
 effect	lib/agentctl/redcli.py	1
 effect	lib/agentctl/reddispatch.py	1
 effect	lib/agentctl/redview.py	1
@@ -115,8 +111,6 @@ effect	lib/agentctl/timefmt.py	1
 effect	lib/agentctl/waiting.py	1
 effect	lib/agentctl/watchdog.py	1
 effect	lib/agentctl/watchknobs.py	1
-effect	lib/agentctl/watchtick.py	1
-effect	lib/agentctl/worktrees.py	1
 effect	quality/design.py	1
 effect	quality/tools.py	1
 effect	quality/typecheck.py	1
@@ -231,8 +225,7 @@ fanout	lib/agentctl/owned.py	13
 fanout	lib/agentctl/owner.py	19
 fanout	lib/agentctl/ownerwrapper.py	23
 fanout	lib/agentctl/processor.py	28
-fanout	lib/agentctl/queue.py	12
-fanout	lib/agentctl/queuecheck.py	18
+fanout	lib/agentctl/queuecheck.py	19
 fanout	lib/agentctl/queuediff.py	22
 fanout	lib/agentctl/queueenter.py	28
 fanout	lib/agentctl/queuepush.py	19
@@ -249,7 +242,7 @@ fanout	lib/agentctl/redhold.py	21
 fanout	lib/agentctl/redland.py	12
 fanout	lib/agentctl/redlease.py	18
 fanout	lib/agentctl/redopen.py	21
-fanout	lib/agentctl/redpending.py	21
+fanout	lib/agentctl/redpending.py	20
 fanout	lib/agentctl/redrecord.py	11
 fanout	lib/agentctl/redseen.py	16
 fanout	lib/agentctl/redstep.py	21

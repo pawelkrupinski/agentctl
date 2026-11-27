@@ -18,6 +18,7 @@ from agentctl.workflows import fix_workflow_jobs
 from agentctl.clones import RED_MAIN_REFETCH, fetch_main
 
 from agentctl.statemachines import open_states
+from agentctl.repos import red_job_names
 
 
 # -- fixes on their way: Fixes-Red changes in the queue, and Fixes-Red commits landed on main
@@ -277,10 +278,6 @@ def red_workflow_file(repo: str, sha: str, d: dict[str, Any], files: list[str]) 
         if (m and m.group(1).strip() == want) or os.path.basename(f) == want:
             return f, txt
     return None
-
-
-def red_job_names(d: dict[str, Any]) -> list[str]:
-    return [str(j) for j in d.get("jobs") or [d.get("job")] if j]
 
 
 def red_failing_jobs(text: str, d: dict[str, Any]) -> list[str]:
