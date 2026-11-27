@@ -1,8 +1,6 @@
 # agentctl, part `statuspage`: the read-only status page: its HTTP server on a daemon thread, its URL, `agentctl status` and `--open`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.context import Context
-from agentctl.clock import epoch_now
 import http.server
 import json
 import os
@@ -13,19 +11,22 @@ import urllib.parse
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.core import err, on_ci_runner, process_cache, reds_dir, state_root
 from agentctl.statefile import read_json_file, write_json
-from agentctl.live import live_lookup
-from agentctl.laptoprole import LAPTOP_ROLE_LEASE, standby_of
-from agentctl.storestate import port_open
-from agentctl.remotestore import store_unreachable_text
-from agentctl.statusagents import STATUS_LOG_MAX, STATUS_LOG_SUFFIXES, status_log_body
-from agentctl.status import render_status, status_cached, status_header
-from agentctl.redhold import red_fix_liveness
+from agentctl.clock import epoch_now
 from agentctl.livepage import AGENT_PAGE_HTML, STATUS_PAGE_HTML
+from agentctl.watchknobs import knob_status_page, knob_status_port
+from agentctl.core import err, on_ci_runner, process_cache
+from agentctl.live import live_lookup
 from agentctl.livestream import (
     LIVE_SEND_TIMEOUT, LIVE_STREAMS, _live_streams, live_mask_text, live_peer_closed, live_stream)
-from agentctl.watchknobs import knob_status_page, knob_status_port
+from agentctl.context import Context
+from agentctl.statusagents import STATUS_LOG_MAX, STATUS_LOG_SUFFIXES, status_log_body
+from agentctl.laptoprole import LAPTOP_ROLE_LEASE, standby_of
+from agentctl.remotestore import store_unreachable_text
+from agentctl.storestate import port_open
+from agentctl.redhold import red_fix_liveness
+from agentctl.status import render_status, status_cached, status_header
+from agentctl.paths import reds_dir, state_root
 
 
 # ---------------------------------------------------------------- the status page (2026-10-29)

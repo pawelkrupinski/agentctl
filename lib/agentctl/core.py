@@ -1,9 +1,8 @@
-# agentctl, part `core`: the process-cache registry, err and attempt, and the git, path and process helpers every part uses.
+# agentctl, part `core`: the process-cache registry, err and attempt, and the git runner and process helpers every part
+# uses (split 2026-11-27: the commit-graph questions to gitrepo, the state paths to paths, slug to repos).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and procrunner's only.
 
-import glob
 import os
-import re
 import shlex
 import stat
 import subprocess
@@ -13,9 +12,7 @@ import time
 from typing import Any, Callable, Sequence, TypeVar
 from agentctl.procrunner import process_runner
 from agentctl.psparse import parse_ps
-from agentctl.redknobs import knob_dispatch_dir, knob_reds_dir
-from agentctl.storeknobs import knob_host, knob_remote, knob_role, knob_scratch, knob_state_root
-from agentctl.blameknobs import knob_recovery_dir
+from agentctl.storeknobs import knob_host, knob_remote, knob_role
 
 # THE PROCESS-WIDE CACHES, IN ONE REGISTRY (simplification-2026-10-31 item 10): every module-level dict, list or set a
 # part keeps between calls is made with `process_cache(...)`, so the test harness clears them all between tests
@@ -32,11 +29,6 @@ def process_cache(empty: T) -> T:
     return empty
 
 HOME = os.path.expanduser("~")
-
-
-def tilde(path: str) -> str:
-    """path with the home directory written as `~` (for a line a person reads)."""
-    return path.replace(HOME, "~")
 
 
 REPOS = [f"{HOME}/bitcashier/{r}" for r in ("infra", "core", "dashboard", "invoice-page", "version-dashboard")] + [
@@ -74,28 +66,6 @@ def attempt(fn: Callable[[], T], default: D, *, catch: tuple[type[BaseException]
         if what is not None:
             err(f"{what} ({str(e)[:160]})")
         return default
-
-
-def state_root(*parts: str) -> str:
-    """THE state root (the owner, 2026-10-28: tests wrote ~200 waiting/ dirs, the sweep reports and 176 rows of
-    checks/runs.jsonl into the real cache): $AGENTCTL_STATE_ROOT, else ~/.cache/agentctl, resolved at EVERY use and
-    inherited by every child process. Every agentctl path is under it unless its own override says otherwise."""
-    return os.path.join(knob_state_root() or os.path.join(HOME, ".cache", "agentctl"), *parts)
-
-
-def claude_session_id() -> str | None:
-    """The Claude session this process runs in ($CLAUDE_CODE_SESSION_ID), None outside one: the one reader of it."""
-    return os.environ.get("CLAUDE_CODE_SESSION_ID") or None
-
-
-def scratch() -> str:
-    d = knob_scratch()
-    if not d:
-        sid = claude_session_id()
-        hits = sorted(glob.glob(f"/private/tmp/claude-{os.getuid()}/*/{sid}/scratchpad")) if sid else []
-        d = hits[0] if hits else state_root()
-    os.makedirs(d, exist_ok=True)
-    return d
 
 
 GIT_NET_SSH = "ssh -o BatchMode=yes -o ConnectTimeout=20 -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
@@ -149,30 +119,6 @@ def git_ok(repo: str, *args: str) -> bool:
         return process_runner().run(["git", "-C", repo, *args], capture_output=True, timeout=120).returncode == 0
     except subprocess.TimeoutExpired:
         return False
-
-
-def is_ancestor(repo: str, ancestor: str | None, descendant: str | None) -> bool:
-    """Whether `descendant` (a commit or ref) contains `ancestor`: git's own test, False when either is unknown here."""
-    return git_ok(repo, "merge-base", "--is-ancestor", str(ancestor), str(descendant))
-
-
-def commit_known(repo: str, rev: str | None) -> bool:
-    """Whether `rev` names a commit this clone holds (ONE existence check: no fetch)."""
-    return git_ok(repo, "cat-file", "-e", f"{rev}^{{commit}}")
-
-
-def slug(repo_arg: str) -> str:
-    if repo_arg in SHORT:
-        return SHORT[repo_arg]
-    if os.path.isdir(repo_arg):
-        url = git(repo_arg, "remote", "get-url", remote()).strip()
-        m = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$", url)
-        if not m:
-            raise SystemExit(f"agentctl: cannot parse remote url of {repo_arg}")
-        return m.group(1)
-    if re.fullmatch(r"[\w.-]+/[\w.-]+", repo_arg):
-        return repo_arg
-    raise SystemExit(f"agentctl: unknown repo {repo_arg!r}")
 
 
 # DETACHED CHILDREN ARE REAPED (2026-10-29: the processor, pid 77145, carried ~17 <defunct> children, some 6 h old --
@@ -248,27 +194,11 @@ def host_role() -> str:
     return "sync"
 
 
-def recovery_dir(*parts: str) -> str:
-    """The recovery registry's directory (its files: orphans, parked, superseded, the reland log), or a path in it."""
-    d = knob_recovery_dir() or (reds_dir("recovery") if knob_reds_dir() else state_root("recovery"))
-    return os.path.join(d, *parts)
-
-
-def reds_dir(*parts: str) -> str:
-    d = knob_reds_dir() or state_root("reds")
-    return os.path.join(d, *parts)
-
-
 def branch_of(wt: str | None) -> str:
     """The worktree's checked-out branch ('' when detached or gone)."""
     if not os.path.isdir(wt or ""):
         return ""
     return str(git(wt or "", "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout).strip()
-
-
-def dispatches_dir(*parts: str) -> str:
-    d = knob_dispatch_dir() or os.path.join(os.path.dirname(reds_dir()), "dispatches")
-    return os.path.join(d, *parts)
 
 
 _bounded = process_cache({})

@@ -1,25 +1,25 @@
 # agentctl, part `runsigs`: a run's failure signatures: each failed job's cause and signature, saved per run, read again only as far as its budget
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.context import Context
-from agentctl.clock import epoch_now
 import glob
 import os
 from contextlib import suppress
 from typing import Any
-from agentctl.core import reds_dir
+from agentctl.statefile import note_failure, read_record, write_json
+from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json, note_failure
+from agentctl.workflows import STEP_TIMED_OUT
 from agentctl.classify import (
     CREDENTIAL_STEP, INFRA_LOG, KEY_REFUSED_LOG, NOISE, NOT_A_FAILURE, RUNNER_FAILED, SETUP_STEP, STRONG,
     UNKNOWN_LOG, WEAK, classify_job, log_verdict_version, norm_line)
 from agentctl.forge import RED_CONCLUSIONS
-from agentctl.workflows import STEP_TIMED_OUT
 from agentctl.joblog import (
     ANNOTATION, DRIFT_LINE, FLIP_HEADER, FLIP_KEY_MAX, FLIP_ROW, FLIP_TAKES, choose_job_lines, drift_key,
     failed_jobs_log, flip_key_line, flip_listings, job_log_lines, relevant_lines, step_window_lines)
+from agentctl.context import Context
 from agentctl.ciwhy import VERDICT_COMPLETE_JOB, job_is_phantom, job_is_verdict_report, jobs_no_verdict, resolve_run
 from agentctl.runexplain import explain_run_jobs, run_failed_attempt, run_failed_jobs
+from agentctl.paths import reds_dir
 
 
 def signature(workflow, job, line):

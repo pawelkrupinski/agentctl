@@ -6,20 +6,21 @@ import subprocess
 import sys
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import NO_SIGN, git, reds_dir, remote, tilde
-from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
-from agentctl.redrecord import red_what
+from agentctl.timefmt import ts
+from agentctl.core import NO_SIGN, git, remote
 from agentctl.claudefiles import bg_transcript
-from agentctl.lander import blame_change_key, blame_change_name, blame_decision, lander_name
 from agentctl.allowedpaths import allowed_path
 from agentctl.inboxentry import inbox_write
-from agentctl.land import spawn_land
+from agentctl.redrepos import red_owner_only
 from agentctl.worktrees import WorktreeGuard, fresh_worktree
 from agentctl.fixerenv import fixer_env
-from agentctl.redland import agentctl_revert_fix_replay
-from agentctl.redrepos import red_owner_only
+from agentctl.lander import blame_change_key, blame_change_name, blame_decision, lander_name
+from agentctl.redrecord import red_what
+from agentctl.land import spawn_land
 from agentctl.fixerland import dispatch_log, red_dispatch
+from agentctl.redland import agentctl_revert_fix_replay
+from agentctl.paths import reds_dir, tilde
 
 
 # -- 3. the revert: the culprit's commits undone, landed as a gate fix

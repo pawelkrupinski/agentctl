@@ -11,16 +11,17 @@ from agentctl.statemachines import machine_state
 from agentctl.clock import Clock, epoch_now
 from agentctl.timefmt import hhmmz, ts
 from agentctl.core import git, git_ok, host_role
-from agentctl.repos import movies_repo_path
 from agentctl.procs import safe_cwd
+from agentctl.agewords import fmt_age
+from agentctl.repos import movies_repo_path
 from agentctl.clones import main_clone
 from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.store import StoreUnavailable
+from agentctl.context import Context
+from agentctl.landhold import LAND_HOLD_DEFAULT, hold_by, hold_text, land_hold, land_hold_release, land_hold_set
 from agentctl.processorlink import await_entry, offer_token, spawn_waiting_processor, waiting_processor_alive
 from agentctl.batchitem import status_batch
-from agentctl.context import Context
 from agentctl.remotestore import store_unreachable_text, store_url
-from agentctl.landhold import LAND_HOLD_DEFAULT, hold_by, hold_text, land_hold, land_hold_release, land_hold_set
 from agentctl.tickservice import waiting_service
 from agentctl.queueslots import set_change
 from agentctl.changekind import HOLD_SHOWN
@@ -35,7 +36,6 @@ from agentctl.batch import batch_row_ids
 from agentctl.invariants import change_carrying_batch
 from agentctl.checkround import check_entry
 from agentctl.batchcheck import check_batch
-from agentctl.agewords import fmt_age
 
 
 def waiting_repo(a: argparse.Namespace) -> str:

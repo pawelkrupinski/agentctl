@@ -1,7 +1,6 @@
 # agentctl, part `owner`: long-lived red family owners: an owner spawned in its worktree, its turns and their prompts, its heartbeat
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import json
 import os
 import re
@@ -9,24 +8,26 @@ import subprocess
 import sys
 from typing import Any
 from contextlib import suppress
-from agentctl.core import git, git_ok, remote, spawn_detached, tilde
-from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json, note_failure
+from agentctl.statefile import note_failure, read_record, write_json
 from agentctl.selfcode import TOOL_PATH
-from agentctl.waitingdir import waiting_state
+from agentctl.clock import epoch_now
+from agentctl.timefmt import ts
+from agentctl.core import git, git_ok, remote, spawn_detached
 from agentctl.procs import process_start, record_alive, socket_host
+from agentctl.paths import tilde
+from agentctl.waitingdir import waiting_state
 from agentctl.inboxentry import inbox_write
-from agentctl.fixersession import bg_resumable
 from agentctl.worktrees import worktree_exclude
+from agentctl.fixersession import bg_resumable
 from agentctl.fixerenv import fixer_env
 from agentctl.redrecord import red_active, red_what
 from agentctl.leases import lease_meta
-from agentctl.redland import sync_brief
 from agentctl.owners import OWNER_TTL, owner_dir, owner_lease, owner_record_path
 from agentctl.redask import red_decision
+from agentctl.ownerleases import owner_hand, owner_holder
+from agentctl.redland import sync_brief
 from agentctl.fixerprompt import fixer_prompt
 from agentctl.fixerlife import HeldLease
-from agentctl.ownerleases import owner_hand, owner_holder
 
 
 OWNER_MAX = 7 * 86400        # ...and is held at most this long in one spell (a restart takes it again)

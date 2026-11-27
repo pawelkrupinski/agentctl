@@ -1,19 +1,19 @@
 # agentctl, part `fixerblockers`: what blocks a fixer's dispatch here: no claude CLI, an interactive session, a fixer or land in this cwd
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import os
 import re
 import subprocess
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, process_cache, reds_dir
 from agentctl.statefile import read_record
+from agentctl.clock import epoch_now
+from agentctl.redknobs import knob_red_fixer
+from agentctl.fixerknobs import knob_claude, knob_claude_settings
+from agentctl.core import HOME, process_cache
 from agentctl.procs import lsof_cwds, ps
 from agentctl.fixerrecords import own_fixer_record_path
 from agentctl.worktrees import worktree_of
-from agentctl.fixerknobs import knob_claude, knob_claude_settings
-from agentctl.redknobs import knob_red_fixer
-from agentctl.core import claude_session_id
+from agentctl.paths import claude_session_id, reds_dir
 
 
 def in_fixer():

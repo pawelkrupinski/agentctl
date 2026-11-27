@@ -50,7 +50,7 @@ def render_all(module):
     with mock.patch.object(module, "revert_line", lambda r, now: f"revert {r['id']} at {now:g}"), \
             mock.patch.object(module, "red_repo_short", lambda repo: f"<{repo}>"), \
             mock.patch.object(module, "RED_PRIMARY", "movies"), \
-            mock.patch.object(importlib.import_module("agentctl.core"), "HOME", os.path.expanduser("~")), \
+            mock.patch.object(importlib.import_module("agentctl.paths"), "HOME", os.path.expanduser("~")), \
             mock.patch.object(module, "epoch_now", lambda: 12345.0):
         return {name: module.render_red_status(m, verbose) for name, (m, verbose) in SCENARIOS.items()}
 

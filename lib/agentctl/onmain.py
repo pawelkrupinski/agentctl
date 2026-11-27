@@ -1,7 +1,7 @@
 # agentctl, part `onmain`: IS THIS COMMIT ON MAIN -- ONE CONCEPT (2026-11-27, was ancestry + landstate + patches + maincontain):
 # the landed check (landed_state: ancestor, then patch-equivalent), a patch's identity (patch ids, empty commits),
 # containment of a run's head (contains, contains_local) and MainContainment (a clone's git or the forge's compare).
-# The ancestry test itself is core.is_ancestor / core.commit_known, beside the git runner every caller holds.
+# The ancestry test itself is gitrepo.is_ancestor / gitrepo.commit_known, the leaf over git (GitRepo its interface).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
@@ -9,11 +9,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional
 from agentctl.clock import epoch_now
-from agentctl.core import attempt, commit_known, git, git_ok, is_ancestor, process_cache, remote, run_cmd
+from agentctl.core import attempt, git, git_ok, process_cache, remote, run_cmd
+from agentctl.landedtwin import cherry_landed, content_twin
 from agentctl.trailers import commit_trailer_values
+from agentctl.gitrepo import commit_known, is_ancestor
 from agentctl.clones import RED_MAIN_REFETCH, fetch_main
 from agentctl.forge import gh_json
-from agentctl.landedtwin import cherry_landed, content_twin
 
 
 class Landed(Enum):

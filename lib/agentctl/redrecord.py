@@ -5,20 +5,20 @@
 import re
 from typing import Any
 from dataclasses import dataclass
-from agentctl.repos import RED_PRIMARY, red_repo_of, red_repo_short
-from agentctl.workflows import LOCAL_FLOW
-from agentctl.statemachines import machine_state, open_items, is_terminal
-from agentctl.classify import norm_line
-from agentctl.redrepos import red_is_other, red_repo_key
 from agentctl.statefile import read_record
+from agentctl.statemachines import is_terminal, machine_state, open_items
 from agentctl.redknobs import knob_streak_rereads
-from agentctl.core import SHORT, err, process_cache, reds_dir
+from agentctl.core import SHORT, err, process_cache
+from agentctl.repos import RED_PRIMARY, red_job_names, red_repo_of, red_repo_short
+from agentctl.workflows import LOCAL_FLOW
+from agentctl.classify import norm_line
 from agentctl.forge import RED_CONCLUSIONS
+from agentctl.redrepos import red_is_other, red_repo_key
 from agentctl.cistate import ci_state_load
-from agentctl.ciwhy import streak_runs
 from agentctl.ciruns import Run
+from agentctl.ciwhy import streak_runs
 from agentctl.runsigs import classifier_version, run_names, run_sigs
-from agentctl.repos import red_job_names
+from agentctl.paths import reds_dir
 
 
 

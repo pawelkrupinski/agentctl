@@ -5,13 +5,15 @@ import os
 import sys
 from typing import Any
 from agentctl.clock import stopwatch
-from agentctl.core import PROTECTED_BRANCHES, REPOS, err, git, remote, scratch, slug
-from agentctl.forge import forge_branch_sha, forge_delete_branch, gh_json
-from agentctl.procs import process_cwds
-from agentctl.worktrees import merged_reason, worktrees
-from agentctl.deletions import log_deletion
-from agentctl.cleanup import bounded_fetch, cleanup_left, plan_measure, plan_worktrees, still_in_use
 from agentctl.tickknobs import knob_cleanup_remove_reserve
+from agentctl.core import PROTECTED_BRANCHES, REPOS, err, git, remote
+from agentctl.repos import slug
+from agentctl.procs import process_cwds
+from agentctl.forge import forge_branch_sha, forge_delete_branch, gh_json
+from agentctl.deletions import log_deletion
+from agentctl.worktrees import merged_reason, worktrees
+from agentctl.cleanup import bounded_fetch, cleanup_left, plan_measure, plan_worktrees, still_in_use
+from agentctl.paths import scratch
 
 
 def cmd_cleanup(a: Any) -> int:

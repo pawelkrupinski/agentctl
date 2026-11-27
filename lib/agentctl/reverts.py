@@ -4,14 +4,16 @@
 from agentctl.statemachines import ARCHIVE, IllegalTransition, MACHINES, StaleVersion, StateSpec, TerminalState
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
-from agentctl.core import git, is_ancestor, remote, tilde
+from agentctl.core import git, remote
 from agentctl.repos import RED_PRIMARY
 from agentctl.trailers import fixes_red_in_message, trailer_format, trailer_values
 from agentctl.allowedpaths import allowed_path
-from agentctl.lander import lander_index, lander_name, lander_of_commit, lander_records, patch_ids
 from agentctl.store import StoreUnavailable
 from agentctl.worktrees import claimant, worktree_exclude
 from agentctl.agewords import fmt_age
+from agentctl.lander import lander_index, lander_name, lander_of_commit, lander_records, patch_ids
+from agentctl.gitrepo import is_ancestor
+from agentctl.paths import tilde
 import os
 import re
 import time

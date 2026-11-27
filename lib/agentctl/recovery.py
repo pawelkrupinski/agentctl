@@ -14,16 +14,17 @@ from agentctl.statefile import read_json_file, unlink_file, write_json_file
 from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import epoch_now
 from agentctl.timefmt import iso_at, ts
-from agentctl.core import SHORT, _tokens, err, git, recovery_dir, remote, spawn_detached, tilde
+from agentctl.core import SHORT, _tokens, err, git, remote, spawn_detached
 from agentctl.trailers import held_commit
 from agentctl.forge import gh_json
+from agentctl.worktrees import mark_internal
 from agentctl.storetoken import (
     no_vault, red_read_token, take_token_notes, token_env_name, token_from_processor, token_vault_key)
 from agentctl.conditions import open_condition, open_conditions, recovery_tick, run_probe
 from agentctl.batchitem import batch_move, current_batch
 from agentctl.tunnel import default_route, tunnel_ports, tunnel_probe, tunnel_state_path
-from agentctl.worktrees import mark_internal
 from agentctl.blamerecords import blame_land_refusal
+from agentctl.paths import recovery_dir, tilde
 
 
 def probe_route(_a):

@@ -8,15 +8,16 @@ from agentctl.statemachines import StaleVersion, TerminalState, machine_state, o
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
 from agentctl.queueknobs import knob_landed_look
-from agentctl.core import commit_known, host_role, process_cache, remote
+from agentctl.core import host_role, process_cache, remote
 from agentctl.repos import movies_repo_path
 from agentctl.procs import safe_cwd
 from agentctl.waitingdir import ChangeRecords, drop_entry, entry_final, waiting_state
 from agentctl.inboxentry import inbox_write
-from agentctl.conditions import open_condition, run_probe
 from agentctl.onmain import LandState, UNKNOWN, landed_state
+from agentctl.conditions import open_condition, run_probe
 from agentctl.waiting import already_landed
 from agentctl.queuesubmit import SUBMIT_FIELDS, submit_ref
+from agentctl.gitrepo import commit_known
 
 
 _landed_looked = process_cache({})

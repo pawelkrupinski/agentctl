@@ -7,7 +7,8 @@ from typing import Any
 from agentctl.timefmt import parse_time
 from agentctl.storeknobs import knob_remote_ghost
 from agentctl.leasetable import LeaseLost
-from agentctl.core import err, git, host_role, remote, slug
+from agentctl.core import err, git, host_role, remote
+from agentctl.repos import slug
 from agentctl.procs import Terminated
 from agentctl.checkrows import check_run_record, with_run
 from agentctl.networksignatures import check_push_failure, credential_failure
@@ -16,10 +17,10 @@ from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
 from agentctl.joblog import fetch_failed_log, job_log_lines, relevant_lines
 from agentctl.owned import backoff, cancel_run
 from agentctl.checkrunjobs import REMOTE_WORKFLOW, jobs_verdict, remote_progress, remote_read_bounds, verdict_jobs
-from agentctl.leases import lock_beat
-from agentctl.queue import VERIFY_AREAS_MODE, VERIFY_MODE
 from agentctl.runowners import record_dispatch, save_dispatch
 from agentctl.agewords import fmt_age
+from agentctl.leases import lock_beat
+from agentctl.queue import VERIFY_AREAS_MODE, VERIFY_MODE
 
 
 REMOTE_TIMEOUT = 2 * 3600  # s past its push a run may be cancelled -- only when idle REMOTE_IDLE (RUN PROGRESS, below)

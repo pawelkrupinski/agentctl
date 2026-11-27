@@ -6,9 +6,9 @@ import subprocess
 import urllib.error
 import urllib.request
 from agentctl.procrunner import process_runner
-from agentctl.core import state_root
-from agentctl.remotestore import default_store_url, store_url
 from agentctl.storeknobs import knob_tunnel_state
+from agentctl.remotestore import default_store_url, store_url
+from agentctl.paths import state_root
 
 
 # ---------------------------------------------------------------- env

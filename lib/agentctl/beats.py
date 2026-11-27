@@ -1,10 +1,10 @@
 # agentctl, part `beats`: the beat files: each loop's last sign of life (the processor's, maintain's, the watchdog's) and its age
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import os
-from agentctl.core import state_root
 from agentctl.statefile import note_failure
+from agentctl.clock import epoch_now
+from agentctl.paths import state_root
 
 
 def beat_path(name):

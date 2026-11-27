@@ -1,9 +1,6 @@
 # agentctl, part `slots`: `agentctl land`: the land in a worktree, its loop (dry run, proven push, join) and its stash
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.context import Context
-from agentctl.ids import stamp
-from agentctl.clock import epoch_now
 import argparse
 import contextlib
 import fcntl
@@ -14,34 +11,36 @@ import sys
 import threading
 import time
 from typing import Any
-from agentctl.core import branch_of, err, git, remote, scratch, slug
+from agentctl.clock import epoch_now
+from agentctl.ids import stamp
 from agentctl.timefmt import ts
-from agentctl.netretry import net_run
+from agentctl.core import branch_of, err, git, remote
+from agentctl.repos import precheck_hook, slug, waiting_supported
 from agentctl.networksignatures import TRANSIENT_PUSH, is_transient_network
-from agentctl.repos import precheck_hook, waiting_supported
-from agentctl.waitingdir import ChangeRecords, waiting_state
-from agentctl.lander import commit_keys, lander_note_direct
+from agentctl.netretry import net_run
 from agentctl.gating import mark_gate_dirty
-from agentctl.leases import lock_note
+from agentctl.waitingdir import ChangeRecords, waiting_state
+from agentctl.redrepos import red_owner_only
+from agentctl.context import Context
 from agentctl.onmain import landed_state
-from agentctl.land import (
-    LAND_PRECHECK_ROUNDS, LAND_RETRIES, RACE, REDGATE, land_lock, push_argv, push_bounds, run_watched,
-    tool_env)
 from agentctl.worktrees import WorktreeGuard
+from agentctl.fixerblockers import in_fixer
+from agentctl.landwatch import start_watch
+from agentctl.lander import commit_keys, lander_note_direct
+from agentctl.processorlink import await_entry, offer_token, spawn_waiting_processor
+from agentctl.leases import lock_note
+from agentctl.land import (
+    LAND_PRECHECK_ROUNDS, LAND_RETRIES, RACE, REDGATE, land_lock, push_argv, push_bounds, run_watched, tool_env)
 from agentctl.queuerecheck import queue_mode
 from agentctl.redfixes import fixes_of
-from agentctl.redrepos import red_owner_only
-from agentctl.gov import gov_class_of
 from agentctl.waiting import must_wait, note_waiting, supersede_older_waiting, waiting_commits
-from agentctl.landwatch import start_watch
-from agentctl.fixerblockers import in_fixer
+from agentctl.gov import gov_class_of
 from agentctl.redseen import gate_reds
 from agentctl.watchtick import watch_landed
 from agentctl.landqueue import queue_command
 from agentctl.queueenter import enqueue, land_until_done, sync
-from agentctl.processorlink import await_entry, offer_token, spawn_waiting_processor
 from agentctl.landdryrun import dry_run, precheck, refused, stalled
-from agentctl.core import claude_session_id
+from agentctl.paths import claude_session_id, scratch
 
 
 class Interrupted(BaseException):

@@ -4,13 +4,11 @@
 import glob
 import os
 import re
-from agentctl.clock import wall_epoch
 from typing import Any
-from agentctl.core import reds_dir
-from agentctl.statefile import read_record
+from agentctl.statefile import mtime, read_record
+from agentctl.clock import wall_epoch
 from agentctl.procs import record_alive
-from agentctl.statefile import mtime
-from agentctl.core import claude_session_id
+from agentctl.paths import claude_session_id, reds_dir
 
 
 def fixer_name(rec: dict[str, Any]) -> str:

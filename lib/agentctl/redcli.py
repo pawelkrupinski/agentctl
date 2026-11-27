@@ -8,37 +8,37 @@ import os
 from typing import Any, Callable
 import re
 import subprocess
-from agentctl.context import Context
-from agentctl.core import attempt, err, git, reds_dir, remote, slug, tilde
-from agentctl.fixerrecords import agent_name, own_fixer_record_path
-from agentctl.owned import backoff, default_repo
-from agentctl.fixerblockers import _blocker_cache, dispatch_blocker, in_fixer
-from agentctl.fixerlife import red_fixer
-from agentctl.ownerwrapper import red_owner
+from agentctl.procrunner import process_runner
+from agentctl.statefile import read_record, write_json
+from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
-from agentctl.repos import RED_PRIMARY, red_repo_short, scan_repo_for
-from agentctl.redrecord import red_what
+from agentctl.redknobs import knob_drift_ci
+from agentctl.blameknobs import knob_blame_probe_wall
+from agentctl.core import attempt, err, git, remote
+from agentctl.repos import RED_PRIMARY, red_repo_short, scan_repo_for, slug
+from agentctl.fixerrecords import agent_name, own_fixer_record_path
+from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
+from agentctl.owned import backoff, default_repo
+from agentctl.checkrunjobs import REMOTE_WORKFLOW
+from agentctl.context import Context
 from agentctl.worktrees import claimant
+from agentctl.fixerblockers import _blocker_cache, dispatch_blocker, in_fixer
+from agentctl.redrecord import red_what
 from agentctl.red import red_put_offer
+from agentctl.reverts import revert_line
+from agentctl.checkrun import delete_check_branch, remote_poll
 from agentctl.redopen import red_offer
 from agentctl.redclaim import bind_fixer_session, red_beat, red_claim, red_owner_push, red_release, red_targets
 from agentctl.blamerecords import blame_withdraw
 from agentctl.redvault import red_block, red_unblock
 from agentctl.reddispatch import repo_dispatch_off_all
+from agentctl.fixerlife import red_fixer
+from agentctl.ownerwrapper import red_owner
 from agentctl.offerdispatch import red_dispatcher
 from agentctl.redview import RED_STATUS_FRESH, red_status_snapshot_path, repo_dispatch_set
-from agentctl.procrunner import process_runner
-from agentctl.statefile import read_record, write_json
-from agentctl.redknobs import knob_drift_ci
-from agentctl.blameknobs import knob_blame_probe_wall
-from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
-from agentctl.checkrunjobs import REMOTE_WORKFLOW
-from agentctl.checkrun import delete_check_branch, remote_poll
-from agentctl.clock import epoch_now
-from agentctl.reverts import revert_line
-from agentctl.status import status_data, status_store
 from agentctl.redhold import red_fix_liveness
-from agentctl.core import claude_session_id
+from agentctl.status import status_data, status_store
+from agentctl.paths import claude_session_id, reds_dir, tilde
 
 
 def red_am_fixer():

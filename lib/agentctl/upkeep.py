@@ -1,29 +1,25 @@
 # agentctl, part `upkeep`: the processor tick's hygiene on every host: the cleanup process, the finished fixers' trees, the test temp dirs, and the disk invariant WD (the laptop's 15-minute pass is maintain.py; log rotation is logrotate.py)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
-from agentctl.filelock import FileLock
-from collections.abc import Iterator
-import glob
 from functools import partial
 import os
 import subprocess
 import sys
-import time
 from typing import Any, Callable
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, _bounded, err, reds_dir, run_bounded, state_root, tilde
-from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
+from agentctl.clock import epoch_now
+from agentctl.timefmt import ts
+from agentctl.tickknobs import knob_upkeep_every
+from agentctl.govknobs import DISK_MIN_GB, knob_disk_min_gb, knob_disk_path
+from agentctl.core import HOME, _bounded, err, run_bounded
 from agentctl.fixerrecords import fixer_records
-from agentctl.redrecord import red_active
-from agentctl.cleanup import close_worktree
 from agentctl.machine import disk_free_gb, machine_cores, run_queues
+from agentctl.cleanup import close_worktree
 from agentctl.testtmp import TEST_TMP_MAX_AGE, sweep_test_tmp
 from agentctl.conditions import open_condition, run_probe
-from agentctl.tickknobs import knob_log_rotate_keep, knob_log_rotate_max, knob_upkeep_every
-from agentctl.govknobs import DISK_MIN_GB, knob_disk_min_gb
-from agentctl.govknobs import knob_disk_path
+from agentctl.redrecord import red_active
+from agentctl.paths import state_root
 
 
 _last_upkeep = [0.0]

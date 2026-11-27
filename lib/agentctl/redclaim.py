@@ -1,28 +1,28 @@
 # agentctl, part `redclaim`: interactive holders: claim, beat, release a red; `red owner-push`, an owner-only repo's fix
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.context import Context
-from agentctl.clock import epoch_now
 import os
 import time
 from typing import Any, Callable
-from agentctl.core import err, git, remote, slug, tilde
-from agentctl.timefmt import ts
 from agentctl.statefile import mtime, read_record, write_json
-from agentctl.procs import safe_cwd
-from agentctl.repos import RED_PRIMARY, movies_repo_path, red_repo_of, repo_path_for, scan_repo_for
-from agentctl.leases import LeaseKinds, lease_meta, red_block_of
-from agentctl.fixerrecords import fixer_session_path, own_fixer_record_path, record_session_is
-from agentctl.redrecord import lease_is_live, red_active, red_item_of_run, red_lease, red_obs_for, red_what
+from agentctl.clock import epoch_now
+from agentctl.timefmt import ts
+from agentctl.core import err, git, remote
+from agentctl.repos import RED_PRIMARY, movies_repo_path, red_repo_of, repo_path_for, scan_repo_for, slug
 from agentctl.allowedpaths import allowed_dir
-from agentctl.worktrees import claimant, worktree_of
+from agentctl.procs import safe_cwd
+from agentctl.fixerrecords import fixer_session_path, own_fixer_record_path, record_session_is
 from agentctl.redrepos import red_is_other, red_owner_only
+from agentctl.context import Context
+from agentctl.worktrees import claimant, worktree_of
+from agentctl.redrecord import lease_is_live, red_active, red_item_of_run, red_lease, red_obs_for, red_what
+from agentctl.leases import LeaseKinds, lease_meta, red_block_of
 from agentctl.red import RED_CLAIM_MAX, RED_CLAIM_TTL, red_move
+from agentctl.fixerland import unlanded_commits
 from agentctl.redseen import red_obs_of_units
 from agentctl.redblock import red_run_units
 from agentctl.redopen import red_attach_obs, red_open
-from agentctl.fixerland import unlanded_commits
-from agentctl.core import claude_session_id
+from agentctl.paths import claude_session_id, tilde
 
 
 # -- interactive: claim, beat, release

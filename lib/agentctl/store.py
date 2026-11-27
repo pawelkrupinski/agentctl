@@ -6,18 +6,21 @@ import os
 from contextlib import closing
 import re
 import sqlite3
-from agentctl.clock import epoch_now, stopwatch
 import time
 from typing import Any, Callable, cast
-from agentctl.core import err, state_root
 from agentctl.statefile import json_object
-from agentctl.offers import OfferTable
+from agentctl.statemachines import (
+    ARCHIVE, IllegalTransition, MACHINES, StaleVersion, StateSpec, TerminalState, change_exit_event, check_move,
+    level_after, machine_state)
+from agentctl.clock import epoch_now, stopwatch
 from agentctl.leasetable import LeaseLost
-from agentctl.backfill import backfill_store, check_run_rows, derived_rows, backfill_check_runs, ensure_backfill_tables
+from agentctl.offers import OfferTable
+from agentctl.core import err
 from agentctl.eventtrace import EventQuery, query_rows
 from agentctl.eventrows import insert_event, migrate_events, move_event, opened_event, record_rows
-from agentctl.statemachines import (
-    ARCHIVE, IllegalTransition, MACHINES, check_move, level_after, StaleVersion, StateSpec, TerminalState, change_exit_event, machine_state)
+from agentctl.backfill import (
+    backfill_check_runs, backfill_store, check_run_rows, derived_rows, ensure_backfill_tables)
+from agentctl.paths import state_root
 
 
 # ---------------------------------------------------------------- the store (design §3, §6; phase 1 step 1)

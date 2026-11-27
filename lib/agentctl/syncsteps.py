@@ -13,15 +13,16 @@ from agentctl.statefile import read_record, write_json
 from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import Clock
 from agentctl.tickknobs import knob_step_bound, knob_sync_mirror
-from agentctl.core import (
-    err, git, is_ancestor, process_cache, reap_children, reds_dir, remote, run_bounded, spawn_detached, state_root)
+from agentctl.core import err, git, process_cache, reap_children, remote, run_bounded, spawn_detached
+from agentctl.tokenerrors import NoToken
 from agentctl.procs import safe_cwd
 from agentctl.filelog import drain_event_log
 from agentctl.inboxentry import inbox_write
-from agentctl.fixersession import trust_asks
-from agentctl.recordingpins import refresh_pinned_recording
 from agentctl.store import StoreLacksCall, StoreUnavailable
 from agentctl.context import Context
+from agentctl.cleanup import close_worktree
+from agentctl.fixersession import trust_asks
+from agentctl.recordingpins import refresh_pinned_recording
 from agentctl.laptoprole import laptop_role_step
 from agentctl.land import tool_env
 from agentctl.storestate import mirror_state
@@ -32,16 +33,16 @@ from agentctl.fixerland import LandWatchPace, fixers_land_watch
 from agentctl.eventprojection import notify_escalations, project_events
 from agentctl.orphanreap import red_reap_orphans
 from agentctl.escalationsession import escalation_step
-from agentctl.cleanup import close_worktree
 from agentctl.upkeep import maybe_upkeep
 from agentctl.reddispatch import red_renew_holders
+from agentctl.vendordrift import vendor_drift_step
 from agentctl.offerdispatch import red_dispatcher
 from agentctl.recovery import maybe_recovery_tick
 from agentctl.netwatch import network_watch, tunnel_watch
-from agentctl.vendordrift import vendor_drift_step
 from agentctl.landedchange import close_landed_changes, migrate_local_queue
 from agentctl.redcli import write_red_status_snapshot
-from agentctl.tokenerrors import NoToken
+from agentctl.gitrepo import is_ancestor
+from agentctl.paths import reds_dir, state_root
 
 
 # ---- the laptop's sync (role "sync")

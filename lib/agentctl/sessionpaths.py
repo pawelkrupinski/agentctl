@@ -4,10 +4,11 @@
 from agentctl.statefile import read_record, write_json
 from agentctl.clock import wall_epoch
 from agentctl.fixerknobs import knob_owner_active
-from agentctl.core import HOME, attempt, recovery_dir
+from agentctl.core import HOME, attempt
+from agentctl.texthash import hashlib_sha1
 from agentctl.claudefiles import claude_projects_root
 from agentctl.live import live_slug
-from agentctl.texthash import hashlib_sha1
+from agentctl.paths import recovery_dir
 import glob
 import json
 import os

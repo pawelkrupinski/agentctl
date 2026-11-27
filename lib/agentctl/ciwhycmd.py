@@ -2,13 +2,13 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-from agentctl.context import Context
 from agentctl.clock import epoch_now
-from agentctl.core import slug
+from agentctl.repos import slug
 from agentctl.cistate import state_read
 from agentctl.gatesummary import GATE_LINE
 from agentctl.owned import default_repo
 from agentctl.timelinecmd import argparse
+from agentctl.context import Context
 from agentctl.statusline import status_gate_text
 from agentctl.cireport import ci_why
 

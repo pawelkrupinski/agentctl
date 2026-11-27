@@ -3,12 +3,12 @@
 
 import os
 from typing import Any
-from agentctl.core import state_root
 from agentctl.statefile import read_json_file, write_json
-from agentctl.forge import RED_CONCLUSIONS
-from agentctl.storeknobs import knob_state_file
 from agentctl.clock import epoch_now
 from agentctl.filelock import FileLock
+from agentctl.storeknobs import knob_state_file
+from agentctl.forge import RED_CONCLUSIONS
+from agentctl.paths import state_root
 
 
 # THE ONE CI-STATE SNAPSHOT (the owner, 2026-10-27: the watch, the gate summary, ci-why's outside list and the red patrol

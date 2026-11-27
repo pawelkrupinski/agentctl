@@ -6,12 +6,13 @@ from agentctl.escalationtable import escalation_repos
 from agentctl.statefile import mtime, note_failure, read_record, write_json
 from agentctl.clock import epoch_now, wall_epoch
 from agentctl.fixerknobs import knob_bg_idle_grace
-from agentctl.core import HOME, SHORT, _tokens, git, state_root, tilde
+from agentctl.core import HOME, SHORT, _tokens, git
 from agentctl.repos import escalation_repo_path, red_repo_clone, red_repos
 from agentctl.claudefiles import bg_transcript, claude_jobs_root, fixer_verdict
 from agentctl.procs import proc_alive
-from agentctl.storetoken import no_vault, token, token_ns
 from agentctl.inboxentry import inbox_write
+from agentctl.storetoken import no_vault, token, token_ns
+from agentctl.paths import state_root, tilde
 import json
 import os
 import re

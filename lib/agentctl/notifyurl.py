@@ -7,9 +7,10 @@
 from typing import Any
 import os
 import re
-from agentctl.context import Context
-from agentctl.core import attempt, state_root
+from agentctl.core import attempt
 from agentctl.repos import red_repo_of
+from agentctl.context import Context
+from agentctl.paths import state_root
 
 
 

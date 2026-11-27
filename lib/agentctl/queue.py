@@ -7,8 +7,9 @@ import subprocess
 import time
 from typing import Any, Iterable
 from agentctl.procrunner import process_runner
-from agentctl.core import err, git, git_ok, commit_known
 from agentctl.statefile import read_text_or
+from agentctl.core import err, git, git_ok
+from agentctl.gitrepo import commit_known
 from agentctl.repos import precheck_hook
 from agentctl.land import tool_env
 

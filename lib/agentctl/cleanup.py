@@ -1,8 +1,6 @@
 # agentctl, part `cleanup`: cleanup and the lifecycle.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.onmain import landed_state
-from agentctl.clock import Stopwatch, epoch_now, stopwatch, wall_epoch
 from typing import Any
 from collections.abc import Sequence
 import argparse
@@ -15,19 +13,22 @@ import signal
 import subprocess
 import time
 from agentctl.procrunner import process_runner
-from agentctl.core import (
-    commit_known, GIT_NET_SSH, HOME, PROTECTED_BRANCHES, err, git, remote, run_cmd, slug, state_root)
+from agentctl.clock import Stopwatch, epoch_now, stopwatch, wall_epoch
 from agentctl.timefmt import now, ts
-from agentctl.forge import forge_branches
-from agentctl.procs import PROC_ROOT, process_cwds, ps
-from agentctl.worktrees import CACHE_TREES, gitdir_activity, merged_reason, worktrees
-from agentctl.maint import cmd_orphans
-from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
-from agentctl.runowners import orphan_branches
-from agentctl.govknobs import knob_sbt_reap, SBT_STALL_MIN
-from agentctl.queueknobs import knob_free_wait
 from agentctl.tickknobs import knob_cleanup_item_timeout, knob_fetch_timeout
-from agentctl.core import claude_session_id
+from agentctl.queueknobs import knob_free_wait
+from agentctl.govknobs import SBT_STALL_MIN, knob_sbt_reap
+from agentctl.core import GIT_NET_SSH, HOME, PROTECTED_BRANCHES, err, git, remote, run_cmd
+from agentctl.repos import slug
+from agentctl.procs import PROC_ROOT, process_cwds, ps
+from agentctl.forge import forge_branches
+from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
+from agentctl.maint import cmd_orphans
+from agentctl.onmain import landed_state
+from agentctl.worktrees import CACHE_TREES, gitdir_activity, merged_reason, worktrees
+from agentctl.runowners import orphan_branches
+from agentctl.gitrepo import commit_known
+from agentctl.paths import claude_session_id, state_root
 
 
 def cleanup_left(until: Stopwatch | None) -> float:

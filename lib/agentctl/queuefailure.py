@@ -4,16 +4,16 @@
 import os
 import re
 from typing import Any, Optional
-from agentctl.context import Context
 from agentctl.statefile import read_record, write_json
 from agentctl.timefmt import ts
-from agentctl.core import err, reds_dir, slug
-from agentctl.repos import gated_repo
-from agentctl.classify import ANSI, norm_line
+from agentctl.core import err
+from agentctl.repos import gated_repo, slug
 from agentctl.waitingdir import ChangeRecords
-from agentctl.joblog import fetch_failed_log, log_entries
+from agentctl.joblog import fetch_failed_log
+from agentctl.hookoutput import failure_keys, jobs_of_out, log_jobs, test_keys
+from agentctl.context import Context
 from agentctl.ciwhy import gate_runs
-from agentctl.hookoutput import HOOK_STATUS, failure_keys, jobs_of_out, log_jobs, test_keys
+from agentctl.paths import reds_dir
 
 
 CHECK_TIMEOUT = re.compile(r"ran past \d+ minutes and were stopped")

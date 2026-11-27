@@ -1,9 +1,6 @@
 # agentctl, part `inboxentry`: the inbox entry: its directory, the kinds a verdict names, who wrote it, and inbox_write, which hands a built entry to the writer the composition root wired (the alert router).
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.filelog import note_event
-from agentctl.ids import stamp
-from agentctl.clock import epoch_now
 import datetime as dt
 import glob
 import itertools
@@ -12,14 +9,17 @@ import re
 import sys
 import time
 from typing import Any, Callable
-from agentctl.core import err, state_root
-from agentctl.timefmt import iso_at
 from agentctl.statefile import read_record
-from agentctl.procs import safe_cwd
-from agentctl.fixerrecords import agent_name
+from agentctl.clock import epoch_now
+from agentctl.ids import stamp
+from agentctl.timefmt import iso_at
 from agentctl.watchknobs import knob_inbox_dir
 from agentctl.fixerknobs import knob_owners_dir
-from agentctl.core import claude_session_id
+from agentctl.core import err
+from agentctl.procs import safe_cwd
+from agentctl.fixerrecords import agent_name
+from agentctl.filelog import note_event
+from agentctl.paths import claude_session_id, state_root
 
 
 # ---------------------------------------------------------------- inbox

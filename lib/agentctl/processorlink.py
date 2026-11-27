@@ -7,18 +7,19 @@ import subprocess
 import sys
 import threading
 from typing import Any
+from agentctl.statefile import unlink_file
 from agentctl.selfcode import TOOL_PATH
 from agentctl.statemachines import machine_state
 from agentctl.clock import Clock
 from agentctl.queueknobs import knob_waiting_timeout
-from agentctl.core import err, slug, spawn_detached
+from agentctl.core import err, spawn_detached
+from agentctl.repos import slug
 from agentctl.waitingdir import WAITING_BRANCH, waiting_state
+from agentctl.owned import Owned, backoff, restart_if_changed
+from agentctl.store import StoreUnavailable
 from agentctl.storetoken import (
     TOKEN_REQUEST, TOKEN_SHAPE, detached_env, hand_token, token, token_back, token_env_name, token_ns,
     token_sock_path)
-from agentctl.store import StoreUnavailable
-from agentctl.owned import Owned, backoff, restart_if_changed
-from agentctl.statefile import unlink_file
 
 
 def processor_owned(d: str, repo: str | None = None) -> Owned:

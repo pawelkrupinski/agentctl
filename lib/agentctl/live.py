@@ -1,18 +1,19 @@
 # agentctl, part `live`: the live sessions: their registry (leased, transcripts found), each one's state and annotation
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import glob
 import json
 import os
 import re
 import threading
 from typing import Any
-from agentctl.core import attempt, dispatches_dir, process_cache, reds_dir
 from agentctl.statefile import mtime, read_json_file, read_record, tail_bytes
-from agentctl.procs import record_alive
-from agentctl.claudefiles import bg_transcript, claude_projects_root
+from agentctl.clock import epoch_now
 from agentctl.watchknobs import knob_live_globs
+from agentctl.core import attempt, process_cache
+from agentctl.claudefiles import bg_transcript, claude_projects_root
+from agentctl.procs import record_alive
+from agentctl.paths import dispatches_dir, reds_dir
 
 
 # ---------------------------------------------------------------- live agent output (2026-10-29)

@@ -10,18 +10,20 @@ from agentctl.statefile import mtime, read_record, read_text_or, unlink_file, wr
 from agentctl.clock import wall_epoch
 from agentctl.filelock import FileLock
 from agentctl.timefmt import ts
-from agentctl.core import _bounded, err, git, pid_alive, reds_dir, remote, tilde, commit_known
+from agentctl.core import _bounded, err, git, pid_alive, remote
 from agentctl.repos import precheck_hook
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.fixerrecords import fixer_records
 from agentctl.waitingdir import waiting_state
 from agentctl.inboxentry import inbox_write
+from agentctl.hookoutput import check_failures, check_passes
 from agentctl.worktrees import mark_internal, worktrees
+from agentctl.cleanup import close_worktree
 from agentctl.land import run_watched, tool_env
 from agentctl.checkslot import check_slot
-from agentctl.cleanup import close_worktree
 from agentctl.redseen import local_red, local_stale
-from agentctl.hookoutput import check_failures, check_passes
+from agentctl.gitrepo import commit_known
+from agentctl.paths import reds_dir, tilde
 
 
 def write_baseline_out(main, out) -> None:

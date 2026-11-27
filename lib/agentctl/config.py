@@ -7,10 +7,11 @@ import operator
 import os
 import re
 from typing import Any, Callable
-from agentctl.core import HOME, tilde
+from agentctl.statefile import note_failure
 from agentctl.selfcode import TOOL_PATH, code_files
 from agentctl.configfile import CONFIG_ERRORS, CONFIG_SOURCE, config_files
-from agentctl.statefile import note_failure
+from agentctl.core import HOME
+from agentctl.paths import tilde
 
 
 # ---------------------------------------------------------------- config: every knob, generated from the code

@@ -1,17 +1,17 @@
 # agentctl, part `clones`: the clones agentctl works in: a repository's main clone, fetching its main, a clone suspected corrupt and its healing switch.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import os
 from typing import IO, Any, Iterator
 import re
-from agentctl.core import git, git_ok, remote
-from agentctl.statefile import write_json
-from agentctl.repos import server_repo
 import contextlib
 import fcntl
 import threading
+from agentctl.statefile import write_json
+from agentctl.clock import epoch_now
 from agentctl.storeknobs import knob_movies_remote
+from agentctl.core import git, git_ok, remote
+from agentctl.repos import server_repo
 
 
 def _clone_of_existing(path: Any) -> Any:

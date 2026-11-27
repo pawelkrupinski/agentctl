@@ -4,8 +4,8 @@
 import re
 import sys
 from typing import Any, Callable, List, Optional
-from agentctl.core import tilde
 from agentctl.inboxentry import INBOX_COMMANDS, inbox_write
+from agentctl.paths import tilde
 
 
 VERDICT_LINE = re.compile(r"^(LANDED \S+|NOT LANDED|WAITING \S+|QUEUED \S+|WATCH (OK|RED|UNKNOWN|STALLED)\b|run \S+#\d+: |file \S+: )")

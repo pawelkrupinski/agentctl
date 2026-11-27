@@ -16,12 +16,12 @@ import sys
 from contextlib import suppress
 from typing import Any, Optional
 
-from agentctl.actors import process_actor
-from agentctl.causes import checked_cause
 from agentctl.clock import wall_epoch
 from agentctl.filelock import FileLock
-from agentctl.core import state_root
+from agentctl.actors import process_actor
+from agentctl.causes import checked_cause
 from agentctl.eventrows import recorded_row
+from agentctl.paths import state_root
 
 LOG_ROTATE = 1 << 20  # bytes: a drained log this long starts again
 DRAIN_PAGE = 500      # lines one store call takes

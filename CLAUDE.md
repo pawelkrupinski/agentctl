@@ -125,9 +125,9 @@ proves each rule's removal is caught.
 - **Side effects live in leaves, with fakes** (the owner, 2026-11-27: "move side effects to leaves, with fake
   implementations for testing (repos etc.)"): git, gh, files, the store, the network, processes and the clock are touched
   only by LEAF adapters; decision logic above them is pure and takes the adapters as parameters. Each adapter has a fake
-  or in-memory implementation that SHARES its logic (movies' `writing-fakes`): for git, a `GitRepo`-style interface
-  (the real one runs the subprocess through `core.git`, the fake holds commits and refs in memory) so unit tests need no
-  temp repository; real temp git repos stay for the integration tests and `tests/e2e/`. When a function mixing decisions
+  or in-memory implementation that SHARES its logic (movies' `writing-fakes`): for git, `lib/agentctl/gitrepo.py`'s
+  `GitRepo` (movies' `scripts/lib/tool_git` names and signatures: `SubprocessGitRepo` asks git, `InMemoryGitRepo` holds
+  commits and refs in memory, `tests/test_gitrepo.py` the one contract over both) so unit tests need no temp repository; real temp git repos stay for the integration tests and `tests/e2e/`. When a function mixing decisions
   with IO is changed, split it: the decision goes up as a pure function, the IO into the adapter. The design ratchet
   measures only the module-level half today (effect rows outside an `adapter` module); a per-FUNCTION "mixed" row (a
   function that performs an effect and also branches past a trivial condition, frozen as a ceiling that only falls) needs

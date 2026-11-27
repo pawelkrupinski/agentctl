@@ -23,20 +23,21 @@
 # known memory CEILING is judged against it (CEILINGS: a JVM's -Xmx, a mongod's cache, a VM's guest memory), and growth must reach
 # WP_GROWTH_PCT or WP_GROWTH_MB over the window: 1% of a big long-lived server is its noise.
 
-from agentctl.clock import epoch_now, wall_epoch
 import glob
 import os
 import re
 import time
 from typing import Any, Callable, Optional
-from agentctl.core import HOME, run_cmd, state_root, tilde
-from agentctl.procs import ps_rows
 from agentctl.psparse import parse_ps
-from agentctl.statefile import read_record, read_text_or, write_json, note_failure
+from agentctl.statefile import note_failure, read_record, read_text_or, write_json
+from agentctl.clock import epoch_now, wall_epoch
+from agentctl.watchknobs import knob_wp_rss_by_name
+from agentctl.core import HOME, run_cmd
+from agentctl.procs import ps_rows
 from agentctl.machine import machine_fixed, ram_gb
 from agentctl.govtickets import gov_tickets
 from agentctl.testtmp import TEST_TMP_MAX_AGE
-from agentctl.watchknobs import knob_wp_rss_by_name
+from agentctl.paths import state_root, tilde
 
 
 WP_RSS_GB = 4.0

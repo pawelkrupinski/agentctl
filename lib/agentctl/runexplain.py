@@ -6,7 +6,7 @@ import json
 import urllib.request
 from typing import Any, Optional
 from agentctl.storeknobs import knob_githubstatus_url
-from agentctl.core import err, tilde
+from agentctl.core import err
 from agentctl.workflows import STEP_TIMED_OUT, workflow_jobs
 from agentctl.classify import SETUP_STEP, classify_job, job_log_verdict
 from agentctl.forge import GH_CLI, RED_CONCLUSIONS, gh_json, runner_queue
@@ -15,6 +15,7 @@ from agentctl.joblog import (
     log_entries, raw_tails, relevant_lines)
 from agentctl.ciwhy import commit_line, job_is_verdict_report, jobs_no_verdict, timed_out_jobs
 from agentctl.runqueue import queue_full
+from agentctl.paths import tilde
 
 
 RUN_VIEW_FIELDS = "jobs,headSha,url,number,status,conclusion,workflowName,workflowDatabaseId,attempt,createdAt,updatedAt"

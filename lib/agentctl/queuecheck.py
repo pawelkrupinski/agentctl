@@ -1,30 +1,32 @@
 # agentctl, part `queuecheck`: a change's check round's pieces: main fetched, its commits, the run adopted, the rebase, the refusals, the mode, the failure judged
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.context import Context
-from agentctl.clock import Clock, epoch_now
 import time
 from typing import Any
-from agentctl.timefmt import ts
 from agentctl.statemachines import change_event
-from agentctl.core import git, remote, commit_known, is_ancestor
-from agentctl.classify import network_only
-from agentctl.networksignatures import network_failure
+from agentctl.clock import Clock, epoch_now
+from agentctl.timefmt import ts
+from agentctl.core import git, remote
 from agentctl.repos import precheck_hook
-from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.clones import fetch_main, note_clone_suspect
 from agentctl.policy import policy_blocks
+from agentctl.generated import generated_entry
+from agentctl.networksignatures import network_failure
+from agentctl.classify import network_only
+from agentctl.waitingdir import ChangeRecords, wlog
+from agentctl.context import Context
+from agentctl.queuefailure import CHECK_TIMEOUT, TIMEOUT_RETRIES, judge_failure, keys_text, on_gate_run
+from agentctl.conflicts import CONFLICT_PLACE_KEPT, conflict_cause, conflict_paths
 from agentctl.queueslots import check_tree, queue_verdict, set_change
 from agentctl.queue import VERIFY_MODE, module_overlap, range_paths, verify_areas_supported, verify_supported
-from agentctl.queueinfra import FETCH_MAIN_FAILED, INFRA_CHECK_FAILURE, STALLED_REASON, STALL_KEEP_PLACE, requeue_infra
-from agentctl.generated import generated_entry
-from agentctl.conflicts import CONFLICT_PLACE_KEPT, conflict_cause, conflict_paths
 from agentctl.queuerecheck import recheck_reason
 from agentctl.redland import fix_replay_refusal
 from agentctl.waiting import already_landed, cancel_entry_remote
 from agentctl.blamerecords import blame_land_refusal
 from agentctl.queuediff import rebase_in_tree
-from agentctl.queuefailure import CHECK_TIMEOUT, TIMEOUT_RETRIES, judge_failure, keys_text, on_gate_run
+from agentctl.queueinfra import (
+    FETCH_MAIN_FAILED, INFRA_CHECK_FAILURE, STALLED_REASON, STALL_KEEP_PLACE, requeue_infra)
+from agentctl.gitrepo import commit_known, is_ancestor
 
 
 def regen_commands(tree: Any, files: Any) -> Any:

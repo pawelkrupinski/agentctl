@@ -1,19 +1,18 @@
 # agentctl, part `landwatch`: land's watch.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.context import Context
-from agentctl.clock import epoch_now
 import os
 from typing import Any
-from agentctl.core import err, slug
+from agentctl.clock import epoch_now
 from agentctl.timefmt import parse_time
-from agentctl.forge import is_cancelled
-from agentctl.repos import movies_repo_path, red_repo_clone
-from agentctl.clones import main_clone
-from agentctl.onmain import contains
-from agentctl.ciwhy import run_no_verdict
-
 from agentctl.watchknobs import knob_watch_conv_start
+from agentctl.core import err
+from agentctl.repos import movies_repo_path, red_repo_clone, slug
+from agentctl.clones import main_clone
+from agentctl.forge import is_cancelled
+from agentctl.context import Context
+from agentctl.ciwhy import run_no_verdict
+from agentctl.onmain import contains
 
 
 # ---------------------------------------------------------------- land: the watch after LANDED

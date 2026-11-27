@@ -10,25 +10,26 @@ from agentctl.statemachines import StaleVersion, is_terminal, open_items
 from agentctl.timefmt import parse_time, ts
 from agentctl.redknobs import (
     knob_red_decided_revert_max, knob_red_fixers, knob_red_held_idle, knob_red_join_idle, knob_red_starve)
-from agentctl.core import NO_SIGN, git, git_ok, reds_dir, remote
+from agentctl.core import NO_SIGN, git, git_ok, remote
 from agentctl.trailers import trailer_format, trailer_values
 from agentctl.allowedpaths import allowed_dir
 from agentctl.procs import socket_host
+from agentctl.agewords import fmt_age
+from agentctl.paths import reds_dir
 from agentctl.waitingdir import waiting_state
 from agentctl.inboxentry import inbox_write
-from agentctl.fixerenv import fixer_env
 from agentctl.redrepos import red_identity, red_owner_only, red_repo_note
+from agentctl.worktrees import WorktreeGuard
+from agentctl.fixerenv import fixer_env
 from agentctl.redrecord import lease_is_live, red_active, red_names, red_what
 from agentctl.leases import LeaseKinds, lease_meta
 from agentctl.land import spawn_land
 from agentctl.red import DECIDED_REVERT, RED_CLAIM_TTL, RED_FIXER_TTL
-from agentctl.worktrees import WorktreeGuard
 from agentctl.fixerland import red_dispatch
 from agentctl.redland import agentctl_revert_fix_replay
 from agentctl.culpritfix import blame_note, blame_reland, lander_spawn
 from agentctl.redclaim import red_joined_progress, red_wt_mark
 from agentctl.redcrash import red_queue_family
-from agentctl.agewords import fmt_age
 
 
 def red_commits_naming(wt: str | None, names: Any, keys: tuple[str, ...] = ("Fixes-Red",)) -> list[tuple[str, float]]:

@@ -2,7 +2,6 @@
 # (`gh api`). Forgejo was switched off on 2026-10-31; GitHub is the only forge.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import contextlib
 import json
 import os
@@ -12,16 +11,16 @@ import time
 import urllib.parse
 import urllib.request
 from typing import Any
-
 from agentctl.procrunner import process_runner
-from agentctl.core import err, process_cache, state_root
-from agentctl.timefmt import parse_time
 from agentctl.statefile import read_record, write_json
-from agentctl.ghapp import ghapp_enabled, ghapp_token
-from agentctl.netretry import net_run
-from agentctl.core import HOME
-from agentctl.ghtally import gh_tally, gh_tally_as, gh_tally_shape
+from agentctl.clock import epoch_now
+from agentctl.timefmt import parse_time
 from agentctl.storeknobs import knob_gh_cli, knob_runners_page_cache
+from agentctl.core import HOME, err, process_cache
+from agentctl.ghapp import ghapp_enabled, ghapp_token
+from agentctl.ghtally import gh_tally, gh_tally_as, gh_tally_shape
+from agentctl.netretry import net_run
+from agentctl.paths import state_root
 
 
 # ---------------------------------------------------------------- forge: the read side

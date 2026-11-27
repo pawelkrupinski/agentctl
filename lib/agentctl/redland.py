@@ -9,20 +9,22 @@ import os
 import re
 import subprocess
 from typing import Iterator
-from agentctl.context import Context
-from agentctl.core import err, git, process_cache, remote, state_root, commit_known
-from agentctl.fixchange import fixes_named
-from agentctl.redfixes import commit_fixes
 from agentctl.procrunner import process_runner
+from agentctl.statemachines import is_terminal
 from agentctl.redknobs import knob_brief, knob_fix_replay_timeout
+from agentctl.core import err, git, process_cache, remote
 from agentctl.repos import red_repo_conf, red_repo_of
 from agentctl.trailers import commit_trailers, trailer_values
 from agentctl.redrepos import RED_WORKFLOWS_FILE, red_workflow_policy, red_workflows_on_main
-from agentctl.statemachines import is_terminal
-from agentctl.redrecord import red_names, red_what
+from agentctl.context import Context
+from agentctl.fixchange import fixes_named
 from agentctl.storetoken import no_vault
 from agentctl.fixerenv import BRIEF
+from agentctl.redrecord import red_names, red_what
 from agentctl.land import tool_env
+from agentctl.redfixes import commit_fixes
+from agentctl.gitrepo import commit_known
+from agentctl.paths import state_root
 
 
 # ONE RULE (2026-11-26; batch #124's deadlock of 2026-11-25 was two of its copies disagreeing). Three copies decided it:

@@ -8,19 +8,20 @@ from agentctl.clock import epoch_now, wall_epoch
 from agentctl.watchknobs import (
     W5_MAX, knob_kick_handoff_wait, knob_w5_max, knob_watchdog_misses, knob_watchdog_retell,
     knob_watchdog_sleep_gap)
-from agentctl.core import attempt, pid_alive, state_root
+from agentctl.core import attempt, pid_alive
 from agentctl.repos import movies_repo_path
 from agentctl.notifier import notify
 from agentctl.launchd import SERVICE_LABEL, launchctl
 from agentctl.beats import beat_age, beat_path, write_beat
 from agentctl.waitingdir import ChangeRecords, waiting_state
+from agentctl.context import Context
+from agentctl.agewords import fmt_age
 from agentctl.storetoken import TOKEN_SHAPE, hand_token, processor_sock, token_request
 from agentctl.conditions import close_condition, open_condition, open_conditions, run_probe
-from agentctl.context import Context
 from agentctl.alertroute import ALERT_SELF_HEALING_INVARIANTS
 from agentctl.changekind import file_unheld_change, unheld_changes
 from agentctl.invariants import INVARIANTS, probe_invariant, watchdog_state
-from agentctl.agewords import fmt_age
+from agentctl.paths import state_root
 import json
 import os
 import re

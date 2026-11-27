@@ -1,8 +1,6 @@
 # agentctl, part `lander`: who landed what -- every `agentctl land` remembers its lander, in the store.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.ids import stamp
-from agentctl.clock import epoch_now
 import glob
 import json
 import os
@@ -11,17 +9,19 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.procs import ps_rows
-from agentctl.core import branch_of, err, git, git_ok, process_cache, remote, slug, tilde
-from agentctl.timefmt import ts
 from agentctl.statefile import mtime, note_failure
-from agentctl.repos import RED_PRIMARY
-from agentctl.storetoken import no_vault
-from agentctl.claudefiles import claude_projects_root
 from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec
+from agentctl.clock import epoch_now
+from agentctl.ids import stamp
+from agentctl.timefmt import ts
 from agentctl.redknobs import knob_red_fixer
 from agentctl.queueknobs import knob_lander_landed_every
-from agentctl.core import claude_session_id
+from agentctl.core import branch_of, err, git, git_ok, process_cache, remote
+from agentctl.claudefiles import claude_projects_root
+from agentctl.procs import ps_rows
+from agentctl.repos import RED_PRIMARY, slug
+from agentctl.paths import claude_session_id, tilde
+from agentctl.storetoken import no_vault
 
 
 # ---------------------------------------------------------------- the lander (the owner, 2026-11-01: "remember which

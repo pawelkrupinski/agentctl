@@ -7,16 +7,18 @@ import re
 import time
 from typing import Any, Callable
 from contextlib import suppress
-from agentctl.context import Context
-from agentctl.core import attempt, err, git, process_cache, state_root, commit_known
 from agentctl.statefile import read_record, write_json
-from agentctl.forge import gh_json, RED_CONCLUSIONS, RUN_FIELDS, run_id_of_number
-from agentctl.classify import SETUP_STEP
+from agentctl.core import attempt, err, git, process_cache
 from agentctl.repos import gated_repo, repo_path_for
 from agentctl.workflows import STEP_TIMED_OUT
+from agentctl.classify import SETUP_STEP
+from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, gh_json, run_id_of_number
 from agentctl.gating import GATING_CHECKS_FILE, gate_flows, gating_checks
 from agentctl.redrepos import red_gate_flows
 from agentctl.ciruns import Run
+from agentctl.context import Context
+from agentctl.gitrepo import commit_known
+from agentctl.paths import state_root
 
 
 _missing_row_said = process_cache(set())  # a red gate run whose failed job has no registry row: said once per run

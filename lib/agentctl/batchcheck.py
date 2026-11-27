@@ -5,25 +5,27 @@ import contextlib
 import os
 import sys
 from typing import Any, Optional
-from agentctl.context import Context
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.clock import Clock
 from agentctl.timefmt import ts
 from agentctl.queueknobs import knob_drift_stall
 from agentctl.govknobs import knob_check_lease_ttl
-from agentctl.core import err, git, git_ok, slug, state_root
-from agentctl.leases import LeaseHold
+from agentctl.core import err, git, git_ok
 from agentctl.classify import INFRA_LOG, names_failing_test
+from agentctl.repos import slug
+from agentctl.paths import state_root
 from agentctl.forge import forge_env
 from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
-from agentctl.land import REDGATE, run_watched, tool_env
+from agentctl.context import Context
 from agentctl.queuefailure import CHECK_TIMEOUT, judge_failure
+from agentctl.batchitem import batch_fail, batch_members, batch_move
+from agentctl.leases import LeaseHold
+from agentctl.land import REDGATE, run_watched, tool_env
 from agentctl.queueslots import queue_verdict, tree_slot
-from agentctl.queueinfra import INFRA_CHECK_FAILURE
 from agentctl.identitychange import change_paths_of, identity_model_commits
 from agentctl.waiting import tail_of, waiting_commits
 from agentctl.batchrun import batch_check, bisect
-from agentctl.batchitem import batch_fail, batch_members, batch_move
+from agentctl.queueinfra import INFRA_CHECK_FAILURE
 from agentctl.queuepush import DEEP_BATCHES
 
 

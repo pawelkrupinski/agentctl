@@ -7,15 +7,16 @@ from agentctl.clock import epoch_now
 from agentctl.ids import entry_id_age
 from agentctl.queueknobs import (
     knob_fixer_land_wait, knob_land_ref_sweep, knob_land_ref_unknown_age, knob_note_precheck_wait)
-from agentctl.core import err, git, git_ok, remote, scratch, spawn_detached
+from agentctl.core import err, git, git_ok, remote, spawn_detached
 from agentctl.networksignatures import credential_failure, is_transient_network, redact_credentials
 from agentctl.netretry import TransientNetwork, net_retry
+from agentctl.agewords import fmt_age
+from agentctl.paths import scratch
 from agentctl.waitingdir import ChangeRecords, entry_final
 from agentctl.owned import backoff
 from agentctl.store import StoreUnavailable
 from agentctl.land import push_bounds, run_watched, tool_env
 from agentctl.waiting import tail_of
-from agentctl.agewords import fmt_age
 import os
 import subprocess
 import sys

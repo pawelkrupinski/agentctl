@@ -9,7 +9,6 @@ from typing import Any
 from agentctl.govpool import json
 from agentctl.storecalls import served_calls
 from agentctl.storeauth import store_token_user
-from agentctl.core import state_root
 from agentctl.ghapp import urllib
 from agentctl.eventrows import legacy_cause
 from agentctl.cistate import state_read
@@ -18,6 +17,7 @@ from agentctl.laptoprole import laptop_role_refusal, laptop_role_speaks
 from agentctl.waiting import cancel_submitted
 from agentctl.changesubmit import submit_change
 from agentctl.storemetrics import metrics_text
+from agentctl.paths import state_root
 
 
 # ---------------------------------------------------------------- phase 2: the store over HTTP (design §6.3, §13 phase 2)

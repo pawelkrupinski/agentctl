@@ -6,15 +6,15 @@ import re
 from typing import Any, Callable
 from typing import Optional
 import os
-from agentctl.core import err, git, git_ok, process_cache, remote, run_cmd
-from agentctl.forge import forge_argv, forge_env
-from agentctl.repos import gated_repo, RED_PRIMARY, red_repo_conf, red_repo_of, red_repo_short
-from agentctl.gating import gate_flows
 from agentctl.statefile import load_record
 from agentctl.selfcode import TOOL_PATH
 from agentctl.redknobs import knob_red_families
+from agentctl.core import err, git, git_ok, process_cache, remote, run_cmd
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.classify import norm_line
+from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_conf, red_repo_of, red_repo_short
+from agentctl.forge import forge_argv, forge_env
+from agentctl.gating import gate_flows
 
 
 def red_is_other(o_r):

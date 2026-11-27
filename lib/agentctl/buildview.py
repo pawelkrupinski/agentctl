@@ -4,7 +4,8 @@
 import os
 import re
 from typing import Any
-from agentctl.core import git, commit_known
+from agentctl.core import git
+from agentctl.gitrepo import commit_known
 
 
 # ---------------------------------------------------------------- THE BUILD AS A CHANGE'S MODULES SEE IT

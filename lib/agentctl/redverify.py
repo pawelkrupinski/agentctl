@@ -7,21 +7,22 @@ import os
 from agentctl.statefile import read_record
 from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.redknobs import knob_red_main_verify_every, knob_red_verify_slack
-from agentctl.core import err, git, reds_dir, remote
+from agentctl.core import err, git, remote
+from agentctl.percentile import pct
 from agentctl.workflows import workflow_file_of
 from agentctl.trailers import trailer_format, trailer_values
 from agentctl.forge import is_cancelled, stuck_durations
 from agentctl.workflowcron import cron_next, workflow_crons
 from agentctl.context import Context
+from agentctl.onmain import contains_local
+from agentctl.workflowdispatch import red_verify_dispatch
 from agentctl.blameopen import PATHISH
 from agentctl.runsigs import cause_of, name_causes
 from agentctl.redrecord import red_what
 from agentctl.redfixcheck import fix_reaches_red
 from agentctl.red import red_move
-from agentctl.onmain import contains_local
-from agentctl.workflowdispatch import red_verify_dispatch
 from agentctl.redopen import red_offer, red_open
-from agentctl.percentile import pct
+from agentctl.paths import reds_dir
 
 
 

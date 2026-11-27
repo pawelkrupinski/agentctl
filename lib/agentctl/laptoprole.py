@@ -7,14 +7,15 @@ import subprocess
 import sys
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.statefile import read_record, write_json, note_failure
+from agentctl.statefile import note_failure, read_record, write_json
 from agentctl.timefmt import day_hhmmz
-from agentctl.core import err, process_cache, state_root
+from agentctl.storeknobs import knob_hostname
+from agentctl.govknobs import knob_laptop_role_ttl
+from agentctl.core import err, process_cache
 from agentctl.procs import socket_host
 from agentctl.inboxentry import inbox_write
 from agentctl.leases import lease_meta
-from agentctl.govknobs import knob_laptop_role_ttl
-from agentctl.storeknobs import knob_hostname
+from agentctl.paths import state_root
 
 
 # ---------------------------------------------------------------- the laptop role: ONE machine holds it

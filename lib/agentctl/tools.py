@@ -9,19 +9,20 @@ import sys
 from collections.abc import Iterator
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, ZERO, err, git, git_ok, remote, scratch
 from agentctl.timefmt import ts
+from agentctl.storeknobs import knob_store_token
+from agentctl.redknobs import knob_red_fixer
+from agentctl.queueknobs import knob_max_foreign
+from agentctl.fixerknobs import knob_allow
+from agentctl.core import HOME, ZERO, err, git, git_ok, remote
+from agentctl.paths import scratch
 from agentctl.forge import GH_CLI
-from agentctl.land import SDKMAN_BINS, tool_env
-from agentctl.storetoken import secrets_bin
 from agentctl.onmain import ALLOW_EMPTY_TRAILER, deliberate_empty, is_empty_commit
+from agentctl.storetoken import secrets_bin
+from agentctl.land import SDKMAN_BINS, tool_env
 from agentctl.tunnel import tunnel_ports
 from agentctl.storestate import port_open
 from agentctl.netwatch import TUNNEL_LABEL
-from agentctl.queueknobs import knob_max_foreign
-from agentctl.redknobs import knob_red_fixer
-from agentctl.storeknobs import knob_store_token
-from agentctl.fixerknobs import knob_allow
 
 
 # ---------------------------------------------------------------- queue (retired)

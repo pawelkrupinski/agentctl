@@ -1,18 +1,19 @@
 # agentctl, part `redauthors`: a red's authors: the commits it holds, who landed them, whether their sessions are still at work
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import wall_epoch
 import os
 import re
 from typing import Any
-from agentctl.core import attempt, err, git, commit_known
+from agentctl.clock import wall_epoch
+from agentctl.blameknobs import knob_author_active_min
+from agentctl.core import attempt, err, git
 from agentctl.allowedpaths import allowed_path
 from agentctl.procs import lsof_cwds, proc_alive, ps
+from agentctl.jvmreap import AGENT_WORK
 from agentctl.inboxentry import inbox_entries
 from agentctl.worktrees import gitdir_activity
 from agentctl.runowners import worktree_holding
-from agentctl.jvmreap import AGENT_WORK
-from agentctl.blameknobs import knob_author_active_min
+from agentctl.gitrepo import commit_known
 
 
 def _green_older_than(runs: Any, rid: Any) -> Any:

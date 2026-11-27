@@ -1,44 +1,45 @@
 # agentctl, part `status`: the status model: each source read under a bound, assembled and cached; the status line
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 from typing import Any, Dict
 import json
 import os
 import threading
 import time
-from agentctl.core import HOME, SHORT, process_cache, reds_dir
-from agentctl.timefmt import parse_time
 from agentctl.statefile import read_json_file, read_record
+from agentctl.clock import epoch_now
+from agentctl.timefmt import parse_time
+from agentctl.watchknobs import knob_status_bound
+from agentctl.core import HOME, SHORT, process_cache
 from agentctl.forge import RED_CONCLUSIONS, forge_run_url
 from agentctl.redrepos import red_family
 from agentctl.cistate import state_read
-from agentctl.fixerblockers import cached_dispatch_blocker
+from agentctl.pressure import pressure_report
 from agentctl.store import Store
+from agentctl.landhold import hold_row, land_hold
+from agentctl.fixerblockers import cached_dispatch_blocker
+from agentctl.conditions import open_conditions
+from agentctl.recordingpins import pins_status
 from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.leases import lease_meta
-from agentctl.reverts import REVERT_OPEN, revert_brief, revert_line
-from agentctl.conditions import open_conditions
-from agentctl.landhold import hold_row, land_hold
-from agentctl.issues import status_issues
-from agentctl.changekind import HOLD_SHOWN
 from agentctl.owners import owner_record_path
+from agentctl.statusagents import status_agents, status_strip_lease
+from agentctl.ownerleases import owners_status
 from agentctl.remotestore import RemoteStore, store_url
 from agentctl.tunnel import tunnel_ports, tunnel_state_path
 from agentctl.storestate import STORE_UNREACHABLE_AFTER, port_open, remote_status_state
-from agentctl.recordingpins import pins_status
+from agentctl.statusline import render_status_line, status_gate_text
+from agentctl.reverts import REVERT_OPEN, revert_brief, revert_line
+from agentctl.issues import status_issues
+from agentctl.orphanreap import holder_work
+from agentctl.changekind import HOLD_SHOWN
 from agentctl.reduntracked import red_untracked_list
 from agentctl.redvault import block_verdict_note
-from agentctl.statusagents import status_agents, status_strip_lease
-from agentctl.pressure import pressure_report
-from agentctl.orphanreap import holder_work
 from agentctl.reddispatch import red_cap, red_family_holder, red_fixers_alive, repo_dispatch_off_all
-from agentctl.park import parked_lines
 from agentctl.redview import red_view
 from agentctl.inboxcli import escalated_now
-from agentctl.ownerleases import owners_status
-from agentctl.statusline import render_status_line, status_gate_text
-from agentctl.watchknobs import knob_status_bound
+from agentctl.park import parked_lines
+from agentctl.paths import reds_dir
 
 
 STATUS_STORE_TIMEOUT = 5        # s per remote store call

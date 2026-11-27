@@ -6,12 +6,13 @@ import os
 import re
 from contextlib import suppress
 from typing import Any
-from agentctl.filelog import note_event
-from agentctl.causes import entry_cause
-from agentctl.core import git, state_root
-from agentctl.timefmt import parse_time, ts
 from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import change_state_of, machine_state, open_states
+from agentctl.timefmt import parse_time, ts
+from agentctl.core import git
+from agentctl.causes import entry_cause
+from agentctl.filelog import note_event
+from agentctl.paths import state_root
 
 
 # ---------------------------------------------------------------- waiting: production changes held while main is red

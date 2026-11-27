@@ -1,8 +1,6 @@
 # agentctl, part `serverclone`: ci-runner's own clone: cloned into a temp dir and verified, kept healthy, repaired by a swap under its exclusive lock
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.ids import stamp
-from agentctl.clock import epoch_now, stopwatch
 import contextlib
 import fcntl
 import glob
@@ -13,16 +11,17 @@ import threading
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import err, git, git_ok, pid_alive, process_cache, remote
+from agentctl.conditionregistry import ConditionRegistry
 from agentctl.statefile import read_record, unlink_file
+from agentctl.clock import epoch_now, stopwatch
+from agentctl.ids import stamp
+from agentctl.storeknobs import knob_clone_lock_wait, knob_clone_repair_retry, knob_clone_timeout, knob_movies_remote
+from agentctl.govknobs import knob_clone_keepalive
+from agentctl.core import err, git, git_ok, pid_alive, process_cache, remote
+from agentctl.sdnotify import SD_READY, sd_notify
 from agentctl.repos import server_repo
 from agentctl.clones import CORRUPT_GIT, clone_gated, clone_shared, clone_side, heal_enabled
 from agentctl.conditions import open_condition, recovery_recheck, run_probe
-from agentctl.conditionregistry import ConditionRegistry
-from agentctl.sdnotify import SD_READY, sd_notify
-from agentctl.govknobs import knob_clone_keepalive
-from agentctl.storeknobs import knob_clone_lock_wait, knob_clone_repair_retry, knob_clone_timeout
-from agentctl.storeknobs import knob_movies_remote
 
 
 # THE SERVER CLONE IS ATOMIC (2026-10-29: the reconciler crash-looped at 11:33 mid-clone; the half clone's .git -- an

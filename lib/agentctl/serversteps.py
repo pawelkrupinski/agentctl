@@ -2,34 +2,35 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, Callable, Sequence
-from agentctl.context import Context
+from agentctl.conditionregistry import ConditionRegistry
 from agentctl.statemachines import StaleVersion, TerminalState, machine_state
 from agentctl.clock import Clock
-from agentctl.core import reap_children, slug
+from agentctl.core import reap_children
+from agentctl.repos import slug
 from agentctl.filelog import drain_event_log
 from agentctl.waitingdir import wlog
-from agentctl.serverhousekeeping import archive_leases_step, expire_entry_files_step
 from agentctl.inboxentry import inbox_write
 from agentctl.cistate import snapshot_gate_reds
-from agentctl.recovery import maybe_recovery_tick
-from agentctl.serverclone import clone_health_lines
-from agentctl.queuestall import queue_stall_step
-from agentctl.crashloop import crash_loop_step
 from agentctl.stats import maybe_stats_pass
 from agentctl.timelinecmd import timeline_step
+from agentctl.context import Context
 from agentctl.landhold import tick_land_hold
+from agentctl.serverhousekeeping import archive_leases_step, expire_entry_files_step
+from agentctl.serverclone import clone_health_lines
+from agentctl.queuestall import queue_stall_step
 from agentctl.reverts import tick_reverts
 from agentctl.issues import tick_issues
 from agentctl.queuesubmit import sweep_land_refs
 from agentctl.checkrun import remote_run_jobs
-from agentctl.batch import say_batch
+from agentctl.crashloop import crash_loop_step
 from agentctl.watchtick import tick_watches
-from agentctl.queuepush import tick_changes
-from agentctl.batchtick import tick_batch
+from agentctl.recovery import maybe_recovery_tick
 from agentctl.redtick import maybe_red_tick
 from agentctl.gatepublish import maybe_publish_gate
 from agentctl.landedchange import close_landed_changes, stranded_changes
-from agentctl.conditionregistry import ConditionRegistry
+from agentctl.batch import say_batch
+from agentctl.queuepush import tick_changes
+from agentctl.batchtick import tick_batch
 
 
 def gate_is_red_now() -> bool:

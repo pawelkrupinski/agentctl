@@ -6,7 +6,8 @@ import os
 from typing import Any, Iterator
 from agentctl.filelock import FileLock
 from agentctl.tickknobs import knob_log_rotate_keep, knob_log_rotate_max
-from agentctl.core import HOME, reds_dir, state_root, tilde
+from agentctl.core import HOME
+from agentctl.paths import reds_dir, state_root, tilde
 
 
 LOG_ROTATE_PRUNE = ("work", "target", ".git")

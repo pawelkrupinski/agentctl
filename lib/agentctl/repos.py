@@ -1,16 +1,16 @@
 # agentctl, part `repos`: the repositories agentctl serves: red-repos.json (each repository's clone, short name, gate workflows and push policy) and the movies and server clones' paths.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.statefile import load_record
 import json
 import os
 import re
 import shlex
 from typing import Any, Dict, List, Optional
-from agentctl.core import HOME, REPOS, err, git_ok, host_role, process_cache, remote, slug
+from agentctl.statefile import load_record
 from agentctl.selfcode import TOOL_PATH
 from agentctl.storeknobs import knob_bin_repo, knob_movies_repo
 from agentctl.redknobs import knob_red_repo, knob_red_repos
+from agentctl.core import HOME, REPOS, SHORT, err, git, git_ok, host_role, process_cache, remote
 
 
 # THE agentctl REPOSITORY (~/bin): a fixer never edits it (`agentctl issue`); watchdog WB checks its checkout stays clean.
@@ -319,3 +319,17 @@ def batching(repo):
     """Whether land batches here (every change joins `waiting`): a repo hook with --checks-only (movies)."""
     hook = precheck_hook(repo)
     return bool(hook) and waiting_supported(repo)
+
+
+def slug(repo_arg: str) -> str:
+    if repo_arg in SHORT:
+        return SHORT[repo_arg]
+    if os.path.isdir(repo_arg):
+        url = git(repo_arg, "remote", "get-url", remote()).strip()
+        m = re.search(r"[:/]([^/:]+/[^/]+?)(?:\.git)?/?$", url)
+        if not m:
+            raise SystemExit(f"agentctl: cannot parse remote url of {repo_arg}")
+        return m.group(1)
+    if re.fullmatch(r"[\w.-]+/[\w.-]+", repo_arg):
+        return repo_arg
+    raise SystemExit(f"agentctl: unknown repo {repo_arg!r}")

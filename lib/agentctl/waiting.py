@@ -4,20 +4,21 @@
 import os
 import signal
 from typing import Any
-from agentctl.context import Context
-from agentctl.core import SHORT, err, git, remote, slug, is_ancestor
+from agentctl.statefile import note_failure, read_record
+from agentctl.statemachines import StaleVersion, change_event, machine_state, open_items
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, note_failure
-from agentctl.repos import server_repo
+from agentctl.core import SHORT, err, git, remote
+from agentctl.repos import server_repo, slug
 from agentctl.trailers import commit_trailer_values
 from agentctl.waitingdir import ChangeRecords, entry_final, waiting_state, wlog
 from agentctl.owned import cancel_run
-from agentctl.queueslots import entry_owned, queue_verdict, set_change
+from agentctl.context import Context
 from agentctl.conflicts import pick
+from agentctl.queueslots import entry_owned, queue_verdict, set_change
 from agentctl.queuerecheck import same_change_source
 from agentctl.redland import may_land_on_red
 from agentctl.changekind import facts_for
-from agentctl.statemachines import StaleVersion, change_event, machine_state, open_items
+from agentctl.gitrepo import is_ancestor
 
 
 WAITING_HELP = """The processor (one loop of ticks, launchd net.bitcashier.agentctl-waiting) and its queue: every landed change is

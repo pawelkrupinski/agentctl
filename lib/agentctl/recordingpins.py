@@ -4,9 +4,10 @@
 from agentctl.statefile import read_record, write_json
 from agentctl.clock import epoch_now
 from agentctl.redknobs import knob_pinned_recording
-from agentctl.core import err, git, host_role, reds_dir, remote
+from agentctl.core import err, git, host_role, remote
 from agentctl.forge import api, forge_release_asset
 from agentctl.agewords import fmt_age
+from agentctl.paths import reds_dir
 import json
 import os
 import re

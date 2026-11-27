@@ -1,17 +1,18 @@
 # agentctl, part `gating`: the gate's workflows: the gating-checks registry (.github/gating-checks.tsv, else the API) and the workflow files it names.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import os
 import re
 from contextlib import suppress
 from typing import Any, NamedTuple
-from agentctl.core import git, process_cache, remote, state_root
+from agentctl.statefile import note_failure, read_record, write_json
+from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json, note_failure
-from agentctl.forge import gh_json
+from agentctl.core import git, process_cache, remote
 from agentctl.repos import scan_repo_for
 from agentctl.workflows import workflow_triggers
+from agentctl.forge import gh_json
+from agentctl.paths import state_root
 
 
 # ---------------------------------------------------------------- ci-why

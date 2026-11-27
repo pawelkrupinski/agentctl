@@ -3,18 +3,19 @@
 
 import os
 from typing import Any
-from agentctl.context import Context
+from agentctl.conditionregistry import ConditionRegistry
 from agentctl.clock import wall_epoch
 from agentctl.tickknobs import knob_assign_bound, knob_gate_publish, knob_step_bound
-from agentctl.core import attempt, err, run_bounded, slug
+from agentctl.core import attempt, err, run_bounded
+from agentctl.repos import slug
 from agentctl.gating import gate_dirty_path
 from agentctl.cistate import ci_state_write
 from agentctl.gatesummary import _last_gate_publish, publish_gate_summary
+from agentctl.context import Context
 from agentctl.recordingpins import refresh_pinned_recording
 from agentctl.branches import route_branch_reds, settle_branch_reds
 from agentctl.cireport import ci_state_refresh, ci_why
 from agentctl.redtick import red_tick_repo
-from agentctl.conditionregistry import ConditionRegistry
 
 
 def gate_publish_cycle(repo: str, store: Any, registry: ConditionRegistry, *, ctx: Context) -> None:

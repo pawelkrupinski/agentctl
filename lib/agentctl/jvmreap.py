@@ -1,7 +1,6 @@
 # agentctl, part `jvmreap`: stale JVMs: a stuck or idle sbt server, an orphaned sbt or test JVM, and their reap
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.ids import stamp
 import glob
 import os
 import re
@@ -11,13 +10,16 @@ import time
 from contextlib import suppress
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import HOME, pid_alive, probe_output, run_cmd, state_root
-from agentctl.timefmt import ts
-from agentctl.procs import lsof_cwds, ps_rows
 from agentctl.psparse import tosec
+from agentctl.ids import stamp
+from agentctl.timefmt import ts
+from agentctl.govknobs import (
+    knob_jvm_cwd, knob_jvm_kept, knob_jvm_ps, knob_sbt_idle_min, knob_sbt_idle_pressure_min,
+    knob_sbt_progress_cpu_per_min, knob_sbt_stall_min, knob_swap_free_floor_mb)
+from agentctl.core import HOME, pid_alive, probe_output, run_cmd
 from agentctl.allowedpaths import allowed_path
-from agentctl.govknobs import knob_sbt_idle_min, knob_sbt_idle_pressure_min, knob_sbt_progress_cpu_per_min, knob_sbt_stall_min, knob_swap_free_floor_mb
-from agentctl.govknobs import knob_jvm_cwd, knob_jvm_kept, knob_jvm_ps
+from agentctl.procs import lsof_cwds, ps_rows
+from agentctl.paths import state_root
 
 
 # A RATE NEEDS A COMPARABLE SAMPLE: the laptop sleeps (1565 sleep/wakes since boot, pmset 2026-11-07), and wall time runs

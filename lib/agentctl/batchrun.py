@@ -1,26 +1,26 @@
 # agentctl, part `batchrun`: a batch's check: its tip assembled in a check tree, run remotely or here, bisected when it fails
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import os
 import re
 import subprocess
 from typing import Any
-from agentctl.statefile import read_text_or
 from agentctl.procrunner import process_runner
-from agentctl.core import err, git, host_role, remote, is_ancestor
+from agentctl.statefile import read_text_or
+from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
+from agentctl.core import err, git, host_role, remote
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import ChangeRecords, wlog
+from agentctl.conditions import condition_item_of, open_condition, probe_gate_read, run_probe
 from agentctl.land import run_watched, tool_env
-from agentctl.queueslots import queue_verdict
-from agentctl.conditions import condition_item_of, open_condition, run_probe
-from agentctl.queue import VERIFY_MODE
 from agentctl.conflicts import conflict_cause, conflict_paths
+from agentctl.queueslots import queue_verdict
+from agentctl.queue import VERIFY_MODE
 from agentctl.waiting import GATE_UNREAD, already_landed, apply_entry, supersede, unread_why
 from agentctl.checkslot import check_slot
 from agentctl.checkrun import remote_check, remote_checks_supported
-from agentctl.conditions import probe_gate_read
+from agentctl.gitrepo import is_ancestor
 
 
 def assemble(st, repo, d, wt, entries, base, alone: bool = False, autoresolve: bool = False):

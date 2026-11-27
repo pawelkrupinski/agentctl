@@ -5,7 +5,7 @@ from typing import Any, Optional
 import os
 import re
 from agentctl.redrecord import lease_is_live
-from agentctl.core import reds_dir
+from agentctl.paths import reds_dir
 
 
 def owner_lease(fam: str) -> str:

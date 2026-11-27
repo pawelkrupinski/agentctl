@@ -2,31 +2,31 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from functools import partial
-from agentctl.clock import epoch_now
 import glob
 import os
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
-from agentctl.timefmt import parse_time, ts
 from agentctl.statefile import read_record, write_json
-from agentctl.core import branch_of, git, recovery_dir, reds_dir, remote, slug, tilde
-from agentctl.networksignatures import NETWORK_CHECK_FAILURE
-from agentctl.repos import movies_repo_path
+from agentctl.clock import epoch_now
+from agentctl.timefmt import parse_time, ts
+from agentctl.fixerknobs import knob_orphan_fixers, knob_orphan_idle
+from agentctl.core import branch_of, git, remote
+from agentctl.repos import movies_repo_path, slug
 from agentctl.fixerrecords import fixer_records
+from agentctl.networksignatures import NETWORK_CHECK_FAILURE
 from agentctl.inboxentry import inbox_write
 from agentctl.fixerenv import fixer_env
 from agentctl.conditions import open_condition, run_probe
+from agentctl.fixerland import spawn_fixer
 from agentctl.blamerecords import blame_drop_revert_worktree
 from agentctl.recovery import reland_worktree
 from agentctl.superseded import superseded_duty, worktree_change_items
 from agentctl.park import park_duty
-from agentctl.orphans import land_entries_once, orphan_candidates, orphan_covered_by, orphan_land_entry
-from agentctl.fixerland import spawn_fixer
-from agentctl.fixerknobs import knob_orphan_idle
-from agentctl.fixerknobs import knob_orphan_fixers
-from agentctl.orphans import probe_orphan_landed
+from agentctl.orphans import (
+    land_entries_once, orphan_candidates, orphan_covered_by, orphan_land_entry, probe_orphan_landed)
+from agentctl.paths import recovery_dir, reds_dir, tilde
 
 
 ORPHAN_PER_PASS = 3

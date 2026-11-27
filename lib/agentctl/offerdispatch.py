@@ -2,23 +2,23 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-from agentctl.core import tilde
+from agentctl.escalationtable import crash_loop_hold
 from agentctl.repos import red_repo_clone, red_repo_of
 from agentctl.procs import socket_host
-from agentctl.fixersession import claude_trust_gap
 from agentctl.fixerblockers import cached_dispatch_blocker
+from agentctl.fixersession import claude_trust_gap
 from agentctl.leases import LeaseKinds, lease_meta
 from agentctl.owners import OWNER_TTL, owner_alive, owner_lease
+from agentctl.ownerleases import family_owned, owner_hand, owner_holder
 from agentctl.red import RED_CLAIM_MAX, RED_CLAIM_TTL, RED_FIXER_MAX, RED_FIXER_TTL
 from agentctl.redseen import KIND_ORDER
 from agentctl.redopen import red_family_tell
-from agentctl.redcrash import red_queue_family
 from agentctl.blame import blame_waiting
-from agentctl.escalationtable import crash_loop_hold
-from agentctl.ownerleases import family_owned, owner_hand, owner_holder
-from agentctl.owner import OWNER_MAX, owner_spawn, owner_still_ending
+from agentctl.redcrash import red_queue_family
 from agentctl.reddispatch import (
     red_backoff_why, red_capacity, red_dispatch_meta, red_family_holder, red_spawn, repo_dispatch_off)
+from agentctl.owner import OWNER_MAX, owner_spawn, owner_still_ending
+from agentctl.paths import tilde
 
 
 def red_dispatcher(store: Any, o_r: str, repo: str, t: float) -> list[str]:

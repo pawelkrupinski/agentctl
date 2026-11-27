@@ -5,12 +5,12 @@ from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec, T
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
 from agentctl.blameknobs import knob_issue_escalate_gap
-from agentctl.core import claude_session_id
 from agentctl.texthash import hashlib_sha1
 from agentctl.procs import safe_cwd
 from agentctl.store import StoreUnavailable
 from agentctl.worktrees import claimant
 from agentctl.agewords import fmt_age
+from agentctl.paths import claude_session_id
 import datetime as dt
 from typing import Any, Optional
 

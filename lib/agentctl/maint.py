@@ -8,17 +8,19 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable
 from contextlib import suppress
-from agentctl.core import HOME, REPOS, git, pid_alive, run_cmd, slug, state_root
 from agentctl.psparse import tosec
+from agentctl.statefile import note_failure, read_record, write_json
 from agentctl.selfcode import code_version
-from agentctl.owned import owner_records
-from agentctl.statefile import read_record, write_json, note_failure
-from agentctl.forge import gh_json
+from agentctl.govknobs import knob_jvm_ps, knob_sbt_reap
+from agentctl.core import HOME, REPOS, git, pid_alive, run_cmd
+from agentctl.repos import slug
 from agentctl.procs import process_cwds, ps, ps_rows
 from agentctl.jvmreap import (
-    awake_now, end_process, is_sbt, jvm_candidates, jvm_reap, jvm_scan, reap_log, sbt_serving, sbt_stuck_reasons, swap_free_mb, term_grace,
-    thread_dump, tree_cpu)
-from agentctl.govknobs import knob_jvm_ps, knob_sbt_reap
+    awake_now, end_process, is_sbt, jvm_candidates, jvm_reap, jvm_scan, reap_log, sbt_serving, sbt_stuck_reasons,
+    swap_free_mb, term_grace, thread_dump, tree_cpu)
+from agentctl.forge import gh_json
+from agentctl.owned import owner_records
+from agentctl.paths import state_root
 
 
 def loop_body(cmd):

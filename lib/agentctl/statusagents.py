@@ -1,7 +1,6 @@
 # agentctl, part `statusagents`: the status page's agents: each live session and fixer, its worktree's head and dirt, its logs and last words
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import glob
 import json
 import os
@@ -12,16 +11,18 @@ import time
 from contextlib import suppress
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import err, process_cache, reds_dir
-from agentctl.timefmt import iso_epoch
 from agentctl.statefile import mtime, tail_bytes
+from agentctl.clock import epoch_now
+from agentctl.timefmt import iso_epoch
+from agentctl.watchknobs import knob_status_agent_bound
+from agentctl.core import err, process_cache
 from agentctl.procs import proc_alive
 from agentctl.fixerrecords import fixer_records
 from agentctl.live import live_annotate, live_transcript_ok
+from agentctl.livestream import live_mask_text
 from agentctl.redrecord import lease_is_live
 from agentctl.leases import lease_meta
-from agentctl.livestream import live_mask_text
-from agentctl.watchknobs import knob_status_agent_bound
+from agentctl.paths import reds_dir
 
 
 STATUS_LOG_TAIL = 40            # lines of each log shown in the page

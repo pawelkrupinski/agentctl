@@ -1,8 +1,6 @@
 # agentctl, part `branches`: branch runs: their inputs against main's, their state, branch reds and their route; `agentctl dispatch`
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.context import Context
-from agentctl.clock import epoch_now
 import datetime as dt
 import json
 import os
@@ -12,22 +10,28 @@ import time
 import urllib.parse
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import dispatches_dir, err, remote, slug, commit_known
+from agentctl.statefile import read_record, unlink_file, write_json
+from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record, write_json, unlink_file
+from agentctl.tickknobs import knob_dispatch_find, knob_dispatch_find_poll
+from agentctl.core import err, remote
+from agentctl.repos import slug
 from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, api, forge_argv, forge_env, gh_json
 from agentctl.inboxentry import inbox_write
-from agentctl.owned import default_repo
-from agentctl.worktrees import merged_reason
 from agentctl.inbox import INBOX_TAIL
-
-from agentctl.runsigs import save_run_sigs
 from agentctl.gatesummary import SUMMARY_MAX_REDS
+from agentctl.owned import default_repo
+from agentctl.context import Context
+from agentctl.worktrees import merged_reason
 from agentctl.fixerblockers import short_flow
-from agentctl.runowners import branch_base, branch_red_id, dispatch_key, dispatch_records, orphan_why, owner_gone, owner_of, owner_text, record_dispatch, save_dispatch, tracked_branch
+from agentctl.runowners import (
+    branch_base, branch_red_id, dispatch_key, dispatch_records, orphan_why, owner_gone, owner_of, owner_text,
+    record_dispatch, save_dispatch, tracked_branch)
 from agentctl.recordingpins import pinned_recording, pinned_runs
 from agentctl.runexplain import explain_run_jobs
-from agentctl.tickknobs import knob_dispatch_find, knob_dispatch_find_poll
+from agentctl.runsigs import save_run_sigs
+from agentctl.gitrepo import commit_known
+from agentctl.paths import dispatches_dir
 
 
 # inputs that change where or how a run runs, or how much of it, never what main's run of the same workflow would decide

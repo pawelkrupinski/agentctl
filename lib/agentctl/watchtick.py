@@ -9,18 +9,20 @@ from agentctl.timefmt import age_since, iso_at
 from agentctl.watchknobs import (
     WATCH_TIMEOUT, knob_watch_conv_start, knob_watch_error_poll, knob_watch_follow_lease, knob_watch_poll,
     knob_watch_stall_min, knob_watch_timeout)
-from agentctl.core import claude_session_id, err, slug
+from agentctl.core import err
+from agentctl.tokenerrors import NoToken
+from agentctl.repos import slug
 from agentctl.procs import safe_cwd
 from agentctl.clones import main_clone
 from agentctl.owned import Owned, backoff, restart_if_changed
 from agentctl.context import Context
 from agentctl.landwatch import (
     WATCH, start_watch, watch_clone, watch_eval, watch_event, watch_look, watch_outcome, watch_verdict)
-from agentctl.redfixes import fixes_of
 from agentctl.cleanup import close_worktree
+from agentctl.redfixes import fixes_of
 from agentctl.redopen import red_attach
 from agentctl.cireport import ci_why
-from agentctl.tokenerrors import NoToken
+from agentctl.paths import claude_session_id
 
 
 def landed_fixes(repo: str, sha: str, fixes: Sequence[str], store: Any, *, ctx: Context) -> list[str]:

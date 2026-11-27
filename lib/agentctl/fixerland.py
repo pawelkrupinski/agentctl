@@ -1,7 +1,6 @@
 # agentctl, part `fixerland`: how a fixer lands: its land command, land as you go, real activity as progress.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import wall_epoch
 import glob
 import itertools
 import json
@@ -12,25 +11,27 @@ import sys
 import time
 from typing import Any
 from contextlib import suppress
-from agentctl.onmain import landed_state
-from agentctl.core import attempt, git, on_ci_runner, reds_dir, remote, spawn_detached, tilde
-from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.store import StoreUnavailable
-from agentctl.procs import process_start, socket_host
 from agentctl.selfcode import TOOL_PATH
-from agentctl.repos import red_repo_of
-from agentctl.fixerrecords import fixer_keys, fixer_records
-from agentctl.inboxentry import inbox_write
-from agentctl.claudefiles import claude_jobs_root
-from agentctl.allowedpaths import allowed_path
-from agentctl.fixersession import fixer_label
-from agentctl.worktrees import fresh_worktree
-from agentctl.fixerenv import fixer_env
-from agentctl.redrepos import red_family, red_is_other, red_owner_only, red_repo_tag
-from agentctl.laptoprole import laptop_role_standby
+from agentctl.clock import wall_epoch
+from agentctl.timefmt import ts
 from agentctl.queueknobs import knob_fixer_land_watch
 from agentctl.fixerknobs import knob_claude_tmp, knob_fixer_unlanded_escalate, knob_fixer_unlanded_nudge
+from agentctl.core import attempt, git, on_ci_runner, remote, spawn_detached
+from agentctl.repos import red_repo_of
+from agentctl.claudefiles import claude_jobs_root
+from agentctl.allowedpaths import allowed_path
+from agentctl.procs import process_start, socket_host
+from agentctl.fixerrecords import fixer_keys, fixer_records
+from agentctl.inboxentry import inbox_write
+from agentctl.redrepos import red_family, red_is_other, red_owner_only, red_repo_tag
+from agentctl.store import StoreUnavailable
+from agentctl.onmain import landed_state
+from agentctl.worktrees import fresh_worktree
+from agentctl.fixersession import fixer_label
+from agentctl.fixerenv import fixer_env
+from agentctl.laptoprole import laptop_role_standby
+from agentctl.paths import reds_dir, tilde
 
 
 # HOW A FIXER LANDS (2026-11-16, Main #2515: the fixer wrapped `agentctl land` in `timeout -s KILL` twice, then ran

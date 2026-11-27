@@ -1,14 +1,14 @@
 # agentctl, part `govbudget`: the governor's memory budget, each class's share of it, and the check cap it holds (one sbt server's worth a check), the check runs log and the slot holders
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import os
 import json
-from agentctl.core import state_root
-from agentctl.statefile import read_record, note_failure
+from agentctl.statefile import note_failure, read_record
+from agentctl.clock import epoch_now
+from agentctl.govknobs import knob_checks_dir, knob_gov_budget_gb, knob_max_checks
 from agentctl.machine import ram_gb
 from agentctl.govtickets import gov_tickets
-from agentctl.govknobs import knob_checks_dir, knob_gov_budget_gb, knob_max_checks
+from agentctl.paths import state_root
 
 
 GOV_MEM_GB = {"red": 5.0, "check": 5.0, "agent": 5.0, "measure": 6.0, "hook": 1.0, "suite": 1.0}

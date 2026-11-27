@@ -7,13 +7,14 @@ from typing import Any
 from agentctl.govpool import json
 from agentctl.statefile import read_record
 from agentctl.clock import epoch_now
-from agentctl.core import dispatches_dir, remote
+from agentctl.core import remote
 from agentctl.ghapp import urllib
 from agentctl.workflows import workflow_file_of
 from agentctl.forge import api, gh_json
 from agentctl.redrepos import RED_WORKFLOWS_FILE, verify_dispatchable
-from agentctl.runowners import record_dispatch
 from agentctl.workflowcron import workflow_crons
+from agentctl.runowners import record_dispatch
+from agentctl.paths import dispatches_dir
 
 
 def verify_inputs(o_r: Any, run_id: Any, workflow_text: str) -> Any:

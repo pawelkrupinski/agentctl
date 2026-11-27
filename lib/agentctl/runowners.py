@@ -8,15 +8,15 @@ from typing import Any
 from agentctl.statefile import read_record, write_json
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
-from agentctl.core import PROTECTED_BRANCHES, dispatches_dir, git, remote, tilde
+from agentctl.core import PROTECTED_BRANCHES, git, remote
 from agentctl.procs import process_start, record_alive, safe_cwd
 from agentctl.fixerrecords import agent_name
 from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.waitingdir import waiting_dir
 from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
-from agentctl.worktrees import CACHE_TREES, internal_trees_dir, worktree_of, worktrees
 from agentctl.onmain import MainContainment
-from agentctl.core import claude_session_id
+from agentctl.worktrees import CACHE_TREES, internal_trees_dir, worktree_of, worktrees
+from agentctl.paths import claude_session_id, dispatches_dir, tilde
 
 
 # ---------------------------------------------------------------- branch runs: every dispatch has an owner, every branch red a route

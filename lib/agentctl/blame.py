@@ -5,16 +5,17 @@ from agentctl.statefile import note_failure, read_record
 from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import epoch_now
 from agentctl.blameknobs import knob_blame_max, knob_blame_probe_wall, knob_blame_probes
-from agentctl.core import git, reds_dir, spawn_detached
+from agentctl.core import git, spawn_detached
 from agentctl.procs import process_start, record_alive
 from agentctl.inboxentry import inbox_write
 from agentctl.redrepos import red_repo_tag
+from agentctl.agewords import fmt_age
 from agentctl.lander import blame_change_name, blame_decision
 from agentctl.blameopen import CONVERGENCE_FLOWS, PATHISH, TEST_TOKEN
 from agentctl.redrecord import red_what
 from agentctl.fixerland import red_dispatch_log
 from agentctl.redopen import red_offer
-from agentctl.agewords import fmt_age
+from agentctl.paths import reds_dir
 import os
 import re
 import signal

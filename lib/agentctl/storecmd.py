@@ -5,16 +5,17 @@ import os
 import threading
 import time
 from typing import Any
-from agentctl.context import Context
 from agentctl.clock import epoch_now
 from agentctl.storeauth import (
     store_secret, store_secret_path, store_token_issue, store_token_revoke, store_tokens_load)
-from agentctl.core import err, state_root
+from agentctl.core import err
 from agentctl.jvmreap import signal
 from agentctl.store import Store
+from agentctl.context import Context
 from agentctl.remotestore import RemoteStore, STORE_PORT
 from agentctl.changesubmit import store_grace
 from agentctl.storeapi import StoreAPI, store_server
+from agentctl.paths import state_root
 
 
 def cmd_store(a: Any, *, ctx: Context) -> Any:

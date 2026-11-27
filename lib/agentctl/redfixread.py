@@ -1,8 +1,6 @@
 # agentctl, part `redfixread`: a fix's reach: Fixes-Red commits on main, what a red's failing jobs read and whether a fix touches it.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.context import Context
-from agentctl.clock import epoch_now
 import os
 import re
 import subprocess
@@ -10,15 +8,17 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.procrunner import process_runner
-from agentctl.core import err, git, git_ok, process_cache, reds_dir, remote, commit_known
 from agentctl.statefile import read_record, write_json
-from agentctl.repos import red_repo_of
-from agentctl.trailers import commit_trailer_values
-from agentctl.workflows import fix_workflow_jobs
-from agentctl.clones import RED_MAIN_REFETCH, fetch_main
-
 from agentctl.statemachines import open_states
-from agentctl.repos import red_job_names
+from agentctl.clock import epoch_now
+from agentctl.core import err, git, git_ok, process_cache, remote
+from agentctl.workflows import fix_workflow_jobs
+from agentctl.trailers import commit_trailer_values
+from agentctl.gitrepo import commit_known
+from agentctl.repos import red_job_names, red_repo_of
+from agentctl.clones import RED_MAIN_REFETCH, fetch_main
+from agentctl.paths import reds_dir
+from agentctl.context import Context
 
 
 # -- fixes on their way: Fixes-Red changes in the queue, and Fixes-Red commits landed on main

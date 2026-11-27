@@ -8,12 +8,13 @@ from agentctl.statemachines import StaleVersion, TerminalState
 from agentctl.clock import epoch_now
 from agentctl.timefmt import iso_at, ts
 from agentctl.blameknobs import knob_condition_pending_lapse, knob_recover_max, knob_unknown_grace
-from agentctl.core import SHORT, attempt, err, git, host_role, recovery_dir, remote
+from agentctl.core import SHORT, attempt, err, git, host_role, remote
 from agentctl.repos import movies_repo_path
 from agentctl.gating import mark_gate_dirty
 from agentctl.inboxentry import inbox_dir, inbox_write
 from agentctl.cistate import ci_state_load
 from agentctl.agewords import fmt_age
+from agentctl.paths import recovery_dir
 import glob
 import json
 import os

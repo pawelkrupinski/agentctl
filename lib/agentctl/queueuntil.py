@@ -12,7 +12,7 @@ from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.onmain import landed_state
 from agentctl.worktrees import worktrees
 from agentctl.cleanup import close_worktree, free_worktree
-from agentctl.core import claude_session_id
+from agentctl.paths import claude_session_id
 
 
 def parse_duration(text):

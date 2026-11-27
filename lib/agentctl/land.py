@@ -13,17 +13,18 @@ from typing import Any, Iterator
 from agentctl.procrunner import process_runner
 from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import Clock
-from agentctl.queueknobs import knob_land_stall_min
+from agentctl.queueknobs import (
+    knob_land_lease_max, knob_land_lease_ttl, knob_land_lock_timeout, knob_land_stall_min,
+    knob_land_wait_report_min, knob_push_stall_secs, knob_push_wall_min)
 from agentctl.fixerknobs import knob_stall_cpu_seconds
 from agentctl.leasetable import LeaseLost
-from agentctl.core import HOME, SHORT, err, git, process_cache, reds_dir, slug, spawn_detached
-from agentctl.forge import forge_env
+from agentctl.core import HOME, SHORT, err, git, process_cache, spawn_detached
+from agentctl.repos import slug
 from agentctl.procs import ps_rows
+from agentctl.forge import forge_env
 from agentctl.store import StoreUnavailable
 from agentctl.leases import LeaseHold, _landing, lock_beat
-from agentctl.queueknobs import (
-    knob_land_lease_max, knob_land_lease_ttl, knob_land_lock_timeout, knob_land_wait_report_min,
-    knob_push_stall_secs, knob_push_wall_min)
+from agentctl.paths import reds_dir
 
 
 # ---------------------------------------------------------------- land / env

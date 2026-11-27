@@ -18,12 +18,13 @@ from typing import Any, Callable
 from agentctl.statefile import read_record, write_json
 from agentctl.timefmt import iso_epoch
 from agentctl.watchknobs import knob_wa_read_every, knob_wa_red_max, knob_wa_undecided_max, knob_wa_unpinned_max
-from agentctl.core import git, host_role, run_cmd, state_root
+from agentctl.core import git, host_role, run_cmd
 from agentctl.repos import bin_repo
 from agentctl.redrepos import diagnosis, read_failure
 from agentctl.cistate import state_read
 from agentctl.context import Context
 from agentctl.agewords import fmt_age
+from agentctl.paths import state_root
 
 
 SELF_REPO = "pawelkrupinski/agentctl"

@@ -2,10 +2,10 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
-from agentctl.core import scratch
 from agentctl.timefmt import ts
 from agentctl.forge import forge_branch_sha, forge_delete_branch
 from agentctl.waitingdir import WAITING_BRANCH
+from agentctl.paths import scratch
 
 
 # ---------------------------------------------------------------- deletions

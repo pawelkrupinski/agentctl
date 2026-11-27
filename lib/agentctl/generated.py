@@ -7,8 +7,8 @@ import re
 import subprocess
 from typing import Any, Dict, List, Optional, Tuple
 from agentctl.procrunner import process_runner
-from agentctl.core import git, host_role, process_cache, slug
-from agentctl.repos import red_repo_conf
+from agentctl.core import git, host_role, process_cache
+from agentctl.repos import red_repo_conf, slug
 
 
 _generated_slugs = process_cache({})  # repo path -> its GitHub slug (None: unknown)

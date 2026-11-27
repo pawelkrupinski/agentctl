@@ -4,11 +4,12 @@
 import os
 import re
 from typing import Any
-from agentctl.core import git, remote, commit_known, is_ancestor
+from agentctl.core import git, remote
 from agentctl.repos import RED_PRIMARY
 from agentctl.workflows import job_inner
-from agentctl.lander import commit_keys, lander_index, lander_of_commit, lander_records
 from agentctl.ciwhy import decided_runs, streak_runs
+from agentctl.lander import commit_keys, lander_index, lander_of_commit, lander_records
+from agentctl.gitrepo import commit_known, is_ancestor
 
 
 def culprit_of(repo, u):

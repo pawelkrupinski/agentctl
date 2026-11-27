@@ -8,13 +8,14 @@ from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import machine_state
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
-from agentctl.core import attempt, git, PROTECTED_BRANCHES, recovery_dir, remote, tilde
+from agentctl.core import PROTECTED_BRANCHES, attempt, git, remote
 from agentctl.procs import process_cwds
 from agentctl.inboxentry import inbox_write
 from agentctl.deletions import log_deletion
 from agentctl.onmain import landed_state
 from agentctl.worktrees import worktrees
 from agentctl.landedchange import change_state
+from agentctl.paths import recovery_dir, tilde
 
 
 # SUPERSEDED (the owner, 2026-10-31: movies-wt-ci-1/2/3 and -review were carried into ci-5 on 2026-10-30 -- rebased

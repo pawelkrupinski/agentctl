@@ -7,7 +7,7 @@ from typing import Any
 from agentctl.selfcode import TOOL_PATH
 from agentctl.redknobs import knob_brief_src
 from agentctl.fixerknobs import FIXER_UNLANDED_NUDGE
-from agentctl.core import err, remote, tilde
+from agentctl.core import err, remote
 from agentctl.repos import RED_PRIMARY, red_repo_clone, red_repo_of
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.classify import is_regression
@@ -16,6 +16,7 @@ from agentctl.redrecord import RED_RECURRING
 from agentctl.fixerland import LAND_BRIEF
 from agentctl.redfixes import red_refuted
 from agentctl.redland import FIX_REPLAY_NONE_MIN, red_replay_command
+from agentctl.paths import tilde
 
 
 # THE FIXER BRIEF (the owner, 2026-10-30): the rules every dispatched fixer and family owner gets -- fast reproducer

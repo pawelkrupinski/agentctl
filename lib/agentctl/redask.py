@@ -3,11 +3,10 @@
 
 import re
 from typing import Any
-from agentctl.core import tilde
-from agentctl.leases import red_block_of
 from agentctl.conditionregistry import PROBE_EVERY
-from agentctl.blameknobs import knob_ask_remind_max
-from agentctl.blameknobs import knob_ask_hold, knob_ask_remind_first
+from agentctl.blameknobs import knob_ask_hold, knob_ask_remind_first, knob_ask_remind_max
+from agentctl.leases import red_block_of
+from agentctl.paths import tilde
 
 
 # BLOCKED ON OWNER IS FOR THE OWNER'S CAUSES ONLY (the owner, 2026-10-28: "fix this: main #2283 → BLOCKED ON OWNER ...

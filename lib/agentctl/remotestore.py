@@ -1,7 +1,6 @@
 # agentctl, part `remotestore`: the store over HTTP: RemoteStore, the phase-2 API's client, its retries of an unsent call, and the machine its calls speak for
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import json
 import os
 import sys
@@ -12,14 +11,14 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable
 from agentctl.statefile import read_json_file, read_text_or, write_json_file
+from agentctl.storecalls import STORE_CALLS, StoreCall
+from agentctl.clock import epoch_now
+from agentctl.storeknobs import knob_store_retries, knob_store_retry_base, knob_store_url
 from agentctl.core import SHORT, attempt, host_role
 from agentctl.store import StoreAuthFailed, StoreLacksCall, StoreUnavailable, store_errors
 from agentctl.storetoken import token
 from agentctl.laptoprole import laptop_role_holder
-from agentctl.core import state_root
-from agentctl.storeknobs import knob_store_retries, knob_store_retry_base
-from agentctl.storeknobs import knob_store_url
-from agentctl.storecalls import STORE_CALLS, StoreCall
+from agentctl.paths import state_root
 
 
 def contact_machine() -> str | None:

@@ -4,7 +4,8 @@
 from agentctl.procrunner import process_runner
 from agentctl.clock import epoch_now, wall_epoch
 from agentctl.fixerknobs import knob_orphan_idle
-from agentctl.core import attempt, branch_of, commit_known, remote
+from agentctl.core import attempt, branch_of, remote
+from agentctl.texthash import hashlib_sha1
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.procs import process_cwds
@@ -19,7 +20,7 @@ from agentctl.blamerecords import blame_land_refusal, blame_records
 from agentctl.recovery import reland_tree_path
 from agentctl.superseded import superseded_mark, worktree_change_items
 from agentctl.park import parked_mark
-from agentctl.texthash import hashlib_sha1
+from agentctl.gitrepo import commit_known
 from typing import Any, Callable, Optional, TypeGuard
 import json
 import os

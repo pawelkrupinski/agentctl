@@ -5,19 +5,19 @@ import os
 import re
 from typing import Any
 import json
+import argparse
 from agentctl.clock import epoch_now
 from agentctl.core import HOME, run_cmd
 from agentctl.procs import safe_cwd
 from agentctl.fixerrecords import agent_name
-from agentctl.redrecord import red_what
 from agentctl.filelog import file_event, note_events
 from agentctl.inboxentry import inbox_dir, inbox_entries
 from agentctl.inbox import entry_line
+from agentctl.redrecord import red_what
 from agentctl.alertroute import alert_audience, alert_condition_audience, alert_red_audience
-from agentctl.inboxwait import inbox_wait
-import argparse
 from agentctl.redview import red_view
-from agentctl.core import claude_session_id
+from agentctl.inboxwait import inbox_wait
+from agentctl.paths import claude_session_id
 
 
 # THE ESCALATION THAT WAKES SOMEBODY is an event (severity escalate) the notifier delivers once (notified_at). What is

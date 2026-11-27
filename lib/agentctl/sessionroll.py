@@ -4,13 +4,14 @@
 import json
 import os
 from typing import Any, BinaryIO, Optional
-from agentctl.core import git, tilde
 from agentctl.timefmt import ts
+from agentctl.fixerknobs import knob_context_fresh
+from agentctl.core import git
 from agentctl.claudefiles import bg_transcript
 from agentctl.fixersession import turn_entry
 from agentctl.redrecord import red_active, red_what
 from agentctl.issues import status_issues
-from agentctl.fixerknobs import knob_context_fresh
+from agentctl.paths import tilde
 
 
 HANDOVER_MAX = 7000          # characters (~2k tokens): the handover's budget

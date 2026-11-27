@@ -6,7 +6,7 @@ from agentctl.statefile import read_record, write_json
 from agentctl.clock import epoch_now, wall_epoch
 from agentctl.timefmt import ts
 from agentctl.tickknobs import MAINTAIN_SWEEP_HOUR, knob_cache_expire_days, knob_sweep_hour
-from agentctl.core import REPOS, state_root
+from agentctl.core import REPOS
 from agentctl.allowedpaths import allowed_path
 from agentctl.notifier import notify
 from agentctl.launchd import launch_agents_dir
@@ -15,9 +15,10 @@ from agentctl.inboxentry import inbox_write
 from agentctl.maint import cmd_orphans, spotlight_exclude
 from agentctl.logrotate import rotate_logs
 from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
-from agentctl.orphanpass import orphan_duty
 from agentctl.entryfiles import decided_entry_files
 from agentctl.agewords import fmt_age
+from agentctl.orphanpass import orphan_duty
+from agentctl.paths import state_root
 from typing import Any, Callable
 import argparse
 import datetime as dt

@@ -1,8 +1,6 @@
 # agentctl, part `owned`: owned long-running modes.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now, wall_epoch
-from agentctl.filelock import FileLock, lock_held
 import glob
 import json
 import os
@@ -13,16 +11,20 @@ import sys
 import time
 from typing import Any, Sequence
 from agentctl.procrunner import process_runner
-from agentctl.core import SHORT, err, git, process_cache, run_cmd, slug, state_root
-from agentctl.timefmt import ts
-from agentctl.statefile import load_record, read_record, write_json, unlink_file
-from agentctl.forge import forge_argv, forge_env
-from agentctl.procs import Terminated, process_start, safe_cwd
+from agentctl.statefile import load_record, read_record, unlink_file, write_json
 from agentctl.selfcode import TOOL_PATH, code_files, code_version
+from agentctl.clock import epoch_now, wall_epoch
+from agentctl.filelock import FileLock, lock_held
+from agentctl.timefmt import ts
+from agentctl.tickknobs import knob_attach_poll, knob_min_interval, knob_restart_check
+from agentctl.fixerknobs import knob_owners_dir
+from agentctl.core import SHORT, err, git, process_cache, run_cmd
+from agentctl.repos import slug
+from agentctl.procs import Terminated, process_start, safe_cwd
+from agentctl.forge import forge_argv, forge_env
 from agentctl.inboxentry import caller_owner, inbox_write
 from agentctl.runverdict import file_verdict, foreign_loops_on, run_verdict
-from agentctl.fixerknobs import knob_owners_dir
-from agentctl.tickknobs import knob_attach_poll, knob_min_interval, knob_restart_check
+from agentctl.paths import state_root
 
 
 def owners_dir():

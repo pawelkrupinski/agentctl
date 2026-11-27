@@ -7,22 +7,22 @@ from typing import Any
 from agentctl.statefile import read_record
 from agentctl.timefmt import hhmmz, ts
 from agentctl.redknobs import RED_HELD_IDLE, knob_red_fix_giveup, knob_red_held_idle
-from agentctl.core import state_root, tilde
 from agentctl.cistate import snapshot_gate_reds
+from agentctl.redfixread import FIX_OPEN
 from agentctl.fixerblockers import short_flow
+from agentctl.runsigs import run_names
 from agentctl.redrecord import RED_RECURRING, red_active, red_lease, red_names
 from agentctl.leases import LeaseKinds, lease_meta, red_block_of
-from agentctl.redfixread import FIX_OPEN
 from agentctl.owners import owner_record_path
 from agentctl.redask import red_ask, red_decision
-from agentctl.culpritfix import blame_status
-from agentctl.runsigs import run_names
-from agentctl.redfixes import red_refuted
 from agentctl.red import red_settled_runs
+from agentctl.redfixes import red_refuted
+from agentctl.culpritfix import blame_status
 from agentctl.redseen import red_obs_of_units
-from agentctl.ask import clean_cut, red_decided_view
-from agentctl.reddispatch import REPO_DISPATCH_OFF, red_owned_progress_at, repo_dispatch_off_all
 from agentctl.redwaits import RED_WAITS_ON
+from agentctl.reddispatch import REPO_DISPATCH_OFF, red_owned_progress_at, repo_dispatch_off_all
+from agentctl.ask import clean_cut, red_decided_view
+from agentctl.paths import state_root, tilde
 
 
 # -- how a red reads (ci-why, the status line, `red status`): its state, holder or offer, deadline. Never NOBODY.

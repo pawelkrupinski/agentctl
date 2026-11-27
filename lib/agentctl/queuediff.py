@@ -3,19 +3,19 @@
 
 import os
 from typing import Any, List, Optional, Tuple
-from agentctl.context import Context
-from agentctl.core import commit_known, git, remote
+from agentctl.core import git, remote
 from agentctl.repos import precheck_hook, waiting_supported
 from agentctl.clones import fetch_main
 from agentctl.generated import regen_owed, without_generated
 from agentctl.networksignatures import TRANSIENT_PUSH
 from agentctl.gating import mark_gate_dirty
 from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
-from agentctl.conditions import open_condition, run_probe
-from agentctl.land import RACE, REDGATE, land_lock_if_free, push_argv, push_bounds, run_watched, tool_env
+from agentctl.context import Context
 from agentctl.queuefailure import Entry, keys_text
 from agentctl.onmain import landed_state
 from agentctl.landwatch import start_watch
+from agentctl.conditions import open_condition, probe_git_fetch, run_probe
+from agentctl.land import RACE, REDGATE, land_lock_if_free, push_argv, push_bounds, run_watched, tool_env
 from agentctl.conflicts import conflict_cause, conflict_paths, union_safe
 from agentctl.queueslots import PUSH_ATTEMPTS_MAX, check_tree, queue_verdict, set_change, tree_slot
 from agentctl.queue import (
@@ -27,7 +27,7 @@ from agentctl.changekind import facts_for
 from agentctl.waiting import already_landed, apply_entry, must_wait, tail_of, waiting_commits
 from agentctl.redseen import gate_reds
 from agentctl.entrychecks import queue_join
-from agentctl.conditions import probe_git_fetch
+from agentctl.gitrepo import commit_known
 
 
 def push_change(repo: str, d: str, e: Entry, clock: Any, st: Any, *, ctx: Context) -> Optional[str]:

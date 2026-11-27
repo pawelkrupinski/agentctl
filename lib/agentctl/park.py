@@ -11,10 +11,11 @@ from agentctl.statefile import read_record, write_json
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
 from agentctl.tickknobs import knob_park_digest_days
-from agentctl.core import attempt, git, recovery_dir, tilde
+from agentctl.core import attempt, git
 from agentctl.inboxentry import inbox_write
-from agentctl.superseded import change_chain_end
 from agentctl.landedchange import change_state
+from agentctl.superseded import change_chain_end
+from agentctl.paths import recovery_dir, tilde
 
 
 PARK_DIGEST_EVERY = 7 * 86400

@@ -6,13 +6,13 @@ from typing import Any, Optional
 from agentctl.statefile import note_failure, write_json
 from agentctl.timefmt import ts
 from agentctl.storeknobs import knob_internal_trees_dir
-from agentctl.core import HOME, err, git, git_ok, remote, state_root
+from agentctl.core import HOME, err, git, git_ok, remote
 from agentctl.allowedpaths import allowed_path
 from agentctl.procs import safe_cwd
+from agentctl.paths import claude_session_id, state_root
 from agentctl.fixerrecords import agent_name
 from agentctl.waitingdir import waiting_state
 from agentctl.onmain import landed_state
-from agentctl.core import claude_session_id
 
 
 def internal_trees_dir(*parts: str) -> str:

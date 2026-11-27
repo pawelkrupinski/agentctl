@@ -63,7 +63,7 @@ def _harness(module, script, log, tmp, stack):
     }
     for name, fake in patches.items():
         stack.enter_context(mock.patch.object(module, name, fake))
-    stack.enter_context(mock.patch.object(importlib.import_module("agentctl.core"), "HOME", tmp))  # core.tilde's home
+    stack.enter_context(mock.patch.object(importlib.import_module("agentctl.paths"), "HOME", tmp))  # paths.tilde's home
     stack.enter_context(mock.patch.dict(os.environ, {"CLAUDE_CODE_SESSION_ID": "SESSION", "TZ": "UTC"}))
     time.tzset()
     clock = type("Clock", (), {"time": staticmethod(lambda: 1000.0), "strftime": staticmethod(time.strftime),

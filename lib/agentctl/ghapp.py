@@ -7,8 +7,9 @@ from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import epoch_now
 from agentctl.timefmt import parse_time
 from agentctl.storeknobs import knob_github_api, knob_github_app, knob_github_lander_repos, knob_identity
-from agentctl.core import err, process_cache, state_root
+from agentctl.core import err, process_cache
 from agentctl.tokenerrors import NoReadAccess
+from agentctl.paths import state_root
 import json
 import os
 import re
