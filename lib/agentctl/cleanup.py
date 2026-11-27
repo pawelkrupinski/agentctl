@@ -1,7 +1,6 @@
 # agentctl, part `cleanup`: cleanup and the lifecycle.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.ancestry import commit_known
 from agentctl.landstate import landed_state
 from agentctl.clock import Stopwatch, epoch_now, stopwatch, wall_epoch
 from typing import Any
@@ -370,9 +369,9 @@ class RepoSweep:
 
     def remote_branch(self, b: str, sha: str) -> None:
         repo, out = self.repo, self.out
-        if not commit_known(repo, sha):
+        if not git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
             git(repo, "fetch", "--quiet", remote(), b, check=False)
-        why = commit_known(repo, sha) and merged_reason(repo, sha, self.main)
+        why = git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}") and merged_reason(repo, sha, self.main)
         if not why:
             t = int(git(repo, "log", "-1", "--format=%ct", sha, check=False).stdout.strip() or self.now_)
             out.append(f"  unmerged remote branch {b}: tip {sha[:10]}, {int((self.now_ - t) / 86400)} d old (listed, kept)")

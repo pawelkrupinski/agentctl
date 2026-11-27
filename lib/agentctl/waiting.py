@@ -4,7 +4,6 @@
 import os
 import signal
 from typing import Any
-from agentctl.ancestry import is_ancestor
 from agentctl.core import SHORT, err, git, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, note_failure
@@ -104,7 +103,7 @@ def dropped_on_main(wt: Any, dropped: Any, base: Any, first: bool) -> Any:
     """The dropped (commit, via) pairs that main (base's history) carries: via is an ancestor of base, or the commit was
     an empty pick of the entry's first commit."""
     return [(c, v) for c, v in dropped
-            if (v and is_ancestor(wt, v, base)) or (not v and first)]
+            if (v and git(wt, "merge-base", "--is-ancestor", v, base, check=False).returncode == 0) or (not v and first)]
 
 
 def drop_landed(st: Any, d: Any, e: dict[str, Any], on_main: Any) -> Any:

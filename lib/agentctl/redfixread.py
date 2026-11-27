@@ -1,7 +1,6 @@
 # agentctl, part `redfixread`: a fix's reach: Fixes-Red commits on main, what a red's failing jobs read and whether a fix touches it.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.ancestry import commit_known
 from agentctl.clock import epoch_now
 import os
 import re
@@ -41,7 +40,7 @@ def _snapshot_heads(snap: Any) -> Any:
 def _missing_heads(repo: Any, snap: Any) -> Any:
     """The head commits of the snapshot's main runs that the clone lacks."""
     heads = _snapshot_heads(snap)
-    return frozenset(h for h in heads if h and not commit_known(repo, h))
+    return frozenset(h for h in heads if h and not git_ok(repo, "cat-file", "-e", f"{h}^{{commit}}"))
 
 
 def red_main_current(repo, snap):

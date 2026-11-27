@@ -7,7 +7,6 @@ import re
 import time
 from typing import Any, Callable
 from contextlib import suppress
-from agentctl.ancestry import commit_known
 from agentctl.core import attempt, err, git, git_ok, process_cache, state_root
 from agentctl.statefile import read_record, write_json
 from agentctl.forge import gh_json, RED_CONCLUSIONS, RUN_FIELDS, run_id_of_number
@@ -96,7 +95,7 @@ def remember_report_only(name: str, rid: str, out: tuple[bool, str]) -> tuple[bo
 
 def commit_line(o_r, sha, repo=None):
     repo = repo or repo_path_for(o_r)
-    if repo and commit_known(repo, sha):
+    if repo and git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}"):
         return git(repo, "log", "-1", "--format=%h %an <%ae> %ad: %s", "--date=format:%m-%d %H:%M", sha).strip()
     try:
         c = gh_json(o_r, "api", f"repos/{o_r}/git/commits/{sha}")

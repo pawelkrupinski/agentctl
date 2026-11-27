@@ -6,28 +6,15 @@ from agentctl.clock import epoch_now
 from agentctl.core import git, git_ok, remote
 
 
-# ONE ANCESTRY PRIMITIVE (review 2026-11-26, A D6): fourteen places spelled `merge-base --is-ancestor` and two dozen
-# `cat-file -e <sha>^{commit}` themselves. They call is_ancestor / commit_known; MainContainment (maincontain.py) asks
-# the same of main's ref, with its fetch and its forge route.
-def is_ancestor(repo: str, ancestor: str, descendant: str) -> bool:
-    """Whether `ancestor` is `descendant` or in its history (False too when either is unknown here)."""
-    return git_ok(repo, "merge-base", "--is-ancestor", ancestor, descendant)
-
-
-def commit_known(repo: str, sha: str) -> bool:
-    """Whether this clone holds the commit `sha`."""
-    return git_ok(repo, "cat-file", "-e", f"{sha}^{{commit}}")
-
-
 def contains_local(repo: str, sha: str, head: str | None) -> bool | None:
     """True / False when both commits are here, else None."""
     if not head:
         return None
     if head == sha:
         return True
-    if not commit_known(repo, head):
+    if not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}"):
         return None
-    return is_ancestor(repo, sha, head)
+    return git_ok(repo, "merge-base", "--is-ancestor", sha, head)
 
 
 def last_fetch(repo: str) -> float:
@@ -47,6 +34,6 @@ def contains(repo: str, sha: str, head: str | None, refetch_after: float) -> boo
         return False
     if head == sha:
         return True
-    if not commit_known(repo, head) and epoch_now() - last_fetch(repo) >= refetch_after:
+    if not git_ok(repo, "cat-file", "-e", f"{head}^{{commit}}") and epoch_now() - last_fetch(repo) >= refetch_after:
         git(repo, "fetch", "--quiet", remote(), "main", check=False)
-    return is_ancestor(repo, sha, head)
+    return git_ok(repo, "merge-base", "--is-ancestor", sha, head)

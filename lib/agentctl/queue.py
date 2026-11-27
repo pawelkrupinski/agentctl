@@ -1,7 +1,6 @@
 # agentctl, part `queue`: the land queue and submission.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.ancestry import commit_known
 from agentctl.clock import epoch_now
 import os
 import re
@@ -356,7 +355,7 @@ def verify_areas_supported(tree):
 
 def selection_at(tree, rev, tip, paths):
     """hook_selection at rev, read in tree (checked out at tip, and back at tip after); None when rev is unknown."""
-    if not rev or not commit_known(tree, rev):
+    if not rev or not git_ok(tree, "cat-file", "-e", f"{rev}^{{commit}}"):
         return None
     if rev == tip:
         return hook_selection(tree, paths)

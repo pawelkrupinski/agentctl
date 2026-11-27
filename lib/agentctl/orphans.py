@@ -1,7 +1,6 @@
 # agentctl, part `orphans`: orphaned work: a worktree with commits nothing lands, found, offered to a fixer or escalated
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.ancestry import commit_known
 from agentctl.clock import epoch_now, wall_epoch
 from typing import Any, Callable, Optional, TypeGuard
 import json
@@ -233,7 +232,7 @@ def orphan_covered_by(wt: str, items: dict[str, Any]) -> Optional[str]:
     """The id of an open change item whose head carries every commit of the orphan (by patch or content), else None."""
     for it in items.get("open") or []:
         head = (it.get("data") or {}).get("head")
-        if not head or not commit_known(wt, head):
+        if not head or not git_ok(wt, "cat-file", "-e", f"{head}^{{commit}}"):
             continue
         if landed_state(wt, head, "HEAD").landed:  # unknown (git cannot compare): not covered
             found: str = it["id"]

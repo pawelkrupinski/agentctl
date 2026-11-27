@@ -1,7 +1,6 @@
 # agentctl, part `queuecheck`: a change's check round's pieces: main fetched, its commits, the run adopted, the rebase, the refusals, the mode, the failure judged
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.ancestry import commit_known, is_ancestor
 from agentctl.clock import Clock, epoch_now
 import time
 from typing import Any
@@ -99,10 +98,10 @@ def fetched_main(st: Any, repo: str, d: str, e: dict[str, Any], clock: Clock) ->
 
 def commits_here(st: Any, repo: str, d: str, e: dict[str, Any], clock: Clock) -> bool:
     """The change's commits are in the clone (phase 2: on the remote as land/<id>, fetched here); else it is requeued."""
-    if commit_known(repo, e['head']):
+    if git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):
         return True
     lr = git(repo, "fetch", "--quiet", remote(), f"refs/heads/land/{e['id']}", check=False)
-    if commit_known(repo, e['head']):
+    if git_ok(repo, "cat-file", "-e", f"{e['head']}^{{commit}}"):
         return True
     lerr = (lr.stderr or "").strip()
     note_clone_suspect(repo, lerr)
@@ -120,8 +119,8 @@ def adopted_run(repo: str, e: dict[str, Any], rem: dict[str, Any], base: str) ->
     checker (the last one lost its lease, died or re-exec'd mid-wait) goes on with the same tip, its run."""
     return bool(rem.get("head") == e["head"] and rem.get("base") and not rem.get("collected_at")
                 and rem.get("status") not in ("cancelled", "skipped", "abandoned")
-                and commit_known(repo, str(rem.get("tip")))
-                and is_ancestor(repo, rem["base"], base))
+                and git_ok(repo, "cat-file", "-e", f"{rem.get('tip')}^{{commit}}")
+                and git_ok(repo, "merge-base", "--is-ancestor", rem["base"], base))
 
 
 def round_head(st: Any, d: str, e: dict[str, Any], repo: str, i: int, base: str, rem: dict[str, Any],

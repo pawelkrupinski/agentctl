@@ -143,20 +143,6 @@ class MainContainmentMatrixTest(Base):
         diff = {k: (want.get(k), v) for k, v in got.items() if want.get(k) != v}
         self.assertEqual(diff, {}, "\n" + "\n".join(f"    {k!r}: {v!r}," for k, v in sorted(got.items(), key=str)))
 
-    def test_the_ancestry_primitives_every_caller_shares(self):
-        """Review 2026-11-26 (A D6): fourteen raw `merge-base --is-ancestor` and two dozen `cat-file -e` calls became
-        ancestry.is_ancestor / commit_known: an unknown commit is not an ancestor and not known."""
-        w = World(self)
-        repo = w.r.path
-        tip = sh(repo, "git", "rev-parse", "HEAD")
-        parent = sh(repo, "git", "rev-parse", "HEAD~1")
-        self.assertTrue(A.is_ancestor(repo, parent, tip))
-        self.assertTrue(A.is_ancestor(repo, tip, tip))
-        self.assertFalse(A.is_ancestor(repo, tip, parent))
-        self.assertFalse(A.is_ancestor(repo, "0" * 40, tip))
-        self.assertTrue(A.commit_known(repo, tip))
-        self.assertFalse(A.commit_known(repo, "0" * 40))
-
     def test_a_commit_the_clone_has_not_fetched_is_landed_once_main_is_fetched(self):
         """Before: commit_on_main never fetched -- a branch red built on a commit another clone had just landed was
         "not on main" here (an orphan, its owner gone)."""
