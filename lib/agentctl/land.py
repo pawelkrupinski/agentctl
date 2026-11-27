@@ -373,14 +373,3 @@ def holding_land_lease(h: LeaseHold) -> Iterator[None]:
         h.release()
 
 
-# THE KNOWN-RED BASELINE (the owner, 2026-10-27: "pre-push fails on plain origin/main" is itself a claimed red, and
-# while it is open a change is judged against main's known-failing checks). When a change's dry run fails, the same
-# checks run on plain origin/main's tree: a commit with main's tree on top of the change (`git commit-tree
-# main^{tree} -p <head>`), checked with `--checks-only <head>..<that>` -- the change's paths select the checks, main's
-# tree is checked. Checks failing there the same way (the same normalized failure lines) are main's own red: recorded
-# in reds/local.json, shown by ci-why as `Local checks`, claimable (`red claim local`) and dispatched like any red, and
-# land says which failures are the change's own. The hook's own output there is kept as `reds/baseline-out/<main sha>`
-# (first line `pre-push baseline <main sha>`), the file movies' pre-push reads through $PREPUSH_BASELINE_DIR (tool_env):
-# land's dry run then runs the hook once more, which passes a check failing only as it fails on main (its pass stored,
-# so the push reuses it). No file for main: the hook blocks every failure (fail-closed).
-HOOK_STATUS = re.compile(r"pre-push (\S+) (ok|FAILED) \(\d+s\)")

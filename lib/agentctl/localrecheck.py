@@ -5,44 +5,25 @@ import contextlib
 import os
 import re
 import time
-from agentctl.ancestry import commit_known
+from typing import Any
+from agentctl.statefile import mtime, read_record, read_text_or, unlink_file, write_json
 from agentctl.clock import wall_epoch
 from agentctl.filelock import FileLock
-from typing import Any
-from agentctl.core import _bounded, err, git, git_ok, pid_alive, reds_dir, remote, tilde
 from agentctl.timefmt import ts
-from agentctl.statefile import mtime, read_record, read_text_or, unlink_file, write_json
-from agentctl.classify import ANSI, STRONG, norm_line
+from agentctl.core import _bounded, err, git, git_ok, pid_alive, reds_dir, remote, tilde
 from agentctl.repos import precheck_hook
 from agentctl.workflows import LOCAL_FLOW
-from agentctl.waitingdir import waiting_state
 from agentctl.fixerrecords import fixer_records
+from agentctl.ancestry import commit_known
+from agentctl.classify import ANSI, STRONG, norm_line
+from agentctl.waitingdir import waiting_state
 from agentctl.inboxentry import inbox_write
-from agentctl.land import HOOK_STATUS, run_watched, tool_env
 from agentctl.worktrees import mark_internal, worktrees
+from agentctl.land import run_watched, tool_env
+from agentctl.checkslot import check_slot
 from agentctl.cleanup import close_worktree
 from agentctl.redseen import local_red, local_stale
-from agentctl.checkslot import check_slot
-
-
-def check_failures(out):
-    """{failed check: {normalized failure lines}} of a hook run's output."""
-    fails, seg = {}, []
-    for raw in (out or "").splitlines():
-        line = ANSI.sub("", raw)
-        m = HOOK_STATUS.search(line)
-        if m:
-            if m.group(2) == "FAILED":
-                fails[m.group(1)] = {norm_line(l) for l in seg if STRONG.search(l)} or {"(no failure line)"}
-            seg = []
-            continue
-        seg.append(line)
-    return fails
-
-
-def check_passes(out):
-    return {m.group(1) for m in (HOOK_STATUS.search(ANSI.sub("", l)) for l in (out or "").splitlines())
-            if m and m.group(2) == "ok"}
+from agentctl.hookoutput import HOOK_STATUS, check_failures, check_passes
 
 
 def write_baseline_out(main, out) -> None:

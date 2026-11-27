@@ -5,28 +5,30 @@ import os
 import time
 from contextlib import suppress
 from typing import Any
-from agentctl.core import err, git, host_role, reds_dir, remote, slug
-from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
-from agentctl.networksignatures import network_failure
+from agentctl.timefmt import ts
+from agentctl.queueknobs import knob_baseline, knob_land_stall_min
+from agentctl.core import err, git, host_role, reds_dir, remote, slug
 from agentctl.repos import batching, precheck_hook, waiting_supported
+from agentctl.networksignatures import network_failure
 from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.worktrees import mark_internal
+from agentctl.processorlink import spawn_waiting_processor
 from agentctl.leases import lock_note
 from agentctl.land import REDGATE, TUNNEL_TROUBLE, run_watched, stall_reason, tool_env
 from agentctl.queue import requeue_infra
 from agentctl.waiting import must_wait, tail_of, waiting_commits
 from agentctl.queuesubmit import queued_tail, submit_ref
-from agentctl.processorlink import spawn_waiting_processor
-from agentctl.redseen import gate_reds, local_red
 from agentctl.gov import GovTimeout, gov_class_of
 from agentctl.checkslot import check_slot
-from agentctl.localrecheck import check_failures, check_passes, local_cleared, note_local_red, write_baseline_out
+from agentctl.redseen import gate_reds, local_red
 from agentctl.cireport import ci_why
 from agentctl.changesubmit import queue_change
 from agentctl.queueenter import change_fields, submit_to_server, sync
+from agentctl.hookoutput import check_failures, check_passes
 from agentctl.queuecheck import NETWORK_REASON
-from agentctl.queueknobs import knob_baseline, knob_land_stall_min
+from agentctl.queueenter import change_fields, submit_to_server, sync
+from agentctl.localrecheck import local_cleared, note_local_red, write_baseline_out
 
 
 def stalled(step, output, log_path):

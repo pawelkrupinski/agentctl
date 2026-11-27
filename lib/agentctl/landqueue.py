@@ -1,38 +1,37 @@
 # agentctl, part `landqueue`: the land queue's commands: land status | hold | release | cancel, and the processor's children (a checker, the service, await)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.clock import epoch_now
 import argparse
 import os
 import sys
 import time
 from typing import Any
-from agentctl.clock import Clock
-from agentctl.core import fmt_age, git, git_ok, host_role
-from agentctl.timefmt import hhmmz, ts
 from agentctl.statefile import read_json_file, unlink_file
+from agentctl.statemachines import machine_state
+from agentctl.clock import Clock, epoch_now
+from agentctl.timefmt import hhmmz, ts
+from agentctl.core import fmt_age, git, git_ok, host_role
 from agentctl.repos import movies_repo_path
-from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.procs import safe_cwd
 from agentctl.clones import main_clone
+from agentctl.waitingdir import ChangeRecords, waiting_state
+from agentctl.store import StoreUnavailable
+from agentctl.processorlink import await_entry, offer_token, spawn_waiting_processor, waiting_processor_alive
+from agentctl.batchitem import status_batch
+from agentctl.remotestore import store_unreachable_text, store_url
 from agentctl.queueslots import set_change
-from agentctl.landhold import hold_text, land_hold
+from agentctl.landhold import LAND_HOLD_DEFAULT, hold_by, hold_text, land_hold, land_hold_release, land_hold_set
+from agentctl.tickservice import waiting_service
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.waiting import GATE_UNREAD, cancel_entry_remote, cancel_submitted, stop_checker, unread_why
 from agentctl.queuesubmit import landed_sha_of
-from agentctl.remotestore import StoreUnavailable, store_unreachable_text, store_url
-from agentctl.landhold import LAND_HOLD_DEFAULT, hold_by, land_hold_release, land_hold_set
-from agentctl.redseen import gate_reds
 from agentctl.remote import remote_check_lines
-from agentctl.watchtick import watch_landed
-from agentctl.queueclose import change_rows, check_entry
-from agentctl.recovery import recover_clear_hold
-from agentctl.batchitem import status_batch
-from agentctl.processorlink import await_entry, offer_token, spawn_waiting_processor, waiting_processor_alive
-from agentctl.tickservice import waiting_service
+from agentctl.redseen import gate_reds
 from agentctl.batch import batch_row_ids
+from agentctl.queueclose import change_rows, check_entry
+from agentctl.watchtick import watch_landed
+from agentctl.recovery import recover_clear_hold
 from agentctl.batchcheck import check_batch
-from agentctl.statemachines import machine_state
 from agentctl.invariants import change_carrying_batch
 
 

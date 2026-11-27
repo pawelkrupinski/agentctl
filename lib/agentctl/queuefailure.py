@@ -4,37 +4,15 @@
 import os
 import re
 from typing import Any, Optional
-from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
+from agentctl.timefmt import ts
 from agentctl.core import err, reds_dir, slug
-from agentctl.classify import ANSI, norm_line
 from agentctl.repos import gated_repo
+from agentctl.classify import ANSI, norm_line
 from agentctl.waitingdir import ChangeRecords
 from agentctl.joblog import fetch_failed_log, log_entries
 from agentctl.ciwhy import gate_runs
-from agentctl.land import HOOK_STATUS
-
-
-# THE DIFFERENTIAL LANDING CHECK (2026-11-04: two good changes, credited-memo and G1 retention, were NOT LANDED because
-# their checks failed on `uk-mowlem-theatre-purbeck-film-festival-hen-736301b7 lacks answers`, a stale slice failing on
-# main itself; each author diagnosed it, landed again and alerted). The check judged the head absolutely; now, like
-# the convergence gate, relative to its base. A failed check's FAILURE KEYS (the failing tests: a scalatest
-# `- <name> *** FAILED ***`, an sbt `Failed tests:` class) are compared with the base's: main's red gate runs' failed
-# logs (cached per run) and the other queued changes' failures on the same base (the queue's own record: two
-# unrelated changes failing the same test on one main is main's). Every failing job explained by base keys: the change
-# is no culprit -- it joins `waiting` behind that red (lands with the batch at green, or with the red's fix), ONE
-# author note naming the tests. A head-only key, or a failing job with no key to judge by: rejected, naming them.
-# And a run stopped at its 80-minute cap is no verdict on the change (69 of the week's 145 "pre-push checks failed",
-# under ci-runner load 30..90 on 14 cores): re-queued as infra, TIMEOUT_RETRIES times, then rejected as too slow.
-FAIL_TEST = re.compile(r"(?:^|\s)-\s+(.+?)\s+\*\*\* FAILED \*\*\*")
-
-
-FAIL_CLASS = re.compile(r"\[error\]\s+([a-z_][\w]*(?:\.[\w]+)*\.[A-Z]\w*)\s*$")
-
-
-# movies' run-script-tests' table row of a script test that failed (`POLLUTE  505s  scripts/ci/x-test.sh (floor)`): the
-# test is named, with how it failed (run 45013308331: a POLLUTE read as "scripttests (no failing test named)")
-FAIL_SCRIPT = re.compile(r"^\s*(FAIL|POLLUTE|STALLED|TIMEOUT)\s+\d+s\s+(\S+)")
+from agentctl.hookoutput import HOOK_STATUS, failure_keys, jobs_of_out, log_jobs, test_keys
 
 
 CHECK_TIMEOUT = re.compile(r"ran past \d+ minutes and were stopped")
@@ -47,77 +25,6 @@ BASE_CORPUS_AGE = 24 * 3600
 
 
 Entry = dict[str, Any]  # a queue entry, a gate run: JSON
-
-
-def test_keys(lines: list[str]) -> dict[str, str]:
-    """{key: name} of the failing tests the lines name: the key normalized (numbers, shas out), the name as printed."""
-    out = {}
-    for raw in lines:
-        line = ANSI.sub("", raw).replace("\t", " ").rstrip()
-        m = FAIL_TEST.search(line)
-        if m:
-            out["test " + norm_line(m.group(1))] = m.group(1).strip()
-            continue
-        m = FAIL_CLASS.search(line) or FAIL_SCRIPT.search(line)
-        if m and m.re is FAIL_SCRIPT:
-            out["script " + m.group(2)] = f"{m.group(2)} ({m.group(1)})"
-        elif m:
-            out["class " + m.group(1)] = m.group(1)
-    return out
-
-
-def failure_keys(jobs: Optional[dict[str, list[str]]]) -> tuple[dict[str, str], list[str]]:
-    """({key: name}, unjudged units) of failed jobs' lines ({job: [lines]}). The unit judged is each failed hook check
-    (`pre-push <check> FAILED`, its lines those since the check before: one job runs many checks, and a shellcheck
-    failure must not hide behind a base-red test in the same job), else the job. A unit failing with no test line is
-    unjudged (nothing to compare: its failure counts as the change's)."""
-    keys: dict[str, str] = {}
-    unjudged = []
-    for job, lines in (jobs or {}).items():
-        for unit, ls in check_units(job, lines):
-            mine = test_keys(ls)
-            keys.update(mine)
-            if not mine:
-                unjudged.append(unit)
-    return keys, sorted(unjudged)
-
-
-def check_units(job: str, lines: list[str]) -> list[tuple[str, list[str]]]:
-    """(unit, its lines) of one job: each failed hook check with the lines since the check before, else the job."""
-    seg: list[str] = []
-    units = []
-    for raw in lines:
-        m = HOOK_STATUS.search(ANSI.sub("", raw))
-        if not m:
-            seg.append(raw)
-            continue
-        if m.group(2) == "FAILED":
-            units.append((f"{job}: {m.group(1)}", seg))
-        seg = []
-    return units or [(job, lines)]
-
-
-def log_jobs(log_text: str) -> dict[str, list[str]]:
-    """{job: [lines]} of `gh run view --log-failed` output (job<TAB>step<TAB>line), timestamps and colours off."""
-    jobs: dict[str, list[str]] = {}
-    for job, line in log_entries(log_text):  # the runner's step-script headers left out (wait.py, STEP_ECHO)
-        jobs.setdefault(job, []).append(line)
-    return jobs
-
-
-def jobs_of_out(out: Optional[str]) -> dict[str, list[str]]:
-    """{job: lines} of a check's output: a remote check's `-- <job>` sections, else one job."""
-    jobs: dict[str, list[str]] = {}
-    cur = "checks"
-    for line in (out or "").splitlines():
-        if line.startswith("-- "):
-            cur = line[3:].strip() or "?"
-            jobs.setdefault(cur, [])
-            continue
-        jobs.setdefault(cur, []).append(line)
-    if set(jobs) - {"checks"}:  # the run's header line (`... failed: <url>`) is no job
-        jobs.pop("checks", None)
-    return {j: ls for j, ls in jobs.items() if ls or j != "checks"}
 
 
 def head_failure_jobs(repo: str, e: Entry, out: Optional[str]) -> dict[str, list[str]]:
