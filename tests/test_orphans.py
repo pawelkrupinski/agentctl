@@ -6,6 +6,7 @@ import contextlib, io, json, os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock  # noqa: E402
 from test_red import RedBase  # noqa: E402
 
@@ -55,10 +56,10 @@ class OrphanTest(RedBase):
         [e] = self.inbox("UNLANDED_ORPHAN")
         self.assertIn("repo-wt-flipflop: 1 commit(s) not on origin/main", e["verdict"])
         self.assertEqual([c["kind"] for c in A.open_conditions(A.CurrentStore(A.process_store))], ["UNLANDED_ORPHAN"])  # an item: it escalates by its machine
-        self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), force=True), [])  # still not on main
+        self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), registry(A), force=True), [])  # still not on main
         sh(wt, "git", "push", "-q", "origin", "HEAD:main")  # it lands
         sh(self.r.path, "git", "fetch", "-q", "origin")
-        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), force=True)), 1)
+        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), registry(A), force=True)), 1)
         self.assertTrue(all(x["read"] for x in self.inbox("UNLANDED_ORPHAN")))
         self.assertTrue(os.path.isdir(wt))  # nothing deleted
 
@@ -132,7 +133,7 @@ class OrphanTest(RedBase):
         st = A.process_store()
         cid = "20261030-175250-repo-wt-ci-5-45426e"
         st.put_item("change", cid, "checking", {"worktree": ci5, "head": head})
-        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), force=True)), 1)  # the probe: covered by the open change
+        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), registry(A), force=True)), 1)  # the probe: covered by the open change
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
         self.assertIn(f"orphan repo-wt-ci-1: carried by open change {cid}: not submitted", A.orphan_duty(A.CurrentStore(A.process_store), self.r.path))
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
@@ -169,7 +170,7 @@ class OrphanTest(RedBase):
         rc, out = self.run_tool("supersede", wt, "--by", "repo-wt-ci-5")
         self.assertEqual(rc, 0, out)
         self.assertIn("SUPERSEDED BY repo-wt-ci-5", out)
-        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), force=True)), 1)  # the probe that raised it clears it
+        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), registry(A), force=True)), 1)  # the probe that raised it clears it
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
         did = A.orphan_duty(A.CurrentStore(A.process_store), self.r.path)
         self.assertFalse([x for x in did if "repo-wt-ci-1" in x], did)  # no submit, no escalation
@@ -233,7 +234,7 @@ class OrphanTest(RedBase):
         rc, out = self.run_tool("park", wt, "--owner-decision", "--reason", "owner deciding, see STATE.md")
         self.assertEqual(rc, 0, out)
         self.assertIn("PARKED", out)
-        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), force=True)), 1)  # the escalation clears: "parked: ..."
+        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), registry(A), force=True)), 1)  # the escalation clears: "parked: ..."
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
         for _ in range(3):
             self.assertEqual([x for x in A.orphan_duty(A.CurrentStore(A.process_store), self.r.path) if "bare-borrow" in x], [])
@@ -309,7 +310,7 @@ class OrphanTest(RedBase):
         self.session(wt)
         self.assertEqual(A.session_worktrees([wt]), {os.path.realpath(wt): "session abcdef123456"})
         self.assertEqual(A.session_worktrees([wt + "-2"]), {}, "a sibling's name is no match")
-        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), force=True)), 1)  # the escalation clears: a live session works in it
+        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), registry(A), force=True)), 1)  # the escalation clears: a live session works in it
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
         self.assertEqual(A.orphan_candidates(self.r.path, A.CurrentStore(A.process_store)), [])
         self.session(wt, minutes_ago=150)  # the session went quiet: ownership lapses with it

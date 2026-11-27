@@ -6,6 +6,7 @@ import os, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 
 PRO2 = {"AGENTCTL_HOSTNAME": "Pawes-MacBook-Pro-2", "AGENTCTL_MACHINE_ID": "8C1E-PRO-2"}
@@ -100,7 +101,7 @@ class LaptopRoleTest(unittest.TestCase):
             saved_fn = getattr(A, name)
             setattr(A, name, lambda *a, _n=name, **k: ran.append(_n) or [])
             self.addCleanup(setattr, A, name, saved_fn)
-        steps = dict(A.sync_steps(None, None, "pawelkrupinski/movies", A.Clock(), self.st))
+        steps = dict(A.sync_steps(None, None, "pawelkrupinski/movies", A.Clock(), self.st, registry(A)))
         for name in ("laptop role", "notifier", "alerts", "claims", "dispatcher", "pins", "drift explorer"):
             steps[name]()
         self.assertEqual(ran, [], "standby: none of the laptop's duties")

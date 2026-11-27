@@ -24,6 +24,7 @@ import hashlib, json, os, random, re, shutil, subprocess, sys, tempfile, threadi
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import probe, registry  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
 
 TICK = 60  # s of simulated time per reconciler tick
@@ -1114,7 +1115,7 @@ class Sim:
         import argparse, contextlib, io
         with contextlib.redirect_stdout(io.StringIO()):
             A.cmd_waiting(argparse.Namespace(wcmd="cancel", repo=self.repo, entry=ch.eid, hold_for=None,
-                                             hold_why=None), *on_clock(self.sim_clock))  # a cancel never waits
+                                             hold_why=None), *on_clock(self.sim_clock), registry(A))  # a cancel never waits
 
     def records(self):
         """The queue's changes, as its readers see them (waitingdir.ChangeRecords: each change item's record, its state
@@ -1882,21 +1883,16 @@ class SimEscalations:
     def __init__(self, sim):
         self.sim, self.rng = sim, random.Random(f"escalations-{sim.seed}")
         self.conditions, self.sessions, self.failing, self.gap = {}, {}, set(), None
-        self.saved = dict(A.PROBES), dict(A.PROBE_EVERY)
-        A.PROBES["sim_escalation"] = lambda a: (a["key"] not in self.failing, f"sim probe of {a['key']}")
-        A.PROBE_EVERY["sim_escalation"] = 60
+        self.probe = probe("sim_escalation", lambda a: (a["key"] not in self.failing, f"sim probe of {a['key']}"))
         self.repo = os.path.join(sim.tmp, "bin")
 
     def close(self):
-        A.PROBES.clear()
-        A.PROBES.update(self.saved[0])
-        A.PROBE_EVERY.clear()
-        A.PROBE_EVERY.update(self.saved[1])
+        pass
 
     def open_condition(self, spec):
         key = spec["key"]
         self.failing.add(key)
-        c = A.open_condition(spec["condition"], spec["text"], A.run_probe("sim_escalation", {"key": key}), [], key=key,
+        c = A.open_condition(spec["condition"], spec["text"], A.run_probe(self.probe, {"key": key}), [], key=key,
                              store=self.sim.store, grace=0)
         self.conditions[key] = {"id": c["id"], "kind": A.escalation_kind(c), "route": A.escalation_route(c),
                                 "agent": spec.get("agent", "clears"), "clears_on": spec.get("clears_on", 1),
@@ -1927,7 +1923,7 @@ class SimEscalations:
             if x["behaviour"] == "clears" and x["key"] in self.failing:
                 self.failing.discard(x["key"])
                 c = next(c for c in A.open_conditions(self.sim.store) if c["key"] == x["key"])
-                A.close_condition(c, A.run_probe("sim_escalation", {"key": x["key"]}), self.sim.store)
+                A.close_condition(c, A.run_probe(self.probe, {"key": x["key"]}), self.sim.store, registry(A))
             x["over"] = True
 
     # the launcher (escalations.py EscalationLauncher)

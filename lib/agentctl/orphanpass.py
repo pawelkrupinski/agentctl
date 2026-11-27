@@ -1,6 +1,7 @@
 # agentctl, part `orphanpass`: one maintain pass over the orphans: one action each (a submit from a throwaway tree, again on infra; one fixer for a real failure), then UNLANDED ORPHAN
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from functools import partial
 from agentctl.clock import epoch_now
 import glob
 import os
@@ -10,13 +11,13 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 from agentctl.timefmt import parse_time, ts
 from agentctl.statefile import read_record, write_json
-from agentctl.core import branch_of, git, reds_dir, remote, slug, tilde
+from agentctl.core import branch_of, git, recovery_dir, reds_dir, remote, slug, tilde
 from agentctl.networksignatures import NETWORK_CHECK_FAILURE
 from agentctl.repos import movies_repo_path
 from agentctl.fixerrecords import fixer_records
 from agentctl.inboxentry import inbox_write
 from agentctl.fixerenv import fixer_env
-from agentctl.conditions import open_condition, recovery_dir, run_probe
+from agentctl.conditions import open_condition, run_probe
 from agentctl.blamerecords import blame_drop_revert_worktree
 from agentctl.recovery import reland_worktree
 from agentctl.superseded import superseded_duty, worktree_change_items
@@ -25,6 +26,7 @@ from agentctl.orphans import land_entries_once, orphan_candidates, orphan_covere
 from agentctl.fixerland import spawn_fixer
 from agentctl.fixerknobs import knob_orphan_idle
 from agentctl.fixerknobs import knob_orphan_fixers
+from agentctl.orphans import probe_orphan_landed
 
 
 ORPHAN_PER_PASS = 3
@@ -116,7 +118,7 @@ def orphan_escalate(store: Any, repo: str, wt: str, name: str, commits: Any, key
     text = (f"UNLANDED ORPHAN: {tilde(wt)}: {len(commits)} commit(s) not on {remote()}/main, its author "
             f"gone, still not landed after a {rec['actions'][-1]['what']} ({verdict or 'never landed'}) -- land it, "
             "hand it to an agent, park it (`agentctl park <worktree> --reason ...`), or drop it")
-    c = open_condition("UNLANDED_ORPHAN", text, run_probe("orphan_landed", {"worktree": wt, "key": key, "repo": repo}),
+    c = open_condition("UNLANDED_ORPHAN", text, run_probe(partial(probe_orphan_landed, store=store), {"worktree": wt, "key": key, "repo": repo}),
                        [], key=re.sub(r"[^\w.-]+", "_", f"orphan-{name}"), command="maintain", cwd=wt, store=store)
     rec["escalated"] = ts() if c else None
     return [f"orphan {name}: escalated UNLANDED ORPHAN" if c else f"orphan {name}: cleared"]

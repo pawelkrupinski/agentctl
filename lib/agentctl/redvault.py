@@ -19,12 +19,14 @@ from agentctl.statemachines import StaleVersion
 from agentctl.redrecord import lease_is_live, red_lease, red_of_key, red_what
 from agentctl.leases import block_lease, lease_meta, red_block_of
 from agentctl.conditions import probe_words, run_probe
+from agentctl.conditionregistry import ConditionRegistry
 from agentctl.redask import OWNER_CAUSES, OWNER_CAUSE_CATEGORY, red_decision, vault_decide_cmd
 from agentctl.red import red_move
 from agentctl.redblock import BLOCK_MAX, BLOCK_TTL, owner_cmd_unsafe, owner_details, red_run_units
 from agentctl.redopen import red_offer
 from agentctl.redclaim import red_targets
 from agentctl.ownerleases import owner_holder
+from agentctl.conditions import probe_http, probe_tcp, probe_workflow_green
 
 
 # A VAULT ASK IS ONE OWNER ITEM PER VAULT, ANSWERED BY ONE LINE (2026-11-16, Order independence #77 [ios]: its fixer's
@@ -318,25 +320,25 @@ def block_on_vault(st: Any, items: list[Any], handed: list[str], ns: str, a: Any
 def named_probe(o_r: str, a: Any) -> Any:
     """The probe --until-green / --until-http / --until-tcp names, or None."""
     if a.until_green:
-        return run_probe("workflow_green", {"repo": o_r, "workflow": a.until_green})
+        return run_probe(probe_workflow_green, {"repo": o_r, "workflow": a.until_green})
     if a.until_http:
-        return run_probe("http", {"url": a.until_http})
+        return run_probe(probe_http, {"url": a.until_http})
     if a.until_tcp:
         host, _, port = a.until_tcp.rpartition(":")
-        return run_probe("tcp", {"host": host, "port": int(port)})
+        return run_probe(probe_tcp, {"host": host, "port": int(port)})
     return None
 
 
-def pick_probe(o_r: str, a: Any, cause: Any, old: Any, om: Any, name: Any, n: str) -> Any:
+def pick_probe(o_r: str, a: Any, cause: Any, old: Any, om: Any, name: Any, n: str, registry: ConditionRegistry) -> Any:
     """The run probe that clears the block: the outage's own (attaching to its ONE lease), a named one
     (--until-green / --until-http / --until-tcp), or the red's own workflow going green; NotBlocked when none."""
     if not (a.until_green or a.until_http or a.until_tcp):
         if old:
-            return run_probe(om["probe"]["kind"], om["probe"]["args"])
+            return run_probe(registry.check(om["probe"]["kind"]), om["probe"]["args"])
         if cause:
             raise NotBlocked(2, f"no open cause {cause!r} to attach to; open it with its probe: --cause {cause} "
                                 "--until-green <workflow> | --until-http <url> | --until-tcp <host:port>")
-    probe = named_probe(o_r, a) or (run_probe("workflow_green", {"repo": o_r, "workflow": name}) if name else None)
+    probe = named_probe(o_r, a) or (run_probe(probe_workflow_green, {"repo": o_r, "workflow": name}) if name else None)
     if probe:
         return probe
     raise NotBlocked(2, f"#{n}'s workflow is unknown, so no probe can clear the block; name one: --until-green "
@@ -408,9 +410,10 @@ def existing_block(st: Any, cause: Any) -> tuple[Any, Any, Any]:
     return lname, old, lease_meta(old)
 
 
-def unclear_probe(o_r: str, a: Any, cause: Any, old: Any, om: Any, name: Any, n: str, items: list[Any]) -> Any:
+def unclear_probe(o_r: str, a: Any, cause: Any, old: Any, om: Any, name: Any, n: str, items: list[Any],
+                  registry: ConditionRegistry) -> Any:
     """The probe that clears the block, which must still fail (else nothing waits on the owner), with reds to block."""
-    iprobe = pick_probe(o_r, a, cause, old, om, name, n)
+    iprobe = pick_probe(o_r, a, cause, old, om, name, n, registry)
     if iprobe.ok:
         raise NotBlocked(1, f"{probe_words(iprobe.kind, iprobe.args)} already ({iprobe.detail}): nothing waits on the "
                             f"owner -- `red claim {n}` and fix it")
@@ -419,7 +422,7 @@ def unclear_probe(o_r: str, a: Any, cause: Any, old: Any, om: Any, name: Any, n:
     return iprobe
 
 
-def block_reds(st: Any, o_r: str, a: Any, n: str) -> int:
+def block_reds(st: Any, o_r: str, a: Any, n: str, registry: ConditionRegistry) -> int:
     """The stages of `red block`: the target's units, what may be blocked, the reds and the fixers holding them, the
     probe that clears the block, then the block lease the reds join. NotBlocked refuses at any stage."""
     name, units, known = block_target_units(st, o_r, n)
@@ -434,7 +437,7 @@ def block_reds(st: Any, o_r: str, a: Any, n: str) -> int:
     refuse_live_fixer(st, items, handed, n)
     if vault and items:
         return block_on_vault(st, items, handed, vault, a)
-    iprobe = unclear_probe(o_r, a, cause, old, om, name, n, items)
+    iprobe = unclear_probe(o_r, a, cause, old, om, name, n, items, registry)
     words = probe_words(iprobe.kind, iprobe.args)
     plan = BlockPlan(lname, owner_cause, items, iprobe, words,
                      owner_details(o_r, n, name, units, owner_cmd, words, owner_cause, st), name)
@@ -451,12 +454,13 @@ def block_reds(st: Any, o_r: str, a: Any, n: str) -> int:
     return 0
 
 
-def red_block(st, o_r, a):
+def red_block(st: Any, o_r: str, a: Any, registry: ConditionRegistry) -> int:
     """`red block`: the red waits on the OWNER, for an owner cause only, as a block lease the tick renews while its
     probe -- named (--until-green / --until-http / --until-tcp), an open cause's, or the red's own workflow going green
-    -- still fails and its justification holds. --cause NAME: ONE lease for that outage, every red it explains attached."""
+    -- still fails and its justification holds. --cause NAME: ONE lease for that outage, every red it explains attached.
+    registry: the process's ConditionRegistry (an open outage's probe run again by its kind)."""
     try:
-        return block_reds(st, o_r, a, str(a.run).lstrip("#"))
+        return block_reds(st, o_r, a, str(a.run).lstrip("#"), registry)
     except NotBlocked as e:
         print(f"NOT BLOCKED: {e}")
         return e.rc

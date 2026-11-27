@@ -246,7 +246,8 @@ class NetWatchTest(unittest.TestCase):
             case.fake("mark_gate_dirty", lambda rng: None)
             case.fake("err", lambda rng, m: None)
             case.fake("open_outage", lambda rng, *a, **k: None)
-            case.fake("run_probe", lambda rng, kind, *a: types.SimpleNamespace(detail=rng.choice(["tunnel ok", "tunnel 5s", "x down", "the tunnel is not answering 5s", "ok"]), ok=True))
+            probed = case.recorded("run_probe", lambda rng, kind, *a: types.SimpleNamespace(detail=rng.choice(["tunnel ok", "tunnel 5s", "x down", "the tunnel is not answering 5s", "ok"]), ok=True))
+            case.put("run_probe", lambda check, *a: probed(A.probe_kind(check), *a))  # recorded by kind, as before the opener ran the function it imports
             probe = r.choice([None, lambda: r.choice(["ok", "5s", "down"])])
             probe = None if probe is None else case.recorded("probe", lambda rng: rng.choice(["ok", "5s", "down"]))
             kick = case.recorded("kick", lambda rng: None)

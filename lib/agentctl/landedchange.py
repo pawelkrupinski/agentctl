@@ -3,6 +3,7 @@
 
 import os
 from typing import Any
+from functools import partial
 from agentctl.statemachines import StaleVersion, TerminalState, machine_state, open_items
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
@@ -94,7 +95,7 @@ def stranded_changes(repo, d, store, now_ = None):
     for it in open_items(st, "change"):
         if it["id"] in entries:
             continue
-        r = run_probe("change_source", {"id": it["id"], "repo": repo})
+        r = run_probe(partial(probe_change_source, store=st), {"id": it["id"], "repo": repo})
         if r.ok is False:
             dd = it.get("data") or {}
             open_condition("change-stranded", f"STRANDED CHANGE {it['id']} ({it['state']}, head "

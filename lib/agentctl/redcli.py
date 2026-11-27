@@ -47,22 +47,18 @@ def red_am_fixer():
     return 1
 
 
-def cmd_red(a, clock, st):
+def cmd_red(a, clock, st, registry):
     if a.rcmd == "am-fixer":
         return red_am_fixer()
     if a.rcmd == "probe":
         return cmd_red_probe(a, clock)
     o_r = slug(a.repo) if getattr(a, "repo", None) and a.rcmd not in ("fixer", "owner") else default_repo()
-    handlers = {"block": red_cmd_block, "unblock": red_cmd_unblock, "owner-push": red_cmd_owner_push,
+    handlers = {"block": lambda a, st, o_r: red_block(st, o_r, a, registry), "unblock": red_cmd_unblock, "owner-push": red_cmd_owner_push,
                 "claim": red_cmd_lease, "beat": red_cmd_lease, "release": red_cmd_lease, "status": red_cmd_status,
                 "auto": red_cmd_auto, "owner": lambda a, st, o_r: red_owner(a, st),
                 "fixer": lambda a, st, o_r: red_fixer(a, st), "unblame": red_cmd_unblame,
                 "dispatch": red_cmd_dispatch}
     return handlers[a.rcmd](a, st, o_r) if a.rcmd in handlers else 2
-
-
-def red_cmd_block(a: Any, st: Any, o_r: Any) -> Any:
-    return red_block(st, o_r, a)
 
 
 def red_cmd_unblock(a: Any, st: Any, o_r: Any) -> Any:

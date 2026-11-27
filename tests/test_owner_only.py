@@ -7,6 +7,7 @@ import glob, json, os, re, subprocess, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from test_vault_block import VaultBase  # noqa: E402
 
 LIB = os.path.join(os.path.dirname(HERE), "lib", "agentctl")
@@ -74,7 +75,7 @@ class HarnessFaultTest(OwnerOnlyBase):
                             meta={"kind": "block", "keys": [key], "text": "BLOCKED ON OWNER", **meta})
             it = A.red_move(self.st, it, "blocked-external", "blocked", data={"block": A.block_lease(key)})
             self.assertIsNotNone(A.block_invalid(self.st, it, A.red_block_of(it, self.st)["meta"], self.t[0]))
-        out = A.red_renew_blocks(self.st, self.t[0])
+        out = A.red_renew_blocks(self.st, self.t[0], registry(A))
         self.assertEqual(len([x for x in out if "lapsed" in x]), 2, out)
 
 

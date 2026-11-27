@@ -7,6 +7,7 @@ import json, os, shutil, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from test_red import RedBase, run, MOVIES, FAIL_LINE  # noqa: E402
 
 CONV, CONV_FILE = "Identity model convergence", "identity-model-convergence.yml"
@@ -109,7 +110,7 @@ class BranchRedTest(BranchBase):
         units = A.predict_units(MOVIES, snap)
         self.assertTrue(units and all(u["gate"] and u["predicts"] == self.branch for u in units))
         st = A.Store(path=os.path.join(self.tmp.name, "store.db"))
-        A.red_tick(st, MOVIES, self.r.path, snap, dispatch=False)  # a red item before main fails: offered like a gate red
+        A.red_tick(st, MOVIES, self.r.path, snap, dispatch=False, registry=registry(A))  # a red item before main fails: offered like a gate red
         its = [i for i in st.items("red") if i["data"]["red_kind"] == "predicts"]
         self.assertTrue(its and all(i["state"] == "offered" and i["data"]["predicts"] == self.branch for i in its), its)
         self.assertIn("main will fail the same way next", A.fixer_prompt(units[0], "/wt", "/brief"))

@@ -6,6 +6,7 @@ import contextlib, io, json, os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock  # noqa: E402
 
 
@@ -82,7 +83,7 @@ class WatchdogTest(unittest.TestCase):
     def run_wd(self):
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-            rc = A.cmd_watchdog(None, FakeClock(), A.CurrentStore(A.process_store))
+            rc = A.cmd_watchdog(None, FakeClock(), A.CurrentStore(A.process_store), registry(A))
         return rc, out.getvalue()
 
     def test_w5_a_silent_processor_is_a_condition_a_notification_and_one_kick(self):

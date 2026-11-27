@@ -5,6 +5,7 @@ import json, os, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, TOOL  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 from test_alerts import AlertBase  # noqa: E402
 
@@ -190,7 +191,7 @@ class IssueEscalationTest(AlertBase):
         self.assertEqual(self.st.item("issue", self.ids[0])["state"], "closed")
 
     def test_the_server_tick_runs_it(self):
-        self.assertIn("issues", [n for n, _ in A.server_steps("/r", self.root, lambda f: f, *on_clock(A.Clock()))])
+        self.assertIn("issues", [n for n, _ in A.server_steps("/r", self.root, lambda f: f, *on_clock(A.Clock()), registry(A))])
 
 
 if __name__ == "__main__":

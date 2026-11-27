@@ -1,6 +1,7 @@
 # agentctl, part `watchdog`: `agentctl watchdog`, the cheap launchd pass over the invariants (invariants.py): their conditions, the processor kicked awake.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from functools import partial
 from agentctl.clock import epoch_now, wall_epoch
 import json
 import os
@@ -16,6 +17,7 @@ from agentctl.notifier import notify
 from agentctl.launchd import SERVICE_LABEL, launchctl
 from agentctl.beats import beat_age, beat_path, write_beat
 from agentctl.conditions import close_condition, open_condition, open_conditions, run_probe
+from agentctl.conditionregistry import ConditionRegistry
 from agentctl.changekind import file_unheld_change, unheld_changes
 from agentctl.invariants import INVARIANTS, watchdog_state
 from agentctl.watchknobs import W5_MAX
@@ -23,6 +25,7 @@ from agentctl.alertroute import ALERT_SELF_HEALING_INVARIANTS
 from agentctl.watchknobs import knob_w5_max
 from agentctl.watchknobs import (
     knob_kick_handoff_wait, knob_watchdog_misses, knob_watchdog_retell, knob_watchdog_sleep_gap)
+from agentctl.invariants import probe_invariant
 
 
 WATCHDOG_KICK_GAP = 600
@@ -107,7 +110,7 @@ def tell_violation(st: Dict[str, Any], wid: str, detail: str, cond: object, heal
         notify(f"agentctl watchdog: {wid}", detail[:220])
 
 
-def cmd_watchdog(a, clock, store):
+def cmd_watchdog(a: Any, clock: Any, store: Any, registry: ConditionRegistry) -> int:
     """One watchdog pass: every invariant checked; a violation opens its INVARIANT condition (and notifies), a restored
     one closes it; W5 kickstarts the processor. Prints one line per invariant. clock and store: cli's (the invariants'
     probe is wired with the same)."""
@@ -115,16 +118,17 @@ def cmd_watchdog(a, clock, store):
     woke = awake_since(st, clock.time())
     write_beat("watchdog")
     misses = dict(st.get("misses") or {})
-    violated = [check_invariant(wid, st, misses, woke, clock, store) for wid in INVARIANTS]
+    violated = [check_invariant(wid, st, misses, woke, clock, store, registry) for wid in INVARIANTS]
     print_unheld(store, clock)
     write_json(state_root("watchdog.json"), {**watchdog_state(), "misses": misses, "awake_since": woke})
     return 1 if any(violated) else 0
 
 
-def check_invariant(wid: Any, st: Any, misses: Any, woke: Any, clock: Any, store: Any) -> Any:
+def check_invariant(wid: Any, st: Any, misses: Any, woke: Any, clock: Any, store: Any,
+                    registry: ConditionRegistry) -> Any:
     """One invariant probed and printed: a violation counted and told, a restored one's condition closed, a silent
     processor kicked (W5). True when it is violated."""
-    r = run_probe("invariant", {"id": wid})
+    r = run_probe(partial(probe_invariant, clock=clock, st=store), {"id": wid})
     key = f"invariant-{wid}"
     cond = next((c for c in open_conditions(store) if c["key"] == key), None)
     print(f"{wid}: {probe_word(r.ok)} -- {r.detail}")
@@ -136,7 +140,7 @@ def check_invariant(wid: Any, st: Any, misses: Any, woke: Any, clock: Any, store
     elif r.ok:
         misses.pop(wid, None)
         if cond:
-            close_condition(cond, r, store)
+            close_condition(cond, r, store, registry)
     return r.ok is False
 
 

@@ -19,8 +19,6 @@ FROZEN = {
     "procrunner.wire_runner": "72 `process_runner()` readers take the runner",
     "ciruns.wire_ci_runs": "16 red / ci-why / landing modules take the CiRuns reader",
     "inboxentry.wire_inbox_writer": "36 modules that write an inbox entry take the writer",
-    "conditions.wire_probes": "30 `run_probe` callers take the probe registry",
-    "conditions.wire_recover_actions": "open_condition / close_condition take the recovery registry",
 }
 
 

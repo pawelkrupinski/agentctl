@@ -8,6 +8,7 @@ from types import SimpleNamespace as NS
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from golden_cases import Probe, check as _check, stable  # noqa: E402
 from test_restructure12 import NOW, maybe, printing  # noqa: E402
 
@@ -444,9 +445,11 @@ class SyncStepsTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
         for name in ("red_renew_holders", "red_reap_orphans", "reap_children", "project_events", "notify_escalations",
-                     "reconcile_alerts", "network_watch", "tunnel_watch", "maybe_recovery_tick", "mirror_state", "flush_outbox",
+                     "reconcile_alerts", "network_watch", "tunnel_watch", "mirror_state", "flush_outbox",
                      "drain_event_log"):
             case.fake(name, lambda rng, *a, **k: rng.choice([None, 1]))
+        recovery = case.recorded("maybe_recovery_tick", lambda rng, *a, **k: rng.choice([None, 1]))
+        case.put("maybe_recovery_tick", lambda store, registry, now: recovery(store, now))  # as recorded before the registry
         for name in ("trust_asks", "close_landed_worktrees", "migrate_local_queue", "close_landed_changes", "answer_regen_holds",
                      "revert_notes", "fixers_land_watch", "maybe_upkeep", "root_checkout_ff", "explorer_tick"):
             case.fake(name, lambda rng, *a, **k: [f"x{i}" for i in range(rng.randint(0, 2))])
@@ -475,7 +478,7 @@ class SyncStepsTest(unittest.TestCase):
     def test_sync_steps(self):
         def run(A):
             def go(repo, d, o_r, clock, store, picks):
-                steps = list(A.sync_steps(repo, d, o_r, clock, store))
+                steps = list(A.sync_steps(repo, d, o_r, clock, store, registry(A)))
                 out = [name for name, _fn in steps]
                 for k in picks:
                     name, fn = steps[k % len(steps)]

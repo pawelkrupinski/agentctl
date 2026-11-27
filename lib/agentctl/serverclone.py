@@ -18,6 +18,7 @@ from agentctl.statefile import read_record, unlink_file
 from agentctl.repos import server_repo
 from agentctl.clones import CORRUPT_GIT, clone_gated, clone_shared, clone_side, heal_enabled
 from agentctl.conditions import open_condition, recovery_recheck, run_probe
+from agentctl.conditionregistry import ConditionRegistry
 from agentctl.sdnotify import SD_READY, sd_notify
 from agentctl.govknobs import knob_clone_keepalive
 from agentctl.storeknobs import knob_clone_lock_wait, knob_clone_repair_retry, knob_clone_timeout
@@ -137,19 +138,19 @@ def _clone_server_repo(repo: str) -> None:
     os.rename(tmp, repo)
 
 
-def _verify_server_clone(repo: str, store: Any) -> None:
+def _verify_server_clone(repo: str, store: Any, registry: ConditionRegistry) -> None:
     server_clone_remote(repo)
     if heal_enabled(repo):  # at startup: a clone that does not verify is repaired before the first tick
         ok, detail = clone_verify(repo)
         if not ok:
-            repair_clone(repo, f"at startup the clone did not verify: {detail}", store)
+            repair_clone(repo, f"at startup the clone did not verify: {detail}", store, registry)
 
 
-def ensure_server_clone(repo: str | None, store: Any) -> str:
+def ensure_server_clone(repo: str | None, store: Any, registry: ConditionRegistry) -> str:
     repo = repo or server_repo()
     clean_clone_tmps(repo)
     if os.path.isdir(os.path.join(repo, ".git")):
-        _verify_server_clone(repo, store)
+        _verify_server_clone(repo, store, registry)
     else:
         _clone_server_repo(repo)
     return repo
@@ -274,7 +275,7 @@ def clone_condition(repo, text, probe, store, tail=()):
                           command="tick", tail=list(tail), store=store)
 
 
-def repair_clone(repo, why, store):
+def repair_clone(repo, why, store, registry: ConditionRegistry):
     """Clone afresh into a temp directory, swap it in under the clone lock, keep the broken copy (one only), re-link the
     worktrees. Opens the CLONE condition (with git's error) first; its probe, passing after the swap, closes it.
     Returns what it did, or None when another repair runs or the users never let go (tried again next tick)."""
@@ -288,7 +289,7 @@ def repair_clone(repo, why, store):
             raise SystemExit(f"agentctl: cannot repair {repo}: no $AGENTCTL_MOVIES_REMOTE")
         try:
             clone_condition(repo, f"CLONE BROKEN: {repo}: {why.splitlines()[0][:300]}; re-cloning it from {url}",
-                            run_probe("clone_health", {"repo": repo}), store, tail=why.splitlines()[-15:])
+                            run_probe(probe_clone_health, {"repo": repo}), store, tail=why.splitlines()[-15:])
         except (Exception, SystemExit) as e:
             err(f"clone repair: the CLONE condition could not be opened ({str(e)[:160]})")
         err(f"clone repair: {repo} is broken ({why.splitlines()[0][:200]}): cloning {url} afresh")
@@ -314,13 +315,13 @@ def repair_clone(repo, why, store):
                 + (f"; {len(trees)} worktree(s) re-linked" if trees else "")
                 + (f"; removed {', '.join(os.path.basename(g) for g in gone)}" if gone else ""))
         err(line)
-        recovery_recheck("clone_health", store)
+        recovery_recheck("clone_health", store, registry)
         return line
     finally:
         _clone_repairing.release()
 
 
-def clone_heal_tick(repo, store):
+def clone_heal_tick(repo, store, registry: ConditionRegistry):
     """The processor's "clone health" step: a suspect clone (a fetch failed with a corruption signature) is probed;
     broken, it is repaired (at most every CLONE_REPAIR_RETRY); healthy, the mark goes (it was something else)."""
     sus = read_record(clone_side(repo, "suspect.json"))
@@ -328,10 +329,10 @@ def clone_heal_tick(repo, store):
         return None
     if epoch_now() - _clone_repair_at.get(os.path.realpath(repo), 0) < knob_clone_repair_retry():
         return None
-    r = run_probe("clone_health", {"repo": repo})
+    r = run_probe(probe_clone_health, {"repo": repo})
     if r.ok:
         unlink_file(clone_side(repo, "suspect.json"))
         return f"clone health: {repo} is fine ({r.detail})"
     if r.ok is None:
         return None  # cannot tell now (the network): looked at again next tick
-    return repair_clone(repo, f"{r.detail}\n{sus.get('error') or ''}".strip(), store)
+    return repair_clone(repo, f"{r.detail}\n{sus.get('error') or ''}".strip(), store, registry)

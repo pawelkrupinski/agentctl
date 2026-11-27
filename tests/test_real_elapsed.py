@@ -5,6 +5,7 @@ import os, sys, threading, time, types, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock  # noqa: E402
 
 
@@ -38,16 +39,16 @@ class FrozenClockTest(unittest.TestCase):
         A.wire_clock(FakeClock(A.wall_epoch() + 10 * 86400))  # ten days ahead of the files' times
         calls = []
         real = A.gate_publish_cycle
-        A.gate_publish_cycle = lambda repo, store: calls.append(1)
+        A.gate_publish_cycle = lambda repo, store, registry: calls.append(1)
         try:
             A._last_gate_publish[0] = 0
-            A.maybe_publish_gate("r", None)
+            A.maybe_publish_gate("r", None, registry(A))
             self.assertEqual(len(calls), 1)
             dirty = A.gate_dirty_path()
             os.makedirs(os.path.dirname(dirty), exist_ok=True)
             open(dirty, "w").close()
             os.utime(dirty, (A.wall_epoch() + 5, A.wall_epoch() + 5))  # a push since: dirty
-            A.maybe_publish_gate("r", None)
+            A.maybe_publish_gate("r", None, registry(A))
             self.assertEqual(len(calls), 2)
         finally:
             A.gate_publish_cycle = real

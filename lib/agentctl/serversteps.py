@@ -28,6 +28,7 @@ from agentctl.batchtick import tick_batch
 from agentctl.redtick import maybe_red_tick
 from agentctl.gatepublish import maybe_publish_gate
 from agentctl.landedchange import close_landed_changes, stranded_changes
+from agentctl.conditionregistry import ConditionRegistry
 
 
 def gate_is_red_now() -> bool:
@@ -86,9 +87,9 @@ def tick_quiet_deadlines(st, now_=None):
     return did
 
 
-def clone_health_step(repo: str, d: str, store: Any) -> Any:
+def clone_health_step(repo: str, d: str, store: Any, registry: ConditionRegistry) -> Any:
     """The clone-health step: its heal tick's line logged, or None when healing is off for the repo."""
-    return [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo, store)] if x] if heal_enabled(repo) else None
+    return [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo, store, registry)] if x] if heal_enabled(repo) else None
 
 
 def logged(d: str, lines: list[str]) -> list[str]:
@@ -104,11 +105,12 @@ def owner_summary(line: str, sinks: list[str]) -> None:
 
 
 def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callable[[], Any]],
-                 clock: Clock, store: Any) -> Sequence[tuple[str, Callable[[], Any]]]:
+                 clock: Clock, store: Any, registry: ConditionRegistry) -> Sequence[tuple[str, Callable[[], Any]]]:
     """The reconciler's tick on ci-runner (the one writer): the changes, the batch, the watches, the gate, the reds,
     the recovery registry. Never the laptop's duties (events -> inbox, the notifier, the network and tunnel watches, the
-    fixers, upkeep): those are sync_steps. clock and store: the process's (cli's), every step's time and store."""
-    return (("clone health", lambda: clone_health_step(repo, d, store)),
+    fixers, upkeep): those are sync_steps. clock, store and registry (the conditions' probes and actions): the process's
+    (cli's), every step's time, store and registry."""
+    return (("clone health", lambda: clone_health_step(repo, d, store, registry)),
             ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, clock, store,
                                                                                                   d)])),
             ("stranded changes", lambda: stranded_changes(repo, d, store)),
@@ -119,13 +121,13 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
             ("land refs", shared(lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d, store=store)])),
             ("lease archive", lambda: maybe_archive_leases(d, store)),
             ("children", reap_children),
-            ("gate summary", lambda: maybe_publish_gate(repo, store)),
+            ("gate summary", lambda: maybe_publish_gate(repo, store, registry)),
             ("red time", lambda: track_red_time(store, gate_is_red_now())),
-            ("red tick", lambda: maybe_red_tick(repo, store)),
-            ("recovery", lambda: maybe_recovery_tick(store, clock.time())),
+            ("red tick", lambda: maybe_red_tick(repo, store, registry)),
+            ("recovery", lambda: maybe_recovery_tick(store, registry, clock.time())),
             ("issues", lambda: [wlog(d, f"tick: {x}") for x in tick_issues(store)]),
             ("reverts", lambda: [wlog(d, f"tick: {x}") for x in tick_reverts(repo, store)]),  # reverts.py: told their landers
-            ("queue stall", lambda: logged(d, queue_stall_step(store))),
+            ("queue stall", lambda: logged(d, queue_stall_step(store, clock.time))),
             ("file events", lambda: drain_event_log(store)),  # filelog.py: this host's file-held state's moves
             ("timeline", lambda: logged(d, timeline_step(store, clock.time(), owner_summary,
                                                          lambda run: remote_run_jobs(slug(repo), run), clock.sleep))),

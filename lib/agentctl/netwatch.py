@@ -12,11 +12,13 @@ from agentctl.launchd import launchctl
 from agentctl.statefile import read_json_file, write_json_file
 from agentctl.store import StoreUnavailable
 from agentctl.gating import mark_gate_dirty
-from agentctl.conditions import open_condition, recovery_recheck_all, run_probe
+from agentctl.conditions import open_condition, run_probe
 from agentctl.cistate import state_read, state_update
 from agentctl.storestate import port_open
 from agentctl.tunnel import default_route, tunnel_ports, tunnel_state_path
 from agentctl.recovery import recover_tunnel_reset
+from agentctl.recovery import probe_route, probe_tunnel
+from agentctl.statemachines import StaleVersion
 
 
 # The laptop tunnel's launchd agent and its log: names it got before Forgejo was switched off (infra's plist; it now
@@ -95,7 +97,7 @@ def network_watch(store, route=None, kick=None):
         return ""
     if r is None:
         err(f"the network went away (was {prev[0]} via {prev[1]})")
-        open_outage(store, "NETWORK", f"NETWORK: offline (no default route; was {prev[0]} via {prev[1]})", run_probe("route"),
+        open_outage(store, "NETWORK", f"NETWORK: offline (no default route; was {prev[0]} via {prev[1]})", run_probe(probe_route),
                        [("tunnel_reset", {})], key="network-offline", inbox=False)  # the kick: below, on the way back
         return "offline"
     err(f"the network {'is back' if prev is None else 'changed'} ({prev[0] if prev else '-'} via {prev[1] if prev else '-'} -> "
@@ -118,7 +120,7 @@ class TunnelCycle:
 
     def __init__(self, store: Any, t: float, probe: Any, kick: Any, uplink: Any) -> None:
         self.store, self.t, self.probe, self.kick, self.uplink = store, t, probe, kick, uplink
-        self.res = run_probe("tunnel") if probe is None else None  # the registry's probe: the one that will clear what it opens
+        self.res = run_probe(probe_tunnel) if probe is None else None  # the registry's probe: the one that will clear what it opens
         self.r = (self.res.detail.rsplit(" ", 1)[-1] if self.res else probe())
         self.st = read_json_file(tunnel_state_path())
 
@@ -154,7 +156,7 @@ class TunnelCycle:
             msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so the tunnel (localhost:{tunnel_ports()[0][0]}) "
                    f"{self.r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")
             err(msg)
-            open_outage(self.store, "NETWORK", msg, self.res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel",
+            open_outage(self.store, "NETWORK", msg, self.res or run_probe(probe_tunnel), [("tunnel_reset", {})], key="tunnel",
                         command="tunnel")
         st.update(network=True, pending_since=None, escalated=False)  # the kick/escalation clock starts on a good uplink
         write_json_file(tunnel_state_path(), st)
@@ -179,7 +181,7 @@ class TunnelCycle:
             return did
         msg = (f"STALLED: the tunnel (localhost:{tunnel_ports()[0][0]}) still {self.r} {int((self.t - st['pending_since']) // 60)} min after a "
                f"kickstart; run `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}` and check {TUNNEL_LOG}")
-        open_outage(self.store, "STALLED", msg, self.res or run_probe("tunnel"), [("tunnel_reset", {})], key="tunnel-stalled",
+        open_outage(self.store, "STALLED", msg, self.res or run_probe(probe_tunnel), [("tunnel_reset", {})], key="tunnel-stalled",
                     command="tunnel", exit_code=2)
         st["escalated"] = True
         return "escalated"
@@ -220,3 +222,13 @@ def tunnel_watch(store, now_=None, probe=None, kick=None, uplink=None):
     churns the tunnel), no STALLED escalation, one NETWORK note per outage."""
     t = now_ if now_ is not None else epoch_now()
     return TunnelCycle(store, t, probe, kick, uplink).run()
+
+
+def recovery_recheck_all(store: Any) -> None:
+    """The network changed or came back: every open condition is probed at the next tick, backoff reset."""
+    st = store
+    for it in st.items("condition", ["open"]):
+        try:
+            st.update_item("condition", it["id"], it["version"], {"next_check": 0, "fails": 0})
+        except StaleVersion:
+            pass

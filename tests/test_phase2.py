@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, seed_gating_checks  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
 
 USERS = {"tok-pawel": "pawel", "tok-metrics": "ci-metrics", "tok-other": "mallory"}
@@ -338,10 +339,10 @@ class ServerSideTest(Phase2Base):
             self.assertIsNone(A.store_url())
         finally:
             os.environ.pop("AGENTCTL_HOST")
-        names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r", *on_clock(A.Clock()))]
+        names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r", *on_clock(A.Clock()), registry(A))]
         self.assertEqual(names, ["laptop role", "outbox", "file events", "state mirror", "children", "events", "notifier", "alerts", "workspace trust", "landed worktrees", "local queue", "landed changes", "regen holds", "claims", "dispatcher", "escalation dispatcher", "pins", "drift explorer", "revert notes", "fixer landing",
                                  "network watch", "tunnel probe", "red status snapshot", "upkeep", "root checkout", "recovery"])
-        server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f, *on_clock(A.Clock()))]
+        server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f, *on_clock(A.Clock()), registry(A))]
         self.assertEqual(server, ["clone health", "landed changes", "stranded changes", "change tick", "land hold", "batch tick", "watches", "land refs",
                                   "lease archive", "children", "gate summary", "red time", "red tick", "recovery", "issues",
                                   "reverts", "queue stall", "file events", "timeline", "quiet deadlines", "stats"])
@@ -945,7 +946,7 @@ class LandHoldTest(Phase2Base):
     def land(self, cmd, **kw):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = A.cmd_waiting(argparse.Namespace(wcmd=cmd, repo=self.repo, entry=None, **kw), *on_clock(FakeClock()))
+            rc = A.cmd_waiting(argparse.Namespace(wcmd=cmd, repo=self.repo, entry=None, **kw), *on_clock(FakeClock()), registry(A))
         return rc, out.getvalue()
 
     def test_a_hold_made_on_the_laptop_holds_ci_runners_batch_until_released(self):
@@ -991,7 +992,7 @@ class LandHoldTest(Phase2Base):
         saved = A.tick_land_hold
         A.tick_land_hold = ticked.append
         try:
-            dict(A.server_steps(self.repo, "/d", lambda f: f, A.Clock(), self.st))["land hold"]()
+            dict(A.server_steps(self.repo, "/d", lambda f: f, A.Clock(), self.st, registry(A)))["land hold"]()
         finally:
             A.tick_land_hold = saved
         self.assertEqual(ticked, [self.st], "the reconciler's step ticks the hold on the store it was handed")

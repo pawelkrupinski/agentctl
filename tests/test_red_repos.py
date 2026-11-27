@@ -7,6 +7,7 @@ import argparse, json, os, shutil, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, sh  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from test_red import run, MOVIES  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 
@@ -65,7 +66,7 @@ class RedReposBase(RedsBase):
 
     def others(self, advance=0):
         self.t[0] += advance
-        return A.red_tick_others(self.st, now_=self.t[0])
+        return A.red_tick_others(self.st, registry(A), now_=self.t[0])
 
     def by_repo(self):
         out = {}
@@ -246,7 +247,7 @@ class TickTest(RedReposBase):
         self.assertIn(CORE, conds[0]["text"])
         self.apps.add("reader")  # the App configured on the host
         self.assertIsNone(A.red_read_token(INFRA))
-        A.recovery_tick(A.CurrentStore(A.process_store), force=True)
+        A.recovery_tick(A.CurrentStore(A.process_store), registry(A), force=True)
         self.assertEqual([c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"] == "red-read-access"], [])
         self.others(advance=60)
         self.assertIn(INFRA, self.by_repo())

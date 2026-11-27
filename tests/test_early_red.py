@@ -9,6 +9,7 @@ import json, os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from test_red import run, FAIL_LINE  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 
@@ -167,7 +168,7 @@ class EarlyReadCostTest(EarlyBase):
 
         def tick(advance):
             self.t[0] += advance
-            return A.red_tick(self.st, A.SHORT["movies"], self.r.path, self.snap(), now_=self.t[0], sync=True, early=early)
+            return A.red_tick(self.st, A.SHORT["movies"], self.r.path, self.snap(), now_=self.t[0], sync=True, early=early, registry=registry(A))
         tick(0)
         key = self.only()["data"]["key"]
         answers.append(A.ForgeHTTPError("gh api GET ...: HTTP 403: API rate limit exceeded for installation"))

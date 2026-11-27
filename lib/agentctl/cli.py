@@ -18,7 +18,10 @@ from agentctl.actors import process_actor
 from agentctl.inboxentry import wire_inbox_writer
 from agentctl.hookoutput import check_failures
 from agentctl.inbox import inbox_command, with_inbox
-from agentctl.conditions import cmd_recover, condition_guarded, wire_probes, wire_recover_actions
+from agentctl.conditionregistry import ConditionRegistry
+from agentctl.conditions import (
+    condition_guarded, probe_gate_read, probe_git_fetch, probe_http, probe_tcp, probe_waiting_ok,
+    probe_workflow_green)
 from agentctl.serverclone import probe_clone_health
 from agentctl.owned import cmd_wait, restart_gate
 from agentctl.maint import cmd_orphans
@@ -42,56 +45,51 @@ from agentctl.upkeep import probe_disk_free
 from agentctl.branches import cmd_dispatch
 from agentctl.localrecheck import recheck_local
 from agentctl.redwaits import probe_quota_reset
-from agentctl.superseded import cmd_supersede
-from agentctl.park import cmd_park, cmd_unpark
 from agentctl.redcrash import probe_red_newer_verdict
 from agentctl.ask import cmd_decide
 from agentctl.watchtick import cmd_watch
 from agentctl.recovery import (
-    probe_gate_read, probe_git_fetch, probe_http, probe_red_read, probe_route, probe_tcp, probe_token,
-    probe_tunnel, probe_waiting_ok, probe_workflow_green, recover_clear_flag, recover_clear_hold,
-    recover_tunnel_reset, note_missing_tokens)
+    cmd_recover, note_missing_tokens, probe_red_read, probe_route, probe_token, probe_tunnel, recover_clear_flag,
+    recover_clear_hold, recover_tunnel_reset)
 from agentctl.tools import cmd_env, cmd_prepush, cmd_queue_retired, cmd_state
-from agentctl.orphans import probe_orphan_landed
-from agentctl.invariants import probe_invariant
-from agentctl.watchdog import cmd_watchdog
 from agentctl.storecmd import cmd_store
 from agentctl.ciwhycmd import cmd_ci_why
-from agentctl.maintain import cmd_maintain
 from agentctl.inboxcli import cmd_inbox
+from agentctl.landedchange import probe_change_source
+from agentctl.superseded import cmd_supersede
+from agentctl.park import cmd_park, cmd_unpark
+from agentctl.orphans import probe_orphan_landed
+from agentctl.maintain import cmd_maintain
 from agentctl.statuspage import cmd_status
 from agentctl.redcli import cmd_red
+from agentctl.invariants import probe_invariant
+from agentctl.watchdog import cmd_watchdog
 from agentctl.processor import cmd_tick, cmd_waiting
 from agentctl.queueenter import cmd_land_precheck
 from agentctl.slots import cmd_land
 from agentctl.cliparser import parser
-from agentctl.landedchange import probe_change_source
 
 
 # THE COMPOSITION ROOT: what every process wires before any command runs.
-wire_probes({"disk_free": probe_disk_free, "quota_reset": probe_quota_reset,
-             "waiting_ok": probe_waiting_ok, "workflow_green": probe_workflow_green,
-             "http": probe_http, "tcp": probe_tcp, "route": probe_route, "tunnel": probe_tunnel,
-             "gate_read": probe_gate_read, "token": probe_token, "git_fetch": probe_git_fetch,
-             "clone_health": probe_clone_health,
-             "red_read": probe_red_read})
-wire_recover_actions({"clear_hold": recover_clear_hold, "tunnel_reset": recover_tunnel_reset,
-                      "clear_flag": recover_clear_flag})
+def condition_registry(clock: Clock, store: Any) -> ConditionRegistry:
+    """The process's ConditionRegistry: every probe, with the process's store and clock bound into those that read
+    them (the watchdog's invariants, a change's source, a red's newer run, the queue's movement), and the recovery
+    actions."""
+    return ConditionRegistry(
+        [probe_disk_free, probe_quota_reset, probe_waiting_ok, probe_workflow_green, probe_http, probe_tcp, probe_route,
+         probe_tunnel, probe_gate_read, probe_token, probe_git_fetch, probe_clone_health, probe_red_read,
+         partial(probe_orphan_landed, store=store), partial(probe_invariant, clock=clock, st=store),
+         partial(probe_change_source, store=store), partial(probe_push_credential, st=store),
+         partial(probe_infra_requeue, st=store), partial(probe_red_newer_verdict, store=store),
+         partial(probe_queue_moving, store=store, now=clock.time)],
+        {"clear_hold": recover_clear_hold, "tunnel_reset": recover_tunnel_reset, "clear_flag": recover_clear_flag})
 
 
 def wire_collaborators(clock: Clock, store: Any) -> None:
-    """The process's clock and its one CI runs reader (CiRuns: what was read of GitHub's runs and jobs), and what a
-    registry calls with the clock and store -- the probes that read them (the watchdog's invariants, a change's source,
-    a red's newer run), the inbox writer, the missing token's note -- wired with main's; at import, with the wall's
-    clock and the process's store, for a use before any main."""
+    """The process's clock and its one CI runs reader (CiRuns: what was read of GitHub's runs and jobs), and the inbox
+    writer, wired with main's; at import, with the wall's clock and the process's store, for a use before any main."""
     wire_clock(clock)
     wire_ci_runs(CiRuns())
-    wire_probes({"orphan_landed": lambda a: probe_orphan_landed(a, store), "invariant": lambda a: probe_invariant(a, clock, store),
-                 "change_source": lambda a: probe_change_source(a, store),
-                 "push_credential": lambda a: probe_push_credential(a, store),
-                 "infra_requeue": lambda a: probe_infra_requeue(a, store),
-                 "red_newer_verdict": lambda a: probe_red_newer_verdict(a, store),
-                 "queue_moving": lambda a: probe_queue_moving(store, clock.time())})
     wire_inbox_writer(condition_guarded(lambda rec: alert_write(rec, store)), clock.time)
 
 
@@ -121,11 +119,12 @@ def main(argv: list[str] | None = None, clock: Clock | None = None, runner: Proc
         partial(process_store, waited_on=True) if waited_on(args) else process_store, clock.time, actor=process_actor(args))
     wire_collaborators(clock, store)
     wire_runner(runner or ProcessRunner())
+    registry = condition_registry(clock, store)
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:
         return selftest()
     a = parser().parse_args(argv)
     handler: Callable[[argparse.Namespace], Any] = {"maintain": with_store(cmd_maintain, store), "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": lambda a: cmd_red(a, clock, store), "decide": with_store(cmd_decide, store), "config": cmd_config, "issue": with_store(cmd_issue, store), "revert": with_store(cmd_revert, store), "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": with_store(cmd_inbox, store), "recover": with_store(cmd_recover, store), "watchdog": lambda a: cmd_watchdog(a, clock, store), "lease": with_store(cmd_lease, store), "laptop": with_store(cmd_laptop, store), "status": with_store(cmd_status, store), "queue": cmd_queue_retired, "tick": lambda a: cmd_tick(a, clock, store), "store": cmd_store, "github-app": cmd_github_app, "waiting": lambda a: cmd_waiting(a, clock, store), "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": with_store(cmd_supersede, store), "park": with_store(cmd_park, store), "unpark": cmd_unpark, "watch": lambda a: cmd_watch(a, clock, store), "sweep": with_store(cmd_sweep, store), "ci-why": with_store(cmd_ci_why, store), "land": lambda a: cmd_land(a, clock, store), "land-precheck": with_store(cmd_land_precheck, store), "env": cmd_env, "history": lambda a: cmd_history(a, store, clock.time), "analyze": lambda a: cmd_analyze(a, store, clock.time)}[a.cmd]
+               "red": lambda a: cmd_red(a, clock, store, registry), "decide": with_store(cmd_decide, store), "config": cmd_config, "issue": with_store(cmd_issue, store), "revert": with_store(cmd_revert, store), "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": with_store(cmd_inbox, store), "recover": lambda a: cmd_recover(a, store, registry), "watchdog": lambda a: cmd_watchdog(a, clock, store, registry), "lease": with_store(cmd_lease, store), "laptop": with_store(cmd_laptop, store), "status": with_store(cmd_status, store), "queue": cmd_queue_retired, "tick": lambda a: cmd_tick(a, clock, store, registry), "store": cmd_store, "github-app": cmd_github_app, "waiting": lambda a: cmd_waiting(a, clock, store, registry), "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": with_store(cmd_supersede, store), "park": with_store(cmd_park, store), "unpark": cmd_unpark, "watch": lambda a: cmd_watch(a, clock, store), "sweep": with_store(cmd_sweep, store), "ci-why": with_store(cmd_ci_why, store), "land": lambda a: cmd_land(a, clock, store), "land-precheck": with_store(cmd_land_precheck, store), "env": cmd_env, "history": lambda a: cmd_history(a, store, clock.time), "analyze": lambda a: cmd_analyze(a, store, clock.time)}[a.cmd]
     command = inbox_command(a)
     try:
         return with_inbox(command, handler, a) if command else handler(a)

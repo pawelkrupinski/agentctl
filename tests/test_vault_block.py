@@ -10,6 +10,7 @@ import json, os, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from test_owner_ask import AskBase  # noqa: E402
 
 DIAG = ("DIAGNOSED: the first app launch on CI's freshly booted simulator times out; the fix is in stash e94585c437a9 "
@@ -29,7 +30,7 @@ class VaultBase(AskBase):
 
     def tick_blocks(self):
         self.t[0] += A.BLOCK_PROBE_EVERY + 1
-        return A.red_renew_blocks(self.st, self.t[0])
+        return A.red_renew_blocks(self.st, self.t[0], registry(A))
 
     def step(self, it):
         return A.red_step(self.st, self.st.item("red", it["id"]), None, None, {}, None, "pawelkrupinski/movies",

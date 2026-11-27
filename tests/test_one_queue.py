@@ -8,6 +8,7 @@ import json, os, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, sh, put_change  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
 
 
@@ -185,7 +186,7 @@ class StrandedTest(OneQueueBase):
         self.assertIn("STRANDED CHANGE x-101", c["text"])
         A.cancel_submitted(A.CurrentStore(A.process_store), "x-101", repo=self.r.path)  # `land cancel` reaches an item no entry carries
         self.assertEqual(self.st.item("change", "x-101")["state"], "cancelled")
-        A.recovery_tick(now_=A.epoch_now() + 3600, force=True, store=self.st)
+        A.recovery_tick(now_=A.epoch_now() + 3600, force=True, store=self.st, registry=registry(A))
         self.assertEqual([c for c in A.open_conditions(self.st) if c["key"].startswith("change-stranded")], [])
 
 

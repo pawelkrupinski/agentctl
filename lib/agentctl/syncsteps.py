@@ -38,6 +38,7 @@ from agentctl.offerdispatch import red_dispatcher
 from agentctl.netwatch import network_watch, tunnel_watch
 from agentctl.redcli import write_red_status_snapshot
 from agentctl.landedchange import close_landed_changes, migrate_local_queue
+from agentctl.conditionregistry import ConditionRegistry
 
 
 # ---- the laptop's sync (role "sync")
@@ -130,8 +131,10 @@ def file_events_refused(e: BaseException) -> None:
         err(f"file events: {e}")
 
 
-def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequence[tuple[str, Callable[[], Any]]]:
-    """The laptop's loop once the store is remote: it never ticks. clock and store: the process's (cli's)."""
+def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
+               registry: ConditionRegistry) -> Sequence[tuple[str, Callable[[], Any]]]:
+    """The laptop's loop once the store is remote: it never ticks. clock, store and registry (the conditions' probes and
+    actions): the process's (cli's)."""
     s = _SyncDuties(repo, o_r, clock, store)
     land_pace = LandWatchPace()  # the fixers' landing look is paced per loop, not per process
     duty = s.duty
@@ -154,7 +157,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any) -> Sequenc
             ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store), 1)),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep(store)]),
             ("root checkout", lambda: [err(x) for x in root_checkout_ff(repo)]),
-            ("recovery", lambda: maybe_recovery_tick(store, clock.time())))
+            ("recovery", lambda: maybe_recovery_tick(store, registry, clock.time())))
 
 
 # THE LAPTOP ANSWERS A REGEN HOLD ITSELF (2026-11-20, phase8-units: held a day for `cd <worktree> && agentctl land`, a

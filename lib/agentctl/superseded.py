@@ -8,11 +8,10 @@ from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import machine_state
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
-from agentctl.core import PROTECTED_BRANCHES, attempt, git, remote, tilde
+from agentctl.core import attempt, git, PROTECTED_BRANCHES, recovery_dir, remote, tilde
 from agentctl.procs import process_cwds
 from agentctl.inboxentry import inbox_write
 from agentctl.deletions import log_deletion
-from agentctl.conditions import recovery_dir
 from agentctl.onmain import landed_state
 from agentctl.worktrees import worktrees
 from agentctl.landedchange import change_state

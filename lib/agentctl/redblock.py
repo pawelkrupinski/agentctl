@@ -12,13 +12,15 @@ from agentctl.workflows import LOCAL_FLOW
 from agentctl.redrecord import lease_is_live, red_active, red_item_of_run, red_lease, red_what
 from agentctl.leases import lease_meta
 from agentctl.inboxentry import inbox_write
-from agentctl.conditions import PROBES, condition_item_of, open_condition, run_probe
+from agentctl.conditions import condition_item_of, open_condition, run_probe
+from agentctl.conditionregistry import PROBE_EVERY, ConditionRegistry
 from agentctl.redrepos import red_gate_flows
 from agentctl.redask import OWNER_CAUSES, ask_category, ask_refusal
 from agentctl.ciwhy import resolve_run
 from agentctl.ciruns import main_runs_of
 from agentctl.redseen import local_units, red_units
 from agentctl.runsigs import run_sigs
+from agentctl.conditions import probe_gate_read
 
 
 # -- an unreadable gate: no dispatch, one UNKNOWN per spell, an infra check
@@ -34,7 +36,7 @@ def gate_unread_spell(o_r, why, store):
         return None
     line = (f"UNKNOWN: the red patrol cannot read the gate ({why[:200]}): nothing dispatched, pushes fail closed. "
             f"Infra check: {infra_check(o_r)}")
-    c = open_condition("UNKNOWN", line, run_probe("gate_read", {"repo": o_r, "since": epoch_now()}), [],
+    c = open_condition("UNKNOWN", line, run_probe(probe_gate_read, {"repo": o_r, "since": epoch_now()}), [],
                        key="gate-unread", command="red", exit_code=2, store=store)
     return line if c else None
 
@@ -270,8 +272,8 @@ class BlockRenewal:
     """The tick's look at every live block, a method per step: which of its reds are still justified (justified), the
     renewal that follows (tend) and its probe (probe). `out` collects the lines the tick reports."""
 
-    def __init__(self, store: Any, t: float) -> None:
-        self.store, self.t, self.out = store, t, []
+    def __init__(self, store: Any, t: float, registry: ConditionRegistry) -> None:
+        self.store, self.t, self.registry, self.out = store, t, registry, []
         self.active = {it["data"]["key"]: it for it in red_active(store).values()}
 
     def run(self) -> list[str]:
@@ -321,7 +323,7 @@ class BlockRenewal:
     def probe(self, row: dict[str, Any], m: dict[str, Any]) -> None:
         """Run the block's probe: passing, the block lapses (RECOVERED); failing, it is renewed on the probe's result."""
         pr = m.get("probe") or {}
-        r = run_probe(pr.get("kind"), pr.get("args")) if pr.get("kind") in PROBES else None
+        r = run_probe(self.registry.check(pr["kind"]), pr.get("args")) if pr.get("kind") in PROBE_EVERY else None
         self._meta(row, {"probed_at": self.t, "last": r.detail if r else "no probe"})
         if r is not None and r.ok:
             self.store.revoke(row["name"], f"PROBE PASSED: {r.detail}")
@@ -332,8 +334,8 @@ class BlockRenewal:
         self._renew(row, f"{r.detail if r else 'cannot tell'}@{int(self.t)}")
 
 
-def red_renew_blocks(store: Any, t: float) -> list[str]:
+def red_renew_blocks(store: Any, t: float, registry: ConditionRegistry) -> list[str]:
     """The tick's look at every live block: its probe (at most every BLOCK_PROBE_EVERY s) and its justification per red.
     Still failing and still justified: renewed (the probe's fresh failing result is its progress). Otherwise it lapses
     now (revoked, the reason in its outcome) or a red that lost its justification is detached from it."""
-    return BlockRenewal(store, t).run()
+    return BlockRenewal(store, t, registry).run()

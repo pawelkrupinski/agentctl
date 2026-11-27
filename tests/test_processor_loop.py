@@ -20,6 +20,13 @@ class Clock:
         return 100.0
 
 
+def probe_by_kind(recorded):
+    """run_probe's fake, recording the check by its kind (conditions.probe_kind): the calls as recorded before the opener
+    ran the probe function it imports."""
+    from agentctl.conditions import probe_kind
+    return lambda check, args=None: recorded(probe_kind(check), args)
+
+
 def run(module, script):
     """waiting_run("REPO", clock, "ST", once, service) with the script's answers: (its return, the calls it made)."""
     log = []
@@ -69,7 +76,7 @@ def run(module, script):
 
     def steps(*names):
         def make(*a):
-            shared = a[2] if len(a) == 5 and callable(a[2]) else None
+            shared = a[2] if len(a) == 6 and callable(a[2]) else None
             if shared:
                 log.append(f"shared step {shared(lambda: 'ran')()}")
             return [("alpha", "A"), ("beta", "B")]
@@ -92,7 +99,7 @@ def run(module, script):
         "clone_shared": shared_clone, "write_beat": rec("write_beat"), "restart_if_changed": rec("restart_if_changed"),
         "_bounded": {"step:x": alive[0], "other": alive[0]} if script.get("running") else {},
         "run_step": run_step, "sd_notify": rec("sd_notify"), "ROUND_ERRORS_MAX": 2,
-        "open_condition": rec("open_condition", script.get("stall")), "run_probe": rec("run_probe", "PROBE"),
+        "open_condition": rec("open_condition", script.get("stall")), "run_probe": probe_by_kind(rec("run_probe", "PROBE")),
         "write_json": rec("write_json"), "write_snapshot": rec("write_snapshot", script.get("snapshot")),
         "ChangeRecords": lambda st, d: type("R", (), {"open": lambda self: script.get("queued", []) + script.get("waiting", [])})(),
         "err": rec("err"), "knob_tick": lambda: 5,
@@ -103,7 +110,7 @@ def run(module, script):
         stack.enter_context(mock.patch.object(module, "TICK_STOP", [bool(script.get("stopped"))]))
         before = list(module._IN_PROCESSOR)
         try:
-            got = module.waiting_run("REPO", Clock(), "ST", once=script.get("once", False), service=script.get("service", False))
+            got = module.waiting_run("REPO", Clock(), "ST", "REGISTRY", once=script.get("once", False), service=script.get("service", False))
         finally:
             flag = module._IN_PROCESSOR[0]
             module._IN_PROCESSOR[:] = before

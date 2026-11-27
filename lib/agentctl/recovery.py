@@ -9,56 +9,21 @@ import sys
 import urllib.error
 import urllib.request
 from typing import Any
-from agentctl.procrunner import process_runner
-from agentctl.core import SHORT, _tokens, err, git, remote, spawn_detached, tilde
+from agentctl.core import err, git, recovery_dir, remote, SHORT, spawn_detached, tilde, _tokens
 from agentctl.timefmt import iso_at, ts
-from agentctl.statefile import read_json_file, read_record, write_json_file, unlink_file
+from agentctl.statefile import read_json_file, write_json_file, unlink_file
 from agentctl.selfcode import TOOL_PATH
-from agentctl.repos import movies_repo_path
 from agentctl.trailers import held_commit
 from agentctl.storetoken import red_read_token, token_env_name, no_vault, take_token_notes, token_from_processor, token_vault_key
 from agentctl.worktrees import mark_internal
-from agentctl.cistate import ci_state_load
-from agentctl.conditions import open_condition, recovery_dir, recovery_tick, run_probe
+from agentctl.conditions import open_condition, recovery_tick, run_probe
+from agentctl.conditionregistry import ConditionRegistry
 from agentctl.tunnel import default_route, tunnel_ports, tunnel_probe, tunnel_state_path
 from agentctl.blamerecords import blame_land_refusal
 from agentctl.batchitem import batch_move, current_batch
 from agentctl.forge import gh_json
-
-
-# -- the probes: (ok, detail) for their args. Background-safe: no `secrets`, bounded, never raising (run_probe catches).
-def probe_workflow_green(a):
-    """The newest decided run of workflow a['workflow'] on main is green (the CI-state snapshot's `latest`)."""
-    snap = ci_state_load(a.get("repo") or SHORT["movies"])
-    if not snap:
-        return None, "no fresh CI-state snapshot"
-    last = (snap.get("latest") or {}).get(a["workflow"])
-    if not last:
-        return None, f"no decided run of {a['workflow']} on main in the snapshot"
-    ok = last.get("conclusion") == "success"
-    return ok, f"{a['workflow']} #{last.get('number')} {last.get('conclusion')}"
-
-
-def probe_http(a):
-    lo, hi = a.get("expect") or (200, 499)
-    try:
-        req = urllib.request.Request(a["url"], method=a.get("method") or "GET")
-        with urllib.request.urlopen(req, timeout=float(a.get("timeout") or 10)) as r:
-            code = r.status
-    except urllib.error.HTTPError as e:
-        code = e.code
-    except Exception as e:
-        return False, f"{a['url']}: {str(e)[:120]}"
-    return lo <= code <= hi, f"{a['url']}: HTTP {code}"
-
-
-def probe_tcp(a):
-    import socket
-    try:
-        with socket.create_connection((a["host"], int(a["port"])), timeout=float(a.get("timeout") or 5)):
-            return True, f"{a['host']}:{a['port']} accepts"
-    except OSError as e:
-        return False, f"{a['host']}:{a['port']}: {e}"
+from agentctl.clock import epoch_now
+from agentctl.conditions import open_conditions
 
 
 def probe_route(_a):
@@ -71,13 +36,6 @@ def probe_tunnel(_a):
     return r == "ok", f"the store tunnel (localhost:{tunnel_ports()[0][0]}) {r}"
 
 
-def probe_gate_read(a):
-    """The gate was read (a CI-state snapshot written) after the condition opened."""
-    snap = ci_state_load(a.get("repo") or SHORT["movies"])
-    at = float((snap or {}).get("at") or 0)
-    return at > float(a.get("since") or 0), (f"gate read at {iso_at(at)}" if at else "no fresh CI-state snapshot")
-
-
 def probe_token(a):
     """A token without `secrets`: the environment, this processor's own, or the processor's socket."""
     ns = a.get("ns") or "movies"
@@ -85,24 +43,6 @@ def probe_token(a):
         return True, f"{ns} token present"
     tok = token_from_processor(SHORT["movies"]) if ns == "movies" else None
     return bool(tok), f"{ns} token " + ("held by the processor" if tok else "unavailable")
-
-
-def probe_git_fetch(a):
-    """The remote's main can be read over git (what a land's `git fetch` needs)."""
-    repo = a.get("repo") or movies_repo_path()
-    try:
-        r = process_runner().run(["git", "-C", repo, "ls-remote", "--heads", remote(), "main"], capture_output=True, text=True,
-                           timeout=60, stdin=subprocess.DEVNULL, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
-    except (OSError, subprocess.SubprocessError) as e:
-        return False, f"git ls-remote {remote()}: {str(e)[:120]}"
-    return r.returncode == 0 and "refs/heads/main" in r.stdout, f"git ls-remote {remote()} main: exit {r.returncode} " \
-        + (r.stderr.strip()[-120:] if r.returncode else "ok")
-
-
-def probe_waiting_ok(a):
-    """A waiting round completed after the condition opened."""
-    at = float((read_record(os.path.join(a["d"], "round-ok.json")) or {}).get("at") or 0)
-    return at > float(a.get("since") or 0), f"last good round {iso_at(at)}" if at else "no good round yet"
 
 
 def recover_tunnel_reset(cond, a, store):
@@ -190,7 +130,7 @@ def token_unavailable_note(ns: str, why: str, store: Any) -> None:
         with no_vault():  # the note's own store call never prompts for the token it notes missing
             open_condition("UNKNOWN", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {token_vault_key('pawelkrupinski/movies')[0]}` in any session (the store token's vault); the "
                                       "next land or `land status` re-seeds the processor",
-                           run_probe("token", {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2,
+                           run_probe(probe_token, {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2,
                            store=store)
     except (Exception, SystemExit) as e:
         err(f"token: could not note the missing token ({str(e)[:120]})")
@@ -206,14 +146,14 @@ def note_missing_tokens(store: Any) -> None:
 _last_recovery = [0.0]
 
 
-def maybe_recovery_tick(store: Any, now: float) -> None:
+def maybe_recovery_tick(store: Any, registry: ConditionRegistry, now: float) -> None:
     """A tick's recovery step at now (the tick's clock): the missing tokens' notes, then the condition machine's
     recheck at most every 5 s."""
     note_missing_tokens(store)
     if now - _last_recovery[0] < 5:
         return
     _last_recovery[0] = now
-    recovery_tick(store)
+    recovery_tick(store, registry)
 
 
 def red_no_read_access(repos, store):
@@ -222,7 +162,7 @@ def red_no_read_access(repos, store):
     return open_condition("UNKNOWN", f"NO READ ACCESS: {', '.join(repos)}: the reconciler cannot read their runs -- "
                                      "the lander App is push-only on movies (needs the agentctl-reader App); their "
                                      "reds are not watched until then",
-                          run_probe("red_read", {"repos": list(repos)}), [], key="red-read-access", command="red",
+                          run_probe(probe_red_read, {"repos": list(repos)}), [], key="red-read-access", command="red",
                           exit_code=2, store=store)
 
 
@@ -236,3 +176,39 @@ def probe_red_read(a):
         except (Exception, SystemExit) as e:
             return False, f"{o_r}: {str(e).replace('agentctl: ', '')[:160]}"
     return True, "every watched repo's runs read"
+
+
+def _probe_report(c: Any) -> str:
+    """The condition's probe (its `since` left out) and what clears it."""
+    args = json.dumps({k: v for k, v in c["probe"]["args"].items() if k != "since"})
+    return f"  probe: {c['probe']['kind']} {args} -- clears when {c.get('until')}\n"
+
+
+def _checked_report(c: Any, t: Any) -> str:
+    """When it was last checked, what the check said, when it is next due."""
+    lr = c.get("last_result") or {}
+    return (f"  last checked {iso_at(float(c.get('last_checked') or 0))}: {'cannot tell' if lr.get('ok') is None else 'fails'}"
+            f" ({lr.get('detail')}); next check in {max(0, int(float(c.get('next_check') or 0) - t))} s"
+            f" (fails {c.get('fails') or 0})\n")
+
+
+def _condition_report(c: Any, t: Any) -> str:
+    """One open condition as `recover` prints it."""
+    return (f"{c['kind']} {c['key']} (open since {c.get('opened')}{', ESCALATED' if c.get('level') else ''}): "
+            f"{c.get('text', '')[:140]}\n" + _probe_report(c) + _checked_report(c, t)
+            + f"  on recover: {', '.join(n for n, _x in c.get('on_recover') or []) or 'ack + gate dirty'}")
+
+
+def cmd_recover(a, store, registry: ConditionRegistry):
+    if a.rcmd == "tick":
+        lines = recovery_tick(store, registry, force=True)
+        print("\n".join(lines) if lines else "recover: nothing cleared")
+        return 0
+    cs = open_conditions(store)
+    if not cs:
+        print("recover: no open conditions")
+        return 0
+    t = epoch_now()
+    for c in cs:
+        print(_condition_report(c, t))
+    return 0

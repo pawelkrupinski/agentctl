@@ -7,6 +7,8 @@ import os, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import registry  # noqa: E402
+from functools import partial  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 
 GIT_ID = ["-c", "user.email=t@t", "-c", "user.name=t"]
@@ -38,7 +40,7 @@ class AtomicCloneTest(unittest.TestCase):
         os.environ.update(self.saved_env)
 
     def test_a_clone_lands_verified_and_leaves_no_temp_directory(self):
-        self.assertEqual(A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store)), self.repo)
+        self.assertEqual(A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A)), self.repo)
         self.assertTrue(A.clone_verify(self.repo)[0])
         self.assertEqual(A.clone_tmp_dirs(self.repo), [])
 
@@ -52,12 +54,12 @@ class AtomicCloneTest(unittest.TestCase):
         A.run_clone = cut_off
         try:
             with self.assertRaises(SystemExit):
-                A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store))
+                A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A))
         finally:
             A.run_clone = real_run
         self.assertFalse(os.path.exists(self.repo))
         self.assertEqual(A.clone_tmp_dirs(self.repo), [])
-        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store))  # the next start clones afresh
+        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A))  # the next start clones afresh
         self.assertTrue(A.clone_verify(self.repo)[0])
 
     def test_a_clone_that_does_not_verify_is_never_renamed_into_place(self):
@@ -69,7 +71,7 @@ class AtomicCloneTest(unittest.TestCase):
         A.run_clone = no_refs
         try:
             with self.assertRaises(SystemExit) as cm:
-                A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store))
+                A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A))
         finally:
             A.run_clone = real_run
         self.assertIn("does not verify", str(cm.exception))
@@ -81,12 +83,12 @@ class AtomicCloneTest(unittest.TestCase):
         os.rmdir(self.repo)
         stale = os.path.join(os.path.dirname(self.repo), f".movies{A.CLONE_TMP}999999999-1")
         os.makedirs(os.path.join(stale, ".git"))
-        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store))
+        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A))
         self.assertFalse(os.path.exists(stale))
         self.assertTrue(A.clone_verify(self.repo)[0])
 
     def test_a_missing_blob_of_mains_tree_fails_the_verification(self):
-        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store))
+        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A))
         blob = A.git(self.repo, "rev-parse", f"{A.remote()}/main:d/f2").strip()
         os.unlink(os.path.join(self.repo, ".git", "objects", blob[:2], blob[2:]))
         ok, detail = A.clone_verify(self.repo)
@@ -118,7 +120,7 @@ class HealTest(unittest.TestCase):
         os.environ.update(AGENTCTL_MOVIES_REMOTE=self.src, AGENTCTL_MOVIES_REPO=self.repo)
         A._clone_repair_at.clear()
         self.store = A.Store(path=os.path.join(self.root, "store.db"))
-        A.ensure_server_clone(self.repo, self.store)
+        A.ensure_server_clone(self.repo, self.store, registry(A))
 
     def tearDown(self):
         os.environ.clear()
@@ -128,14 +130,14 @@ class HealTest(unittest.TestCase):
         return [it for it in self.store.items("condition", [state]) if it["data"].get("kind") == "CLONE"]
 
     def test_a_healthy_clone_probes_ok(self):
-        r = A.run_probe("clone_health", {"repo": self.repo})
+        r = A.run_probe(A.probe_clone_health, {"repo": self.repo})
         self.assertTrue(r.ok, r.detail)
 
     def test_a_corrupt_fetch_marks_the_clone_and_the_tick_repairs_it_keeping_one_broken_copy(self):
         older = f"{self.repo}.broken-20261001-000000"
         os.makedirs(older)
         corrupt(self.repo)
-        self.assertFalse(A.run_probe("clone_health", {"repo": self.repo}).ok)
+        self.assertFalse(A.run_probe(A.probe_clone_health, {"repo": self.repo}).ok)
         real_git = A.git
 
         def failing_fetch(repo, *args, **k):  # what ci-runner's fetch said, all day
@@ -151,10 +153,10 @@ class HealTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("did not send all necessary objects", why)
         self.assertTrue(os.path.exists(A.clone_side(self.repo, "suspect.json")))
-        line = A.clone_heal_tick(self.repo, self.store)
+        line = A.clone_heal_tick(self.repo, self.store, registry(A))
         self.assertIn("re-cloned and swapped in", line)
         self.assertTrue(A.clone_verify(self.repo)[0])
-        self.assertTrue(A.run_probe("clone_health", {"repo": self.repo}).ok)
+        self.assertTrue(A.run_probe(A.probe_clone_health, {"repo": self.repo}).ok)
         broken = [p for p in os.listdir(os.path.dirname(self.repo)) if p.startswith("movies.broken-")]
         self.assertEqual(len(broken), 1)  # the older one went after the swap
         self.assertNotEqual(os.path.join(os.path.dirname(self.repo), broken[0]), older)
@@ -170,17 +172,17 @@ class HealTest(unittest.TestCase):
         ok, why = A.fetch_main(self.repo)
         self.assertFalse(ok)
         self.assertFalse(os.path.exists(A.clone_side(self.repo, "suspect.json")))
-        self.assertIsNone(A.run_probe("clone_health", {"repo": self.repo}).ok)  # cannot tell: never a repair
+        self.assertIsNone(A.run_probe(A.probe_clone_health, {"repo": self.repo}).ok)  # cannot tell: never a repair
 
     def test_a_suspect_mark_on_a_healthy_clone_just_goes(self):
         A.write_json(A.clone_side(self.repo, "suspect.json"), {"at": 1, "error": "Could not read 409b8bb3c1"})
-        self.assertIn("is fine", A.clone_heal_tick(self.repo, self.store))
+        self.assertIn("is fine", A.clone_heal_tick(self.repo, self.store, registry(A)))
         self.assertFalse(os.path.exists(A.clone_side(self.repo, "suspect.json")))
         self.assertFalse([p for p in os.listdir(os.path.dirname(self.repo)) if ".broken-" in p])
 
     def test_at_startup_a_clone_that_does_not_verify_is_repaired(self):
         corrupt(self.repo)
-        A.ensure_server_clone(self.repo, self.store)
+        A.ensure_server_clone(self.repo, self.store, registry(A))
         self.assertTrue(A.clone_verify(self.repo)[0])
         self.assertEqual(len([p for p in os.listdir(os.path.dirname(self.repo)) if ".broken-" in p]), 1)
 
@@ -190,7 +192,7 @@ class HealTest(unittest.TestCase):
         os.makedirs(os.path.join(tree, "target"))
         open(os.path.join(tree, "target", "warm"), "w").close()
         corrupt(self.repo)
-        A.repair_clone(self.repo, "a test", self.store)
+        A.repair_clone(self.repo, "a test", self.store, registry(A))
         self.assertEqual(A.git(tree, "rev-parse", "HEAD").strip(), A.git(self.repo, "rev-parse", f"{A.remote()}/main").strip())
         A.git(tree, "reset", "-q", "--hard")
         self.assertTrue(os.path.exists(os.path.join(tree, "target", "warm")))
@@ -210,12 +212,12 @@ class HealTest(unittest.TestCase):
         t.start()
         held.wait(10)
         os.environ["AGENTCTL_CLONE_LOCK_WAIT"] = "0.5"
-        self.assertIsNone(A.repair_clone(self.repo, "a test", self.store))  # the user never let go: no swap, next tick
+        self.assertIsNone(A.repair_clone(self.repo, "a test", self.store, registry(A)))  # the user never let go: no swap, next tick
         self.assertFalse(A.clone_verify(self.repo)[0])
         self.assertEqual(A.clone_tmp_dirs(self.repo), [])
         os.environ["AGENTCTL_CLONE_LOCK_WAIT"] = "30"
         threading.Timer(1.0, release.set).start()
-        line = A.repair_clone(self.repo, "a test", self.store)  # waits for the user, then swaps
+        line = A.repair_clone(self.repo, "a test", self.store, registry(A))  # waits for the user, then swaps
         t.join(10)
         self.assertIn("swapped in", line)
         self.assertTrue(A.clone_verify(self.repo)[0])
@@ -240,10 +242,6 @@ class RequeueLoopTest(unittest.TestCase):
             self.opened.append((kind, text, probe, kw)) or {"key": kw.get("key")}
         self.e = {"id": "e1", "seq": 1, "status": "checking", "worktree": "/w", "head": "a" * 40}
         A.ChangeRecords(self.st, self.d).save(self.e)
-        probes = dict(A.PROBES)  # the queue's probes read the test's store (the root wires the process's)
-        self.addCleanup(lambda: A.PROBES.update(probes))
-        A.wire_probes({"push_credential": lambda a: A.probe_push_credential(a, self.st),
-                       "infra_requeue": lambda a: A.probe_infra_requeue(a, self.st)})
 
     def tearDown(self):
         A.wlog, A.open_condition = self.saved
@@ -289,7 +287,7 @@ class RequeueLoopTest(unittest.TestCase):
         self.assertIn("could not read Username", A.retry_hold(A.ChangeRecords(self.st, self.d).get("e1"))[1])
 
     def credential_probe(self, since):
-        return A.run_probe("push_credential", {"d": self.d, "since": since, "host": A.host_role()})
+        return A.run_probe(partial(A.probe_push_credential, st=self.st), {"d": self.d, "since": since, "host": A.host_role()})
 
     def test_the_credential_condition_clears_on_the_next_push_that_succeeds_never_by_asking_a_helper(self):
         """2026-11-22 review: a probe running `git credential fill` minted a GitHub App token every 60 s while open."""
@@ -320,7 +318,7 @@ class RequeueLoopTest(unittest.TestCase):
         self.again("its checks stalled (on ci-runner: fatal: could not read Username)", repo=self.d)
         args = self.opened[0][2].args
         self.assertEqual(args["host"], A.host_role())
-        got = A.run_probe("push_credential", {**args, "host": "elsewhere"})
+        got = A.run_probe(partial(A.probe_push_credential, st=self.st), {**args, "host": "elsewhere"})
         self.assertIsNone(got.ok, "another host cannot tell")
 
     def test_a_credential_github_refuses_opens_the_same_one_condition(self):
@@ -351,10 +349,10 @@ class RequeueLoopTest(unittest.TestCase):
         for _ in range(3):
             self.again("its checks stalled (sbt)")
         args = self.opened[0][2].args
-        self.assertFalse(A.run_probe("infra_requeue", args).ok)  # checking, the same reason: still stuck
+        self.assertFalse(A.run_probe(partial(A.probe_infra_requeue, st=self.st), args).ok)  # checking, the same reason: still stuck
         A.set_change(self.st, self.d, {**A.ChangeRecords(self.st, self.d).get("e1"), "infra_reason": None}, "checked",
                      cause="check-passed")
-        self.assertTrue(A.run_probe("infra_requeue", args).ok)
+        self.assertTrue(A.run_probe(partial(A.probe_infra_requeue, st=self.st), args).ok)
 
     def test_a_checks_fetch_of_main_failing_says_why(self):
         saved = A.precheck_hook, A.fetch_main

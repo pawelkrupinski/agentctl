@@ -332,7 +332,7 @@ class RedBlockTest(unittest.TestCase):
             case.fake("red_what", lambda rng, d: f"red-{d['key']}")
             case.fake("run_probe", lambda rng, kind, args: maybe(rng, types.SimpleNamespace(ok=rng.random() < 0.4, detail=rng.choice(["d1", "d2"])), 0.7))
             case.fake("inbox_write", lambda rng, *a: None)
-            case.put("PROBES", {"p1", "p2"})
+            case.put("PROBE_EVERY", {"p1", "p2"})
             case.fake("lease_meta", lambda rng, row: row["meta"])
             rows = []
             for i in range(r.randint(0, 3)):
@@ -342,7 +342,9 @@ class RedBlockTest(unittest.TestCase):
                 rows.append({"name": f"block/b{i}", "epoch": i, "secret": "s", "meta": meta})
             st = Probe(case, "store", list=lambda rng, prefix: rows)
             return (st, r.choice([100.0, 100.0, 30.0, 60.5]))
-        check(self, "red_renew_blocks", build, lambda A: A.red_renew_blocks, 8000)
+        # the registry re-runs a block's probe through run_probe's fake, by kind: the calls recorded before the registry
+        registry = types.SimpleNamespace(check=lambda kind: kind)
+        check(self, "red_renew_blocks", build, lambda A: lambda st, t: A.red_renew_blocks(st, t, registry), 8000)
 
 
 class Stamp:

@@ -26,6 +26,7 @@ from agentctl.changekind import facts_for
 from agentctl.waiting import already_landed, apply_entry, must_wait, tail_of, waiting_commits
 from agentctl.redseen import gate_reds
 from agentctl.entrychecks import queue_join
+from agentctl.conditions import probe_git_fetch
 
 
 def push_change(repo: str, d: str, e: Entry, clock: Any, st: Any) -> Optional[str]:
@@ -258,7 +259,7 @@ class ChangePush:
         wlog(self.d, f"{e['id']}: {why} (push attempt {n}); its tail: {tail_of(out or '')[:300]}")
         if n >= PUSH_ATTEMPTS_MAX:
             open_condition("STALLED", f"STALLED: the push of {e['id']} failed {n} times ({why}); it is tried again "
-                                      f"when git can read {remote()}/main", run_probe("git_fetch", {"repo": self.repo}),
+                                      f"when git can read {remote()}/main", run_probe(probe_git_fetch, {"repo": self.repo}),
                            [], key=f"push-failing-{e['id']}", command="land", cwd=e.get("worktree"),
                            tail=(out or "").splitlines()[-15:], store=self.st)
         return "checked"

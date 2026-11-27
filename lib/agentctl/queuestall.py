@@ -9,7 +9,8 @@
 # -- so the owner is asked once and the stall's time is attributable. Its probe (queue_moving) closes it when a change
 # moves again or none is open. An alert, never a hold: it blocks nothing.
 
-from typing import Any, Optional
+from functools import partial
+from typing import Any, Callable, Optional
 
 from agentctl.statemachines import machine_state
 from agentctl.conditions import open_condition, run_probe
@@ -56,17 +57,17 @@ def queue_stall(changes: list[dict[str, Any]], reds: list[dict[str, Any]], now: 
             f"the head blocker: {head_blocker(changes, reds, now)}")
 
 
-def probe_queue_moving(store: Any, now: float) -> tuple[bool, str]:
-    """The queue is moving: no change is open, or one moved within the bound."""
-    stall = queue_stall(store.items("change"), store.items("red"), now, knob_queue_stall_after())
+def probe_queue_moving(_a: dict[str, Any], store: Any, now: Callable[[], float]) -> tuple[bool, str]:
+    """The queue is moving: no change is open, or one moved within the bound (now: the tick's clock)."""
+    stall = queue_stall(store.items("change"), store.items("red"), now(), knob_queue_stall_after())
     return stall is None, stall or "a change moved (or none is open)"
 
 
-def queue_stall_step(store: Any) -> list[str]:
+def queue_stall_step(store: Any, now: Callable[[], float]) -> list[str]:
     """The tick's look: the condition opened (or refreshed) while the queue is stalled; its line, if any. An alert
     only: it holds and rejects nothing."""
     # policy: queue-stall
-    probe = run_probe("queue_moving", {})
+    probe = run_probe(partial(probe_queue_moving, store=store, now=now), {})
     if probe.ok is not False:
         return []
     open_condition("STALLED", probe.detail, probe, [], key="queue-stall", command="land", store=store)

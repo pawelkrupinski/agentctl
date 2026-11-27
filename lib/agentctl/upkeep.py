@@ -100,7 +100,7 @@ def maybe_upkeep(store, now_=None):
     free-space check (it closes itself once space is back; it escalates only while it stays open)."""
     t = now_ if now_ is not None else epoch_now()
     min_gb = knob_disk_min_gb()
-    pr = run_probe("disk_free", {"path": knob_disk_path() or HOME, "min_gb": min_gb})
+    pr = run_probe(probe_disk_free, {"path": knob_disk_path() or HOME, "min_gb": min_gb})
     low = pr.ok is False
     out = []
     if t - _last_upkeep[0] >= knob_upkeep_every() or (low and t - _last_upkeep[0] >= 600):

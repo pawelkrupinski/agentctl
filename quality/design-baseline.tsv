@@ -127,7 +127,7 @@ state	lib/agentctl/ciruns.py	1
 state	lib/agentctl/ciwhy.py	1
 state	lib/agentctl/clock.py	1
 state	lib/agentctl/clones.py	1
-state	lib/agentctl/conditions.py	3
+state	lib/agentctl/conditions.py	1
 state	lib/agentctl/configfile.py	2
 state	lib/agentctl/core.py	4
 state	lib/agentctl/fixerblockers.py	1
@@ -230,13 +230,13 @@ fanout	lib/agentctl/owner.py	19
 fanout	lib/agentctl/ownerwrapper.py	23
 fanout	lib/agentctl/processor.py	27
 fanout	lib/agentctl/projector.py	14
-fanout	lib/agentctl/queue.py	11
+fanout	lib/agentctl/queue.py	12
 fanout	lib/agentctl/queuecheck.py	17
 fanout	lib/agentctl/queuediff.py	21
 fanout	lib/agentctl/queueenter.py	28
 fanout	lib/agentctl/queuepush.py	18
 fanout	lib/agentctl/queuesubmit.py	11
-fanout	lib/agentctl/recovery.py	15
+fanout	lib/agentctl/recovery.py	13
 fanout	lib/agentctl/redblock.py	15
 fanout	lib/agentctl/redclaim.py	18
 fanout	lib/agentctl/redcli.py	29
@@ -267,7 +267,7 @@ fanout	lib/agentctl/status.py	36
 fanout	lib/agentctl/statusagents.py	12
 fanout	lib/agentctl/statuspage.py	13
 fanout	lib/agentctl/storeapi.py	10
-fanout	lib/agentctl/superseded.py	11
+fanout	lib/agentctl/superseded.py	10
 fanout	lib/agentctl/syncsteps.py	29
 fanout	lib/agentctl/tools.py	14
 fanout	lib/agentctl/upkeep.py	14

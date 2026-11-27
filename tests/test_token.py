@@ -4,6 +4,7 @@ import json, os, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, TOOL  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock  # noqa: E402
 
 MOVIES = "pawelkrupinski/movies"
@@ -256,11 +257,11 @@ class MissingTokenNotedThroughTheStoreTest(unittest.TestCase):
         st, opened, saved = object(), [], (A.open_condition, A.recovery_tick)
         A._token_missing.clear()
         A.open_condition = lambda *a, **k: opened.append((a[1].split(":")[1], k["key"], k["store"]))
-        A.recovery_tick = lambda store: None
+        A.recovery_tick = lambda *a, **k: None
         try:
             A.token_missing("movies", "locked", now_=1000)
-            A.maybe_recovery_tick(st, 0.0)
-            A.maybe_recovery_tick(st, 0.0)  # taken: once
+            A.maybe_recovery_tick(st, registry(A), 0.0)
+            A.maybe_recovery_tick(st, registry(A), 0.0)  # taken: once
         finally:
             A.open_condition, A.recovery_tick = saved
             A._token_missing.clear()

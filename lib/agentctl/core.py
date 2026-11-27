@@ -65,6 +65,7 @@ from agentctl.psparse import parse_ps
 from agentctl.configfile import config_load
 from agentctl.redknobs import knob_dispatch_dir, knob_reds_dir
 from agentctl.storeknobs import knob_host, knob_remote, knob_role, knob_scratch, knob_state_root
+from agentctl.blameknobs import knob_recovery_dir
 
 # THE PROCESS-WIDE CACHES, IN ONE REGISTRY (simplification-2026-10-31 item 10): every module-level dict, list or set a
 # part keeps between calls is made with `process_cache(...)`, so the test harness clears them all between tests
@@ -431,6 +432,12 @@ def host_role() -> str:
     if knob_role() == "server" or knob_host() == "ci-runner":
         return "server"
     return "sync"
+
+
+def recovery_dir(*parts: str) -> str:
+    """The recovery registry's directory (its files: orphans, parked, superseded, the reland log), or a path in it."""
+    d = knob_recovery_dir() or (reds_dir("recovery") if knob_reds_dir() else state_root("recovery"))
+    return os.path.join(d, *parts)
 
 
 def reds_dir(*parts: str) -> str:

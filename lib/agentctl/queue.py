@@ -1,6 +1,7 @@
 # agentctl, part `queue`: the land queue and submission.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from functools import partial
 from agentctl.clock import epoch_now
 import os
 import re
@@ -19,6 +20,7 @@ from agentctl.queueslots import set_change
 from agentctl.conditions import open_condition, run_probe
 from agentctl.statemachines import change_event
 from agentctl.queueknobs import knob_infra_same_max
+from agentctl.serverclone import probe_clone_health
 
 
 # a backlog batch (batch.py, THE BACKLOG BATCH) is up to BACKLOG_BATCH_MAX of them checked in ONE tree.
@@ -108,9 +110,9 @@ def infra_requeue_condition(st: Any, d: str, e: dict[str, Any], why: str, reason
     if reason == FETCH_MAIN_FAILED:
         repo = repo or repo_of_waiting(d)
         return open_condition("STALLED", f"{text}. Every change's check fetches main: the landing is blocked",
-                              run_probe("clone_health", {"repo": repo}), [],
+                              run_probe(probe_clone_health, {"repo": repo}), [],
                               key=f"main-fetch-{os.path.basename(os.path.abspath(repo))}", command="land", tail=tail, store=st)
-    return open_condition("STALLED", text, run_probe("infra_requeue", {"d": d, "eid": e["id"], "reason": reason}), [],
+    return open_condition("STALLED", text, run_probe(partial(probe_infra_requeue, st=st), {"d": d, "eid": e["id"], "reason": reason}), [],
                           key=f"infra-requeue-{e['id']}", command="land", cwd=e.get("worktree"), tail=tail, store=st)
 
 
@@ -125,7 +127,7 @@ def push_credential_condition(st: Any, d: str, why: str, detail: str | None, rep
             f"Its credential helper there must work again (the App helper on ci-runner, gh's login on the laptop). "
             f"Cleared by the next check-branch push that succeeds. Last: {redact_credentials(why)}")
     tail = redact_credentials(detail or why).strip().splitlines()[-15:]
-    probe = run_probe("push_credential", {"d": d, "since": epoch_now(), "host": host_role()})
+    probe = run_probe(partial(probe_push_credential, st=st), {"d": d, "since": epoch_now(), "host": host_role()})
     return open_condition("STALLED", text, probe, [], key=f"push-credential-{os.path.basename(os.path.abspath(repo))}",
                           command="land", tail=tail, grace=0, store=st)
 

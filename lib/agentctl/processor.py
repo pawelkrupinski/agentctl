@@ -21,7 +21,8 @@ from agentctl.sdnotify import SD_READY, sd_notify
 from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.storetoken import _IN_PROCESSOR
 from agentctl.cistate import state_update
-from agentctl.conditions import open_condition, run_probe
+from agentctl.conditions import open_condition, probe_waiting_ok, run_probe
+from agentctl.conditionregistry import ConditionRegistry
 from agentctl.serverclone import ensure_server_clone
 from agentctl.owned import restart_if_changed, start_rev
 from agentctl.processorlink import TokenDrop, processor_owned
@@ -30,11 +31,11 @@ from agentctl.landhold import hold_row, land_hold
 from agentctl.reverts import revert_brief
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.ask import owner_asks
-from agentctl.landqueue import land_await, queue_checker, queue_command, waiting_repo
-from agentctl.serversteps import server_steps
 from agentctl.statuspage import status_page_start
 from agentctl.syncsteps import sync_steps
 from agentctl.changerows import change_rows
+from agentctl.serversteps import server_steps
+from agentctl.landqueue import land_await, queue_checker, queue_command, waiting_repo
 
 
 class ProcessorLoop:
@@ -67,7 +68,7 @@ class ProcessorLoop:
         try:
             open_condition("STALLED", f"STALLED: the waiting processor's ticks failed {self.errors} times in a row; "
                                       f"see {self.d}/processor.log and service.log",
-                           run_probe("waiting_ok", {"d": self.d, "since": self.clock.time()}), [], key="waiting-rounds",
+                           run_probe(probe_waiting_ok, {"d": self.d, "since": self.clock.time()}), [], key="waiting-rounds",
                            command="waiting", store=self.store)
             self.stalled_noted = True
         except (Exception, SystemExit) as e:
@@ -101,7 +102,8 @@ class ProcessorLoop:
         return 0
 
 
-def waiting_run(repo: str, clock: Clock, store: Any, once: bool = False, service: bool = False) -> int:
+def waiting_run(repo: str, clock: Clock, store: Any, registry: ConditionRegistry, once: bool = False,
+                service: bool = False) -> int:
     """THE processor: ONE loop of ticks (design §3). On ci-runner (server_steps): the change items (executors,
     pushes), the batch, the watches, the gate line, the red tick, the recovery registry. On the laptop (sync_steps):
     the outbox, the state mirror, events -> inbox and the notifier, claims, the fixer dispatcher, the network and
@@ -129,18 +131,19 @@ def waiting_run(repo: str, clock: Clock, store: Any, once: bool = False, service
                 with clone_shared(repo):
                     return fn()
             return run
-        steps = sync_steps(repo, d, o_r, clock, store) if role == "sync" else server_steps(repo, d, shared, clock, store)
+        steps = (sync_steps(repo, d, o_r, clock, store, registry) if role == "sync"
+                 else server_steps(repo, d, shared, clock, store, registry))
         return ProcessorLoop(repo, d, clock, store, own, drop, steps, role, once, argv).run()
 
 
 TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns between ticks
 
 
-def cmd_tick(a: argparse.Namespace, clock: Clock, store: Any) -> int:
+def cmd_tick(a: argparse.Namespace, clock: Clock, store: Any, registry: ConditionRegistry) -> int:
     """`agentctl tick`: the processor (the reconciler's loop of ticks); `tick service install|uninstall|status`: it as the
     launchd agent."""
     if host_role() == "server":  # ci-runner: its own clone, systemd's notify protocol, a clean stop between ticks
-        repo = ensure_server_clone(a.repo, store)
+        repo = ensure_server_clone(a.repo, store, registry)
         signal.signal(signal.SIGTERM, lambda *_: TICK_STOP.__setitem__(0, True))
         store.db().close()  # the database exists (its schema) before systemd hears READY
         sd_notify("READY=1")
@@ -153,12 +156,12 @@ def cmd_tick(a: argparse.Namespace, clock: Clock, store: Any) -> int:
     if a.tcmd == "service" and not a.action:
         print("usage: agentctl tick service install|uninstall|status")
         return 2
-    return cmd_waiting(w, clock, store)
+    return cmd_waiting(w, clock, store, registry)
 
 
-def cmd_waiting(a: argparse.Namespace, clock: Clock, store: Any) -> int:
+def cmd_waiting(a: argparse.Namespace, clock: Clock, store: Any, registry: ConditionRegistry) -> int:
     if a.wcmd == "run":
-        return waiting_run(waiting_repo(a), clock, store, once=a.once, service=getattr(a, "service", False))
+        return waiting_run(waiting_repo(a), clock, store, registry, once=a.once, service=getattr(a, "service", False))
     if a.wcmd == "await":  # land's wait on its entry, resumed after a restart on new code
         return land_await(a, waiting_repo(a), clock, store)
     if a.wcmd in ("check", "check-batch"):

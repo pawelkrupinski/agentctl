@@ -20,6 +20,7 @@ from agentctl.conflicts import conflict_cause, conflict_paths
 from agentctl.waiting import GATE_UNREAD, already_landed, apply_entry, supersede, unread_why
 from agentctl.checkslot import check_slot
 from agentctl.remote import remote_check, remote_checks_supported
+from agentctl.conditions import probe_gate_read
 
 
 def assemble(st, repo, d, wt, entries, base, alone: bool = False, autoresolve: bool = False):
@@ -195,5 +196,5 @@ def unread_note(d, reds, entries, st) -> None:
     open_condition("UNKNOWN", f"UNKNOWN: the waiting processor cannot read the gate ({unread_why(reds)}); {len(entries)} "
                               "change(s) wait, taken as red. Hand it the token: `~/bin/agentctl land status` from a "
                               "session with the vault unlocked",
-                   run_probe("gate_read", {"since": epoch_now()}), [], key="gate-unread-waiting", command="waiting",
+                   run_probe(probe_gate_read, {"since": epoch_now()}), [], key="gate-unread-waiting", command="waiting",
                    exit_code=2, cwd=entries[0].get("worktree") if entries else None, store=st)

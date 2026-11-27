@@ -305,7 +305,8 @@ class RecoveryTickTest(unittest.TestCase):
         case.fake("migrate_condition_files", lambda rng, st: raising(rng, 0.2, ["migrated x"], SystemExit))
         items = [an_open_condition(r, i) for i in range(r.randint(0, 4))]
         case.fake("run_probe", lambda rng, kind, args: StableResult(kind, rng.choice([True, False, None]), "d"))
-        case.fake("close_condition", lambda rng, c, res, store=None: rng.choice([None, "RECOVERED " + c["key"]]))
+        closed = case.recorded("close_condition", lambda rng, c, res, store=None: rng.choice([None, "RECOVERED " + c["key"]]))
+        case.put("close_condition", lambda c, res, store, registry: closed(c, res, store=store))  # as recorded before the registry
         case.fake("env_num", lambda rng, n, d: rng.choice([d, 7, 10 ** 9]))
 
         def update(rng, kind, iid, version, data):
@@ -317,7 +318,10 @@ class RecoveryTickTest(unittest.TestCase):
         return (st, r.choice([None, NOW]), r.choice([False, True]))
 
     def test_recovery_tick(self):
-        check(self, "recovery_tick", self.build, lambda A: A.recovery_tick, 8000)
+        # the registry re-runs a stored probe through run_probe's fake, by kind: the calls recorded before the registry
+        registry = types.SimpleNamespace(check=lambda kind: kind)
+        check(self, "recovery_tick", self.build,
+              lambda A: lambda st, now_, force: A.recovery_tick(st, registry, now_, force), 8000)
 
 
 class CloseConditionTest(unittest.TestCase):
@@ -342,7 +346,7 @@ class CloseConditionTest(unittest.TestCase):
                 return rng.choice([None, "did " + name, ""])
             return run
         acts = {n: case.recorded("act." + n, action(n)) for n in ("a1", "a2")}
-        case.put("RECOVER_ACTIONS", acts)
+        self.registry = types.SimpleNamespace(actions=acts)
         d = {"inbox": r.sample(["e1", "e2", "e3"], r.randint(0, 3)), "on_recover": [[n, {}] for n in r.sample(["a1", "a2", "gone"] if False else ["a1", "a2"], r.randint(0, 2))]}
         item = r.choice([None, {"id": "c1", "version": 3, "state": r.choice(["open", "open", "closed"]), "data": d}])
         st = Probe(case, "st", item=lambda rng, kind, iid: item,
@@ -357,7 +361,7 @@ class CloseConditionTest(unittest.TestCase):
         def run(A):
             def go(cond, result, st):
                 try:
-                    out = ["ok", A.close_condition(cond, result, st)]
+                    out = ["ok", A.close_condition(cond, result, st, self.registry)]
                 except BaseException as e:  # noqa: BLE001
                     out = ["raised", type(e).__name__]
                 acked = os.path.join(self.root, "acked")
@@ -385,7 +389,7 @@ class OpenConditionTest(unittest.TestCase):
         case.fake("inbox_write", lambda rng, *a, **k: raising(rng, 0.1, rng.choice([None, "eid1"]), SystemExit))
         case.fake("host_role", lambda rng: "server")
         case.fake("ts", lambda rng: "T")
-        case.put("RECOVER_ACTIONS", {"a1": None, "a2": None})
+        case.put("RECOVER_ACTION_NAMES", ("a1", "a2"))
         existing = {"ck": 0, "ck.2": 0}
         taken = r.sample(list(existing), r.randint(0, 2))
 
@@ -423,7 +427,8 @@ class CmdRecoverTest(unittest.TestCase):
                   "next_check": r.choice([None, NOW + 40, NOW - 40]), "fails": r.choice([None, 0, 3]),
                   "on_recover": r.choice([None, [], [("a1", {}), ("a2", {})]])} for i in range(r.randint(0, 3))]
         case.fake("open_conditions", lambda rng, st: conds)
-        case.fake("recovery_tick", lambda rng, st, force=False: r.choice([[], ["L1", "L2"]]))
+        ticked = case.recorded("recovery_tick", lambda rng, st, force=False: r.choice([[], ["L1", "L2"]]))
+        case.put("recovery_tick", lambda st, registry, force=False: ticked(st, force=force))  # as recorded before the registry
         case.fake("epoch_now", lambda rng: NOW)
         return (types.SimpleNamespace(rcmd=r.choice(["tick", "list", None])), Probe(case, "st"))
 
@@ -432,7 +437,7 @@ class CmdRecoverTest(unittest.TestCase):
             def go(a, st):
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
-                    rc = A.cmd_recover(a, st)
+                    rc = A.cmd_recover(a, st, types.SimpleNamespace())
                 return rc, out.getvalue()
             return go
         check(self, "cmd_recover", self.build, run, 3000)

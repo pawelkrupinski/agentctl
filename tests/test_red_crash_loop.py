@@ -7,6 +7,7 @@ import os, re, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import registry  # noqa: E402
 
 CRASH = "ended with no LANDED / GAVE UP line"
 
@@ -370,7 +371,7 @@ class RecoveryTest(CrashLoopBase):
         it, _args = self.blocked()
         self.snap(9400, 2400, "success")
         self.t[0] += A.BLOCK_PROBE_EVERY + 1
-        out = A.red_renew_blocks(self.st, self.t[0])
+        out = A.red_renew_blocks(self.st, self.t[0], registry(A))
         self.assertTrue(any("RECOVERED" in l for l in out), out)
         self.assertIsNone(A.red_block_of(it, self.st))
 

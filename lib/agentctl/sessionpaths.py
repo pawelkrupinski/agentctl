@@ -9,11 +9,10 @@ import re
 import time
 from contextlib import suppress
 from typing import Any, Iterator
-from agentctl.core import HOME, attempt, hashlib_sha1
+from agentctl.core import attempt, hashlib_sha1, HOME, recovery_dir
 from agentctl.statefile import read_record, write_json
 from agentctl.claudefiles import claude_projects_root
 from agentctl.live import live_slug
-from agentctl.conditions import recovery_dir
 from agentctl.fixerknobs import knob_owner_active
 
 

@@ -8,6 +8,7 @@ sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL, code_source  # noqa: E402
 from test_red import RedBase, MOVIES  # noqa: E402
 from test_reds import TickClock  # noqa: E402
+from fake_probes import probe, registry  # noqa: E402
 
 
 class Recorder:
@@ -15,7 +16,7 @@ class Recorder:
     def __init__(self, fails=1):
         self.calls, self.fails = [], fails
 
-    def __call__(self, a):
+    def __call__(self, a, **_bound):  # _bound: the store or clock cli binds into the check of its kind
         self.calls.append(dict(a))
         return (len(self.calls) > self.fails), f"call {len(self.calls)}"
 
@@ -30,16 +31,11 @@ class RegistryBase(unittest.TestCase):
                     "AGENTCTL_TUNNEL_STATE": os.path.join(self.tmp.name, "tunnel.json")}
         self.saved_env = {k: os.environ.get(k) for k in self.env}
         os.environ.update(self.env)
-        self.saved_probes, self.saved_actions = dict(A.PROBES), dict(A.RECOVER_ACTIONS)
         self.saved_dirty = A.mark_gate_dirty
         self.dirty = []
         A.mark_gate_dirty = lambda: self.dirty.append(1)
 
     def tearDown(self):
-        A.PROBES.clear()
-        A.PROBES.update(self.saved_probes)
-        A.RECOVER_ACTIONS.clear()
-        A.RECOVER_ACTIONS.update(self.saved_actions)
         A.mark_gate_dirty = self.saved_dirty
         for k, v in self.saved_env.items():
             if v is None:
@@ -51,69 +47,80 @@ class RegistryBase(unittest.TestCase):
     def entries(self, kind=None):
         return [e for e in A.inbox_entries() if kind is None or e.get("kind") == kind]
 
+    def fake(self, kind, fn):
+        """fn in place of probe_<kind> (every module binding it), until the test ends."""
+        saved = getattr(A, f"probe_{kind}")
+        setattr(A, f"probe_{kind}", probe(kind, fn))
+        self.addCleanup(setattr, A, f"probe_{kind}", saved)
+        return fn
+
+    def tick(self, *a, **k):
+        """recovery_tick with cli's registry, built now (on the test's fakes)."""
+        return A.recovery_tick(A.CurrentStore(A.process_store) if not a else a[0], registry(A), *a[1:], **k)
+
 
 class WiredRegistryTest(unittest.TestCase):
-    def test_the_condition_machine_is_a_module_and_the_root_wires_every_probe_and_action_into_it(self):
+    def test_the_root_builds_one_registry_of_every_probe_and_action_and_no_module_keeps_one(self):
+        reg = registry(A)
+        self.assertEqual(set(reg.checks), set(A.PROBE_EVERY))  # every probe has its recheck interval, and only those
+        self.assertEqual(set(reg.actions), set(A.RECOVER_ACTION_NAMES))
+        for kind, check in reg.checks.items():  # the check of a kind is its probe function (a partial binding the store)
+            self.assertIs(getattr(check, "func", check), getattr(A, f"probe_{kind}"), kind)
         mod = sys.modules["agentctl.conditions"]
-        self.assertIs(mod.PROBES, A.PROBES)  # one registry: what the root wires is what the machine reads
-        self.assertIs(mod.RECOVER_ACTIONS, A.RECOVER_ACTIONS)
-        self.assertEqual(set(A.PROBES), set(A.PROBE_EVERY))  # every probe has its recheck interval, and only those
-        self.assertTrue({"clear_hold", "tunnel_reset", "clear_flag"} <= set(A.RECOVER_ACTIONS))
-        for kind, probe in A.PROBES.items():
-            if kind not in ("invariant", "change_source", "red_newer_verdict", "orphan_landed", "queue_moving",
-                            "push_credential", "infra_requeue"):  # these take the root's store
-                self.assertIs(probe, getattr(A, f"probe_{kind}"), kind)  # the probe itself, no late-binding wrapper
+        self.assertFalse(hasattr(mod, "PROBES") or hasattr(mod, "RECOVER_ACTIONS"), "no registry cell in the machine")
+
+    def test_a_registry_missing_a_kind_or_holding_a_check_of_another_name_is_refused(self):
+        with self.assertRaises(A.ConditionBypass):
+            A.ConditionRegistry([A.probe_tcp], dict(registry(A).actions))
+        with self.assertRaises(A.ConditionBypass):
+            A.run_probe(lambda a: (True, "not a probe"), {})
 
     def test_the_invariant_probe_checks_with_mains_clock_and_store(self):
         clock, store, seen = A.Clock(), object(), []
-        saved = dict(A.PROBES), A.INVARIANTS.get("WX")
         A.INVARIANTS["WX"] = lambda c, st: seen.append((c, st)) or (True, "held")
         try:
-            A.wire_collaborators(clock, store)
-            self.assertTrue(A.run_probe("invariant", {"id": "WX"}).ok)
+            self.assertTrue(A.run_probe(registry(A, clock, store).check("invariant"), {"id": "WX"}).ok)
         finally:
-            A.PROBES.clear()
-            A.PROBES.update(saved[0])
             A.INVARIANTS.pop("WX")
         self.assertEqual(seen, [(clock, store)], "the watchdog's invariants read the clock and store cli handed")
 
 
 class SameProbeTest(RegistryBase):
     def test_every_probe_kind_opens_and_closes_through_the_same_function(self):
-        for kind in sorted(self.saved_probes):
-            rec = Recorder()
-            A.PROBES[kind] = rec
+        for kind in sorted(A.PROBE_EVERY):
+            rec = self.fake(kind, Recorder())
             args = {"x": kind}
-            c = A.open_condition("UNKNOWN", f"UNKNOWN: {kind} is down", A.run_probe(kind, args), [], key=f"k-{kind}", store=A.CurrentStore(A.process_store))
+            c = A.open_condition("UNKNOWN", f"UNKNOWN: {kind} is down", A.run_probe(rec, args), [], key=f"k-{kind}", store=A.CurrentStore(A.process_store))
             self.assertIsNotNone(c, kind)
-            self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), force=True)[0][:10], "RECOVERED:", kind)
+            self.assertEqual(self.tick(force=True)[0][:10], "RECOVERED:", kind)
             self.assertEqual(rec.calls, [args, args], kind)  # the opening check and the closing check: one function
             self.assertFalse(os.path.exists(c.get("path") or A.recovery_dir(f"k-{kind}.json")), kind)
         unread = [e for e in self.entries("UNKNOWN") if not e["read"]]
         self.assertEqual(unread, [])  # every condition's entry acked on recovery: nobody acks a solved problem
-        self.assertEqual(len(self.entries("RECOVERED")), len(self.saved_probes))
+        self.assertEqual(len(self.entries("RECOVERED")), len(A.PROBE_EVERY))
         self.assertTrue(self.dirty)
 
     def test_a_failing_probe_backs_off_and_a_passing_one_opens_nothing(self):
-        A.PROBES["tcp"] = Recorder(fails=3)
-        A.open_condition("UNKNOWN", "UNKNOWN: port", A.run_probe("tcp", {"host": "h", "port": 1}), [], key="p", store=A.CurrentStore(A.process_store))
+        tcp = self.fake("tcp", Recorder(fails=3))
+        A.open_condition("UNKNOWN", "UNKNOWN: port", A.run_probe(tcp, {"host": "h", "port": 1}), [], key="p", store=A.CurrentStore(A.process_store))
         t = A.epoch_now()
-        self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), t + 1000), [])
+        self.assertEqual(self.tick(A.CurrentStore(A.process_store), t + 1000), [])
         c = A.open_conditions(A.CurrentStore(A.process_store))[0]
         self.assertEqual(c["fails"], 1)
         self.assertGreater(c["next_check"], t + 1000 + A.PROBE_EVERY["tcp"])
-        self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), t + 1001), [])  # not due: not probed
-        self.assertEqual(len(A.PROBES["tcp"].calls), 2)
-        A.PROBES["http"] = Recorder(fails=0)
-        self.assertIsNone(A.open_condition("UNKNOWN", "UNKNOWN: x", A.run_probe("http", {"url": "u"}), [], store=A.CurrentStore(A.process_store)))
+        self.assertEqual(self.tick(A.CurrentStore(A.process_store), t + 1001), [])  # not due: not probed
+        self.assertEqual(len(tcp.calls), 2)
+        http = self.fake("http", Recorder(fails=0))
+        self.assertIsNone(A.open_condition("UNKNOWN", "UNKNOWN: x", A.run_probe(http, {"url": "u"}), [], store=A.CurrentStore(A.process_store)))
         self.assertEqual(self.entries("UNKNOWN")[-1]["verdict"], "UNKNOWN: port")
 
     def test_on_recover_actions_run_once(self):
         ran = []
-        A.RECOVER_ACTIONS["kick_tunnel"] = lambda c, a, st: ran.append(a) or "kicked"
-        A.PROBES["route"] = Recorder()
-        A.open_condition("NETWORK", "NETWORK: offline", A.run_probe("route"), [("kick_tunnel", {"n": 1})], key="net", store=A.CurrentStore(A.process_store))
-        lines = A.recovery_tick(A.CurrentStore(A.process_store), force=True) + A.recovery_tick(A.CurrentStore(A.process_store), force=True)
+        reg = registry(A, route=probe("route", Recorder()))
+        reg.actions["tunnel_reset"] = lambda c, a, st: ran.append(a) or "kicked"
+        A.open_condition("NETWORK", "NETWORK: offline", A.run_probe(reg.checks["route"]), [("tunnel_reset", {"n": 1})], key="net", store=A.CurrentStore(A.process_store))
+        lines = (A.recovery_tick(A.CurrentStore(A.process_store), reg, force=True)
+                 + A.recovery_tick(A.CurrentStore(A.process_store), reg, force=True))
         self.assertEqual(ran, [{"n": 1}])
         self.assertEqual(len(lines), 1)
         self.assertIn("kicked", lines[0])
@@ -127,13 +134,13 @@ class BlipTest(RegistryBase):
         super().setUp()
         os.environ["AGENTCTL_UNKNOWN_GRACE"] = "300"
         self.addCleanup(os.environ.__setitem__, "AGENTCTL_UNKNOWN_GRACE", "0")
-        A.PROBES["token"] = Recorder(fails=99)
+        self.token = self.fake("token", Recorder(fails=99))
         self.t = [1_794_900_000.0]
         self.st = A.Store(clock=lambda: self.t[0])  # open_condition's time is its store's clock
 
     def sighting(self, after):
         self.t[0] += after
-        return A.open_condition("UNKNOWN", "UNKNOWN: token unavailable", A.run_probe("token", {"ns": "movies"}), [],
+        return A.open_condition("UNKNOWN", "UNKNOWN: token unavailable", A.run_probe(self.token, {"ns": "movies"}), [],
                                 key="token-movies", store=self.st)
 
     def test_a_failure_that_clears_inside_the_grace_opens_nothing(self):
@@ -155,8 +162,8 @@ class BlipTest(RegistryBase):
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
 
     def test_other_kinds_and_a_zero_grace_open_at_once(self):
-        self.assertIsNotNone(A.open_condition("STALLED", "STALLED: x", A.run_probe("token", {}), [], key="s", store=A.CurrentStore(A.process_store)))
-        self.assertIsNotNone(A.open_condition("UNKNOWN", "UNKNOWN: y", A.run_probe("token", {}), [], key="u", grace=0, store=A.CurrentStore(A.process_store)))
+        self.assertIsNotNone(A.open_condition("STALLED", "STALLED: x", A.run_probe(self.token, {}), [], key="s", store=A.CurrentStore(A.process_store)))
+        self.assertIsNotNone(A.open_condition("UNKNOWN", "UNKNOWN: y", A.run_probe(self.token, {}), [], key="u", grace=0, store=A.CurrentStore(A.process_store)))
 
 
 class HostTest(RegistryBase):
@@ -170,31 +177,29 @@ class HostTest(RegistryBase):
 
     def test_the_laptops_condition_is_probed_on_the_laptop_never_on_ci_runner(self):
         st = A.process_store()  # one store, both hosts (the laptop's is ci-runner's through the API)
-        rec = Recorder(fails=1)
-        A.PROBES["tcp"] = rec
+        rec = self.fake("tcp", Recorder(fails=1))
         self.role("sync-test")
-        c = A.open_condition("WATCHDOG", "W5: the processor is down", A.run_probe("tcp", {}), [], key="w5",
+        c = A.open_condition("WATCHDOG", "W5: the processor is down", A.run_probe(rec, {}), [], key="w5",
                              store=st)
         self.assertEqual(c["host"], "sync")
         self.role("server")
         t = A.epoch_now() + 3 * 3600
-        self.assertEqual(A.recovery_tick(st, t, force=True), [])
+        self.assertEqual(self.tick(st, t, force=True), [])
         self.assertEqual(len(rec.calls), 1, "ci-runner never runs the laptop's probe")
         self.assertEqual(st.item("condition", "w5")["level"], 1, "the server escalates it")
         self.role("sync-test")
-        self.assertEqual(A.recovery_tick(st, t + 1, force=True)[0][:10], "RECOVERED:")
+        self.assertEqual(self.tick(st, t + 1, force=True)[0][:10], "RECOVERED:")
         self.assertEqual(len(rec.calls), 2)
 
     def test_a_token_condition_the_server_opened_is_cleared_by_the_laptops_probe(self):
         st = A.process_store()
-        rec = Recorder(fails=1)
-        A.PROBES["token"] = rec
+        rec = self.fake("token", Recorder(fails=1))
         self.role("server")
-        c = A.open_condition("UNKNOWN", "UNKNOWN: token unavailable", A.run_probe("token", {"ns": "movies"}), [],
+        c = A.open_condition("UNKNOWN", "UNKNOWN: token unavailable", A.run_probe(rec, {"ns": "movies"}), [],
                              key="token-movies", store=st)
         self.assertEqual(c["host"], "server")
         self.role("sync-test")  # only the laptop has the processor's socket
-        self.assertEqual(A.recovery_tick(st, A.epoch_now() + 1, force=True)[0][:10], "RECOVERED:")
+        self.assertEqual(self.tick(st, A.epoch_now() + 1, force=True)[0][:10], "RECOVERED:")
 
 
 class ConditionItemTest(RegistryBase):
@@ -202,24 +207,24 @@ class ConditionItemTest(RegistryBase):
     after opening and every 2 h after, and only its own probe passing closes it."""
     def test_open_escalate_by_deadline_close_by_its_probe_and_old_files_migrate(self):
         ok = [False]
-        A.PROBES["tunnel"] = lambda a: (ok[0], "down" if not ok[0] else "up")
-        A.open_condition("STALLED", "STALLED: x", A.run_probe("tunnel"), [], key="k1", store=A.CurrentStore(A.process_store))
+        tunnel = self.fake("tunnel", lambda a: (ok[0], "down" if not ok[0] else "up"))
+        A.open_condition("STALLED", "STALLED: x", A.run_probe(tunnel), [], key="k1", store=A.CurrentStore(A.process_store))
         st = A.process_store()
         it = st.item("condition", "k1")
         self.assertEqual((it["state"], it["level"]), ("open", 0))
-        self.assertEqual(A.recovery_tick(A.CurrentStore(A.process_store), now_=A.epoch_now() + 11 * 60), [])
+        self.assertEqual(self.tick(now_=A.epoch_now() + 11 * 60), [])
         it = st.item("condition", "k1")
         self.assertEqual(it["level"], 1)
         self.assertEqual([e["severity"] for e in st.events() if e["item_id"] == "k1"][-1], "escalate")
         self.assertGreater(it["deadline"], time.time() + 3600)  # the next escalation in 2 h
         ok[0] = True
-        self.assertEqual(len(A.recovery_tick(A.CurrentStore(A.process_store), force=True)), 1)
+        self.assertEqual(len(self.tick(force=True)), 1)
         self.assertEqual(st.item("condition", "k1")["state"], "closed")
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
         os.makedirs(A.recovery_dir(), exist_ok=True)  # a condition file from before step 12: an item now
         A.write_json(A.recovery_dir("old.json"), {"key": "old", "kind": "NETWORK", "text": "NETWORK: x",
                                                   "probe": {"kind": "tunnel", "args": {}}, "next_check": 1e12})
-        A.recovery_tick(A.CurrentStore(A.process_store))
+        self.tick()
         self.assertFalse(os.path.exists(A.recovery_dir("old.json")))
         self.assertEqual([c["key"] for c in A.open_conditions(A.CurrentStore(A.process_store))], ["old"])  # an item now, its probe due at its own time
 
@@ -234,10 +239,10 @@ class NoBypassTest(RegistryBase):
         with self.assertRaises(A.ConditionBypass):
             A.ProbeResult("tunnel", {}, False, "forged")
         with self.assertRaises(A.ConditionBypass):
-            A.run_probe("no-such-probe")
-        A.PROBES["tunnel"] = Recorder()
+            registry(A).check("no-such-probe")
+        tunnel = self.fake("tunnel", Recorder())
         with self.assertRaises(A.ConditionBypass):
-            A.open_condition("STALLED", "STALLED: x", A.run_probe("tunnel"), [("no-such-action", {})], store=A.CurrentStore(A.process_store))
+            A.open_condition("STALLED", "STALLED: x", A.run_probe(tunnel), [("no-such-action", {})], store=A.CurrentStore(A.process_store))
 
     def test_a_condition_kind_inbox_entry_is_refused_outside_open_condition(self):
         for v in ("STALLED: tunnel", "UNKNOWN: gate", "NETWORK: uplink", "NOT LANDED: stalled push"):
@@ -328,7 +333,7 @@ class DetectorsTest(RegistryBase):
         self.assertEqual([a[:3] for a in ran], [["/fake/launchctl", "kickstart", "-k"]])
 
     def test_tunnel_network_and_stall_open_on_the_tunnel_probe_and_clear_on_it(self):
-        A.PROBES["tunnel"] = Recorder(fails=10 ** 6)
+        tunnel = self.fake("tunnel", Recorder(fails=10 ** 6))
         saved = A.uplink_loss, A.launchctl_kick
         A.uplink_loss, A.launchctl_kick = (lambda: 0.9), (lambda: None)
         try:
@@ -337,18 +342,18 @@ class DetectorsTest(RegistryBase):
             A.uplink_loss, A.launchctl_kick = saved
         self.assertEqual([c["probe"]["kind"] for c in A.open_conditions(A.CurrentStore(A.process_store))], ["tunnel"])
         self.assertEqual(len(self.entries("NETWORK")), 1)
-        A.PROBES["tunnel"].fails = 0
-        A.recovery_tick(A.CurrentStore(A.process_store), force=True)
+        tunnel.fails = 0
+        self.tick(force=True)
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
         self.assertTrue(all(e["read"] for e in self.entries("NETWORK")))
         self.assertFalse(A.read_json_file(A.tunnel_state_path()).get("network"))
 
     def test_network_offline_clears_on_the_route_probe(self):
-        A.PROBES["route"] = Recorder()
+        self.fake("route", Recorder())
         A._last_route[0] = ("en0", "10.0.0.1")
         self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), route=lambda: None, kick=lambda: None), "offline")
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store))[0]["probe"]["kind"], "route")
-        A.recovery_tick(A.CurrentStore(A.process_store), force=True)
+        self.tick(force=True)
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])
 
 
@@ -376,7 +381,7 @@ class UntilGreenTest(RedBase):
         return s
 
     def tick(self, snap):
-        return A.red_tick(self.st, MOVIES, self.r.path, snap, now_=self.t[0], dispatch=False)
+        return A.red_tick(self.st, MOVIES, self.r.path, snap, now_=self.t[0], dispatch=False, registry=registry(A))
 
     def test_the_block_lapses_when_the_probe_workflow_goes_green_and_the_red_is_verified(self):
         self.tick(self.snap("failure"))

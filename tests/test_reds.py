@@ -14,6 +14,7 @@ import json, os, signal, subprocess, sys, time, types, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, put_change  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock, RealTimeClock  # noqa: E402
 from agentctl.clock import Clock  # noqa: E402
 from test_red import RedBase, run, FAIL_LINE, MOVIES  # noqa: E402
@@ -89,7 +90,7 @@ class RedsBase(RedBase):
     def tick(self, dispatch=False, advance=0, snap=True):
         self.t[0] += advance
         return A.red_tick(self.st, MOVIES, self.r.path, self.snap() if snap else None, now_=self.t[0], dispatch=dispatch,
-                          sync=True)  # this process plays both hosts: the server's tick and the sync's claims
+                          sync=True, registry=registry(A))  # this process plays both hosts: the server's tick and the sync's claims
 
     def reds(self):
         return {it["data"]["key"]: it for it in self.st.items("red")}

@@ -2,6 +2,7 @@
 make structural fixes"). Every inbox entry goes through ONE router: keyed by an ITEM, addressed to an AUDIENCE (author,
 fixer, owner, info); one live alert per item, updated in place; closed by its item's own probe; only the owner's reach
 the owner's `inbox wait`, the notifier and the ESCALATED count. Each test here failed before the model."""
+from functools import partial
 import contextlib, io, json, os, stat, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -213,7 +214,7 @@ class HysteresisTest(AlertBase):
         saved = A.INVARIANTS["W5"]
         A.INVARIANTS["W5"] = lambda clock, st: (False, "the processor has not beaten for 10 min")
         try:
-            p = A.run_probe("invariant", {"id": "W5"})
+            p = A.run_probe(partial(A.probe_invariant, clock=A.Clock(), st=self.st), {"id": "W5"})
             A.open_condition("INVARIANT", "INVARIANT W5 violated: the processor has not beaten", p, [],
                              key="invariant-W5", command="watchdog", store=self.st)
         finally:

@@ -13,9 +13,10 @@ from agentctl.recordingpins import refresh_pinned_recording
 from agentctl.branches import route_branch_reds, settle_branch_reds
 from agentctl.cireport import ci_state_refresh, ci_why
 from agentctl.redtick import red_tick_repo
+from agentctl.conditionregistry import ConditionRegistry
 
 
-def gate_publish_cycle(repo: str, store: Any) -> None:
+def gate_publish_cycle(repo: str, store: Any, registry: ConditionRegistry) -> None:
     """One publish: the gate read once, the red tick on that snapshot, the summary line published, the branch reds
     settled and routed."""
     try:
@@ -25,7 +26,7 @@ def gate_publish_cycle(repo: str, store: Any) -> None:
         ci_state_write(snap)
         # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or
         # held (never NOBODY). Bounded: a dispatch's worktree checkout finishes on the tick's own thread
-        if not run_bounded("red-tick", lambda: red_tick_repo(repo, store, snap), knob_assign_bound()):
+        if not run_bounded("red-tick", lambda: red_tick_repo(repo, store, registry, snap), knob_assign_bound()):
             err("red tick: still running; the gate line is published meanwhile")
         _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo, store=store)
         publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
@@ -41,7 +42,7 @@ def gate_publish_cycle(repo: str, store: Any) -> None:
             err(f"branch reds: {failed} ({str(e).replace('agentctl: ', '')[:200]})")
 
 
-def maybe_publish_gate(repo, store):
+def maybe_publish_gate(repo, store, registry):
     """The processor's loop, at most every GATE_PUBLISH_INTERVAL s: read the gate (it holds the token) and publish the
     summary line for the status line. Never fatal; a failed read leaves the old file to age out (fail-closed)."""
     # a push to main since the last publish (mark_gate_dirty): publish now, not at the 45 s mark
@@ -50,5 +51,5 @@ def maybe_publish_gate(repo, store):
         return
     _last_gate_publish[0] = wall_epoch()  # the wall's: it is compared with a file's mtime above
 
-    if not run_bounded("gate-publish", lambda: gate_publish_cycle(repo, store), knob_step_bound()):
+    if not run_bounded("gate-publish", lambda: gate_publish_cycle(repo, store, registry), knob_step_bound()):
         err("gate summary: still reading from an earlier cycle (the loop goes on)")

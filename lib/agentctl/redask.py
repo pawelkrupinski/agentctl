@@ -5,7 +5,7 @@ import re
 from typing import Any
 from agentctl.core import tilde
 from agentctl.leases import red_block_of
-from agentctl.conditions import PROBES
+from agentctl.conditionregistry import PROBE_EVERY
 from agentctl.blameknobs import knob_ask_remind_max
 from agentctl.blameknobs import knob_ask_hold, knob_ask_remind_first
 
@@ -168,7 +168,7 @@ def ask_split(decide):
 def ask_blocks_work(b):
     """Block b (red_block_of) waits on the owner alone: no probe of its own can lift it (ONLY A QUESTION THE WORLD MAY
     ANSWER IS HELD, above), so its reds' work stops until he answers."""
-    return not b or ((b.get("meta") or {}).get("probe") or {}).get("kind") not in PROBES
+    return not b or ((b.get("meta") or {}).get("probe") or {}).get("kind") not in PROBE_EVERY
 
 
 def ask_held_until(members, spell, t, store):

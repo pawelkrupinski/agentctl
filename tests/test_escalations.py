@@ -8,6 +8,7 @@ import ast, glob, json, os, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import probe, registry  # noqa: E402
 ROOT = os.path.dirname(HERE)
 
 
@@ -57,19 +58,12 @@ class EscalationBase(unittest.TestCase):
         self.t = [1_800_000_000.0]
         self.st = A.Store(path=os.path.join(self.tmp.name, "store.db"), clock=lambda: self.t[0])
         self.failing = set()  # the condition keys whose probe fails
-        self.saved_probes = dict(A.PROBES)
-        A.PROBES["escprobe"] = lambda a: (a["key"] not in self.failing, f"probe of {a['key']}")
-        self.saved_every = dict(A.PROBE_EVERY)
-        A.PROBE_EVERY["escprobe"] = 60
+        self.probe = probe("escprobe", lambda a: (a["key"] not in self.failing, f"probe of {a['key']}"))
         self.saved_dirty = A.mark_gate_dirty
         A.mark_gate_dirty = lambda: None
         self.launcher = FakeLauncher(os.path.join(self.tmp.name, "repo"))
 
     def tearDown(self):
-        A.PROBES.clear()
-        A.PROBES.update(self.saved_probes)
-        A.PROBE_EVERY.clear()
-        A.PROBE_EVERY.update(self.saved_every)
         A.mark_gate_dirty = self.saved_dirty
         for k, v in self.saved_env.items():
             if v is None:
@@ -80,12 +74,12 @@ class EscalationBase(unittest.TestCase):
 
     def open(self, kind, key, text):
         self.failing.add(key)
-        return A.open_condition(kind, text, A.run_probe("escprobe", {"key": key}), [], key=key, store=self.st, grace=0)
+        return A.open_condition(kind, text, A.run_probe(self.probe, {"key": key}), [], key=key, store=self.st, grace=0)
 
     def clear(self, key):
         self.failing.discard(key)
         c = next(c for c in A.open_conditions(self.st) if c["key"] == key)
-        A.close_condition(c, A.run_probe("escprobe", {"key": key}), self.st)
+        A.close_condition(c, A.run_probe(self.probe, {"key": key}), self.st, registry(A))
 
     def run_pass(self, advance=0):
         self.t[0] += advance

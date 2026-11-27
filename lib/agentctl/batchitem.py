@@ -9,6 +9,7 @@ from agentctl.core import remote
 from agentctl.repos import repo_of_waiting
 from agentctl.waitingdir import ChangeRecords, entry_final, wlog
 from agentctl.conditions import open_condition, run_probe
+from agentctl.conditions import probe_git_fetch
 
 
 def status_batch(st: Any, d: str) -> Any:
@@ -34,7 +35,7 @@ def batch_fail(st, d, it, why, n_changes=0):
             f"when git can read {remote()}/main, or in 30 min")
     wlog(d, text)
     it = batch_move(st, it, "held", {"retries": 0, "why": why}, text=text, severity="escalate")
-    open_condition("STALLED", text, run_probe("git_fetch", {"repo": repo_of_waiting(d)}),
+    open_condition("STALLED", text, run_probe(probe_git_fetch, {"repo": repo_of_waiting(d)}),
                    [("clear_hold", {"d": d})], key=f"batch-retry-{it['id'].replace('#', '-')}", command="waiting",
                    store=st)
     return it

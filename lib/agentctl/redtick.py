@@ -35,6 +35,7 @@ from agentctl.redhold import red_enforce
 from agentctl.redwaits import red_quota_waits
 from agentctl.tickknobs import knob_step_bound
 from agentctl.recovery import red_no_read_access
+from agentctl.conditionregistry import ConditionRegistry
 
 
 # -- the tick's red step (the processor; ci-why never acts)
@@ -51,10 +52,10 @@ def tick_stage(what: Any, stage: Any, default: Any = None, after: Any = "") -> A
         return default
 
 
-def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync=False, early=None):
+def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync=False, early=None, *, registry):
     """One level-triggered pass: observe (unless the gate is unread: nothing opens or clears on an unknown; early reds
     too, redearly.py), each red one step (per item, inside try: one bad item never stops the tick), the claims renewed, the dispatcher. Returns what it
-    did."""
+    did. registry: the process's ConditionRegistry (a block's probe re-run by its kind)."""
     t = now_ if now_ is not None else store.clock()
     # THE PRIMARY'S TICK also runs the store-wide passes (the migration, the blocks, the invariant); another watched
     # repo's tick only observes, opens and steps ITS OWN reds -- the primary's observation never clears another repo's
@@ -65,7 +66,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
     active = tick_open_reds(store, o_r, repo, t, obs, acts)
     acts += tick_stage("merging re-keyed reds failed", lambda: red_merge_rekeyed(store, active, obs), [])
     if primary:
-        acts += tick_stage("renewing the blocks failed", lambda: red_renew_blocks(store, t), [])
+        acts += tick_stage("renewing the blocks failed", lambda: red_renew_blocks(store, t, registry), [])
     acts += tick_stage("the quota waits failed", lambda: red_quota_waits(store, o_r, repo, t), [])
     for key, it in list(active.items()):
         acts += step_red(store, o_r, repo, snap, facts, key, it, obs, untracked, t)
@@ -153,14 +154,14 @@ def renew_and_reap(store: Any, t: Any) -> Any:
     return red_reap_orphans(store, t)
 
 
-def red_tick_repo(repo, store, snap=None, dispatch=False):
+def red_tick_repo(repo, store, registry, snap=None, dispatch=False):
     o_r = slug(repo)
     if not gated_repo(o_r):
         return []
     with _red_lock:
         _last_red_tick[0] = epoch_now()
         recheck_local(repo, wait=False)
-        acts = red_tick(store, o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch)
+        acts = red_tick(store, o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch, registry=registry)
     for line in acts:
         err(f"red: {line}")
     return acts
@@ -217,13 +218,14 @@ def red_observe_gate(o_r, snap):
 _last_others_tick = [0.0]
 
 
-def tick_other_repo(store: Any, o_r: str, now_: Any, dispatch: bool) -> list[str]:
+def tick_other_repo(store: Any, o_r: str, now_: Any, dispatch: bool, registry: ConditionRegistry) -> list[str]:
     """One other watched repo's red tick: its lines, prefixed with the repo; none (its skip said) when it fails."""
     try:
         snap = red_gate_snap(o_r, store)
         clone = red_repo_clone(o_r)
         with _red_lock:
-            acts = [f"{red_repo_short(o_r)}: {x}" for x in red_tick(store, o_r, clone, snap, now_=now_, dispatch=dispatch)]
+            acts = [f"{red_repo_short(o_r)}: {x}" for x in red_tick(store, o_r, clone, snap, now_=now_, dispatch=dispatch,
+                                                                     registry=registry)]
         _others_said.pop(o_r, None)
         return acts
     except (Exception, SystemExit) as e:
@@ -238,7 +240,7 @@ def note_no_read_access(unread: list[str], store: Any) -> None:
         err(f"red tick: could not note the missing read access ({str(e)[:120]})")
 
 
-def red_tick_others(store, now_=None, dispatch=False, force=True):
+def red_tick_others(store, registry, now_=None, dispatch=False, force=True):
     """The red tick of every watched repo but the primary (red-repos.json): its gate read, its reds observed and
     stepped, each repo inside its own try (one unreadable repo never stops the others or the primary). Its clone is
     this machine's when there is one (Fixes-Red trailers, authors); without one (ci-runner) its reds open and clear
@@ -257,7 +259,7 @@ def red_tick_others(store, now_=None, dispatch=False, force=True):
         except NoReadAccess:
             unread.append(o_r)  # one condition for all of them, below: no line per tick
             continue
-        acts += tick_other_repo(store, o_r, now_, dispatch)
+        acts += tick_other_repo(store, o_r, now_, dispatch, registry)
     if unread:
         note_no_read_access(unread, store)
     for line in acts:
@@ -280,21 +282,21 @@ def red_others_skipped(o_r, why, now_=None):
     return line
 
 
-def maybe_red_tick(repo, store):
+def maybe_red_tick(repo, store, registry):
     """At most every RED_TICK_INTERVAL s, from the processor's duties. Bounded; never fatal."""
     if epoch_now() - _last_red_tick[0] < knob_red_tick():
         return
 
     def work():
         try:
-            red_tick_repo(repo, store)
+            red_tick_repo(repo, store, registry)
         except (Exception, SystemExit) as e:
             err(f"red tick: skipped ({str(e).replace('agentctl: ', '')[:200]})")
             try:
                 gate_unread_spell(slug(repo), str(e)[:200], store)
             except (Exception, SystemExit) as spell_error:
                 err(f"red tick: the gate spell was not recorded ({str(spell_error)[:160]})")
-        red_tick_others(store, force=False)  # the other watched repos (red-repos.json); never fatal, never the primary's gate spell
+        red_tick_others(store, registry, force=False)  # the other watched repos (red-repos.json); never fatal, never the primary's gate spell
     if not run_bounded("red-tick", work, knob_step_bound()):
         err("red tick: still running from an earlier cycle (the loop goes on)")
 

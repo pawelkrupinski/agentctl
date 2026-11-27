@@ -4,6 +4,7 @@ import contextlib, io, os, subprocess, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from test_wait_run import FakeForge, job  # noqa: E402
 from fake_clock import FakeClock  # noqa: E402
 
@@ -606,5 +607,5 @@ class CachedGateTest(CiWhyTest):
         subprocess.run(["git", "-C", clone, "remote", "add", "origin", "git@github.com:pawelkrupinski/movies.git"], check=True)
         self.scenario([])
         A._last_gate_publish[0] = 0
-        A.maybe_publish_gate(clone, A.CurrentStore(A.process_store))
+        A.maybe_publish_gate(clone, A.CurrentStore(A.process_store), registry(A))
         self.assertTrue(A.gate_summary_line(A.state_read().get("summary") or {}, A.slug(clone))[1] or os.path.exists(self.gs))

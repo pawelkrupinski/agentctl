@@ -6,6 +6,7 @@ import json, os, re, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from fake_probes import registry  # noqa: E402
 from test_red import run, MOVIES  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 
@@ -86,10 +87,10 @@ class RedKeyingTest(RedsBase):
 
     def test_the_streak_is_read_again_and_the_waiting_fix_holds_the_red(self):
         self.stale_records()
-        A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts=self.facts())
+        A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts=self.facts(), registry=registry(A))
         it = self.only()
         self.assertTrue({"2406", "3589", "2481", "3664", "2493", "3684"} <= set(it["data"]["runs"]), it["data"]["runs"])
-        A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts=self.facts())
+        A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts=self.facts(), registry=registry(A))
         it = self.only()
         self.assertEqual(it["state"], "fix-pending")
         self.assertEqual(it["data"]["fix"]["entry"], FIX_ENTRY)
@@ -98,10 +99,10 @@ class RedKeyingTest(RedsBase):
         self.stale_records()
         os.environ["AGENTCTL_STREAK_REREADS"] = "1"
         try:
-            A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts={})
+            A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts={}, registry=registry(A))
             first = set(self.only()["data"]["runs"])
             self.assertEqual(first, {"2493", "3684", "2481", "3664"})  # the newest stale one only
-            A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts={})
+            A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts={}, registry=registry(A))
             self.assertTrue({"2406", "3589"} <= set(self.only()["data"]["runs"]))
         finally:
             os.environ.pop("AGENTCTL_STREAK_REREADS", None)
@@ -115,7 +116,7 @@ class RedKeyingTest(RedsBase):
             "red_kind": "gate", "gate": True, "runs": ["2406", "3589"], "last_run": {"number": 2406, "databaseId": 3589},
             "opened_at": self.t[0] - 36000, "attempts": 1, "history": [{"outcome": "LANDED 16a683a55"}],
             "refuted": ["deadbeef00"], "fix": {"entry": FIX_ENTRY, "status": "waiting"}})
-        A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts=self.facts())
+        A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts=self.facts(), registry=registry(A))
         reds = self.reds()
         self.assertEqual(reds[old_key]["state"], "cleared")
         new = self.only()
@@ -124,7 +125,7 @@ class RedKeyingTest(RedsBase):
         self.assertIn("deadbeef00", new["data"]["refuted"])
         self.assertTrue({"2406", "3589", "2493"} <= set(new["data"]["runs"]))
         self.assertEqual(A.red_fix_of(new, self.facts())["entry"], FIX_ENTRY)
-        A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts=self.facts())
+        A.red_tick(self.st, MOVIES, self.r.path, self.snap(), now_=self.t[0], dispatch=False, facts=self.facts(), registry=registry(A))
         self.assertEqual(self.only()["state"], "fix-pending")
 
 
