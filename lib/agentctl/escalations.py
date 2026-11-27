@@ -56,6 +56,8 @@ class EscalationLauncher(Protocol):
 
     def stop(self, session: str) -> None: ...
 
+    def retire(self, worktree: str, why: str) -> str: ...
+
 
 def escalation_pass(store: Any, t: float, launcher: EscalationLauncher) -> list[str]:
     """ONE PASS of the escalation dispatcher: the fixers watched (cleared, failed, renewed), the escalations offered or
@@ -178,6 +180,9 @@ def end_try(store: Any, t: float, launcher: EscalationLauncher, row: dict[str, A
     cid, kind, session = m["condition"], m["kind"], m.get("session")
     if session:
         launcher.stop(session)
+    # its tree is no one's now: the diff is archived, the tree and its branch go
+    retired = launcher.retire(m["worktree"], f"{outcome}: {why}") if m.get("worktree") else ""
+    retired = f"; {retired}" if retired else ""
     if row.get("holder"):
         store.release(row["name"], row["epoch"], row["secret"], outcome=f"{outcome}: {why}")
     else:
@@ -185,13 +190,13 @@ def end_try(store: Any, t: float, launcher: EscalationLauncher, row: dict[str, A
     item, frm = item_of(kind, cid), "working" if m.get("taken") else "dispatched"
     if outcome == "CLEARED":
         say(item, frm, "cleared", "probe", t, f"try {m.get('try')}: {why}")
-        return f"escalation {kind} ({m.get('key')}): CLEARED after try {m.get('try')}"
+        return f"escalation {kind} ({m.get('key')}): CLEARED after try {m.get('try')}{retired}"
     tried = {"try": m.get("try"), "session": session, "worktree": m.get("worktree"), "started": m.get("started"),
              "ended": t, "outcome": f"{outcome}: {why}"}
     rec = write_record(store, cid, lambda r: failed_try(r, tried, t))
     say(item, frm, "offered", "work-ended", t, f"try {m.get('try')} failed: {outcome}: {why}")
     return (f"escalation {kind} ({m.get('key')}): try {m.get('try')} FAILED ({outcome}: {why}); "
-            f"next not before {int(float((rec or {}).get('next_after') or t) - t) // 60} min")
+            f"next not before {int(float((rec or {}).get('next_after') or t) - t) // 60} min{retired}")
 
 
 def failed_try(rec: dict[str, Any], tried: dict[str, Any], t: float) -> dict[str, Any]:

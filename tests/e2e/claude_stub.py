@@ -3,7 +3,7 @@
 agentctl asks of claude -- `--help`, `--bg <prompt> ...` (a background session), `agents --json --all`, `stop <id>` --
 from files in $E2E_CLAUDE_DIR, and logs every call there (calls.jsonl: argv and cwd). A started session does its
 scripted work at once: it copies $E2E_CLAUDE_FIX_FROM over $E2E_CLAUDE_FIX_TO (the scenario's fix) and stays `working`
-until stopped. $E2E_CLAUDE_BG_FAIL makes `--bg` refuse with that text (a launch that fails)."""
+until stopped, leaving an uncommitted agent-notes.txt in its cwd. $E2E_CLAUDE_BG_FAIL makes `--bg` refuse with that text (a launch that fails)."""
 import json, os, shutil, sys
 
 DIR = os.environ["E2E_CLAUDE_DIR"]
@@ -40,6 +40,8 @@ def main(argv):
         name = argv[argv.index("-n") + 1] if "-n" in argv else ""
         rows.append({"id": sid, "sessionId": f"{sid}-0000", "name": name, "state": "working", "cwd": os.getcwd()})
         save(rows)
+        with open(os.path.join(os.getcwd(), "agent-notes.txt"), "w") as f:  # the work in progress an agent leaves
+            f.write("uncommitted notes\n")
         if os.environ.get("E2E_CLAUDE_FIX_FROM"):
             shutil.copyfile(os.environ["E2E_CLAUDE_FIX_FROM"], os.environ["E2E_CLAUDE_FIX_TO"])
         print(f"backgrounded {sid}")

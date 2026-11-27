@@ -6,9 +6,9 @@ import os
 import subprocess
 from typing import Any, Optional
 from agentctl.core import NO_SIGN, git
-from agentctl.worktrees import WorktreeGuard
-from agentctl.onmain import deliberate_empty, equivalent_on, is_empty_commit, patch_id, upstream_patch_ids
 from agentctl.generated import conflict_stages, generated_entry, merge_file, snapshots_both_changed, unmerged
+from agentctl.onmain import deliberate_empty, equivalent_on, is_empty_commit, patch_id, upstream_patch_ids
+from agentctl.worktreelife import WorktreeGuard
 from agentctl.generatedregen import regenerate
 
 

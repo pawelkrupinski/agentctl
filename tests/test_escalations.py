@@ -17,6 +17,7 @@ class FakeLauncher:
 
     def __init__(self, repo):
         self.repo, self.starts, self.stopped, self.state = repo, [], [], {}
+        self.retired = []
         self.gap, self.block, self.refuse = None, None, None
 
     def host(self):
@@ -45,6 +46,10 @@ class FakeLauncher:
 
     def stop(self, session):
         self.stopped.append(session)
+
+    def retire(self, worktree, why):
+        self.retired.append((worktree, why))
+        return f"retired {worktree}"
 
 
 class EscalationBase(unittest.TestCase):
@@ -216,6 +221,9 @@ class ClosureAndRetryTest(EscalationBase):
         acts = self.run_pass(advance=60)
         self.assertTrue(any("CLEARED" in a for a in acts), acts)
         self.assertEqual(self.launcher.stopped, ["s1"])
+        self.assertEqual([w for w, _ in self.launcher.retired], [f"{self.launcher.repo}-wt-escalation-1"],
+                         "a cleared fixer's tree is archived and removed")
+        self.assertTrue(any("retired" in a for a in acts), acts)
         self.assertEqual(self.live(), [])
         self.assertEqual([(e["from_state"], e["to_state"], e["cause"]) for e in self.events(c["id"])],
                          [(None, "offered", "timeout"), ("offered", "dispatched", "agent"),
@@ -271,6 +279,7 @@ class ClosureAndRetryTest(EscalationBase):
         for _ in range(int(A.SONNET_RUNTIME // 600)):
             self.run_pass(advance=600)
         self.assertEqual(self.launcher.stopped, ["s1"])
+        self.assertEqual(len(self.launcher.retired), 1, "a given-up fixer's tree is retired too")
         tries = self.st.item("condition", c["id"])["data"]["escalation"]["tries"]
         self.assertTrue(tries[0]["outcome"].startswith("TIMED OUT"), tries)
 

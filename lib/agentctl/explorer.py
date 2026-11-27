@@ -6,11 +6,11 @@ from agentctl.procrunner import process_runner
 from agentctl.statemachines import ARCHIVE, MACHINES, StateSpec
 from agentctl.clock import epoch_now
 from agentctl.core import NO_SIGN, err, git, remote
+from agentctl.paths import reds_dir
 from agentctl.forge import forge_release_asset
-from agentctl.worktrees import fresh_worktree
+from agentctl.worktreelife import fresh_worktree
 from agentctl.fixerenv import fixer_env
 from agentctl.land import spawn_land
-from agentctl.paths import reds_dir
 
 
 """The movies flip explorer's filing (2026-11-04): the nightly explorer workflow publishes `new-flips.tsv` on the release

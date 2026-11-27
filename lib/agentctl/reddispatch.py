@@ -19,7 +19,7 @@ from agentctl.paths import reds_dir
 from agentctl.waitingdir import waiting_state
 from agentctl.inboxentry import inbox_write
 from agentctl.redrepos import red_identity, red_owner_only, red_repo_note
-from agentctl.worktrees import WorktreeGuard
+from agentctl.worktreelife import WorktreeGuard
 from agentctl.fixerenv import fixer_env
 from agentctl.redrecord import lease_is_live, red_active, red_names, red_what
 from agentctl.leases import LeaseKinds, lease_meta

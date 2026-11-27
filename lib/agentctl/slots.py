@@ -15,15 +15,16 @@ from agentctl.clock import epoch_now
 from agentctl.ids import stamp
 from agentctl.timefmt import ts
 from agentctl.core import branch_of, err, git, remote
-from agentctl.repos import precheck_hook, slug, waiting_supported
 from agentctl.networksignatures import TRANSIENT_PUSH, is_transient_network
 from agentctl.netretry import net_run
+from agentctl.repos import precheck_hook, slug, waiting_supported
+from agentctl.paths import claude_session_id, scratch
 from agentctl.gating import mark_gate_dirty
 from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.redrepos import red_owner_only
 from agentctl.context import Context
 from agentctl.onmain import landed_state
-from agentctl.worktrees import WorktreeGuard
+from agentctl.worktreelife import WorktreeGuard
 from agentctl.fixerblockers import in_fixer
 from agentctl.landwatch import start_watch
 from agentctl.lander import commit_keys, lander_note_direct
@@ -40,7 +41,6 @@ from agentctl.watchtick import watch_landed
 from agentctl.landqueue import queue_command
 from agentctl.queueenter import enqueue, land_until_done, sync
 from agentctl.landdryrun import dry_run, precheck, refused, stalled
-from agentctl.paths import claude_session_id, scratch
 
 
 class Interrupted(BaseException):

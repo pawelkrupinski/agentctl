@@ -21,7 +21,7 @@ from agentctl.inboxentry import inbox_write
 from agentctl.hookoutput import precheck_reason
 from agentctl.context import Context
 from agentctl.onmain import landed_state
-from agentctl.worktrees import WorktreeGuard
+from agentctl.worktreelife import WorktreeGuard
 from agentctl.fixerblockers import in_fixer
 from agentctl.queueuntil import UNTIL_DONE_AGAIN, next_command, own_change_item, until_done_finish
 from agentctl.storetoken import no_vault

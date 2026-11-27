@@ -4,15 +4,15 @@
 import re
 from typing import Any, Optional
 from agentctl.escalationtable import EscalationRoute
+from agentctl.core import SHORT
+from agentctl.procs import socket_host
+from agentctl.repos import escalation_repo_path
 from agentctl.escalations import escalation_pass
-from agentctl.fixersession import SESSION_DENIED_TOOLS, bg_ended, bg_session, bg_start, bg_stop, claude_trust_gap
+from agentctl.worktreelife import fresh_worktree, retire_worktree
 from agentctl.fixerblockers import cached_dispatch_blocker, claude_cli, interactive_mode
+from agentctl.fixersession import SESSION_DENIED_TOOLS, bg_ended, bg_session, bg_start, bg_stop, claude_trust_gap
 from agentctl.fixerenv import fixer_env
 from agentctl.fixerprompt import FIXER_IDENTITY_ENV
-from agentctl.repos import escalation_repo_path
-from agentctl.core import SHORT
-from agentctl.worktrees import fresh_worktree
-from agentctl.procs import socket_host
 
 ESCALATION_LABEL = "escalation · "  # `claude agents` lists each session as `escalation · <kind>`
 
@@ -66,6 +66,11 @@ class SessionLauncher:
         cli = claude_cli()
         if cli:
             bg_stop(cli, session)
+
+    def retire(self, worktree: str, why: str) -> str:
+        """The stopped session's worktree archived (uncommitted diff, unmerged commits) under the state dir, then
+        removed with its branch."""
+        return retire_worktree(worktree, why)
 
 
 def escalation_step(store: Any, t: float) -> list[str]:

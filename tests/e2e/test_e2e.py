@@ -1,7 +1,7 @@
 """THE END-TO-END SCENARIOS (the owner, 2026-11-27): the real store server, the real reconciler tick and sync, the laptop's
 real CLI and a real git remote, together (tests/e2e/e2e_harness.py); GitHub is the stub (tests/e2e/ghstub.py). Each
 scenario is one test, and each FAILS when its behaviour is broken (tests/e2e/mutations.py proves it per scenario)."""
-import io, json, os, re, shutil, socket, subprocess, sys, tarfile, threading, time, unittest
+import glob, io, json, os, re, shutil, socket, subprocess, sys, tarfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -361,6 +361,10 @@ class EscalationTest(E2ETest):
         with open(os.path.join(self.claude, "sessions.json")) as f:
             started = json.load(f)[0]["id"]
         self.assertEqual([c["argv"][1] for c in self.claude_calls("stop")], [started])
+        self.assertFalse(glob.glob(self.bin + "-wt-escalation-*"), "the stopped fixer's worktree is removed")
+        self.assertNotIn("escalation-vendor-drift", H.sh(self.bin, "git", "branch", "--list"))
+        [archived] = glob.glob(os.path.join(self.w.root, "laptop", "state", "fixer-archive", "*", "untracked", "agent-notes.txt"))
+        self.assertEqual(open(archived).read(), "uncommitted notes\n", "its uncommitted work is archived first")
         self.assertEqual(self.w.tick().returncode, 0)
         self.assertEqual(self.owner_escalations(), [])
         self.assertEqual(self.inbox_escalations(), [])

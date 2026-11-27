@@ -2085,6 +2085,9 @@ class SimEscalations:
         if x:
             x["alive"], x["over"] = False, True
 
+    def retire(self, worktree, why):
+        return ""  # the sim keeps no trees
+
 
 # THE ESCALATIONS (2026-11-26): agent kinds whose fixer clears, fails then clears, never clears (handed to the owner),
 # hangs past its wall time; two subjects of one kind; more agent kinds than the cap; owner-only kinds beside them

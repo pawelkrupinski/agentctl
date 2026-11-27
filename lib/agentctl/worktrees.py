@@ -1,4 +1,4 @@
-# agentctl, part `worktrees`: agent worktrees: whose one is (claimant, worktree_of), the trees agentctl made for itself, a run's fresh worktree, the clone's shared exclude file.
+# agentctl, part `worktrees`: agent worktrees: whose one is (claimant, worktree_of), the trees agentctl made for itself, the clone's shared exclude file.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
@@ -6,12 +6,11 @@ from typing import Any, Optional
 from agentctl.statefile import note_failure, write_json
 from agentctl.timefmt import ts
 from agentctl.storeknobs import knob_internal_trees_dir
-from agentctl.core import HOME, err, git, git_ok, remote
+from agentctl.core import HOME, git, remote
 from agentctl.allowedpaths import allowed_path
 from agentctl.procs import safe_cwd
 from agentctl.paths import claude_session_id, state_root
 from agentctl.fixerrecords import agent_name
-from agentctl.waitingdir import waiting_state
 from agentctl.onmain import landed_state
 
 
@@ -67,22 +66,6 @@ def worktree_exclude(wt: str, names: Any) -> None:
             f.write("\n".join(add) + "\n")
 
 
-def fresh_worktree(repo: str, kind: str, num: Any) -> tuple[str | None, str | None]:
-    """A fresh <clone>-wt-<kind>-<run>[-n] off <remote>/main (its branch named the same): (path, None) or (None, why).
-    A blame probe's (kind blame/...) and a red fixer's (kind red) worktree alike."""
-    _d, clone, _w = waiting_state(repo)
-    wt, branch, n = f"{clone}-wt-{kind}-{num}", f"{kind}-{num}", 1
-    while os.path.exists(wt) or git_ok(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}"):
-        n += 1
-        wt, branch = f"{clone}-wt-{kind}-{num}-{n}", f"{kind}-{num}-{n}"
-    git(repo, "worktree", "prune", check=False)
-    git(repo, "fetch", "--quiet", remote(), "main", check=False)
-    r = git(repo, "worktree", "add", "-q", "-b", branch, wt, f"{remote()}/main", check=False)
-    if r.returncode != 0:
-        return None, f"git worktree add failed ({r.stderr.strip()[:160]})"
-    return wt, None
-
-
 def worktrees(repo: str) -> list[dict[str, Any]]:
     wts: list[dict[str, Any]] = []
     cur: dict[str, Any] = {}
@@ -118,49 +101,3 @@ def merged_reason(repo: str, head: str, main: str) -> Optional[str]:
 CACHE_TREES = os.path.join(HOME, ".cache") + "/"  # tool-owned trees (e.g. kinowo-identity measure-local): reused, not litter
 
 
-# EVERY EXIT PUTS THE WORKTREE BACK (2026-11-20, the owner: "fix agentctl issues structurally"; 11 closed issues were a
-# path that left state behind: a NOT LANDED with its rebase in progress, a stash never restored, a hook left running, a
-# lease held 20 min after its land was gone). Two guards, one for each way out:
-# - exit_guard(): SIGTERM, SIGHUP and SIGINT raise Interrupted inside the block (a BaseException), so every `finally`
-#   and context exit above it runs -- the stash restored, the landing lease released, a child group ended
-#   (run_watched) -- where Python's default would have died mid-step with none of them;
-# - WorktreeGuard(repo): what a command started in a worktree and left unfinished -- a rebase, cherry-pick, revert or
-#   merge in progress -- is aborted on every exit (an error, a signal, a timeout, a return), and the branch it was on is
-#   checked out again if it left HEAD detached; an operation already in progress when it began is the agent's, never
-#   touched. Used by land (its rebase, its stash, its lease), the blame and fallback reverts and the check tree's picks.
-GIT_IN_PROGRESS = (("rebase-merge", "rebase"), ("rebase-apply", "rebase"), ("CHERRY_PICK_HEAD", "cherry-pick"),
-                   ("REVERT_HEAD", "revert"), ("MERGE_HEAD", "merge"))
-
-
-def git_in_progress(repo):
-    """The git operations in progress in worktree repo: {name} of rebase / cherry-pick / revert / merge."""
-    args = [x for marker, _n in GIT_IN_PROGRESS for x in ("--git-path", marker)]
-    paths = git(repo, "rev-parse", "--path-format=absolute", *args, check=False).stdout.splitlines()
-    return {name for (_m, name), p in zip(GIT_IN_PROGRESS, paths) if p.strip() and os.path.exists(p.strip())}
-
-
-class WorktreeGuard:
-    """`with WorktreeGuard(repo):` -- on every exit, the operations started inside and left in progress are aborted and
-    a branch left for a detached HEAD is checked out again (EVERY EXIT PUTS THE WORKTREE BACK, above)."""
-
-    def __init__(self, repo):
-        self.repo = repo
-
-    def __enter__(self):
-        self.before = git_in_progress(self.repo)
-        self.branch = git(self.repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip() or None
-        return self
-
-    def __exit__(self, *exc):
-        try:
-            for op in sorted(git_in_progress(self.repo) - self.before):
-                r = git(self.repo, op, "--abort", check=False)
-                if r.returncode and op == "rebase":  # a rebase-apply left by `git am`
-                    git(self.repo, "am", "--abort", check=False)
-                err(f"agentctl: aborted the {op} it left in progress in {self.repo}")
-            now = git(self.repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip() or None
-            if self.branch and now is None and not git_in_progress(self.repo):
-                git(self.repo, "checkout", "-q", self.branch, check=False)
-        except Exception as e:  # a guard never hides the exit it guards
-            err(f"agentctl: could not put {self.repo} back ({str(e)[:160]})")
-        return False
