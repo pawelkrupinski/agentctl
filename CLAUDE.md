@@ -122,6 +122,17 @@ proves each rule's removal is caught.
   function on its call path, to ONE PARAMETER PER DEPENDENCY (`clock`, `runner`, `inbox`, `runs`, `store`, ...) instead of
   `ctx` / `Context` or an ambient `wire_*` locator. A caller unpacks from `ctx` only at a boundary that still holds one.
   No NEW function takes `ctx`: `tests/test_no_new_ctx_parameters.py` freezes the per-module count, which only falls.
+- **Side effects live in leaves, with fakes** (the owner, 2026-11-27: "move side effects to leaves, with fake
+  implementations for testing (repos etc.)"): git, gh, files, the store, the network, processes and the clock are touched
+  only by LEAF adapters; decision logic above them is pure and takes the adapters as parameters. Each adapter has a fake
+  or in-memory implementation that SHARES its logic (movies' `writing-fakes`): for git, a `GitRepo`-style interface
+  (the real one runs the subprocess through `core.git`, the fake holds commits and refs in memory) so unit tests need no
+  temp repository; real temp git repos stay for the integration tests and `tests/e2e/`. When a function mixing decisions
+  with IO is changed, split it: the decision goes up as a pure function, the IO into the adapter. The design ratchet
+  measures only the module-level half today (effect rows outside an `adapter` module); a per-FUNCTION "mixed" row (a
+  function that performs an effect and also branches past a trivial condition, frozen as a ceiling that only falls) needs
+  `python_facts.effects` to report per function and a `mixed` kind in `design_lint` -- written down for a movies
+  `scripts/design-rules` lane, never edited in the vendored copy.
 - **One source of truth per concept** (movies "Extract repeated patterns at two uses"): no two pieces of code doing
   the same job differently -- deciding whether the gate is red, classifying a transient error, running `gh` / `git`
   with a timeout and retries, reading or writing a state file, formatting a time, an age or a verdict, finding a
