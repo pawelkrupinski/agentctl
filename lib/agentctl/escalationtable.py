@@ -105,6 +105,14 @@ DISPATCH_TABLE: dict[str, EscalationRoute] = {
                               "(the evidence below: each launch's end and log). Find why the launch dies -- the wrapper, "
                               "`claude --bg`, its environment, the worktree -- and fix that harness code (an owner-only "
                               "cause, the vault or a credential, is never yours: say BLOCKED ON OWNER)", "opus"),
+    "VENDOR_DRIFT": agent_route("the movies checkout changed a file agentctl vendors (devtools/design_rules/*, "
+                                "devtools/lib/*): in your worktree run `python3 devtools/vendor.py sync` (it copies "
+                                "the files and records their digests in VENDORED.tsv), then the full suite; if the new "
+                                "design rules or ratchet code put rows past a limit, freeze them (`\"$(python3 "
+                                "quality/tools.py)\" quality/ratchet.py update`) and give the commit's final trailer "
+                                "block the kind's trailer (Complexity:, Length:, Duplication:, Coupling:, Typing:, "
+                                "Naming: or Design:); push with `python3 devtools/selfpush.py`. The condition closes "
+                                "when `python3 devtools/vendor.py drift` exits 0 in ~/bin."),
     "NETWORK": owner_route("irreversible", "the laptop's network or the tunnel is out: an outage no agent can "
                                            "reach past"),
     "UNLANDED_ORPHAN": owner_route("policy-no-rule", "an orphaned worktree whose own orphan fixer already ran: "
@@ -114,6 +122,7 @@ DISPATCH_TABLE: dict[str, EscalationRoute] = {
 # THE FIXER CRASH LOOP (crashloop.py): its condition's kind and key per subject (`red:<id>`, `condition:<id>`), and the
 # hold both dispatchers ask before they launch that subject's fixer again -- here, below both, so it is ONE rule
 CRASH_LOOP_KIND = "CRASH_LOOP"
+VENDOR_DRIFT_KIND = "VENDOR_DRIFT"   # vendordrift.py: the movies checkout ahead of agentctl's vendored copies
 
 
 def crash_loop_key(subject: str) -> str:
@@ -123,7 +132,7 @@ def crash_loop_key(subject: str) -> str:
 def crash_loop_hold(open_conditions: list[dict[str, Any]], subject: str) -> Optional[str]:
     """Why the subject's fixer is not launched now -- its CRASH_LOOP condition (an item) is open -- or None."""
     key = crash_loop_key(subject)
-    for it in open_conditions:
+    for it in open_conditions:  # policy: crash-loop-hold
         d = it.get("data") or {}
         if d.get("kind") == CRASH_LOOP_KIND and d.get("key") == key and it.get("state", "open") == "open":
             return f"held: its fixer crash-loops at launch (condition {it['id']}): {str(d.get('text'))[:160]}"

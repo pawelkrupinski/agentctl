@@ -99,6 +99,18 @@ class OwnerDecisionsTest(unittest.TestCase):
         self.assertEqual(A.HOLDS["regen"].recovery, "recover", "2: an overdue regen hold recovers")
 
 
+class CrashLoopHoldTest(unittest.TestCase):
+    def test_the_crash_loop_relaunch_hold_is_a_registered_owner_approved_enforced_rule(self):
+        """THE CRASH_LOOP relaunch hold (770c75a; the owner, 2026-11-27): in the registry, approved, so it blocks."""
+        p = A.POLICIES["crash-loop-hold"]
+        self.assertEqual(p.effect, "hold")
+        self.assertTrue(p.approved)
+        self.assertIn("the owner, 2026-11-27", p.decided)
+        self.assertFalse(p.mechanism)
+        st = A.Store(path=os.path.join(tempfile.mkdtemp(prefix="agentctl-policy-"), "store.db"), clock=lambda: 1000.0)
+        self.assertTrue(A.policy_blocks("crash-loop-hold", st), "approved: enforced, never warn-only")
+
+
 class PolicyBlocksTest(unittest.TestCase):
     def test_an_approved_rule_blocks_and_an_unapproved_one_warns_once(self):
         t = [1000.0]

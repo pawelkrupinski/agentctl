@@ -45,7 +45,7 @@ class ConditionRegistry:
 PROBE_EVERY = {"disk_free": 300, "run_queue": 60, "quota_reset": 300, "invariant": 60, "waiting_ok": 30, "orphan_landed": 300, "route": 5, "tunnel": 10, "gate_read": 15,
                "workflow_green": 60, "token": 60, "tcp": 60, "http": 120, "git_fetch": 120,
                "clone_health": 120, "infra_requeue": 60, "push_credential": 60, "change_source": 60, "red_newer_verdict": 60,
-               "red_read": 300, "queue_moving": 60, "fixer_crash_loop": 60}
+               "red_read": 300, "queue_moving": 60, "fixer_crash_loop": 60, "vendor_drift": 60}
 
 
 class ConditionBypass(RuntimeError):

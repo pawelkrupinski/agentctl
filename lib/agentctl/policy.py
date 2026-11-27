@@ -88,6 +88,10 @@ POLICIES = {p.id: p for p in (
     Policy("queue-stall", "alert", "open changes and no change moving for 60 min ($AGENTCTL_QUEUE_STALL_AFTER) open "
            "one STALLED condition naming the head blocker; warn-only, it holds and rejects nothing (queuestall.py)",
            decided="the owner, 2026-11-26: keep the STALLED alert, warn-only, threshold 90 -> 60 min"),
+    Policy("crash-loop-hold", "hold", "a red's or an escalation's fixer is not launched again while its CRASH_LOOP condition is "
+           "open (its launches kept dying at launch of one cause); one launch is let through once a fix is deployed or "
+           "its block lifted (crashloop.py, escalationtable.py crash_loop_hold; the dispatchers' offers wait, saying why)",
+           decided="the owner, 2026-11-27: the CRASH_LOOP relaunch hold (770c75a), approved and enforced"),
     # -- rules that WARN, never block: agent-proposed and undecided, or (fix-replay-outside) kept warn-only by the
     # owner's own decision -- 2026-11-20, "enforce for gate reds": a red outside the gate stays warn-only
     Policy("fix-replay-outside", "reject", "a Fixes-Red landing for a red OUTSIDE the gate whose workflow names a "

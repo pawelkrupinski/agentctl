@@ -9,12 +9,17 @@ the same design rules, and agentctl never depends on movies -- so what both run 
 
 VENDORED.tsv: `<copy, relative to the checkout><TAB><movies path><TAB><sha256>`. A change to a copy is made in movies
 first (a movies lane), then `sync` here; an agentctl-side improvement is written down for movies, never edited in place.
+  python3 devtools/vendor.py drift   only the drift: exit 1 while the movies checkout is ahead of a copy (what the
+                                     VENDOR_DRIFT condition's probe asks)
 Without the movies checkout `check` reads the digests only: agentctl's CI stays standalone."""
 import hashlib
 import os
 import pwd
 import shutil
 import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib"))  # tool_git, under `python3 -I` too
+import tool_git  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TABLE = os.path.join("devtools", "design_rules", "VENDORED.tsv")
@@ -41,6 +46,34 @@ def movies_root():
     return root if os.path.isdir(root) else ""
 
 
+DRIFTED = "drifted from movies"
+
+
+def drifted(root=ROOT, movies=None):
+    """The copies whose movies file moved ahead (the movies checkout changed a vendored file): `sync` repairs them."""
+    return [x for x in problems(root, movies) if DRIFTED in x]
+
+
+def touched(root=ROOT, base="origin/main"):
+    """The vendored copies (and the table) this checkout's commits change against `base`'s merge base, or None when
+    git cannot say (no such base): the push's own change to what it vendors."""
+    git = tool_git.Git.here(root)
+    fork = git.line("merge-base", base, "HEAD")
+    if not fork:
+        return None
+    changed = set(git.lines("diff", "--name-only", fork, "HEAD"))
+    return sorted(changed & ({copy for copy, _s, _d in read_table(root)} | {TABLE}))
+
+
+def drift_verdict(root=ROOT, movies=None, base="origin/main"):
+    """(blocking, reported) drift. THE STRUCTURAL FIX (2026-11-27: three movies changes to a vendored file each refused
+    every agentctl push): drift blocks only a push that touches a copy or the table itself (or one git cannot place
+    against `base`); otherwise it is reported, and the VENDOR_DRIFT condition (lib/agentctl/vendordrift.py) has an
+    agent sync it."""
+    found = drifted(root, movies)
+    return (found, []) if found and touched(root, base) != [] else ([], found)
+
+
 def problems(root=ROOT, movies=None):
     """Why the copies are not as recorded: an edited copy, a missing one, and (with a movies checkout) a drifted one."""
     movies = movies_root() if movies is None else movies
@@ -54,7 +87,7 @@ def problems(root=ROOT, movies=None):
             out.append(f"{copy}: edited here (digest differs from VENDORED.tsv): change it in movies, then `vendor.py sync`")
         theirs = os.path.join(movies, source) if movies else ""
         if theirs and os.path.isfile(theirs) and digest(theirs) != digest(path):
-            out.append(f"{copy}: drifted from movies' {source}: `python3 devtools/vendor.py sync`, or write down the "
+            out.append(f"{copy}: {DRIFTED}' {source}: `python3 devtools/vendor.py sync`, or write down the "
                        "change for a movies lane")
     return out
 
@@ -82,6 +115,10 @@ def main(argv):
     if argv[:1] == ["check"]:
         found = problems()
         print("\n".join(found) or "vendor: every copy as recorded")
+        return 1 if found else 0
+    if argv[:1] == ["drift"]:
+        found = drifted()
+        print("\n".join(found) or "vendor: no copy drifted from movies")
         return 1 if found else 0
     print(__doc__)
     return 2

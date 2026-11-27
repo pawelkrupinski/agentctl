@@ -2072,6 +2072,8 @@ ESCALATIONS = [
     (5, {"kind": "escalate", "condition": "INVARIANT", "key": "invariant-WP", "text": "INVARIANT WP violated: Google "
          "Chrome pid 9: 12 GB -- the owner's to look at (agentctl never stops a process it did not start)", "owner": True}),
     (6, {"label": "b", "worktree": "b", "paths": ["docs/b.md"]}),
+    (7, {"kind": "escalate", "condition": "VENDOR_DRIFT", "key": "vendor-drift", "text": "VENDOR DRIFT: the movies "
+         "checkout changed a file agentctl vendors"}),  # vendordrift.py: a Sonnet agent syncs the copies
 ]
 # THE CRASH LOOPS (2026-11-26): fixers dying at launch of the vault (the owner's), of one other cause, and of a different
 # cause each time (climbs the tiers as before)

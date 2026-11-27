@@ -94,8 +94,11 @@ movies model (movies "Code quality ratchets" and "Coupling"), on the movies repo
 **The movies design rules apply here unchanged** (the owner, 2026-11-26), and agentctl never depends on the movies
 repository: the general rule core (`scripts/design-rules/`, its engine, trailer rule and rules table) is copied
 BYTE-EQUAL into `devtools/design_rules/` (`python3 devtools/vendor.py sync` copies it and records the digests in
-`VENDORED.tsv`; `check` and `tests/test_vendored.py` fail on an edited copy, and on a drifted one wherever
-`~/projects/movies` exists). Never edit a copy: change it in movies, then sync; an improvement made here is written down
+`VENDORED.tsv`; `check` and `tests/test_vendored.py` fail on an edited copy, and on a drifted one (the movies checkout
+ahead) only for a push that itself touches a copy or `VENDORED.tsv`: other pushes report drift and pass). A movies change
+to a vendored file is followed by agentctl's automatic sync: the laptop's sync loop opens a `VENDOR_DRIFT` condition
+(`lib/agentctl/vendordrift.py`), the escalation table routes it to a Sonnet agent that runs `vendor.py sync`, freezes any new
+ratchet rows with the right trailer and pushes. Never edit a copy: change it in movies, then sync; an improvement made here is written down
 for a movies lane. `quality/design.py` is agentctl's extractor over the core (the Python modules, `agentctl.<part>` imports),
 `quality/design-rules.tsv` its table (the limits, suffixes, abbreviations and idioms equal movies' own; the adapters,
 distance and layers agentctl's), `quality/design-baseline.tsv` what is past a rule today, frozen (rows only fall;

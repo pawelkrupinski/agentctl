@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import glob
+from functools import partial
 import os
 import subprocess
 import sys
@@ -37,6 +38,7 @@ from agentctl.reddispatch import red_renew_holders
 from agentctl.offerdispatch import red_dispatcher
 from agentctl.recovery import maybe_recovery_tick
 from agentctl.netwatch import network_watch, tunnel_watch
+from agentctl.vendordrift import vendor_drift_step
 from agentctl.landedchange import close_landed_changes, migrate_local_queue
 from agentctl.redcli import write_red_status_snapshot
 from agentctl.tokenerrors import NoToken
@@ -154,6 +156,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
             ("pins", duty(s.pins)), ("drift explorer", duty(s.explorer)),
             ("revert notes", duty(lambda: [err(x) for x in revert_notes(store)])),
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch(pace=land_pace)]),
+            ("vendor drift", duty(partial(vendor_drift_step, store, registry.check("vendor_drift"), clock.time, os.path.dirname(TOOL_PATH)))),  # vendordrift.py
             ("network watch", lambda: network_watch(store)), ("tunnel probe", lambda: tunnel_watch(store)),
             ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store, ctx=ctx), 1)),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep(store)]),

@@ -55,6 +55,7 @@ def probe_words(kind: Any, a: Any) -> Any:
             "infra_requeue": lambda: f"queue entry {a.get('eid')} gets past {a.get('reason')}",
             "queue_moving": lambda: "a change moves again (or none is open)",
             "fixer_crash_loop": lambda: f"{a.get('subject')} clears, a launch of its fixer lives, or agentctl's code changes",
+            "vendor_drift": lambda: "every vendored copy equals the movies checkout's file (vendor.py sync)",
             "red_read": lambda: f"ci-runner reads {', '.join(a.get('repos') or [])} (the agentctl-reader App)",
             "red_newer_verdict": lambda: f"a newer {a.get('workflow')} run than #{a.get('run')} no longer fails this way"}.get(kind, lambda: kind)()
 

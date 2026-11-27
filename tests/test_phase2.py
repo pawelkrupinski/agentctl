@@ -343,12 +343,12 @@ class ServerSideTest(Phase2Base):
             os.environ.pop("AGENTCTL_HOST")
         names = [n for n, _ in A.sync_steps(self.repo, self.tmp, "o/r", *on_clock(A.Clock()), registry(A), ctx=case_context())]
         self.assertEqual(names, ["laptop role", "outbox", "file events", "state mirror", "children", "events", "notifier", "alerts", "workspace trust", "landed worktrees", "local queue", "landed changes", "regen holds", "claims", "dispatcher", "escalation dispatcher", "pins", "drift explorer", "revert notes", "fixer landing",
-                                 "network watch", "tunnel probe", "red status snapshot", "upkeep", "root checkout", "recovery"])
+                                 "vendor drift", "network watch", "tunnel probe", "red status snapshot", "upkeep", "root checkout", "recovery"])
         server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f, *on_clock(A.Clock()), registry(A), ctx=case_context())]
         self.assertEqual(server, ["clone health", "landed changes", "stranded changes", "change tick", "land hold", "batch tick", "watches", "land refs",
                                   "lease archive", "entry files", "children", "gate summary", "red time", "red tick", "recovery", "issues",
                                   "reverts", "queue stall", "crash loops", "file events", "timeline", "quiet deadlines", "stats"])
-        laptop_only = {"events", "notifier", "alerts", "network watch", "tunnel probe", "red status snapshot", "upkeep", "fixer landing", "dispatcher", "regen holds",
+        laptop_only = {"events", "notifier", "alerts", "vendor drift", "network watch", "tunnel probe", "red status snapshot", "upkeep", "fixer landing", "dispatcher", "regen holds",
                        "claims"}
         self.assertEqual(laptop_only & set(server), set())
 
