@@ -20,12 +20,10 @@ from agentctl.allowedpaths import allowed_path
 from agentctl.inboxentry import inbox_write
 from agentctl.maint import cmd_orphans, spotlight_exclude
 from agentctl.tickknobs import MAINTAIN_SWEEP_HOUR
-from agentctl.statemachines import open_states
-from agentctl.waitingdir import entry_final
+from agentctl.entryfiles import decided_entry_files
 from agentctl.notifier import notify
 from agentctl.launchd import launch_agents_dir
 from agentctl.beats import beat_age, write_beat
-from agentctl.fixerblockers import shutil_which
 from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
 from agentctl.logrotate import rotate_logs
 from agentctl.orphanpass import orphan_duty
@@ -44,7 +42,7 @@ def sweep_skip_reason(script: str) -> str | None:
         return "laptop only"
     if not os.access(script, os.X_OK):
         return "no scripts/ios-simulators in the movies checkout"
-    return None if shutil_which("xcrun") else "no xcrun"
+    return None if shutil.which("xcrun") else "no xcrun"
 
 
 def swept_for_real(r: Any, dry_run: bool, count: int) -> bool:
@@ -230,24 +228,11 @@ class CacheExpiry:
             if m is not None and not os.path.isdir(p) and m < self.cutoff:
                 self.drop(p, f"older than {self.days:g} days")
 
-    def _entry_decided(self, p: str) -> bool:
-        """Whether the entry file at p is of a decided change: its own status is final, or its change item (the record
-        since one-change-model step 6: ci-runner's files were left open by it) is in a terminal state."""
-        e = read_record(p)
-        if not e or not e.get("status"):
-            return False
-        if entry_final(e["status"]):
-            return True
-        it = self.store.item("change", os.path.basename(p)[:-5]) if self.store else None
-        return bool(it) and it["state"] not in open_states("change")
-
     def entry_files(self) -> None:
         """The queue directories' entry files of decided changes, untouched for the window (ci-runner kept 1,897 from before
         the item became the only record)."""
-        for p in glob.glob(os.path.join(glob.escape(os.path.join(self.root, "waiting")), "*", "entries", "*.json")):
-            m = _lstat_mtime(p)
-            if m is not None and m < self.cutoff and self._entry_decided(p):
-                self.drop(p, f"entry file of a decided change, untouched for {self.days:g} days")
+        for p in decided_entry_files(os.path.join(self.root, "waiting"), self.cutoff, self.store):
+            self.drop(p, f"entry file of a decided change, untouched for {self.days:g} days")
 
     def red_dirs(self) -> None:
         for p in glob.glob(os.path.join(glob.escape(os.path.join(self.root, "reds")), "[0-9]*")):

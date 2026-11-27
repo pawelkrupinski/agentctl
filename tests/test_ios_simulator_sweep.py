@@ -1,5 +1,6 @@
 """maintain sweeps the iOS Simulators agents left booted (movies' scripts/ios-simulators sweep), and the fixer brief
 tells a fixer to run simulator work through `scripts/ios-simulators run --`."""
+from unittest import mock
 import argparse, contextlib, io, os, stat, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -11,9 +12,10 @@ class IosSimulatorSweepTest(unittest.TestCase):
     def setUp(self):
         self.root = tempfile.mkdtemp(prefix="movies-root-")
         self.written = []
-        self.saved = {k: getattr(A, k) for k in ("inbox_write", "shutil_which")}
+        self.saved = {k: getattr(A, k) for k in ("inbox_write",)}
         A.inbox_write = lambda command, verdict, *rest, **kw: self.written.append((command, verdict))
-        A.shutil_which = lambda name: "/usr/bin/xcrun"
+        self.which = mock.patch("shutil.which", lambda name: "/usr/bin/xcrun")
+        self.which.start()
         self.saved_platform = sys.platform
         sys.platform = "darwin"
 
@@ -21,6 +23,7 @@ class IosSimulatorSweepTest(unittest.TestCase):
         for k, v in self.saved.items():
             setattr(A, k, v)
         sys.platform = self.saved_platform
+        self.which.stop()
 
     def script(self, body):
         os.makedirs(os.path.join(self.root, "scripts"), exist_ok=True)
@@ -62,7 +65,9 @@ class IosSimulatorSweepTest(unittest.TestCase):
 
     def test_it_is_skipped_without_xcrun(self):
         self.script("echo ran\n")
-        A.shutil_which = lambda name: None
+        self.which.stop()
+        self.which = mock.patch("shutil.which", lambda name: None)
+        self.which.start()
         out = self.sweep()
         self.assertIn("no xcrun", out)
         self.assertNotIn("ran\n", out)
