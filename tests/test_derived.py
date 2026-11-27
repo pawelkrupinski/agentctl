@@ -297,7 +297,7 @@ class DerivedTest(test_generated.GeneratedQueueTest):
             if self.entry(younger)["status"] == "queued":
                 A.check_entry(self.r.path, younger, *on_clock(self.clock))  # its new round, on main with the older
             A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
-            if self.entry(younger)["status"] in A.ENTRY_FINAL:
+            if A.entry_final(self.entry(younger)["status"]):
                 break
         self.assertTrue(self.landed(older, younger), [self.entry(x) for x in (older, younger)])
         self.assertIn("## Tools (3)", self.on_main(CATALOGUE), "the combined count")

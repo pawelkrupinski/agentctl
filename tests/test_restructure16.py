@@ -216,11 +216,9 @@ class SetChangeTest(unittest.TestCase):
         r = case.rng
         terminal = ("landed", "rejected", "superseded", "cancelled")
         states = ["queued", "checking", "checked", "pushing", "waiting"] + list(terminal)
-        case.fake("joined_changes", lambda rng, d, e, st: [({"id": "q1"}, {"id": "q1"})] * rng.randint(0, 2))
         case.fake("machine_state", lambda rng, kind, s: NS(terminal=s in terminal))
         case.fake("change_item_fields", lambda rng, e: {"head": e.get("head")})
         case.fake("save_entry", lambda rng, d, e: None)
-        case.fake("joined_verdicts", lambda rng, st, e, joined, to, event, data: None)
 
         def put_item(rng, kind, eid, state, data):
             return {"state": rng.choice(states), "version": rng.randint(1, 4), "data": rng.choice([None, {}, {"hold": {"why": "w"}}])}
@@ -396,7 +394,6 @@ class ProjectChangesTest(unittest.TestCase):
         case.fake("waiting_entries", lambda rng, d, open_only=True: every)
         case.fake("change_item_fields", lambda rng, e: {"head": e["id"]})
         case.fake("machine_state", lambda rng, k, s: NS(terminal=s in ("landed", "rejected")))
-        case.fake("projected_transition", lambda rng, e, w, cur, state: ({"d": 1}, {"kind": "k"}))
         states = ["queued", "checking", "waiting", "landed", "rejected"]
 
         def transition(rng, *a, **k):

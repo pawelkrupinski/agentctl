@@ -144,36 +144,13 @@ def deadline_walk(typ, state):
     return False, any(MACHINES[typ][x].escalate for x in cycle)
 
 
-# the change items, projected from today's queue entries (read-only until step 6 makes the tick their writer)
-ENTRY_STATE = {"queued": "queued", "checking": "checking", "checked": "checked", "pushing": "pushing",
-               "joined": "waiting", "waiting": "waiting", "landed": "landed",
-               "rejected": "rejected", "superseded": "superseded", "cancelled": "cancelled"}
+def change_state_of(status: Any) -> str | None:
+    """The change state a queue entry's status names, None for a status no change state is (`joined`, `migrated`:
+    retired, docs/design/one-change-model.md; an entry carrying one is decided)."""
+    return status if status in MACHINES["change"] else None
 
 
-def joined_verdict(q, w, to):
-    """The verdict line of queued change q that joined waiting entry w, at w's final state `to`, from w's `why` -- ONE
-    builder for the change's own transition (joined_verdicts) and its projection (projected_transition), so both say
-    the same; None when w has no why."""
-    if not w.get("why"):
-        return None
-    line = str(w["why"]).splitlines()[0]
-    if to == "superseded":  # its why is the bare reason: the verdict line says SUPERSEDED, as supersede's does
-        line = f"SUPERSEDED by {w.get('superseded_by') or 'another entry'}: {line}"
-    return f"{line} (queued {q['id']}, joined `waiting` as {w['id']})"
-
-
-def projected_transition(e, w, frm, to):
-    """(data, event) of a projected change transition. A joined change's terminal one carries its waiting entry's
-    verdict (a batch's LANDED, a NOT LANDED) and landed sha under ITS OWN id, so a watcher on the id `land` printed
-    reads them there (2026-11-16: ...-ac68b8 got only `waiting -> landed`, its batch's LANDED went to the waiting
-    entry's id)."""
-    verdict = joined_verdict(e, w, to) if w and machine_state("change", to).terminal else None
-    if not verdict:
-        return None, {"text": f"{e['id']}: {frm} -> {to}", "refs": {"entry": e["id"]}}
-    sha = {"landed_sha": w["landed_sha"]} if to == "landed" and w.get("landed_sha") else {}
-    at = {"pushed_at": w["pushed_at"]} if sha and w.get("pushed_at") else {}
-    return ({"why": verdict, **({"tip": sha["landed_sha"]} if sha else {}), **sha, **at},
-            change_event(e, verdict, code=0 if to in ("landed", "superseded") else 1, **sha))
+ENTRY_STATE = {name: name for name in MACHINES["change"]}  # the simulator's name until its invariants read change_state_of
 
 
 # A CHANGE NEVER LEAVES THE QUEUE SILENTLY (2026-10-30: `…-76336e`'s NOT LANDED reached the inbox without its item id,

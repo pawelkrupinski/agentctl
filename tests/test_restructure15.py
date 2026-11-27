@@ -104,7 +104,7 @@ class SweepLandRefsTest(unittest.TestCase):
         case.fake("entry_id_age", lambda rng, eid, t: rng.choice([None, 10, 10 ** 6]))
         case.fake("waiting_entries", lambda rng, d, open_only=True: [{"id": r.choice(ids), "status": r.choice(["queued", "final", "landed"])}
                                                                       for _ in range(r.randint(0, 3))])
-        case.put("ENTRY_FINAL", ("final", "landed"))
+        case.fake("entry_final", lambda rng, s: s in ("final", "landed"))
         case.fake("machine_state", lambda rng, m, s: NS(terminal=s in ("landed", "dead")))
         case.fake("git", lambda rng, repo, *a, **k: proc(rng, "\n".join(refs), rng.choice([0, 0, 0, 1])) if a[0] == "ls-remote"
                   else proc(rng, "", rng.choice([0, 1])))

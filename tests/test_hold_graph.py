@@ -87,7 +87,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
                     A.check_entry(self.r.path, x, *on_clock(self.clock))
             A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
             self.drive()  # the batch tick: queued changes that meet may land as one backlog batch
-            if all(self.entry(x)["status"] in A.ENTRY_FINAL for x in ids):
+            if all(A.entry_final(self.entry(x)["status"]) for x in ids):
                 break
         return {x: self.entry(x)["status"] for x in ids}
 

@@ -15,7 +15,7 @@ from agentctl.govknobs import CHECK_LEASE_TTL
 from agentctl.core import err, fmt_age, git, remote, spawn_detached
 from agentctl.repos import precheck_hook
 from agentctl.generated import without_generated
-from agentctl.waitingdir import ENTRY_FINAL, waiting_entries, wlog
+from agentctl.waitingdir import entry_final, waiting_entries, wlog
 from agentctl.storetoken import detached_env
 from agentctl.conditions import open_condition, run_probe
 from agentctl.queueslots import check_tree, check_tree_slot, set_change
@@ -48,7 +48,7 @@ def backlog_reconcile(d, st):
     did = []
     for e in waiting_entries(d, open_only=False):
         bid = e.get("backlog_batch")
-        if not bid or e.get("status") in ENTRY_FINAL:
+        if not bid or entry_final(e.get("status")):
             continue
         it = st.item("batch", bid)
         if batch_carries(it, e):

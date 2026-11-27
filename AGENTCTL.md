@@ -2127,8 +2127,7 @@ by the `ci-why` summary).
 land's own process, outside the lock (the hook's dry run `--range <remote>/main..<sha>`), then under the `land/<repo>`
 lease it fetches, pushes when main has not moved since the check (moved: checked again outside the lock, twice; the
 third time under it) and verifies; main red and the change must wait: it joins the queue as `waiting` and `--follow`
-waits for its batch (a queued change that joined `waiting` gets that entry's final verdict under its OWN id, the one
-`land` printed: `joined_verdicts`). `--follow` then watches in-process; otherwise LANDED starts a watch item and land exits. A sha
+waits for its batch (the change itself waits, under the id `land` printed: one change, one item). `--follow` then watches in-process; otherwise LANDED starts a watch item and land exits. A sha
 has ONE watch, its store item, whichever host makes it: `--follow` claims it (a lease it renews, which the tick leaves
 alone) and writes its verdict there; a second follower of the same sha, on any host, prints that verdict instead of
 watching again, and a lapsed claim is taken over (a follower renews only its own claim). The item names its repo
@@ -2369,8 +2368,9 @@ Main takes ~20 min and the identity runs longer; a job can fail in minute 3 whil
 ONE QUEUE (2026-10-30): the queue is ci-runner's store. `land status`, the status line and the status page all read
 its change items; `land cancel <id>` reaches any open item (on the laptop through the store API), one no entry carries
 included. The laptop holds no queue: `land` (and its network re-queue) push `refs/heads/land/<id>` and submit; what its
-local waiting dir still holds, the sync moves to ci-runner's queue each cycle (`migrated`), or says `LOCAL QUEUE: …`
-loudly. A change whose commits are on main BY CONTENT (landing rebases, so never by sha) closes itself as LANDED, every tick (each change looked at every 10 min, `$AGENTCTL_LANDED_LOOK`), on the server and on the laptop
+local waiting dir still holds (an outbox: a `--follow` land while red), the sync moves to ci-runner's queue each cycle
+and deletes there (the store's item is the change from then on), or says `LOCAL QUEUE: …` loudly. A status no change
+state is (`joined`, `migrated`: retired, docs/design/one-change-model.md) reads as decided. A change whose commits are on main BY CONTENT (landing rebases, so never by sha) closes itself as LANDED, every tick (each change looked at every 10 min, `$AGENTCTL_LANDED_LOOK`), on the server and on the laptop
 (its clone has the commits of the laptop's worktrees). A submission supersedes the older open items of its worktree.
 An open item no queue entry carries is a STRANDED CHANGE condition, closed by its own probe once the item closes. W1
 counts only those open items, after that landed look, and names the oldest with why it has not landed.

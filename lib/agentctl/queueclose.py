@@ -14,7 +14,7 @@ from agentctl.clock import Clock
 from agentctl.landstate import UNKNOWN, LandState, landed_state
 from agentctl.core import fmt_age, git_ok, host_role, process_cache, remote
 from agentctl.repos import movies_repo_path, precheck_hook, waiting_supported
-from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries, waiting_state, wlog
+from agentctl.waitingdir import drop_entry, entry_final, save_entry, waiting_entries, waiting_state, wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_write
 from agentctl.clones import clone_shared
@@ -75,7 +75,7 @@ def _close_landed_entries(repo: Any, st: Any, d: Any, t: Any, did: list[str]) ->
     cover, whose store items are not looked at again."""
     carried: set[str] = set()
     for e in waiting_entries(d, open_only=False) if d else []:
-        if e.get("status") in ENTRY_FINAL or e.get("status") == "pushing":
+        if entry_final(e.get("status")) or e.get("status") == "pushing":
             continue
         carried.add(e["id"])
         state = change_state(repo, e.get("head"), e.get("commits")) if landed_look_due(e["id"], t) else None
@@ -164,16 +164,17 @@ def _tell_stranded(d: Any, e: Any, line: str) -> None:
 
 
 def migrate_local_queue(repo: Any, store: Any) -> Any:
-    """THE LAPTOP'S (sync role): its local waiting dir holds no queue. Each open entry there is LANDED when its commits
-    are on main by content, else pushed to refs/heads/land/<id> and submitted to ci-runner's queue under its own id
-    (the entry: `migrated`). One that cannot move is said loudly (stderr, and its author's inbox once an hour).
-    Returns what it did."""
+    """THE LAPTOP'S (sync role): its local waiting dir holds no queue, only an OUTBOX (a `land --follow` while main is
+    red: slots.join). Each open entry there is LANDED when its commits are on main by content, else pushed to
+    refs/heads/land/<id> and submitted to ci-runner's queue under its own id, and its file DELETED: the store's item is
+    the change from then on (docs/design/one-change-model.md, step 2). One that cannot move is said loudly (stderr,
+    and its author's inbox once an hour). Returns what it did."""
     if host_role() != "sync" or not os.path.isdir(repo):
         return []
     d = waiting_state(repo)[0]
     did: list[str] = []
     for e in waiting_entries(d, open_only=False):
-        if e.get("status") in ENTRY_FINAL:
+        if entry_final(e.get("status")):
             continue
         state = change_state(repo, e.get("head"), e.get("commits"))
         if state.landed:  # unknown: migrated to ci-runner's queue like an unlanded one, which decides there
@@ -181,8 +182,7 @@ def migrate_local_queue(repo: Any, store: Any) -> Any:
             continue
         why = _migration_failure(repo, store, d, e)
         if why is None:
-            e.update(status="migrated", decided=ts(), why="moved to ci-runner's queue")
-            save_entry(d, e)
+            drop_entry(d, e["id"])
             did.append(f"{e['id']}: moved to ci-runner's queue")
             continue
         line = (f"LOCAL QUEUE: {e['id']} ({e.get('worktree')}) is in the laptop's local queue, which nothing runs: {why}; "

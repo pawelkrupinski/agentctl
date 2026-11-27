@@ -303,7 +303,7 @@ class PushBatchTest(test_queue.QueueTest):
         for _ in range(n):
             out += A.tick_changes(self.r.path, self.d, *on_clock(self.clock)) + A.close_landed_changes(self.r.path, self.clock, A.CurrentStore(A.process_store), self.d) \
                 + A.tick_batch(self.r.path, self.d, *on_clock(self.clock))
-            if all(self.entry(e)["status"] in A.ENTRY_FINAL for e in eids):
+            if all(A.entry_final(self.entry(e)["status"]) for e in eids):
                 break
         A.project_events(A.CurrentStore(A.process_store))
         return out

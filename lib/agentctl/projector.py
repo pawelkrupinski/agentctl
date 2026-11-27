@@ -17,7 +17,7 @@ from agentctl.waitingdir import waiting_entries, wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_dir, inbox_kind
 from agentctl.notifier import notify, notify_cause, notify_fix
-from agentctl.statemachines import ENTRY_STATE, StaleVersion, TerminalState, machine_state, projected_transition
+from agentctl.statemachines import StaleVersion, TerminalState, change_state_of, machine_state
 from agentctl.store import LEASE_ARCHIVE_AFTER
 from agentctl.queueslots import change_item_fields
 from agentctl.redask import ask_interval
@@ -26,34 +26,23 @@ from agentctl.alertroute import event_audience
 from agentctl.blameknobs import knob_ask_remind_max
 
 
-def _entry_change_state(e, every):
-    """(the change state of a queue entry, the waiting entry it follows or None). A pre-step-8 join follows the waiting
-    entry that carries it."""
-    if e.get("status") != "joined":
-        return ENTRY_STATE.get(e.get("status")), None
-    w = every.get(e.get("waiting_id") or "")
-    return ENTRY_STATE.get((w or {}).get("status"), "landed" if not w else "waiting"), w
-
-
 def project_changes(d, store):
     """Each queue entry's change item: created in its state, moved (a transition, with its event) when the entry's
     status moved. Returns the items."""
     st = store
     out = []
-    every = {x["id"]: x for x in waiting_entries(d, open_only=False)}
-    for e in every.values():
-        state, w = _entry_change_state(e, every)
+    for e in waiting_entries(d, open_only=False):
+        state = change_state_of(e.get("status"))
         if not state:
             continue
         cur = st.put_item("change", e["id"], state, {**change_item_fields(e),
                                                      "submitted_at": st.clock(),
                                                      "red_accum0": float(st.meta_get("red_accum", 0) or 0)})
         if cur["state"] != state and not machine_state("change", cur["state"]).terminal:
-            data, event = projected_transition(e, w, cur["state"], state)
-            event = {**event, "cause": PROJECTED_CAUSE.get(state) or reject_cause(str((data or {}).get("why") or "")),
-                     "detail": "projected"}
+            event = {"text": f"{e['id']}: {cur['state']} -> {state}", "refs": {"entry": e["id"]},
+                     "cause": PROJECTED_CAUSE.get(state) or reject_cause(""), "detail": "projected"}
             with suppress(StaleVersion, TerminalState):
-                st.transition("change", e["id"], state, cur["version"], data=data, event=event)
+                st.transition("change", e["id"], state, cur["version"], event=event)
             cur = st.item("change", e["id"])
         out.append(cur)
     return out

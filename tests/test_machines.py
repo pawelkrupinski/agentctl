@@ -134,74 +134,35 @@ class ProjectionTest(unittest.TestCase):
         self.assertEqual(A.project_changes(d, st)[0]["state"], "checking")
         self.assertEqual([e["kind"] for e in st.events() if e["from_state"] is not None], ["change.checking"])
 
-    def test_a_change_that_joined_waiting_gets_its_batchs_verdict_under_its_own_id(self):
-        """2026-11-16: queued 20261116-184811-movies-r2-ci-ac68b8 joined `waiting` as 20261116-182331-movies-r2-ci-962;
-        its batch's LANDED went to the waiting entry's id, and the queued one's own event said only `waiting -> landed`
-        (an OTHER entry): a watcher on the id `land` printed never saw LANDED."""
+    def test_an_entry_of_a_retired_status_is_decided_never_an_open_change(self):
+        """ONE CHANGE, ONE RECORD (docs/design/one-change-model.md, step 1): `joined` (no writer since 6d206ed,
+        2026-11-18) and `migrated` (the laptop outbox's "sent") are no change states. An entry file still carrying one
+        is decided: no item is made or moved for it -- the projector made a joined entry whose waiting entry was gone
+        a LANDED item with no sha -- and the queue never picks it."""
         root = tempfile.mkdtemp()
         st = A.Store(path=os.path.join(root, "store.db"))
         d = os.path.join(root, "w")
         os.makedirs(os.path.join(d, "entries"))
-        q = {"id": "q1", "seq": 1, "status": "joined", "waiting_id": "w1", "worktree": "/wt/q"}
-        w = {"id": "w1", "seq": 2, "status": "waiting", "worktree": "/wt/q"}
-        A.write_json(os.path.join(d, "entries", "q1.json"), q)
-        A.write_json(os.path.join(d, "entries", "w1.json"), w)
-        A.project_changes(d, st)
-        A.write_json(os.path.join(d, "entries", "w1.json"),
-                     dict(w, status="landed", landed_sha="abc123", why="LANDED abc123 (batch: 1 change(s) in one push)"))
-        A.project_changes(d, st)
-        ev = [e for e in st.events() if e["item_id"] == "q1" and e["to_state"] == "landed"]
-        self.assertEqual(len(ev), 1)
-        self.assertTrue(ev[0]["refs"]["verdict"].startswith("LANDED abc123 (batch: 1 change(s) in one push"),
-                        ev[0]["refs"]["verdict"])
-        self.assertIn("q1", ev[0]["refs"]["verdict"])
-        self.assertEqual(ev[0]["refs"]["entry"], "q1")
-        self.assertEqual(A.inbox_kind(ev[0]["refs"]["verdict"], True), "LANDED")
-        self.assertEqual(st.item("change", "q1")["data"]["tip"], "abc123", "await_queued prints the landed sha")
+        for i, status in ((1, "joined"), (2, "migrated"), (3, "bogus")):
+            A.write_json(os.path.join(d, "entries", f"q{i}.json"),
+                         {"id": f"q{i}", "seq": i, "status": status, "waiting_id": "gone", "worktree": "/wt/q"})
+        A.write_json(os.path.join(d, "entries", "w1.json"), {"id": "w1", "seq": 4, "status": "waiting", "worktree": "/wt/w"})
+        self.assertEqual({i["id"]: i["state"] for i in A.project_changes(d, st)}, {"w1": "waiting"})
+        self.assertIsNone(st.item("change", "q1"))
+        self.assertEqual([e["id"] for e in A.waiting_entries(d)], ["w1"])
+        self.assertEqual(A.queued_entries(d), [])
+        self.assertEqual([s for s in ("queued", "checking", "checked", "pushing", "waiting", "joined", "migrated", "bogus", None)
+                          if A.entry_final(s)], ["joined", "migrated", "bogus", None])
 
-    def test_a_joined_changes_verdict_reads_the_same_from_its_transition_and_its_projection(self):
-        """Review round 9: joined_verdicts built the line from the event's verdict and projected_transition from the
-        entry's why (a supersede read `SUPERSEDED w1 by w0: ...` one way, `SUPERSEDED by w0: ...` the other)."""
-        for to, why, fields in (("landed", "LANDED abc123 (batch: 1 change(s) in one push)", {"landed_sha": "abc123"}),
-                                ("superseded", "the same change already waits as w0", {"superseded_by": "w0"}),
-                                ("cancelled", "cancelled by `agentctl land cancel`", {})):
-            root = tempfile.mkdtemp()
-            st = A.Store(path=os.path.join(root, "store.db"))
-            d = os.path.join(root, "w")
-            os.makedirs(os.path.join(d, "entries"))
-            q = {"id": "q1", "seq": 1, "status": "joined", "waiting_id": "w1", "worktree": "/wt/q"}
-            w = {"id": "w1", "seq": 2, "status": "waiting", "worktree": "/wt/q"}
-            A.write_json(os.path.join(d, "entries", "q1.json"), q)
-            A.write_json(os.path.join(d, "entries", "w1.json"), w)
-            A.project_changes(d, st)
-            event_line = why if to != "superseded" else f"SUPERSEDED w1 by w0: {why}"
-            A.set_change(st, d, w, to, event=A.change_event(w, event_line, code=0), why=why, **fields, cause="agent")
-            ev = [e for e in st.events() if e["item_id"] == "q1" and e["to_state"] == to]
-            self.assertEqual(len(ev), 1, to)
-            projected = A.projected_transition(q, w, "waiting", to)[1]["refs"]["verdict"]
-            self.assertEqual(ev[0]["refs"]["verdict"], projected, to)
-            self.assertIn("(queued q1, joined `waiting` as w1)", projected)
-
-    def test_a_joined_change_whose_waiting_entry_was_superseded_says_superseded_under_its_own_id(self):
-        """Review round 5: the waiting entry's `why` on a supersede is the bare reason ("the same change already
-        waits as ..."), so the joined change's verdict read as an OTHER entry with exit 1, never SUPERSEDED."""
-        root = tempfile.mkdtemp()
-        st = A.Store(path=os.path.join(root, "store.db"))
-        d = os.path.join(root, "w")
+    def test_a_final_status_on_disk_stands_against_a_racing_open_write(self):
+        """save_entry's race rule (audit S2), characterised before the files go: a decided entry on disk keeps its
+        status and verdict when a racing writer saves the entry open."""
+        d = tempfile.mkdtemp()
         os.makedirs(os.path.join(d, "entries"))
-        A.write_json(os.path.join(d, "entries", "q1.json"),
-                     {"id": "q1", "seq": 1, "status": "joined", "waiting_id": "w1", "worktree": "/wt/q"})
-        w = {"id": "w1", "seq": 2, "status": "waiting", "worktree": "/wt/q"}
-        A.write_json(os.path.join(d, "entries", "w1.json"), w)
-        A.project_changes(d, st)
-        A.write_json(os.path.join(d, "entries", "w1.json"),
-                     dict(w, status="superseded", superseded_by="w0", why="the same change already waits as w0"))
-        A.project_changes(d, st)
-        [ev] = [e for e in st.events() if e["item_id"] == "q1" and e["to_state"] == "superseded"]
-        self.assertEqual(A.inbox_kind(ev["refs"]["verdict"], True), "SUPERSEDED", ev["refs"]["verdict"])
-        self.assertIn("by w0", ev["refs"]["verdict"])
-        self.assertEqual(ev["refs"]["exit"], 0)
-
+        A.save_entry(d, {"id": "e1", "seq": 1, "status": "superseded", "why": "by e2", "superseded_by": "e2"})
+        A.save_entry(d, {"id": "e1", "seq": 1, "status": "checked", "tip": "t"})
+        e = A.read_record(os.path.join(d, "entries", "e1.json"))
+        self.assertEqual((e["status"], e["why"], e["superseded_by"], e["tip"]), ("superseded", "by e2", "e2", "t"))
 
 if __name__ == "__main__":
     unittest.main()

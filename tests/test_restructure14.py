@@ -249,6 +249,7 @@ class MigrateLocalQueueTest(unittest.TestCase):
         case.fake("change_state", lambda rng, repo, head, commits=None: change_state_of(rng.choice([True, False, None]), "via1"))
         case.fake("ts", lambda rng: "T")
         case.fake("save_entry", lambda rng, d, e: None)
+        case.fake("drop_entry", lambda rng, d, eid: None)
         case.fake("close_item_landed", lambda rng, st, cid, why, via=None: True)
         case.fake("submit_ref", lambda rng, repo, d, e, to_server=False: rng.random() < 0.7)
         case.fake("epoch_now", lambda rng: NOW)

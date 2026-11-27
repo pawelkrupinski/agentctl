@@ -127,13 +127,9 @@ def reject_class(cause: str | None) -> str:
     return REJECT_CLASS.get(cause or "", "test")
 
 
-# the cause of a waiting entry's status move (filelog.py's `entry` events, waitingdir.save_entry)
-ENTRY_CAUSE = {**PROJECTED_CAUSE, "joined": "batch", "migrated": "submitted", "abandoned": "check-failed-infra"}
-
-
 def entry_cause(status: str, why: str = "") -> str:
     """The cause of a waiting entry entering `status` (a reject by THE classifier over its reason)."""
-    return reject_cause(why) if status == "rejected" else ENTRY_CAUSE.get(status, "agent")
+    return reject_cause(why) if status == "rejected" else PROJECTED_CAUSE.get(status, "agent")
 
 
 def governor_cause(waited_on: object) -> str:

@@ -307,8 +307,8 @@ def spawn_executor(repo, d, eid):
 # into a second open change item -- every held change counted and listed twice by the status line, `land status`, the
 # watchdog and the stats. Now the queued change ITSELF waits: its entry joins the waiting entries the batch reads (its
 # tip the one it was checked at, its commits and counting fixes as land's join records them) and its item moves to
-# `waiting`; the batch lands, rejects or supersedes it under the id its `land` printed. A `joined` entry on disk (from
-# before) still follows the waiting entry that carries it (joined_changes, project_changes) until it is decided.
+# `waiting`; the batch lands, rejects or supersedes it under the id its `land` printed. A `joined` entry still on disk
+# (from before) is decided (waitingdir.entry_final): it was retired with its projection (docs/design/one-change-model.md).
 QUEUE_ONLY_FIELDS = ("backlog_batch", "batch_alone", "push_alone", "drift_split", "remote_run")  # a check's, not a wait's
 
 

@@ -2,7 +2,6 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, Optional
-from agentctl.queueslots import ENTRY_STATUS
 
 
 # A FIX FOLLOWS ITS WORK, NOT ITS CHANGE ID (2026-10-31, Main #2877): "fix 20261031-073114-movies-wt-flakes-9f6bc4
@@ -40,7 +39,7 @@ def red_fix_fresh(store: Any, fix: Optional[dict[str, Any]]) -> Optional[dict[st
     if ch["state"] == "landed":
         sha = ch["data"].get("landed_sha") or ch["data"].get("tip")
         return {**fix, "status": "landed", "sha": sha, "at": float(ch.get("entered_at") or store.clock())} if sha else fix
-    return {**fix, "status": ENTRY_STATUS.get(ch["state"], fix.get("status"))}
+    return {**fix, "status": ch["state"]}
 
 
 def fixes_named(x: Optional[dict[str, Any]]) -> set[str]:

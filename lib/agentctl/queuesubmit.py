@@ -14,7 +14,7 @@ from agentctl.netretry import TransientNetwork, net_retry
 from agentctl.networksignatures import credential_failure, is_transient_network, redact_credentials
 from agentctl.store import StoreUnavailable
 from agentctl.selfcode import TOOL_PATH
-from agentctl.waitingdir import ENTRY_FINAL, save_entry, waiting_entries
+from agentctl.waitingdir import entry_final, save_entry, waiting_entries
 from agentctl.land import push_bounds, run_watched, tool_env
 from agentctl.owned import backoff
 from agentctl.waiting import tail_of
@@ -65,7 +65,7 @@ def _land_ref_unneeded(eid: str, every: Any, items: Any, t: float) -> Optional[s
     """None when land/<eid> must stay (a change either source holds open, or an unknown one not yet old enough); else
     the note on its deletion ("" when its change is decided)."""
     e, it = every.get(eid), items.get(eid)
-    if e and e.get("status") not in ENTRY_FINAL:
+    if e and not entry_final(e.get("status")):
         return None
     if it and not machine_state("change", it["state"]).terminal:
         return None

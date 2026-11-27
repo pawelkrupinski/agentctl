@@ -4,12 +4,14 @@
 import glob
 import os
 import re
+from contextlib import suppress
 from typing import Any
 from agentctl.filelog import note_event
 from agentctl.causes import entry_cause
 from agentctl.core import git, state_root
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
+from agentctl.statemachines import MACHINES
 
 
 # ---------------------------------------------------------------- waiting: production changes held while main is red
@@ -49,7 +51,17 @@ def waiting_entries(d: str, open_only: bool = True) -> list[dict[str, Any]]:
     return sorted(out, key=lambda e: (e.get("seq") is None, e.get("seq") or 0))  # an entry with no seq: last
 
 
-ENTRY_FINAL = ("landed", "rejected", "superseded", "cancelled", "joined", "migrated")  # migrated: the laptop's, to ci-runner
+# AN ENTRY IS OPEN ONLY IN AN OPEN CHANGE STATE (docs/design/one-change-model.md, rule 4): any other status -- a
+# terminal state, or one an older revision wrote and no change state is (`joined`, `migrated`) -- is decided.
+ENTRY_OPEN = tuple(name for name, spec in MACHINES["change"].items() if not spec.terminal)
+
+
+def entry_final(status: Any) -> bool:
+    """Whether an entry of this status is decided (not ENTRY_OPEN)."""
+    return status not in ENTRY_OPEN
+
+
+ENTRY_FINAL = ("landed", "rejected", "superseded", "cancelled")  # the simulator's name until its invariants read entry_final
 
 
 def save_entry(d: str, e: dict[str, Any]) -> None:
@@ -57,12 +69,19 @@ def save_entry(d: str, e: dict[str, Any]) -> None:
     (audit S2: `supersede` raced the checker's save): the disk's status and verdict stand."""
     p = os.path.join(d, "entries", f"{e['id']}.json")
     disk = read_record(p) or {}
-    if disk.get("status") in ENTRY_FINAL and e.get("status") not in ENTRY_FINAL:
+    if disk.get("status") and entry_final(disk.get("status")) and not entry_final(e.get("status")):
         e.update({k: disk[k] for k in ("status", "why", "decided", "superseded_by", "landed_sha") if k in disk})
     write_json(p, e)
     if e.get("status") and e.get("status") != disk.get("status"):  # its status moved: an event (filelog.py)
         note_event("entry", str(e["id"]), disk.get("status"), str(e["status"]),
                    entry_cause(str(e["status"]), str(e.get("why") or "")), detail=e.get("why"))
+
+
+def drop_entry(d: str, eid: str) -> None:
+    """The entry's file removed: the laptop outbox's, once ci-runner's store took the change (queueclose.py
+    migrate_local_queue)."""
+    with suppress(FileNotFoundError):
+        os.remove(os.path.join(d, "entries", f"{eid}.json"))
 
 
 def wlog(d: str, msg: str) -> None:

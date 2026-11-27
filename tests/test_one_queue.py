@@ -135,8 +135,21 @@ class LocalQueueTest(OneQueueBase):
         self.assertEqual(self.refs, ["q-97"])
         self.assertEqual([(e["id"], e["head"]) for e in remote.submitted], [("q-97", ha)])
         es = {e["id"]: e for e in A.waiting_entries(self.d, open_only=False)}
-        self.assertEqual((es["q-97"]["status"], es["q-106"]["status"]), ("migrated", "landed"))
+        self.assertEqual(sorted(es), ["q-106"], "the moved entry's file is gone: the store's item is the change")
+        self.assertEqual(es["q-106"]["status"], "landed")
         self.assertEqual(A.migrate_local_queue(self.r.path, remote), [], "moved once")
+
+    def test_an_entry_an_older_revision_marked_migrated_is_decided_never_sent_again(self):
+        """VERSION SKEW (docs/design/one-change-model.md, rule 4): a laptop that ran an older revision left the entry it
+        moved as `migrated`; the new drain neither submits it again nor lists it open, and leaves the file as it is."""
+        wa, ha = self.change("a", "a\n")
+        self.entry("q-90", wa, ha)
+        e = A.waiting_entries(self.d, open_only=False)[0]
+        A.save_entry(self.d, dict(e, status="migrated"))
+        remote = FakeRemote(self.st)
+        self.assertEqual(A.migrate_local_queue(self.r.path, remote), [])
+        self.assertEqual((self.refs, remote.submitted), ([], []))
+        self.assertEqual([x["status"] for x in A.waiting_entries(self.d, open_only=False)], ["migrated"])
 
     def test_an_entry_that_cannot_move_is_said_loudly_and_tried_again(self):
         wa, ha = self.change("a", "a\n")

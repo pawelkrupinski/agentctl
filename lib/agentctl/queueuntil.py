@@ -5,7 +5,7 @@ import argparse
 import os
 import re
 from typing import Any
-from agentctl.statemachines import ENTRY_STATE, machine_state
+from agentctl.statemachines import change_state_of, machine_state
 from agentctl.queueknobs import knob_free_wait
 from agentctl.core import attempt, git, remote
 from agentctl.waitingdir import waiting_entries, waiting_state
@@ -28,9 +28,9 @@ UNTIL_DONE_AGAIN = "~/bin/agentctl land --until-done"
 def _unitemed_entries(repo: Any, known: Any, ours: Any) -> Any:
     """This host's queue entries that `ours` claims and no change item (`known`: their ids) holds yet, as items."""
     d = attempt(lambda: waiting_state(repo)[0], None, catch=(RuntimeError,))
-    return [{"id": e["id"], "state": ENTRY_STATE[e["status"]], "data": e, "entered_at": e.get("seq") or 0}
+    return [{"id": e["id"], "state": e["status"], "data": e, "entered_at": e.get("seq") or 0}
             for e in (waiting_entries(d, open_only=False) if d else [])
-            if e["id"] not in known and ours(e) and e.get("status") in ENTRY_STATE]
+            if e["id"] not in known and ours(e) and change_state_of(e.get("status"))]
 
 
 def own_change_item(repo, head, store):

@@ -5,7 +5,7 @@ import os
 import re
 import time
 from typing import Any
-from agentctl.statemachines import ENTRY_STATE
+from agentctl.statemachines import change_state_of
 from agentctl.timefmt import day_hhmmz, hhmmz
 from agentctl.holdgraph import OPEN_PARENT_STATES, stack_map, waiting_on_changes
 from agentctl.core import attempt, host_role, remote
@@ -138,7 +138,7 @@ class ChangePass:
         if e["status"] not in self.statuses:
             return []  # (a push this tick made it landed, waiting or rejected: no check for it)
         st, t = self.st, self.t
-        it = st.put_item("change", e["id"], ENTRY_STATE.get(e["status"], "queued"), change_item_fields(e))
+        it = st.put_item("change", e["id"], change_state_of(e["status"]) or "queued", change_item_fields(e))
         state = it["state"]
         if state == "pushing":  # a tick that died mid-push: verified next, never pushed twice blindly
             set_change(st, self.d, e, "checked", cause="pushing", event={"text": f"{e['id']}: its push was interrupted: verified, then tried again"})

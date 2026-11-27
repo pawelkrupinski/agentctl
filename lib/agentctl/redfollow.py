@@ -4,7 +4,6 @@
 from typing import Any
 from agentctl.core import remote
 from agentctl.landstate import landed_state
-from agentctl.queueslots import ENTRY_STATUS
 from agentctl.fixchange import CHANGE_ENDED, red_change
 from agentctl.queuesubmit import entry_id_age
 from agentctl.redknobs import knob_red_fix_requeue_grace
@@ -59,7 +58,7 @@ def _change_fix(f: dict[str, Any], o: dict[str, Any], t: float) -> dict[str, Any
             return None
         return {"entry": o["id"], "status": "landed", "sha": sha, "at": float(o.get("entered_at") or t),
                 "followed": f.get("entry"), "author": f.get("author")}
-    return {"entry": o["id"], "status": ENTRY_STATUS.get(o["state"], o["state"]), "followed": f.get("entry"),
+    return {"entry": o["id"], "status": o["state"], "followed": f.get("entry"),
             "author": f.get("author")}
 
 
