@@ -8,7 +8,7 @@ from contextlib import suppress
 from typing import Any
 from agentctl.timefmt import parse_time, ts
 from agentctl.core import attempt, git, process_cache
-from agentctl.trailers import trailer_values
+from agentctl.trailers import commit_trailer_values
 from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.patches import patch_id
 from agentctl.inboxentry import inbox_write
@@ -21,8 +21,7 @@ from agentctl.maincontain import MainContainment
 
 def commit_fixes(repo: str, sha: str, store: Any) -> set[str]:
     """The `Fixes-Red:` values of commit sha that count as fixes (fix_check)."""
-    v = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", sha, check=False)
-    vals = trailer_values(v.stdout if v.returncode == 0 else "")
+    vals = commit_trailer_values(repo, sha, "Fixes-Red")
     return fix_check(repo, sha, vals, store)[0] if vals else set()
 
 
@@ -32,9 +31,7 @@ _trailer_fixes = process_cache({})
 def _commit_fixes(repo: Any, c: Any, store: Any) -> Any:
     """The runs commit c's Fixes-Red trailers name that count (cached per commit)."""
     if c not in _trailer_fixes:
-        r = git(repo, "log", "-1", "--format=%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", c, check=False)
-        vals = trailer_values(r.stdout) if r.returncode == 0 else set()
-        _trailer_fixes[c] = sorted(fix_check(repo, c, vals, store)[0]) if vals else []  # only those that count
+        _trailer_fixes[c] = sorted(commit_fixes(repo, c, store))  # only those that count
     return _trailer_fixes[c]
 
 

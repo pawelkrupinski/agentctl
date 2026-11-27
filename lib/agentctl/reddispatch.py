@@ -8,7 +8,7 @@ import time
 from typing import Any
 from agentctl.core import NO_SIGN, fmt_age, git, git_ok, reds_dir, remote
 from agentctl.timefmt import parse_time, ts
-from agentctl.trailers import trailer_values
+from agentctl.trailers import trailer_format, trailer_values
 from agentctl.waitingdir import waiting_state
 from agentctl.allowedpaths import allowed_dir
 from agentctl.procs import socket_host
@@ -35,7 +35,7 @@ def red_commits_naming(wt: str | None, names: Any, keys: tuple[str, ...] = ("Fix
     (runs, the key), the newest first."""
     if not allowed_dir(wt):
         return []
-    fmt = "%x09".join(["%H", "%ct"] + [f"%(trailers:key={k},valueonly,separator=%x2C)" for k in keys])
+    fmt = f"%H%x09%ct%x09{trailer_format(keys)}"
     out = git(str(wt), "log", "HEAD", "--not", "--remotes", "-n", "200", f"--format={fmt}", check=False).stdout
     want = {str(n).lstrip("#") for n in names if n}
     got = []

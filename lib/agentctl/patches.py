@@ -3,6 +3,7 @@
 
 from typing import Optional
 from agentctl.core import content_twin, git, run_cmd
+from agentctl.trailers import commit_trailer_values
 
 
 # NEVER AN EMPTY COMMIT (2026-10-27). An agent queued a commit, queued it again, and both entries ran: the later one's
@@ -16,8 +17,7 @@ ALLOW_EMPTY_TRAILER = "Allow-Empty"
 
 def deliberate_empty(repo: str, c: str) -> bool:
     """A commit made empty on purpose: `git commit --allow-empty` with an `Allow-Empty: <why>` trailer."""
-    return bool(git(repo, "log", "-1", f"--format=%(trailers:key={ALLOW_EMPTY_TRAILER},valueonly)", c,
-                    check=False).stdout.strip())
+    return bool(commit_trailer_values(repo, c, ALLOW_EMPTY_TRAILER))
 
 
 def is_empty_commit(repo, c):

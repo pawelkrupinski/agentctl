@@ -6,6 +6,7 @@ from typing import Any
 from agentctl.statefile import read_text_or
 from agentctl.core import git, process_cache
 from agentctl.repos import precheck_hook
+from agentctl.trailers import commit_trailer_values
 from agentctl.queue import hook_query
 from agentctl.redland import fetch_entry_commits
 
@@ -30,8 +31,7 @@ def change_paths_of(repo: Any, e: Any, commits: Any = None) -> list[str] | None:
 
 def pure_move_claimed(repo, commit):
     """Whether the commit's message carries the trailer `Pure-Move: verified` (movies' scripts/pure-move-check claim)."""
-    r = git(repo, "log", "-1", "--format=%(trailers:key=Pure-Move,valueonly)", commit, check=False)
-    return r.returncode == 0 and [v.strip() for v in r.stdout.splitlines() if v.strip()] == ["verified"]
+    return commit_trailer_values(repo, commit, "Pure-Move") == {"verified"}
 
 
 _identity_known = process_cache({})  # (entry id, head) -> identity_change's verdict

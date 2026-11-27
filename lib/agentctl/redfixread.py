@@ -12,6 +12,7 @@ from agentctl.procrunner import process_runner
 from agentctl.core import err, git, git_ok, process_cache, reds_dir, remote
 from agentctl.statefile import read_record, write_json
 from agentctl.repos import red_repo_of
+from agentctl.trailers import commit_trailer_values
 from agentctl.workflows import fix_workflow_jobs
 from agentctl.clones import fetch_main
 from agentctl.ciruns import ci_runs
@@ -64,8 +65,7 @@ def red_unrelated(repo, e):
     """A change landing on a red gate under the owner's speed-up / CI-fix rule names the red only to pass the gate:
     its `Red-Unrelated: <reason>` trailer says it is no fix for that red, so it never takes the red's fixer away."""
     for c in e.get("commits") or []:
-        r = git(repo, "log", "-1", "--format=%(trailers:key=Red-Unrelated,valueonly)", c, check=False)
-        if r.returncode == 0 and r.stdout.strip():
+        if commit_trailer_values(repo, c, "Red-Unrelated"):
             return True
     return False
 

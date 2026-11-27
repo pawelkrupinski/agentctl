@@ -124,6 +124,22 @@ class ChangeKindTest(unittest.TestCase):
         self.assertEqual(A.fixes_red_in_message(messages[0]), set())
         self.assertEqual(A.commit_trailers(messages[1]), ["Co-Authored-By: x <x@y>"])
 
+    def test_one_commit_trailer_read(self):
+        """Review 2026-11-26 (A D4): twelve copies of git's `%(trailers)` read, each with its own failure handling. One
+        function reads a commit's values of a key (final block, as git); an unreadable commit gives none."""
+        import subprocess
+        repo = os.path.join(self.tmp.name, "r")
+        subprocess.run(["git", "init", "-q", repo], check=True)
+        msg = "s\n\nPure-Move: verified\nFixes-Red: 6, #7\n  8\nCo-Authored-By: x <x@y>"
+        subprocess.run(["git", "-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty",
+                        "-m", msg], check=True)
+        self.assertEqual(A.commit_trailer_values(repo, "HEAD", "Fixes-Red"), {"6", "7", "8"})
+        self.assertEqual(A.commit_trailer_values(repo, "HEAD", "Pure-Move"), {"verified"})
+        self.assertEqual(A.commit_trailer_values(repo, "HEAD", "Retires"), set())
+        self.assertEqual(A.commit_trailer_values(repo, "0" * 40, "Fixes-Red"), set())
+        self.assertEqual(A.trailer_format(("A", "B")), "%(trailers:key=A,valueonly,separator=%x2C)%x09"
+                         "%(trailers:key=B,valueonly,separator=%x2C)")
+
     def test_the_governor_admits_a_fix_of_any_open_red_as_red(self):
         """Before: gov_class_of read the gate's reds alone -- a fix of a red outside the gate queued behind the
         governor like an ordinary check."""

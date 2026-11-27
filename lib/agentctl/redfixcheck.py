@@ -8,7 +8,7 @@ from typing import Any
 import re
 from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.core import attempt, err, git, git_ok, process_cache, reds_dir, remote
-from agentctl.trailers import trailer_values
+from agentctl.trailers import trailer_format, trailer_values
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_names, red_what
 from agentctl.redfixread import (
@@ -24,7 +24,7 @@ def landed_fix_commits(store, repo):
     were each read as the red's fix on its way, its live fixer stopped, then refuted -- "recurring: 4 fixes refuted"."""
     if not repo:
         return []
-    fmt = "%H%x09%ct%x09%(trailers:key=Red-Unrelated,valueonly,separator=%x2C)%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)%x09%s"
+    fmt = f"%H%x09%ct%x09{trailer_format(('Red-Unrelated', 'Fixes-Red'))}%x09%s"
     r = git(repo, "log", f"refs/remotes/{remote()}/main", "--since=3.days", f"--format={fmt}", check=False)
     out = []
     for line in (r.stdout if r.returncode == 0 else "").splitlines():

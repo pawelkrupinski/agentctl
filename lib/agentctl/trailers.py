@@ -12,6 +12,20 @@ from agentctl.core import git
 TRAILER_SPLIT = re.compile(r"[,;\s]+")
 
 
+def trailer_format(keys: tuple[str, ...], separator: str = "%x09", unfold: bool = False) -> str:
+    """git's `--format` fragment reading each of `keys` as its trailers' values (the final block, as git reads it),
+    comma-separated within a key and `separator` between keys: the ONE spelling of the `%(trailers...)` read."""
+    opts = ",unfold" if unfold else ""
+    return separator.join(f"%(trailers:key={k},valueonly{opts},separator=%x2C)" for k in keys)
+
+
+def commit_trailer_values(repo: str, commit: str, key: str) -> set[str]:
+    """The names a commit's `<key>:` trailers give (trailer_values), read by git from its message; none when git cannot
+    read the commit. ONE read: every single-commit trailer question goes through it."""
+    r = git(repo, "log", "-1", f"--format={trailer_format((key,))}", commit, check=False)
+    return trailer_values(r.stdout) if r.returncode == 0 else set()
+
+
 def trailer_values(s: str | None) -> set[str]:
     """The names of a trailer's values: split on commas, semicolons and whitespace, each without a leading '#'."""
     return {f.strip().lstrip("#") for f in TRAILER_SPLIT.split(s or "") if f.strip().lstrip("#")}

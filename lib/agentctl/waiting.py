@@ -8,7 +8,7 @@ from agentctl.core import SHORT, err, git, remote, slug
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, note_failure
 from agentctl.repos import server_repo
-from agentctl.trailers import trailer_values
+from agentctl.trailers import commit_trailer_values
 from agentctl.waitingdir import ChangeRecords, entry_final, waiting_state, wlog
 from agentctl.owned import cancel_run
 from agentctl.queueslots import entry_owned, queue_verdict, set_change
@@ -196,8 +196,7 @@ def diagnoses_of(repo, commits):
     """The run ids/numbers the commits' `Diagnoses-Red:` trailers name (DIAGNOSTICS ARE NO FIX, redmove.py)."""
     out = set()
     for c in commits:
-        r = git(repo, "log", "-1", "--format=%(trailers:key=Diagnoses-Red,valueonly,separator=%x2C)", c, check=False)
-        out |= trailer_values(r.stdout) if r.returncode == 0 else set()
+        out |= commit_trailer_values(repo, c, "Diagnoses-Red")
     return out
 
 

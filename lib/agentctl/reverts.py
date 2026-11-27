@@ -11,7 +11,7 @@ from agentctl.core import fmt_age, git, git_ok, remote, tilde
 from agentctl.timefmt import ts
 from agentctl.store import StoreUnavailable
 from agentctl.repos import RED_PRIMARY
-from agentctl.trailers import fixes_red_in_message, trailer_values
+from agentctl.trailers import fixes_red_in_message, trailer_format, trailer_values
 from agentctl.lander import lander_index, lander_name, lander_of_commit, lander_records, patch_ids
 from agentctl.allowedpaths import allowed_path
 from agentctl.worktrees import claimant, worktree_exclude
@@ -57,7 +57,7 @@ def revert_scan(repo, since, main, now_):
     """[{sha, subject, body, reverts, rework_of, relands}] of the commits since..main, oldest first: since None reads
     the last REVERT_LOOKBACK s. Trailers are read as git reads them (the final block only)."""
     rng = [f"{since}..{main}"] if since else [f"--since=@{int(now_ - REVERT_LOOKBACK)}", main]
-    fmt = "%x1e%H%x1f%s%x1f%B%x1f" + "%x1f".join(f"%(trailers:key={k},valueonly,separator=%x2C)" for k in REVERT_TRAILERS)
+    fmt = "%x1e%H%x1f%s%x1f%B%x1f" + trailer_format(REVERT_TRAILERS, "%x1f")
     r = git(repo, "log", "--no-merges", f"--max-count={REVERT_SCAN_MAX}", f"--format={fmt}", *rng, check=False)
     if r.returncode != 0:
         return None

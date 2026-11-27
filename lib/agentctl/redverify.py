@@ -7,7 +7,7 @@ import os
 from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.statefile import read_record
 from agentctl.core import err, git, pct, reds_dir, remote
-from agentctl.trailers import trailer_values
+from agentctl.trailers import trailer_format, trailer_values
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_what
 from agentctl.red import red_move
@@ -200,8 +200,7 @@ def _named_paths(rec: Any) -> set[str]:
 
 def _commits_between(repo: Any, red_head: Any, green_head: Any) -> Any:
     """The log of red_head..green_head as one chunk per commit (sha, trailers, files), or None when it cannot be read."""
-    r = git(repo, "log", f"{red_head}..{green_head}", "--format=%x00%H%x09%(trailers:key=Red-Unrelated,valueonly,separator=%x2C)"
-            "%x09%(trailers:key=Fixes-Red,valueonly,separator=%x2C)", "--name-only", check=False)
+    r = git(repo, "log", f"{red_head}..{green_head}", f"--format=%x00%H%x09{trailer_format(('Red-Unrelated', 'Fixes-Red'))}", "--name-only", check=False)
     return r.stdout.split("\0")[1:] if r.returncode == 0 else None
 
 
