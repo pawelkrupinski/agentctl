@@ -94,7 +94,7 @@ mypy-errors	pressure	16
 mypy-errors	processor	9
 mypy-errors	processorlink	16
 mypy-errors	procwatch	2
-mypy-errors	projector	21
+mypy-errors	projector	17
 mypy-errors	queue	27
 mypy-errors	queuebatch	38
 mypy-errors	queuebatchsel	19
@@ -105,7 +105,7 @@ mypy-errors	queueenter	72
 mypy-errors	queuefailure	5
 mypy-errors	queuepush	43
 mypy-errors	queuerecheck	43
-mypy-errors	queueslots	23
+mypy-errors	queueslots	18
 mypy-errors	queuesubmit	31
 mypy-errors	queueuntil	10
 mypy-errors	recordingpins	30
@@ -153,7 +153,7 @@ mypy-errors	serverclone	36
 mypy-errors	serversteps	23
 mypy-errors	sessionpaths	9
 mypy-errors	slots	51
-mypy-errors	statemachines	29
+mypy-errors	statemachines	25
 mypy-errors	stats	33
 mypy-errors	status	81
 mypy-errors	statusagents	34
