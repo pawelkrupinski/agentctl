@@ -110,6 +110,31 @@ class GovernorTest(unittest.TestCase):
     def set_busy(self, cores):
         os.environ["AGENTCTL_GOV_BUSY_PROBE"] = f"echo {cores}"
 
+    def machine(self, load1, load5, cores=18):
+        os.environ["AGENTCTL_MACHINE"] = json.dumps({"ram_gb": 36, "free_gb": 20, "pressure": 40, "swap_used_mb": 0,
+            "swap_total_mb": 0, "load1": load1, "load5": load5, "cores": cores, "free_pct": 60, "level": 1})
+
+    def test_a_sustained_run_queue_starves_the_governor_however_few_cores_read_busy(self):
+        """2026-11-27 10:30Z: uptime 91 / 118 / 120 on 18 cores (bursts of ~25 short `node` processes), yet gov status said
+        load 13.6/18 and admitted 8 tickets: admission read only the busy cores. Busy 17 of 18, run queue 100, is starved;
+        a burst (5-min low) is not; resumes only under LAPTOP_LOAD x the cores."""
+        self.set_busy(13.6)
+        self.machine(100, 100)
+        cap = A.gov_capacity(tickets=[], m={"cores": 18})
+        self.assertEqual(cap["state"], "starved")
+        self.assertIsNone(self.admit("agent", 1), "paused on the run queue")
+        self.assertIsNone(self.admit("check", 1))
+        self.assertIsNotNone(self.admit("red", 1), "a red fix never waits")
+        ok, why, _ = A.gov_fits("agent", 1, [], dict(A.gov_machine(), cores=18))
+        self.assertFalse(ok)
+        self.assertIn("run queue 100", why)
+        self.machine(100, 10)
+        self.assertEqual(A.gov_capacity(tickets=[], m={"cores": 18})["state"], "starved", "kept: 1-min still over 2x")
+        self.machine(30, 60)
+        self.assertEqual(A.gov_capacity(tickets=[], m={"cores": 18})["state"], "ok", "under 2x: resumed")
+        self.machine(100, 20)
+        self.assertEqual(A.gov_capacity(tickets=[], m={"cores": 18})["state"], "ok", "a burst: the 5-min load is low")
+
     def test_pause_when_starved_resume_below_the_low_mark(self):
         """The owner, 2026-11-19: "if cpu is starved then pause until we have enough resources and resume when we have
         too much". Work waits once the cores busy pass 1.0x the machine's and goes again only under 0.8x (hysteresis:
@@ -579,6 +604,16 @@ class MachineCpuTest(unittest.TestCase):
         self.assertIn("CPU saturated", why)
         self.assertIsNone(A.laptop_pressure(dict(r, runq=20.0)), "busy but not oversubscribed: no pressure")
         self.assertIsNone(A.laptop_pressure(dict(r, load1=8.0)), "threads waiting while cores idle: no pressure")
+
+    def test_a_sustained_run_queue_alone_is_pressure_and_the_status_line_shows_both(self):
+        r = {"free_pct": 80, "level": 1, "swap_mb": 0, "load1": 17.0, "cores": 18, "runq": 100.0, "runq5": 118.0,
+             "swap_growth_mb": None, "swap_span": 0}
+        self.assertIn("run queue 100", A.laptop_pressure(r))
+        self.assertIsNone(A.laptop_pressure(dict(r, runq5=20.0)), "a burst: no pressure")
+        self.assertIsNone(A.laptop_pressure(dict(r, runq=46.0, runq5=46.0)), "2.6x: the 2026-11-19 case stays no pressure")
+        line = A.pressure_summary(r)
+        self.assertIn("busy 17.0/18 cores", line)
+        self.assertIn("load 100/18 (run queue", line)
 
     def test_the_governor_reads_a_saturated_machine_as_starved(self):
         saved = A.machine_busy_cores, A.machine_cores

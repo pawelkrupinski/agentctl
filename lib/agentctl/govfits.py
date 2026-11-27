@@ -6,12 +6,12 @@ from contextlib import suppress
 from typing import Any
 from agentctl.statefile import read_record, write_json
 from agentctl.clock import wall_epoch
-from agentctl.cpu import GOV_SATURATED
-from agentctl.machine import machine_cores
+from agentctl.cpu import GOV_SATURATED, RUNQ_STARVED, runq_oversubscribed
+from agentctl.machine import machine_cores, run_queues
 from agentctl.govtickets import gov_dir, gov_log, gov_tickets
 from agentctl.govbudget import checks_cap, gov_budget
 from agentctl.pressure import gov_busy_cores
-from agentctl.govknobs import knob_gov_cpu_factor
+from agentctl.govknobs import knob_gov_cpu_factor, knob_laptop_load
 from agentctl.govknobs import (
     knob_gov_pool_share, knob_gov_free_need_gb, knob_gov_reserve_gb, knob_gov_resume, knob_gov_spare, knob_gov_starved, knob_suite_cap)
 
@@ -40,9 +40,17 @@ def gov_starved(busy: float, measured: float, n: int) -> bool:
     return busy > knob_gov_starved() * n or measured >= GOV_SATURATED * n
 
 
-def _capacity_state(busy: Any, measured: Any, n: Any, prev: Any) -> Any:
+def gov_queue_starved(queues: Any, n: Any, prev: Any) -> bool:
+    """The run queue (1-min, 5-min) sustained over RUNQ_STARVED x the cores, and once starved on it, until the 1-min
+    falls under LAPTOP_LOAD x the cores (2026-11-27: 91/118/120 on 18 cores while 13.6 read busy, 8 tickets admitted)."""
+    if not queues:
+        return False
+    return runq_oversubscribed(queues[0], queues[1], n) or (prev == "starved" and queues[0] > knob_laptop_load() * n)
+
+
+def _capacity_state(busy: Any, measured: Any, n: Any, prev: Any, queues: Any = None) -> Any:
     """starved | spare | ok for busy of n cores; between GOV_RESUME and GOV_STARVED the previous state is kept."""
-    if gov_starved(busy, measured, n):
+    if gov_starved(busy, measured, n) or gov_queue_starved(queues, n, prev):
         return "starved"
     if busy < knob_gov_spare() * n:
         return "spare"
@@ -60,14 +68,15 @@ def gov_capacity(tickets: list[dict[str, Any]] | None = None, m: dict[str, Any] 
     busy = max(charged, measured)
     path = os.path.join(gov_dir(), "capacity.json")
     prev = (read_record(path) or {}).get("state", "ok")
-    state = _capacity_state(busy, measured, n, prev)
+    queues = run_queues()
+    state = _capacity_state(busy, measured, n, prev, queues)
     if state != prev:
         with suppress(OSError):
             write_json(path, {"state": state, "busy": busy, "at": wall_epoch()})
             gov_log(f"capacity {prev} -> {state}: {busy:.1f} of {n} cores busy ({charged:g} charged, {measured:.1f} "
                     "measured)")
     return {"state": state, "busy": busy, "charged": charged, "measured": measured, "cores": n,
-            "load1": (m or {}).get("load1")}
+            "queues": queues, "load1": (m or {}).get("load1")}
 
 
 def _suite_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: Any) -> Any:
@@ -125,6 +134,9 @@ def _cpu_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: Any
     """The cores: PAUSED while starved (gov_capacity: resumes by itself, no one acts), else held while the cores it asks
     for would pass the load factor."""
     cap = gov_capacity(tickets, m)
+    if cap["state"] == "starved" and runq_oversubscribed(*(cap.get("queues") or (None, None)), cap["cores"]):
+        return False, (f"starved: run queue {cap['queues'][0]:.0f} (5-min {cap['queues'][1]:.0f}) on {cap['cores']} cores, "
+                       f"{cap['busy']:.1f} busy (pauses over {RUNQ_STARVED:g}x sustained)"), False
     if cap["state"] == "starved":
         return False, (f"starved: {cap['busy']:.1f} of {cap['cores']} cores busy (pauses over "
                        f"{knob_gov_starved():g}x, resumes under "

@@ -11,7 +11,7 @@ from agentctl.procs import ps_rows
 from agentctl.psparse import PsRow, parse_ps
 from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.cpu import cpu_pressure, machine_busy_cores
-from agentctl.machine import machine_cores, machine_fixed, read_meminfo, run_queue
+from agentctl.machine import machine_cores, machine_fixed, read_meminfo, run_queue, run_queues
 from agentctl.govtickets import gov_dir
 from agentctl.govknobs import LAPTOP_SWAP_WINDOW, knob_laptop_free_pct, knob_laptop_pressure_level, knob_laptop_swap_growth_mb, knob_laptop_swap_window
 from agentctl.govknobs import knob_gov_busy_probe, knob_gov_load_probe, knob_gov_ps_probe, knob_laptop_pressure
@@ -120,6 +120,8 @@ def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_
     # 18 cores while 5.2 were busy, 2026-11-19); `load1` passed in (the tests' seam) stands for it
     r = {"free_pct": None, "level": None, "swap_mb": None, "load1": gov_busy_cores() if load1 is None else load1,
          "cores": cores or machine_cores(), "runq": run_queue(passed=load1)}
+    queues = None if load1 is not None else run_queues()
+    r["runq5"] = queues[1] if queues else None  # the run queue sustained: the 5-min load (cpu_pressure)
     r.update(_memory_reading(sysctl_out, meminfo))
     r["swap_growth_mb"], r["swap_span"] = swap_growth(r["swap_mb"], now_)
     return r
@@ -165,7 +167,8 @@ def pressure_summary(r=None):
     swap = "swap ?" if r.get("swap_mb") is None else (
         f"swap {r['swap_mb'] / 1024:.1f} GB ({round((r.get('swap_growth_mb') or 0) / 1024, 1) + 0.0:+.1f} GB in "
         f"{(r.get('swap_span') or 0) / 60:.0f} min)")
-    return f"memory {q(r.get('free_pct'))}% free, level {lvl}, load {q(r.get('load1'), '{:.1f}')}/{r['cores']} cores, {swap}"
+    queue = "" if r.get("runq") is None else f", load {r['runq']:.0f}/{r['cores']} (run queue, 5-min {q(r.get('runq5'), '{:.0f}')})"
+    return f"memory {q(r.get('free_pct'))}% free, level {lvl}, busy {q(r.get('load1'), '{:.1f}')}/{r['cores']} cores{queue}, {swap}"
 
 
 def pressure_report():

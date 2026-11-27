@@ -17,7 +17,7 @@ from agentctl.selfcode import TOOL_PATH
 from agentctl.fixerrecords import fixer_records
 from agentctl.redrecord import red_active
 from agentctl.cleanup import close_worktree
-from agentctl.machine import disk_free_gb
+from agentctl.machine import disk_free_gb, machine_cores, run_queues
 from agentctl.testtmp import TEST_TMP_MAX_AGE, sweep_test_tmp
 from agentctl.conditions import open_condition, run_probe
 from agentctl.tickknobs import knob_log_rotate_keep, knob_log_rotate_max, knob_upkeep_every
@@ -26,12 +26,22 @@ from agentctl.govknobs import knob_disk_path
 
 
 _last_upkeep = [0.0]
+RUN_QUEUE_ESCALATE = 3.0         # x the cores: the 5-min load over it ...
+RUN_QUEUE_ESCALATE_AFTER = 600   # ... for this many seconds opens the WL invariant
 
 
 def probe_disk_free(a):
     free = disk_free_gb(a.get("path"))
     floor = DISK_MIN_GB if a.get("min_gb") in (None, "") else float(a["min_gb"])  # 0 is a floor, not "unset"
     return free >= floor, f"{free:.1f} GB free on {a.get('path') or HOME}"
+
+
+def probe_run_queue(a):
+    """The run queue (5-min load) is under `factor` x the cores: false while it is over it."""
+    queues, n = run_queues(), machine_cores()
+    if not queues:
+        return None, "the load average is unreadable"
+    return queues[1] <= float(a["factor"]) * n, f"run queue {queues[0]:.0f} (5-min {queues[1]:.0f}) on {n} cores"
 
 
 def close_finished_fixer_trees(st):
@@ -94,6 +104,20 @@ def _disk_invariant(store: Any, pr: Any, min_gb: Any, low: Any) -> Any:
     return [f"WD: {pr.detail}"]
 
 
+def _run_queue_invariant(store: Any) -> list[str]:
+    """WL, the run-queue invariant (2026-11-27: 91/118/120 on 18 cores): the 5-min load over RUN_QUEUE_ESCALATE x the
+    cores for RUN_QUEUE_ESCALATE_AFTER s is an INVARIANT condition for the owner and the agents, whose heavy work the
+    governor already holds meanwhile (gov_capacity); it closes by itself when the queue falls."""
+    pr = run_probe(probe_run_queue, {"factor": RUN_QUEUE_ESCALATE})
+    if pr.ok is not False:
+        return []
+    cond = open_condition("INVARIANT", f"INVARIANT WL: the CPU is oversubscribed -- {pr.detail}, over "
+                          f"{RUN_QUEUE_ESCALATE:g}x the cores for {RUN_QUEUE_ESCALATE_AFTER // 60} min; the governor holds new "
+                          "work: pause or fold lanes, find the process bursts (`agentctl gov status`, `ps -Ao pcpu,args`)",
+                          pr, [], key="run-queue", grace=RUN_QUEUE_ESCALATE_AFTER, store=store)
+    return [f"WL: {pr.detail}"] if cond else []
+
+
 def maybe_upkeep(store, now_=None):
     """The tick's upkeep step: at most every UPKEEP_EVERY s, or within 10 min when the disk is low (DISK_MIN_GB); and
     WD, the disk invariant: still low with the last upkeep done, an INVARIANT condition whose probe is that same
@@ -102,7 +126,7 @@ def maybe_upkeep(store, now_=None):
     min_gb = knob_disk_min_gb()
     pr = run_probe(probe_disk_free, {"path": knob_disk_path() or HOME, "min_gb": min_gb})
     low = pr.ok is False
-    out = []
+    out = _run_queue_invariant(store)
     if t - _last_upkeep[0] >= knob_upkeep_every() or (low and t - _last_upkeep[0] >= 600):
         _last_upkeep[0] = t
         # in its thread (minutes of git): the tick goes on; it logs to upkeep.log

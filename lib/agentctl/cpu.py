@@ -9,6 +9,7 @@ from agentctl.statefile import read_record, write_json, note_failure
 from agentctl.govknobs import knob_laptop_load
 
 
+RUNQ_STARVED = 3.0     # x the cores: the run queue, 1-min and 5-min both over it, is starved however few cores read busy
 GOV_SATURATED = 0.95    # x the cores: the machine's measured CPU at or over it is starved, whatever is charged
 
 # THE WHOLE MACHINE'S CPU (2026-11-22: top 0.24% idle -- 44% user, 56% sys -- at load 131-150 on 18 cores, while ps's
@@ -75,6 +76,11 @@ def machine_busy_cores(n: int, read: Optional[Callable[[], Optional[tuple[int, i
     return round(float(n * (end[0] - start[0]) / (end[1] - start[1])), 2)
 
 
+def runq_oversubscribed(runq: Any, runq5: Any, n: Any) -> bool:
+    """The run queue sustained over RUNQ_STARVED x the cores: the 1-min and the 5-min load both (a burst is no starving)."""
+    return bool(n and runq is not None and runq5 is not None and min(runq, runq5) > RUNQ_STARVED * n)
+
+
 def cpu_pressure(r: dict[str, Any]) -> list[str]:
     """The CPU's part of laptop_pressure: busy cores past LAPTOP_LOAD x the cores (a reading charged past them), or the
     whole machine's CPU saturated (GOV_SATURATED, user + sys) with a run queue over LAPTOP_LOAD x the cores -- never
@@ -84,6 +90,9 @@ def cpu_pressure(r: dict[str, Any]) -> list[str]:
         return []
     if busy > factor * n:
         return [f"{busy:.1f} cores busy of {n} (holds over {factor * n:g})"]
+    if runq_oversubscribed(runq, r.get("runq5"), n):  # 91/118 on 18 cores at 13.6 busy (2026-11-27): bursts of short processes
+        return [f"run queue {runq:.0f} (5-min {r['runq5']:.0f}) on {n} cores, {busy:.1f} busy: oversubscribed "
+                f"(holds over {RUNQ_STARVED:g}x the cores sustained)"]
     if busy >= GOV_SATURATED * n and runq is not None and runq > factor * n:
         return [f"CPU saturated: {busy:.1f} of {n} cores busy (user + sys), run queue {runq:.0f} (holds at "
                 f"{GOV_SATURATED:.0%} busy with a run queue over {factor * n:g})"]

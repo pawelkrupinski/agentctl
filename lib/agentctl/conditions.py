@@ -39,6 +39,7 @@ _RUN_PROBE_TOKEN = object()
 def probe_words(kind: Any, a: Any) -> Any:
     """A probe in a person's words: the status line's `auto-clears when <this>`."""
     return {"disk_free": lambda: f"{a.get('min_gb')} GB are free again",
+            "run_queue": lambda: f"the 5-min run queue is under {a.get('factor')}x the cores",
             "quota_reset": lambda: f"the quota resets and {a.get('workflow')}'s {a.get('job')} passes",
             "workflow_green": lambda: f"{a.get('workflow')} is green", "http": lambda: f"{a.get('url')} answers",
             "tcp": lambda: f"{a.get('host')}:{a.get('port')} accepts",

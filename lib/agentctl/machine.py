@@ -36,6 +36,19 @@ def machine_load1() -> float:
     return float(m["load1"]) if m and m.get("load1") is not None else os.getloadavg()[0]
 
 
+def run_queues() -> Optional[tuple[float, float]]:
+    """The 1- and 5-min load averages (the run queue, sustained), or the fixed machine's `load1` / `load5` (default:
+    its load1). None where unreadable."""
+    m = machine_fixed()
+    if m and m.get("load1") is not None:
+        return float(m["load1"]), float(m.get("load5", m["load1"]))
+    try:
+        la = os.getloadavg()
+    except OSError:
+        return None
+    return la[0], la[1]
+
+
 def run_queue(passed: Optional[float] = None) -> Optional[float]:
     """The 1-min load average: the run queue, beside the busy cores (a saturated CPU is pressure only when it is
     oversubscribed too). None where unreadable, or when a caller passed its own load (pressure_reading's seam)."""

@@ -2464,6 +2464,14 @@ agentctl suite [run.py args]       # agentctl's own tests (tests/run.py) under a
   131-150 on 18 cores, while ps summed to 6.1 cores and pressure read none). The capacity is starved at 95% of the
   cores measured (GOV_SATURATED); `laptop_pressure` says `CPU saturated: B of N cores busy (user + sys), run queue R`
   when that coincides with a run queue over LAPTOP_LOAD x the cores. A long run queue alone, cores idle, is no pressure.
+  **The run queue, sustained, is starving on its own** (2026-11-27 10:30Z: `uptime` 91 / 118 / 120 on 18 cores -- bursts of ~25
+  short `node` processes, Docker's VM -- while 13.6 cores read busy and `gov status` admitted 8 tickets): the 1-min AND
+  5-min load both over RUNQ_STARVED (3) x the cores read `starved` (`gov_capacity`: every class but red pauses, `starved:
+  run queue 100 (5-min 118) on 18 cores`) and resume only when the 1-min falls under LAPTOP_LOAD (2) x the cores; below
+  3x, or a burst the 5-min load has not seen, stays no pressure (the 46-on-18 case of 2026-11-19 is 2.6x). The status
+  line shows both: `busy 13.6/18 cores, load 91/18 (run queue, 5-min 118)`. The 5-min load over 3x the cores for 10 min
+  opens the INVARIANT WL condition (`upkeep.py`, owner-visible, closes by itself): pause or fold lanes. The cores a
+  ticket's job is charged come from movies' jvm-gate.sh tree meter (a job and its descendants: `node`, Docker clients).
 - **THE GOVERNED FAN-OUT** (2026-11-25, the owner: "fix structurally" -- load 103 on 18 cores while `gov status` said
   0 admitted: agentctl's pre-push suite and simulator gate, movies' mutation tests, 43 test processes, none holding a
   ticket; movies' jvm-gate.sh had grepped gov.py for `def cmd_gov`, which the module split moved, so movies took no

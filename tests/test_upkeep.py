@@ -101,5 +101,35 @@ class DiskTest(unittest.TestCase):
             os.environ.pop("AGENTCTL_DISK_MIN_GB", None)
 
 
+class RunQueueTest(unittest.TestCase):
+    """2026-11-27: a run queue of 91/118/120 on 18 cores went unnoticed for hours: over 3x the cores for 10 min is the WL
+    invariant, an owner-visible INVARIANT condition that closes by itself."""
+
+    def setUp(self):
+        self.saved = os.environ.get("AGENTCTL_MACHINE")
+        m = json.loads(self.saved)
+        os.environ["AGENTCTL_MACHINE"] = json.dumps(dict(m, cores=18, load1=100.0, load5=118.0))
+
+    def tearDown(self):
+        os.environ["AGENTCTL_MACHINE"] = self.saved
+
+    def test_the_probe_fails_only_over_three_times_the_cores(self):
+        self.assertFalse(A.run_probe(A.probe_run_queue, {"factor": 3.0}).ok)
+        os.environ["AGENTCTL_MACHINE"] = json.dumps(dict(json.loads(self.saved), cores=18, load1=100.0, load5=50.0))
+        self.assertTrue(A.run_probe(A.probe_run_queue, {"factor": 3.0}).ok)
+
+    def test_wl_opens_only_after_ten_minutes_and_is_an_invariant(self):
+        store = A.CurrentStore(A.process_store)
+        self.assertEqual(A.RUN_QUEUE_ESCALATE_AFTER, 600)
+        self.assertEqual(A._run_queue_invariant(store), [], "the first sighting: pending, a burst opens nothing")
+        saved, A.RUN_QUEUE_ESCALATE_AFTER = A.RUN_QUEUE_ESCALATE_AFTER, 0
+        try:
+            self.assertTrue(A._run_queue_invariant(store)[0].startswith("WL: "))
+        finally:
+            A.RUN_QUEUE_ESCALATE_AFTER = saved
+        [c] = [c for c in A.open_conditions(store) if c["key"] == "run-queue"]
+        self.assertEqual((c["kind"], c["probe"]["kind"]), ("INVARIANT", "run_queue"))
+
+
 if __name__ == "__main__":
     unittest.main()
