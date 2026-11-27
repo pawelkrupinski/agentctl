@@ -1,9 +1,8 @@
-# agentctl, part `projector`: the store's projectors, run by the server's tick: inbox entries and alerts from the events, one live notification per escalation, the lease archive.
+# agentctl, part `eventprojection`: what the server's tick does with the events: the inbox entries and alerts they project, one live notification per escalation.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.context import Context
 from agentctl.ids import stamp
-from agentctl.clock import epoch_now
 import json
 import os
 import re
@@ -11,12 +10,10 @@ from typing import Any
 from agentctl.core import attempt, err
 from agentctl.timefmt import iso_at
 from agentctl.notifyurl import notification_url
-from agentctl.waitingdir import wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_dir, inbox_kind
 from agentctl.notifier import notify, notify_cause, notify_fix
 from agentctl.statemachines import machine_state
-from agentctl.store import LEASE_ARCHIVE_AFTER
 from agentctl.redask import ask_interval
 from agentctl.alerts import alert_write
 from agentctl.alertroute import event_audience
@@ -270,12 +267,3 @@ def notify_escalations(store: Any, *, ctx: Context) -> int:
     return EscalationPass(store, ctx=ctx).run()
 
 
-def maybe_archive_leases(d, st, every: int = 3600):
-    """Once an hour: the leases free for over a day go to the events (Store.archive_free_leases)."""
-    if epoch_now() - float(st.meta_get("lease_archive_at", 0) or 0) < every:
-        return 0
-    st.meta_set("lease_archive_at", epoch_now())
-    n = st.archive_free_leases()
-    if n:
-        wlog(d, f"tick: {n} lease(s) free for over {LEASE_ARCHIVE_AFTER // 3600} h archived into the events")
-    return n

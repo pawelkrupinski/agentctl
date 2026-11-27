@@ -1,4 +1,4 @@
-# agentctl, part `alertprobe`: whether an open alert still stands: its red, condition or gate probed, cleared when what it said is over
+# agentctl, part `alertclear`: whether an open alert still stands: its red, condition or gate probed, cleared when what it said is over
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any, Callable

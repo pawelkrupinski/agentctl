@@ -29,7 +29,7 @@ from agentctl.reverts import revert_notes
 from agentctl.alerts import reconcile_alerts
 from agentctl.explorer import explorer_tick
 from agentctl.fixerland import LandWatchPace, fixers_land_watch
-from agentctl.projector import notify_escalations, project_events
+from agentctl.eventprojection import notify_escalations, project_events
 from agentctl.orphanreap import red_reap_orphans
 from agentctl.escalationsession import escalation_step
 from agentctl.cleanup import close_worktree

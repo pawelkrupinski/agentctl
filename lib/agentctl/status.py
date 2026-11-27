@@ -2,20 +2,17 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now
-import argparse
 from typing import Any, Dict
 import json
 import os
 import threading
 import time
-from agentctl.core import HOME, SHORT, process_cache, reds_dir, slug
+from agentctl.core import HOME, SHORT, process_cache, reds_dir
 from agentctl.timefmt import parse_time
 from agentctl.statefile import read_json_file, read_record
 from agentctl.forge import RED_CONCLUSIONS, forge_run_url
-from agentctl.owned import default_repo
 from agentctl.redrepos import red_family
 from agentctl.cistate import state_read
-from agentctl.gatesummary import GATE_LINE
 from agentctl.fixerblockers import cached_dispatch_blocker
 from agentctl.store import Store
 from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
@@ -38,7 +35,6 @@ from agentctl.orphanreap import holder_work
 from agentctl.reddispatch import red_cap, red_family_holder, red_fixers_alive, repo_dispatch_off_all
 from agentctl.park import parked_lines
 from agentctl.redview import red_view
-from agentctl.cireport import ci_why
 from agentctl.inboxcli import escalated_now
 from agentctl.ownerleases import owners_status
 from agentctl.statusline import render_status_line, status_gate_text
@@ -172,12 +168,6 @@ def status_header(t, d=None, probes=True):
         h["store_port"] = port_open(tunnel_ports()[0][0], timeout=1.0)
     h["line"] = render_status_line(h, t)
     return h
-
-
-def status_line(now_=None):
-    """`status --line`: the header's line (no git, no GitHub; on the sync at most one GET /v1/state)."""
-    t = now_ if now_ is not None else epoch_now()
-    return status_header(t, probes=False)["line"]
 
 
 def code_text(h):

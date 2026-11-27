@@ -71,11 +71,10 @@ class Base(unittest.TestCase):
         os.environ.update(self.env)
         os.environ.pop("AGENTCTL_STORE_URL", None)
         os.makedirs(self.env["AGENTCTL_REDS_DIR"])
-        self.patched = {n: getattr(A, n) for n in ("cached_dispatch_blocker", "port_open", "proc_alive", "status_line")}
+        self.patched = {n: getattr(A, n) for n in ("cached_dispatch_blocker", "port_open", "proc_alive")}
         A.cached_dispatch_blocker = lambda ttl=60: None
         A.port_open = lambda port, host="127.0.0.1", timeout=2.0: True
         A.proc_alive = lambda pid, start=None: pid == 4242
-        A.status_line = lambda now_=None: "gate GREEN · waiting: 0"
         for c in (A._status_wt, A._status_wt_reads, A._status_said, A._status_last, A._status_reading):
             c.clear()
 

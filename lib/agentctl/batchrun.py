@@ -19,7 +19,7 @@ from agentctl.queue import VERIFY_MODE
 from agentctl.conflicts import conflict_cause, conflict_paths
 from agentctl.waiting import GATE_UNREAD, already_landed, apply_entry, supersede, unread_why
 from agentctl.checkslot import check_slot
-from agentctl.remote import remote_check, remote_checks_supported
+from agentctl.checkrun import remote_check, remote_checks_supported
 from agentctl.conditions import probe_gate_read
 
 

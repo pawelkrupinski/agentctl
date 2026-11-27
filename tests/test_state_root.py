@@ -6,6 +6,7 @@ import contextlib, io, json, os, re, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL, code_source  # noqa: E402
+from status_helpers import status_line  # noqa: E402
 from fake_runner import FakeRunner  # noqa: E402
 import harness  # noqa: E402
 
@@ -82,8 +83,8 @@ class StatusLineTest(unittest.TestCase):
         saved = os.environ.get("AGENTCTL_STATE_FILE")
         os.environ["AGENTCTL_STATE_FILE"] = path
         try:
-            self.assertEqual(A.status_line(now_=t), "gate green · no reds · waiting: 1 — a · checking: 1 — b")
-            self.assertTrue(A.status_line(now_=t + 300).startswith("RECONCILER STALLED since "))
+            self.assertEqual(status_line(now_=t), "gate green · no reds · waiting: 1 — a · checking: 1 — b")
+            self.assertTrue(status_line(now_=t + 300).startswith("RECONCILER STALLED since "))
         finally:
             if saved is None:
                 os.environ.pop("AGENTCTL_STATE_FILE")

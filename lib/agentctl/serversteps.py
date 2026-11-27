@@ -20,7 +20,7 @@ from agentctl.landhold import tick_land_hold
 from agentctl.reverts import tick_reverts
 from agentctl.issues import tick_issues
 from agentctl.queuesubmit import sweep_land_refs
-from agentctl.remote import remote_run_jobs
+from agentctl.checkrun import remote_run_jobs
 from agentctl.batch import say_batch
 from agentctl.watchtick import tick_watches
 from agentctl.queuepush import tick_changes

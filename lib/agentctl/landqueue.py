@@ -26,7 +26,7 @@ from agentctl.queueslots import set_change
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.waiting import GATE_UNREAD, cancel_entry_remote, cancel_submitted, stop_checker, unread_why
 from agentctl.queuesubmit import landed_sha_of
-from agentctl.remote import remote_check_lines
+from agentctl.checkrun import remote_check_lines
 from agentctl.redseen import gate_reds
 from agentctl.batch import batch_row_ids
 from agentctl.watchtick import watch_landed

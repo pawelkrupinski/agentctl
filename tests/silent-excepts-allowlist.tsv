@@ -22,7 +22,7 @@ lib/agentctl/ownerwrapper.py	OwnerWrapper._release_heartbeat	StoreUnavailable	th
 lib/agentctl/ownerwrapper.py	OwnerWrapper._release	StoreUnavailable	the store cannot be reached: the release / cancel is retried by the next tick, and the lease expires on its own
 lib/agentctl/procs.py	_proc_cwds	FileNotFoundError, PermissionError, ProcessLookupError	a process gone or not ours to read: its cwd is simply not listed
 lib/agentctl/procwatch.py	wp_rss_gb	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
-lib/agentctl/projector.py	escalation_stale	KeyError, ValueError	a malformed line, field or entry is skipped; the rest still count
+lib/agentctl/eventprojection.py	escalation_stale	KeyError, ValueError	a malformed line, field or entry is skipped; the rest still count
 lib/agentctl/psparse.py	parse_ps	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
 lib/agentctl/queuesubmit.py	take_delivery	StaleVersion, StoreUnavailable	another writer moved the item or the store is unreachable: the delivery is taken again next tick
 lib/agentctl/reddispatch.py	red_owned_progress_at	ValueError, TypeError	a malformed line, field or entry is skipped; the rest still count

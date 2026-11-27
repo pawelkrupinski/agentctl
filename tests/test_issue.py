@@ -5,6 +5,7 @@ import json, os, subprocess, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, TOOL  # noqa: E402
+from status_helpers import deadline_walk  # noqa: E402
 from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
@@ -51,7 +52,7 @@ class IssueTest(NoFixerBase):
         self.assertIn("no open agentctl issues", out)
 
     def test_an_open_issue_escalates_weekly_never_times_out_silently(self):
-        self.assertEqual(A.deadline_walk("issue", "open"), (False, True))
+        self.assertEqual(deadline_walk("issue", "open"), (False, True))
 
     def test_a_store_without_the_issue_machine_says_not_filed(self):
         saved = A.MACHINES.pop("issue")

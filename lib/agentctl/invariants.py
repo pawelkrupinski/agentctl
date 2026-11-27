@@ -22,7 +22,7 @@ from agentctl.queuehold import hold_recovers_itself
 from agentctl.procwatch import inv_wp, inv_wt
 from agentctl.selfci import inv_wa
 from agentctl.redrecord import red_what
-from agentctl.projector import notify_failure
+from agentctl.eventprojection import notify_failure
 from agentctl.changekind import change_hold_visible
 from agentctl.netwatch import inv_wu
 from agentctl.redhold import W1_HARD_FACTOR, change_progress, inv_wr, red_unheld

@@ -7,6 +7,7 @@ import os, re, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL, code_source  # noqa: E402
+from status_helpers import deadline_walk  # noqa: E402
 from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
@@ -24,7 +25,7 @@ class MachinesTest(unittest.TestCase):
     def test_without_progress_every_state_ends_terminal_or_escalates_forever(self):
         for typ, states in A.MACHINES.items():
             for name in states:
-                terminal, escalates = A.deadline_walk(typ, name)
+                terminal, escalates = deadline_walk(typ, name)
                 self.assertTrue(terminal or escalates, f"{typ}.{name} can time out into silence")
 
     def test_a_deadline_loops_back_into_its_own_state_only_in_a_wait_state_which_escalates(self):

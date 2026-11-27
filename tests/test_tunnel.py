@@ -5,6 +5,7 @@ import os, socket, sys, tempfile, threading, time, unittest, urllib.error
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from status_helpers import status_line  # noqa: E402
 
 
 class Hang:
@@ -134,14 +135,14 @@ class TunnelTest(unittest.TestCase):
         # 2026-10-29: ~20% loss to 1.1.1.1 and the jump host kept the forward timing out; restarts only churned it
         down, lossy, clean = (lambda: "timeout"), (lambda: A.UPLINK_LOSS_MAX), (lambda: 0.0)  # AT the bound: lossy
         A.publish_gate_summary("o/r", "gate green · no reds", epoch=A.epoch_now() - 3600)
-        self.assertIn("gate UNREAD", A.status_line())
+        self.assertIn("gate UNREAD", status_line())
         self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.epoch_now(), down, uplink=lossy), "network")
-        line = A.status_line()
+        line = status_line()
         self.assertIn("gate NETWORK (lossy uplink: 10% loss", line)
         self.assertNotIn("UNREAD", line)
         self.assertEqual(self.kicks, [])  # no restart
         self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.epoch_now(), lambda: "ok"), "restored")
-        self.assertIn("gate UNREAD", A.status_line())  # the NETWORK reading is gone with the outage
+        self.assertIn("gate UNREAD", status_line())  # the NETWORK reading is gone with the outage
         # the uplink fine and the forward dead (05:27-05:50): the end-to-end probe kicks after two failures
         self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.epoch_now(), down, uplink=clean), "down")
         self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.epoch_now() + 10, down, uplink=clean), "kicked")

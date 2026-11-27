@@ -1,4 +1,4 @@
-# agentctl, part `remotejobs`: the remote check's workflow and its jobs: those that decide its verdict, and a running job's expected duration (its timeout-minutes, else a headroom over its recorded p90, else a cap)
+# agentctl, part `checkrunjobs`: the remote check's workflow and its jobs: those that decide its verdict, and a running job's expected duration (its timeout-minutes, else a headroom over its recorded p90, else a cap)
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now

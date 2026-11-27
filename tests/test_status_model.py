@@ -5,6 +5,7 @@ import contextlib, io, os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from status_helpers import status_line  # noqa: E402
 from harness import case_context  # noqa: E402
 
 
@@ -27,8 +28,8 @@ class StatusModelTest(unittest.TestCase):
                        summary={"at": int(self.t - 10), "repo": A.SHORT["movies"], "line": "gate RED (main #9 -> NOBODY)"})
         h = A.status_data(only=("header",), now_=self.t)["header"]
         self.assertEqual(h["gate_text"], "gate RED (main #9 -> NOBODY)")
-        self.assertEqual(A.status_line(self.t), h["line"])
-        self.assertEqual(self.out(["status", "--line"])[1], A.status_line())
+        self.assertEqual(status_line(self.t), h["line"])
+        self.assertEqual(self.out(["status", "--line"])[1], status_line())
         rc, text = self.out(["ci-why", "--summary", "--cached", "--repo", "movies"])
         self.assertEqual((rc, text), (1, h["gate_text"]))
         self.assertTrue(self.out(["status"])[1].startswith(h["line"]))

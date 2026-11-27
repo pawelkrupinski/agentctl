@@ -19,7 +19,7 @@ from agentctl.redfixes import fixes_of
 from agentctl.waiting import note_waiting, supersede_older_waiting, waiting_commits
 from agentctl.gov import GovTimeout
 from agentctl.checkslot import check_slot
-from agentctl.remote import remote_check, remote_checks_supported, remote_matches
+from agentctl.checkrun import remote_check, remote_checks_supported, remote_matches
 
 
 def spawn_executor(repo, d, eid):

@@ -16,7 +16,7 @@ limit	datafanout	15
 suffix	lib/agentctl/processor.py:processor	1
 suffix	lib/agentctl/statuspage.py:StatusHandler	1
 suffix	lib/agentctl/storeapi.py:StoreRequestHandler	1
-abbreviation	lib/agentctl/alertprobe.py:alert_ctx_get	1
+abbreviation	lib/agentctl/alertclear.py:alert_ctx_get	1
 abbreviation	lib/agentctl/core.py:err	1
 abbreviation	lib/agentctl/fixerknobs.py:knob_claude_tmp	1
 abbreviation	lib/agentctl/fixerland.py:claude_tmp_root	1
@@ -181,7 +181,7 @@ import-io	devtools/mkmodule.py	6
 import-io	devtools/movedefs.py	5
 import-io	devtools/selfpush.py	1
 import-io	quality/tools.py	1
-fanout	lib/agentctl/alertprobe.py	12
+fanout	lib/agentctl/alertclear.py	12
 fanout	lib/agentctl/ask.py	11
 fanout	lib/agentctl/batch.py	18
 fanout	lib/agentctl/batchcheck.py	18
@@ -194,6 +194,7 @@ fanout	lib/agentctl/blamerecords.py	16
 fanout	lib/agentctl/branches.py	18
 fanout	lib/agentctl/changesubmit.py	11
 fanout	lib/agentctl/checkround.py	15
+fanout	lib/agentctl/checkrun.py	14
 fanout	lib/agentctl/checkslot.py	11
 fanout	lib/agentctl/cireport.py	23
 fanout	lib/agentctl/cleanup.py	14
@@ -201,6 +202,7 @@ fanout	lib/agentctl/cli.py	55
 fanout	lib/agentctl/cliparser.py	10
 fanout	lib/agentctl/culpritfix.py	15
 fanout	lib/agentctl/entrychecks.py	13
+fanout	lib/agentctl/eventprojection.py	12
 fanout	lib/agentctl/fixerland.py	20
 fanout	lib/agentctl/fixerlife.py	26
 fanout	lib/agentctl/fixerprompt.py	11
@@ -229,7 +231,6 @@ fanout	lib/agentctl/owned.py	13
 fanout	lib/agentctl/owner.py	19
 fanout	lib/agentctl/ownerwrapper.py	23
 fanout	lib/agentctl/processor.py	28
-fanout	lib/agentctl/projector.py	15
 fanout	lib/agentctl/queue.py	12
 fanout	lib/agentctl/queuecheck.py	18
 fanout	lib/agentctl/queuediff.py	22
@@ -257,13 +258,12 @@ fanout	lib/agentctl/redvault.py	19
 fanout	lib/agentctl/redverify.py	16
 fanout	lib/agentctl/redview.py	19
 fanout	lib/agentctl/redwaits.py	13
-fanout	lib/agentctl/remote.py	14
 fanout	lib/agentctl/runowners.py	11
 fanout	lib/agentctl/runsigs.py	10
 fanout	lib/agentctl/serverclone.py	11
 fanout	lib/agentctl/serversteps.py	25
 fanout	lib/agentctl/slots.py	27
-fanout	lib/agentctl/status.py	36
+fanout	lib/agentctl/status.py	33
 fanout	lib/agentctl/statusagents.py	12
 fanout	lib/agentctl/statuspage.py	14
 fanout	lib/agentctl/storeapi.py	10

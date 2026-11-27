@@ -12,7 +12,7 @@ from agentctl.core import attempt, err, hashlib_sha1
 from agentctl.statefile import read_record, write_json, unlink_file
 from agentctl.inboxentry import inbox_dir, inbox_entries
 from agentctl.alertroute import ALERT_AUTHOR_VERDICT_KINDS, alert_kind_of, alert_norm, alert_route, alert_tier
-from agentctl.alertprobe import alert_probe
+from agentctl.alertclear import alert_probe
 from agentctl.watchknobs import knob_alert_quiet_max
 from agentctl.watchknobs import knob_alert_reconcile
 

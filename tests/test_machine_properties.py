@@ -13,6 +13,7 @@ import os, random, sys, tempfile, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from status_helpers import deadline_walk  # noqa: E402
 
 SEQUENCES = int(os.environ.get("AGENTCTL_TEST_MACHINE_SEQUENCES") or 120)
 STEPS = 30
@@ -87,7 +88,7 @@ class TransitionPropertyTest(unittest.TestCase):
                         break
                     s = rng.choice(list(spec.exits) + [spec.on_deadline])
             for s in seen:
-                terminal, escalates = A.deadline_walk(typ, s)
+                terminal, escalates = deadline_walk(typ, s)
                 self.assertTrue(terminal or escalates, f"{typ}.{s} is reachable and can stall in silence")
 
 

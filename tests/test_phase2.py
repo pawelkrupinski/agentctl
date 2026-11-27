@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, seed_gating_checks  # noqa: E402
+from status_helpers import status_line  # noqa: E402
 from harness import case_context  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
@@ -374,7 +375,7 @@ class RemoteStatusLineTest(Phase2Base):
         saved = A.RemoteStore
         A.RemoteStore = Fake
         try:
-            return A.status_line(now_)
+            return status_line(now_)
         finally:
             A.RemoteStore = saved
 

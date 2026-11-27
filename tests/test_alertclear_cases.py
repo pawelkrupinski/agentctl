@@ -1,4 +1,4 @@
-"""THE ALERT PROBES (alertprobe.alert_probe, alert_probe_cleared), characterised with the store, the conditions, the gate
+"""THE ALERT PROBES (alertclear.alert_probe, alert_probe_cleared), characterised with the store, the conditions, the gate
 snapshot, git and the audience rules faked and worktrees real temporary directories: for each kind of item what closes
 its alert (or says whom it is for), and for each kind and verdict what clears the condition it names. `run` takes the
 module so a copy of the code can be driven the same way."""
@@ -171,14 +171,14 @@ def generate(rng, n):
 
 class AlertProbeTest(unittest.TestCase):
     def test_every_probe_does_what_it_did(self):
-        module = __import__("agentctl.alertprobe", fromlist=["x"])
+        module = __import__("agentctl.alertclear", fromlist=["x"])
         for name, script in SCENARIOS.items():
             with self.subTest(name):
                 self.assertEqual(run(module, script), EXPECTED[name], name)
 
 
 def results():
-    module = __import__("agentctl.alertprobe", fromlist=["x"])
+    module = __import__("agentctl.alertclear", fromlist=["x"])
     return {n: run(module, s) for n, s in SCENARIOS.items()}
 
 

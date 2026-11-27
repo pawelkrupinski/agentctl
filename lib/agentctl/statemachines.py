@@ -131,19 +131,6 @@ def machine_state(typ: Any, state: Any) -> Any:
         raise ValueError(f"no state {state!r} in machine {typ!r}") from None
 
 
-def deadline_walk(typ, state):
-    """The deadline-only path from `state`: (reached terminal?, cycle escalates?)."""
-    seen = []
-    while state not in seen:
-        seen.append(state)
-        spec = MACHINES[typ][state]
-        if spec.terminal:
-            return True, False
-        state = spec.on_deadline
-    cycle = seen[seen.index(state):]
-    return False, any(MACHINES[typ][x].escalate for x in cycle)
-
-
 def change_state_of(status: Any) -> str | None:
     """The change state a queue entry's status names, None for a status no change state is (`joined`, `migrated`:
     retired, docs/design/one-change-model.md; an entry carrying one is decided)."""

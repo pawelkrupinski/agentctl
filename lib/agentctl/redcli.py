@@ -32,8 +32,8 @@ from agentctl.statefile import read_record, write_json
 from agentctl.redknobs import knob_drift_ci
 from agentctl.blameknobs import knob_blame_probe_wall
 from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
-from agentctl.remotejobs import REMOTE_WORKFLOW
-from agentctl.remote import delete_check_branch, remote_poll
+from agentctl.checkrunjobs import REMOTE_WORKFLOW
+from agentctl.checkrun import delete_check_branch, remote_poll
 from agentctl.clock import epoch_now
 from agentctl.reverts import revert_line
 from agentctl.status import status_data, status_store

@@ -1758,7 +1758,7 @@ The reconciler then takes it, a step per tick:
   re-verification, the price of never holding a red fix for a whole batch check); a change queued meanwhile joins the
   next one. A second identity change is checked alone beside it. The same machine as the red batch:
   batch.py `backlog_candidates`, `backlog_reconcile` (members follow their batch), the `depth` of `batch_check` /
-  `bisect` (remote.py); tests: `tests/test_backlog_batch.py`.
+  `bisect` (checkrun.py); tests: `tests/test_backlog_batch.py`.
 - **A FIX OF ANY OPEN RED GOES FIRST (2026-11-19, 08010c: `Fixes-Red: 6`, Alert backtest #6, red 5254bffda9d2,
   outside the gate).** The queue's red-fix exemptions read only the GATE's reds, so at a green gate a fix of a red
   outside it was an ordinary change: checked at 08:32Z, it waited 22 min behind two combined-tree verifications, was
@@ -2292,7 +2292,7 @@ IS PROGRESS (2026-11-18: a healthy run whose only remaining job ran past 30 min,
 victoria-logs-ci, 30 days, >= 5 runs), else 2 h (`REMOTE_JOB_CAP`), read once per run (`job_bounds`). A failed push of the check branch is tried again 5 s and 20 s later
 (2026-11-17: two rounds ended "its checks stalled" 13 s in, no branch created on GitHub, and lost ~20 min each to the
 infra backoff and the check-slot queue); a round with no verdict is re-queued as `its checks stalled (<where>: <what
-the remote check said>)`, so the landing round's `reason` names the cause (remote.py `check_branch_push`). Such a
+the remote check said>)`, so the landing round's `reason` names the cause (checkrun.py `check_branch_push`). Such a
 stall KEEPS THE CHANGE'S PLACE (2026-11-17, ref-srp-54ebae 2 h old: the 5-min infra backoff let younger changes take
 every check tree): the first `STALL_KEEP_PLACE` (2) stalls in a row are due at once, so the tree it freed goes to it,
 first by age; then the infra backoff (queue.py `STALLED_REASON`).
@@ -2310,7 +2310,7 @@ Superseding or cancelling an entry cancels its undecided run.
 A GHOST RUN IS GIVEN UP (2026-11-20, phase7-houses: run 44682642375 queued 90 min, no check job started, while later
 runs ran): a queued run with no check job started that GitHub's `actions/runs?status=queued|in_progress` listing omits --
 the listing ci-runner's runner scheduler reads, so no runner is ever started for it -- is cancelled after
-`AGENTCTL_REMOTE_GHOST` (10 min) of that and re-checked, keeping its place (remote.py `remote_ghost`). `land status
+`AGENTCTL_REMOTE_GHOST` (10 min) of that and re-checked, keeping its place (checkrun.py `remote_ghost`). `land status
 <id>` of a checking change prints its remote check (run, branch, pushed and last-progress ages, each job: its verdict,
 `running <age>` or `waiting for a runner slot`), mirrored on its item as `check` (`remote_mirror`).
 

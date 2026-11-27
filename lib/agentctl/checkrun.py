@@ -1,4 +1,4 @@
-# agentctl, part `remote`: the remote check: a change's check run on CI from a check branch, polled to its verdict
+# agentctl, part `checkrun`: the remote check: a change's check run on CI from a check branch, polled to its verdict
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
@@ -16,7 +16,7 @@ from agentctl.joblog import fetch_failed_log, job_log_lines, relevant_lines
 from agentctl.leases import lock_beat
 from agentctl.runowners import record_dispatch, save_dispatch
 from agentctl.checkrows import check_run_record, with_run
-from agentctl.remotejobs import REMOTE_WORKFLOW, jobs_verdict, remote_progress, remote_read_bounds, verdict_jobs
+from agentctl.checkrunjobs import REMOTE_WORKFLOW, jobs_verdict, remote_progress, remote_read_bounds, verdict_jobs
 from agentctl.owned import backoff, cancel_run
 from agentctl.queue import VERIFY_AREAS_MODE, VERIFY_MODE
 

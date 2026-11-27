@@ -7,6 +7,7 @@ import contextlib, io, json, os, re, subprocess, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, StallSamples, put_change, sh  # noqa: E402
+from status_helpers import status_line  # noqa: E402
 from harness import case_context  # noqa: E402
 from fake_clock import FakeClock, lagging_clock, on_clock  # noqa: E402
 from test_waiting import REPO_HOOK, WaitingTest, assert_queued_line_names_no_verdict  # noqa: E402
@@ -300,7 +301,7 @@ class QueueTest(WaitingTest):
         rows = A.change_rows(A.CurrentStore(A.process_store))
         self.assertEqual([(r["id"], r["state"]) for r in rows], [(i, "waiting") for i in ids], "one item per change")
         A.write_snapshot(d, A.CurrentStore(A.process_store))
-        line = A.status_line()
+        line = status_line()
         self.assertIn("waiting: 3 — ", line)
         for wt in wts:
             self.assertEqual(line.count(re.sub(r"^.*-wt-", "", os.path.basename(wt))), 1, line)

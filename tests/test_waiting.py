@@ -7,6 +7,7 @@ import json, os, stat, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base, StallSamples, sh  # noqa: E402
+from status_helpers import status_line  # noqa: E402
 from harness import case_context  # noqa: E402
 from fake_clock import FakeClock, lagging_clock, on_clock  # noqa: E402
 
@@ -428,7 +429,7 @@ class WaitingTest(Base):
         self.assertAlmostEqual(h["deadline"] - self.clock.time(), 30 * 60, delta=60)  # land's clock
         self.assertEqual(self.drive(), ["held"])
         A.write_snapshot(d, A.CurrentStore(A.process_store))
-        line = A.status_line()
+        line = status_line()
         self.assertIn("LAND HELD until", line)
         self.assertIn("infra deploy", line)
         self.assertIn("infra deploy", A.status_landing(A.process_store(), A.epoch_now())["hold"]["why"])
@@ -442,7 +443,7 @@ class WaitingTest(Base):
         self.assertTrue([e for e in A.process_store().events() if e["kind"] == "hold.expired"])
         self.assertNotEqual(self.drive(), ["held"])
         A.write_snapshot(d, A.CurrentStore(A.process_store))
-        self.assertNotIn("HELD", A.status_line())
+        self.assertNotIn("HELD", status_line())
 
     def test_an_unread_gate_holds_the_batch_and_says_so_once(self):
         # 08:05Z 10-27: the processor could not read the gate (no token under launchd), took it for green, and pushed
