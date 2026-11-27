@@ -6,7 +6,7 @@ from typing import Any, Optional
 from agentctl.timefmt import ts
 from agentctl.core import git, remote, commit_known
 from agentctl.repos import precheck_hook
-from agentctl.landstate import landed_state
+from agentctl.onmain import landed_state
 from agentctl.leases import lock_note
 from agentctl.gating import mark_gate_dirty
 from agentctl.waitingdir import waiting_state, wlog

@@ -9,7 +9,7 @@ from agentctl.repos import precheck_hook, waiting_supported
 from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
 from agentctl.gating import mark_gate_dirty
 from agentctl.clones import fetch_main
-from agentctl.landstate import landed_state
+from agentctl.onmain import landed_state
 from agentctl.land import RACE, REDGATE, land_lock_if_free, push_argv, push_bounds, run_watched, tool_env
 from agentctl.queueslots import PUSH_ATTEMPTS_MAX, check_tree, queue_verdict, set_change, tree_slot
 from agentctl.conditions import open_condition, run_probe

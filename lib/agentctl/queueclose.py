@@ -10,7 +10,7 @@ from contextlib import suppress
 from agentctl.timefmt import ts
 from agentctl.statemachines import StaleVersion, TerminalState, machine_state, open_items
 from agentctl.clock import Clock
-from agentctl.landstate import UNKNOWN, LandState, landed_state
+from agentctl.onmain import LandState, UNKNOWN, landed_state
 from agentctl.core import fmt_age, host_role, process_cache, remote, commit_known
 from agentctl.repos import movies_repo_path, precheck_hook, waiting_supported
 from agentctl.waitingdir import ChangeRecords, drop_entry, entry_final, waiting_state, wlog

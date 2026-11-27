@@ -5,7 +5,7 @@ from typing import Any, Callable
 import os
 import re
 from agentctl.core import remote
-from agentctl.landstate import landed_state
+from agentctl.onmain import landed_state
 from agentctl.timefmt import iso_epoch
 from agentctl.statefile import read_record
 from agentctl.conditions import CONDITION_KINDS

@@ -8,7 +8,7 @@ from agentctl.core import fmt_age
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.inboxentry import inbox_write
 from agentctl.redrepos import verify_dispatchable
-from agentctl.ancestry import contains_local
+from agentctl.onmain import contains_local
 from agentctl.redrecord import RED_RECURRING, lease_is_live, red_lease, red_what
 from agentctl.redfixread import FIX_OPEN
 from agentctl.fixchange import red_change, red_fix_fresh

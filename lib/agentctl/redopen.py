@@ -9,7 +9,7 @@ from agentctl.statefile import read_record
 from agentctl.repos import RED_PRIMARY
 from agentctl.allowedpaths import allowed_path
 from agentctl.redrepos import red_gate_flows, red_identity, red_is_other
-from agentctl.ancestry import contains_local
+from agentctl.onmain import contains_local
 from agentctl.ciwhy import resolve_run
 from agentctl.runsigs import classifier_version, run_sigs
 from agentctl.statemachines import StaleVersion

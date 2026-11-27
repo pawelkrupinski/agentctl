@@ -620,7 +620,7 @@ two disagreements were resolved: a gate red's fix beside a production commit nam
 not the names its entry recorded at submission (a trailer fix_check stopped counting makes no fix). An item's data read
 without git is judged by its recorded names. The queue facts it reads are read once per queue tick (`facts_for` inside
 `facts_tick`, opened by `tick_changes` and `tick_batch`); outside a tick every call reads afresh. Whether a fix's commit is
-on main is one `maincontain.MainContainment` (a clone's git, or the forge's compare with no clone here): `contains`,
+on main is one `onmain.MainContainment` (a clone's git, or the forge's compare with no clone here): `contains`,
 `landed`, `carrying` -- "cannot tell" is None, never "not on main". `land hold` makes its hold in one store transaction
 (`Store.open_singleton`): two holders at once make one hold.
 

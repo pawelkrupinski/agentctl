@@ -23,7 +23,7 @@ from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.lander import commit_keys, lander_note_direct
 from agentctl.gating import mark_gate_dirty
 from agentctl.leases import lock_note
-from agentctl.landstate import landed_state
+from agentctl.onmain import landed_state
 from agentctl.land import (
     LAND_PRECHECK_ROUNDS, LAND_RETRIES, RACE, REDGATE, land_lock, push_argv, push_bounds, run_watched,
     tool_env)

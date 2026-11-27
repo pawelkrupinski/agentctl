@@ -9,7 +9,7 @@ from agentctl.statemachines import change_state_of, machine_state
 from agentctl.queueknobs import knob_free_wait
 from agentctl.core import attempt, git, remote
 from agentctl.waitingdir import ChangeRecords, waiting_state
-from agentctl.landstate import landed_state
+from agentctl.onmain import landed_state
 from agentctl.worktrees import worktrees
 from agentctl.cleanup import close_worktree, free_worktree
 

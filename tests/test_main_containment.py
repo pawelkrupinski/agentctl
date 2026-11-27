@@ -117,7 +117,7 @@ MATRIX = {
     ('git', 'no-repo', 'unlanded'): (False, 'self', None),
 }
 
-# THE DISAGREEMENTS, resolved (maincontain.py's header says why; each has its own test below):
+# THE DISAGREEMENTS, resolved (onmain.py's header says why; each has its own test below):
 #  - a commit main has but the clone has not fetched: commit_on_main said "not on main" -- now it fetches, as the
 #    contains route did: landed;
 #  - UNKNOWN IS NOT "NO": no clone, no main ref, a failed compare answered False -- now None (each caller says what
@@ -171,7 +171,7 @@ class MainContainmentMatrixTest(Base):
         self.assertIs(main.contains("b" * 40), True, "asked again at once: the error was not remembered")
 
     def test_a_run_head_the_clone_lacks_fetches_main_once_per_window(self):
-        """Review 2026-11-26 (A B1): ancestry.contains fetched main on EVERY call for a run head the clone did not have
+        """Review 2026-11-26 (A B1): onmain.contains fetched main on EVERY call for a run head the clone did not have
         (a force-pushed-away head refetched each land-watch tick), unlike MainContainment's once per RED_MAIN_REFETCH."""
         w = World(self)
         os.utime(os.path.join(w.r.path, sh(w.r.path, "git", "rev-parse", "--git-path", "FETCH_HEAD").strip()), (0, 0))

@@ -1,7 +1,7 @@
 # agentctl, part `cleanup`: cleanup and the lifecycle.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.landstate import landed_state
+from agentctl.onmain import landed_state
 from agentctl.clock import Stopwatch, epoch_now, stopwatch, wall_epoch
 from typing import Any
 from collections.abc import Sequence

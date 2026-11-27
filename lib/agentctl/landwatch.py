@@ -9,7 +9,7 @@ from agentctl.timefmt import parse_time
 from agentctl.forge import is_cancelled
 from agentctl.repos import movies_repo_path, red_repo_clone
 from agentctl.clones import main_clone
-from agentctl.ancestry import contains
+from agentctl.onmain import contains
 from agentctl.ciwhy import run_no_verdict
 from agentctl.ciruns import ci_runs, main_runs
 from agentctl.watchknobs import knob_watch_conv_start
@@ -24,7 +24,7 @@ from agentctl.watchknobs import knob_watch_conv_start
 WATCH = {"pawelkrupinski/movies": {"main": ("Main", "main.yml"),
                                    "convergence": ("Identity model convergence", "identity-model-convergence.yml"),
                                    "takes": ("Identity takes", "identity-takes.yml")}}
-WATCH_MAIN_REFETCH = 300         # a run head the clone lacks fetches main at most this often (ancestry.contains)
+WATCH_MAIN_REFETCH = 300         # a run head the clone lacks fetches main at most this often (onmain.contains)
 WATCH_SLACK = 120                 # clock skew between the laptop and GitHub's createdAt
 
 

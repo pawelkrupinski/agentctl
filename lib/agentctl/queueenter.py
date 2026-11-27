@@ -13,7 +13,7 @@ from agentctl.ids import stamp
 from agentctl.queueknobs import knob_land_before_queue_seconds, knob_max_foreign, knob_until_done_deadline
 from agentctl.core import NO_SIGN, branch_of, err, fmt_age, git, git_ok, host_role, process_cache, remote, scratch, is_ancestor
 from agentctl.trailers import do_not_land, held_commit
-from agentctl.landstate import landed_state
+from agentctl.onmain import landed_state
 from agentctl.policy import policy_blocks
 from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.storetoken import no_vault

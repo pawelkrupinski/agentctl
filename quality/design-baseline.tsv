@@ -146,9 +146,9 @@ state	lib/agentctl/lander.py	1
 state	lib/agentctl/laptoprole.py	1
 state	lib/agentctl/leases.py	1
 state	lib/agentctl/live.py	4
-state	lib/agentctl/maincontain.py	3
 state	lib/agentctl/netwatch.py	1
 state	lib/agentctl/notifier.py	1
+state	lib/agentctl/onmain.py	3
 state	lib/agentctl/outsideflows.py	1
 state	lib/agentctl/owned.py	4
 state	lib/agentctl/policy.py	1
@@ -241,7 +241,7 @@ fanout	lib/agentctl/redcli.py	29
 fanout	lib/agentctl/redcrash.py	19
 fanout	lib/agentctl/reddispatch.py	20
 fanout	lib/agentctl/redearly.py	13
-fanout	lib/agentctl/redfixes.py	11
+fanout	lib/agentctl/redfixes.py	10
 fanout	lib/agentctl/redhold.py	20
 fanout	lib/agentctl/redland.py	11
 fanout	lib/agentctl/redlease.py	17

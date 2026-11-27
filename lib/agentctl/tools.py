@@ -14,7 +14,7 @@ from agentctl.timefmt import ts
 from agentctl.forge import GH_CLI
 from agentctl.land import SDKMAN_BINS, tool_env
 from agentctl.storetoken import secrets_bin
-from agentctl.patches import ALLOW_EMPTY_TRAILER, deliberate_empty, is_empty_commit
+from agentctl.onmain import ALLOW_EMPTY_TRAILER, deliberate_empty, is_empty_commit
 from agentctl.tunnel import tunnel_ports
 from agentctl.storestate import port_open
 from agentctl.netwatch import TUNNEL_LABEL

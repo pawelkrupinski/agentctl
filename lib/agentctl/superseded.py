@@ -6,7 +6,7 @@ import argparse
 from typing import Any
 import os
 from agentctl.core import PROTECTED_BRANCHES, attempt, git, remote, tilde
-from agentctl.landstate import landed_state
+from agentctl.onmain import landed_state
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json
 from agentctl.procs import process_cwds

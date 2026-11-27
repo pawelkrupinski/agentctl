@@ -10,13 +10,12 @@ from agentctl.timefmt import parse_time, ts
 from agentctl.core import attempt, git, process_cache
 from agentctl.trailers import commit_trailer_values
 from agentctl.waitingdir import ChangeRecords, waiting_state
-from agentctl.patches import patch_id
+from agentctl.onmain import MainContainment, patch_id
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_names, red_what
 from agentctl.redfixread import FIX_OPEN, red_unrelated
 from agentctl.fixchange import fixes_named, red_fix_fresh
 from agentctl.redfixcheck import fix_check, fix_reaches_red, landed_fix_commits, red_change_link
-from agentctl.maincontain import MainContainment
 
 
 def commit_fixes(repo: str, sha: str, store: Any) -> set[str]:
@@ -321,7 +320,7 @@ def red_run_on_way(d, snap, repo):
 # landing re-cut it as 19482f5c08 (Verify scrape recording #23's Filmweb fix, 2026-11-11), so no main ever held it. The
 # change's entry FILE still read `joined` and also named "40" (a run of an earlier spell of this key), so five days
 # later the new spell took it as a fix on its way, and the store turned it into the landed phantom. Now a landed fix's
-# sha is resolved against main (maincontain.MainContainment.carrying): kept when main contains it, followed to the main commit carrying
+# sha is resolved against main (onmain.MainContainment.carrying): kept when main contains it, followed to the main commit carrying
 # its patch (a re-cut on landing), and no fix at all when main carries neither; and a fix that landed before this spell
 # opened is no fix for it (the run that opened it already contained it), however its entry reads. A red already
 # fix-pending on such a sha is corrected the same way (red_fix_pending).

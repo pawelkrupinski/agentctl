@@ -15,7 +15,7 @@ from agentctl.forge import RUN_FIELDS, gh_json
 from agentctl.waitingdir import waiting_dir
 from agentctl.deletions import SWEEP_KEEP_REMOTE, delete_remote_branch, log_deletion
 from agentctl.worktrees import CACHE_TREES, internal_trees_dir, worktree_of, worktrees
-from agentctl.maincontain import MainContainment
+from agentctl.onmain import MainContainment
 
 
 # ---------------------------------------------------------------- branch runs: every dispatch has an owner, every branch red a route

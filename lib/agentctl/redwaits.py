@@ -8,7 +8,7 @@ import time
 from agentctl.statemachines import is_terminal
 from agentctl.timefmt import iso_at, parse_time
 from agentctl.redrecord import lease_is_live, red_active_of, red_lease, red_of_key, red_what
-from agentctl.maincontain import MainContainment
+from agentctl.onmain import MainContainment
 from agentctl.red import red_move
 from agentctl.redopen import red_offer
 from agentctl.ids import dt
