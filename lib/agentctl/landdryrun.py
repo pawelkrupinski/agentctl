@@ -154,7 +154,7 @@ def network_requeue(repo, head, out, log_path, clock, store, a=None):
     if submit_ref(repo, d, e):
         ChangeRecords(store, d).save(e)
     requeue_infra(store, d, e, why, clock.time(), reason=NETWORK_REASON, detail=out, repo=repo)
-    e = read_record(os.path.join(d, "entries", f"{e['id']}.json")) or e
+    e = ChangeRecords(store, d).get(e["id"]) or e
     left = max(0, int((float(e.get("retry_after") or clock.time()) - clock.time()) // 60))
     print(f"QUEUED {e['id']} ({head[:10]}): infra, not a known red -- {why}; checked again in {left} min; "
           f"{queued_tail()}", flush=True)

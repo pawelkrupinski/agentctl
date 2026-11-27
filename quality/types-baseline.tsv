@@ -95,7 +95,7 @@ mypy-errors	processor	9
 mypy-errors	processorlink	16
 mypy-errors	procwatch	2
 mypy-errors	projector	16
-mypy-errors	queue	27
+mypy-errors	queue	26
 mypy-errors	queuebatch	38
 mypy-errors	queuebatchsel	19
 mypy-errors	queuecheck	28

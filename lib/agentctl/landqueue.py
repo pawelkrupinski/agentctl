@@ -12,12 +12,11 @@ from agentctl.core import fmt_age, git, git_ok, host_role
 from agentctl.timefmt import hhmmz, ts
 from agentctl.statefile import read_json_file, unlink_file
 from agentctl.repos import movies_repo_path
-from agentctl.waitingdir import entry_final, waiting_entries, waiting_state
+from agentctl.waitingdir import ChangeRecords, entry_final, waiting_entries, waiting_state
 from agentctl.procs import safe_cwd
 from agentctl.clones import main_clone
 from agentctl.queueslots import set_change
 from agentctl.queue import hold_text, land_hold
-from agentctl.queuerecheck import queued_entries
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.waiting import GATE_UNREAD, cancel_entry_remote, cancel_submitted, stop_checker, unread_why
 from agentctl.queuesubmit import landed_sha_of
@@ -160,7 +159,7 @@ def land_cancel_command(a: argparse.Namespace, repo: str, d: str, st: Any) -> in
     and its CI run."""
     if host_role() == "sync":
         return cancel_through_store(a.entry, st)
-    queued = [e for e in queued_entries(d) if a.entry in e["id"]]
+    queued = [e for e in ChangeRecords(st, d).queued() if a.entry in e["id"]]
     if len(queued) == 1:
         return cancel_queued(st, d, queued[0])
     return cancel_waiting(a.entry, repo, d, st)
@@ -188,7 +187,7 @@ def cancel_queued(st: Any, d: str, e: dict[str, Any]) -> int:
 
 def cancel_waiting(entry: str, repo: str, d: str, st: Any) -> int:
     """A waiting entry cancelled (the next batch is assembled without it), or a stranded item no entry carries."""
-    hits = [e for e in waiting_entries(d) if entry in e["id"]]
+    hits = [e for e in ChangeRecords(st, d).waiting() if entry in e["id"]]
     if not hits:  # an item no entry carries (stranded): the item alone
         ids = [r["id"] for r in change_rows(st) if entry in r["id"]]
         if len(ids) == 1:

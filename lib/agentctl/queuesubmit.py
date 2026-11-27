@@ -14,7 +14,7 @@ from agentctl.netretry import TransientNetwork, net_retry
 from agentctl.networksignatures import credential_failure, is_transient_network, redact_credentials
 from agentctl.store import StoreUnavailable
 from agentctl.selfcode import TOOL_PATH
-from agentctl.waitingdir import entry_final, waiting_entries
+from agentctl.waitingdir import ChangeRecords, entry_final
 from agentctl.land import push_bounds, run_watched, tool_env
 from agentctl.owned import backoff
 from agentctl.waiting import tail_of
@@ -103,7 +103,7 @@ def sweep_land_refs(repo, d, store, now_=None):
     r = git(repo, "ls-remote", "--heads", remote(), "refs/heads/land/*", check=False)
     if r.returncode != 0:
         return []
-    every = {e["id"]: e for e in waiting_entries(d, open_only=False)}
+    every = {e["id"]: e for e in ChangeRecords(store, d).every()}
     items = _change_items(store)
     if items is None:
         return []

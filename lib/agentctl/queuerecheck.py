@@ -8,7 +8,6 @@ from agentctl.procrunner import process_runner
 from agentctl.core import err, git, process_cache
 from agentctl.repos import batching, precheck_hook
 from agentctl.buildview import BUILD_VIEW_PATHS, build_view_change, read_build
-from agentctl.waitingdir import waiting_entries
 from agentctl.queue import (
     SELECTION_PATHS, forces_full_recheck, hook_query, named_reader, range_paths, selection_at, selection_change)
 from agentctl.generated import without_generated
@@ -355,10 +354,6 @@ def same_change_source(e, worktree, branch):
     if os.path.realpath(e.get("worktree") or "") != os.path.realpath(worktree or ""):
         return False
     return not e.get("branch") or not branch or e["branch"] == branch
-
-
-def queued_entries(d: str) -> list[dict[str, Any]]:
-    return [e for e in waiting_entries(d, open_only=False) if e.get("status") in ("queued", "checking", "checked", "pushing")]
 
 
 def queue_mode(repo, a):

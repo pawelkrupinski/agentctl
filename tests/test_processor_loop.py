@@ -94,7 +94,7 @@ def run(module, script):
         "run_step": run_step, "sd_notify": rec("sd_notify"), "ROUND_ERRORS_MAX": 2,
         "open_condition": rec("open_condition", script.get("stall")), "run_probe": rec("run_probe", "PROBE"),
         "write_json": rec("write_json"), "write_snapshot": rec("write_snapshot", script.get("snapshot")),
-        "queued_entries": lambda d: script.get("queued", []), "waiting_entries": lambda d: script.get("waiting", []),
+        "ChangeRecords": lambda st, d: type("R", (), {"open": lambda self: script.get("queued", []) + script.get("waiting", [])})(),
         "err": rec("err"), "knob_tick": lambda: 5,
     }
     with contextlib.ExitStack() as stack:

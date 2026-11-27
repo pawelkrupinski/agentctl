@@ -9,10 +9,9 @@ from typing import Any
 from agentctl.filelog import note_event
 from agentctl.causes import entry_cause
 from agentctl.core import git, state_root
-from agentctl.timefmt import ts
+from agentctl.timefmt import parse_time, ts
 from agentctl.statefile import read_record, write_json
-from agentctl.statemachines import open_states
-from agentctl.timefmt import parse_time
+from agentctl.statemachines import change_state_of, open_states
 
 
 # ---------------------------------------------------------------- waiting: production changes held while main is red
@@ -75,11 +74,13 @@ def save_entry(d: str, e: dict[str, Any]) -> None:
                    entry_cause(str(e["status"]), str(e.get("why") or "")), detail=e.get("why"))
 
 
-# THE ITEM CARRIES THE RECORD (docs/design/one-change-model.md, step 3): every entry the queue writes is written to its
-# change item's data too, whole but for its status (the item's state), under RECORD_KEY -- one added key, so an older
-# revision reading the item sees the keys it knew (the design's rule 2). The copy is merged without a new version
-# (Store.merge_item): no writer's compare-and-set is disturbed by it. The file is still the record the queue reads.
+# THE ITEM IS THE CHANGE (docs/design/one-change-model.md): every entry the queue writes is its change item's data too,
+# whole but for its status (the item's state), under RECORD_KEY -- one added key, so an older revision reading the item
+# sees the keys it knew (the design's rule 2). The copy is merged without a new version (Store.merge_item): no writer's
+# compare-and-set is disturbed by it. Since step 4 the queue READS its changes from the items (ChangeRecords' readers);
+# the file is still written (rule 3: a rollback finds it current).
 RECORD_KEY = "record"
+QUEUED = ("queued", "checking", "checked", "pushing")  # the states of a change in the land queue (not waiting for green)
 
 
 def entry_record(e: dict[str, Any]) -> dict[str, Any]:
@@ -87,21 +88,91 @@ def entry_record(e: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in e.items() if k != "status"}
 
 
+def new_change_data(st: Any, e: dict[str, Any]) -> dict[str, Any]:
+    """A new change item's data, from its entry: its fields (change_item_fields), when the store took it and the red
+    time accumulated by then (its queue age net of red main: oldest_change_age)."""
+    return {**change_item_fields(e), "submitted_at": st.clock(), "red_accum0": float(st.meta_get("red_accum", 0) or 0)}
+
+
+def change_seq_key(d: str) -> str:
+    """The store counter of a queue's change numbers (Store.next_seq), per queue directory."""
+    return f"change_seq:{os.path.basename(d.rstrip('/'))}"
+
+
 class ChangeRecords:
-    """THE WRITER OF A CHANGE'S ENTRY: its file (save_entry) and its change item's copy of it. store: the queue's own
-    (the server's local database, needs_token False), or None for the laptop's OUTBOX (a `land --follow` while main is
-    red, slots.join: no item until ci-runner takes it, and its store is remote)."""
+    """THE RECORD OF A QUEUE'S CHANGES: its writer (the item, then the entry's file) and its readers. store: the queue's
+    own (the server's local database, needs_token False): the changes are its change items, each read as the entry it
+    carries (RECORD_KEY) with the item's state as its status. None (or a remote store) for the laptop's OUTBOX (a `land
+    --follow` while main is red, slots.join: no item until ci-runner takes it): the entry files alone."""
 
     def __init__(self, store: Any, d: str) -> None:
-        self.store = store if store is not None and not store.needs_token else None
+        self.store: Any = store if store is not None and not store.needs_token else None
         self.d = d
 
     def save(self, e: dict[str, Any]) -> None:
-        """Entry e written (save_entry's race rule applies), then its item's copy; a change with no item yet gets its
-        copy when the projector creates it (projector.project_changes)."""
+        """Entry e written: its item first (created, carrying it, when the store has none: a new change is a change
+        for every reader at once), then its file (save_entry's race rule applies), then its item's copy."""
+        if self.store is not None:
+            self._open(e)
         save_entry(self.d, e)
         if self.store is not None:
             self.store.merge_item("change", str(e["id"]), {RECORD_KEY: entry_record(e)})
+
+    def _open(self, e: dict[str, Any]) -> None:
+        state = change_state_of(e.get("status"))
+        if state and self.store.item("change", str(e["id"])) is None:
+            self.store.put_item("change", str(e["id"]), state,
+                                {**new_change_data(self.store, e), RECORD_KEY: entry_record(e)})
+
+    def every(self) -> list[dict[str, Any]]:
+        """Every change of the queue that has its record, as its entry, in seq order (one with no seq last). A change
+        decided before its item carried a record (before 2026-11-27's step 3) is not one: its item's own fields and
+        its events are its history."""
+        if self.store is None:
+            return waiting_entries(self.d, open_only=False)
+        out = [change_record_of(it) for it in self.store.items("change") if (it.get("data") or {}).get(RECORD_KEY)]
+        return sorted(out, key=lambda e: (e.get("seq") is None, e.get("seq") or 0))
+
+    def open(self) -> list[dict[str, Any]]:
+        """The changes in an open state (ENTRY_OPEN): queued, checking, checked, pushing or waiting."""
+        return [e for e in self.every() if not entry_final(e.get("status"))]
+
+    def waiting(self) -> list[dict[str, Any]]:
+        """The changes waiting for main to turn green."""
+        return [e for e in self.every() if e.get("status") == "waiting"]
+
+    def queued(self) -> list[dict[str, Any]]:
+        """The changes in the land queue: queued, checking, checked or pushing."""
+        return [e for e in self.every() if e.get("status") in QUEUED]
+
+    def get(self, eid: str) -> dict[str, Any] | None:
+        """Change eid as its entry; None when the queue has no record of it."""
+        if self.store is None:
+            rec: dict[str, Any] | None = read_record(os.path.join(self.d, "entries", f"{eid}.json"))
+            return rec
+        it = self.store.item("change", eid)
+        return change_record_of(it) if it and (it.get("data") or {}).get(RECORD_KEY) else None
+
+    def draw_seq(self) -> int:
+        """The next change number (THE COUNTER NEVER GOES BACK: an entry that took a bounced entry's place keeps an old
+        seq, so a number is the highest ever drawn). The store's atomic counter (Store.next_seq), started once above
+        every number the queue's entries hold; the outbox: above its entries'."""
+        if self.store is None:
+            return drawn_max(waiting_entries(self.d, open_only=False)) + 1
+        key = change_seq_key(self.d)
+        if self.store.meta_get(key) is None:
+            self.store.meta_set(key, drawn_max(waiting_entries(self.d, open_only=False) + self.every()))
+        return int(self.store.next_seq(key))
+
+
+def change_record_of(it: dict[str, Any]) -> dict[str, Any]:
+    """Change item it as its queue entry: its record, its state as the status."""
+    return {**it["data"][RECORD_KEY], "id": it["id"], "status": it["state"]}
+
+
+def drawn_max(entries: list[dict[str, Any]]) -> int:
+    """The highest change number these entries drew (their seq, or the `drawn` of one that took another's place)."""
+    return max([max(int(e.get("seq") or 0), int(e.get("drawn") or 0)) for e in entries] + [0])
 
 
 def drop_entry(d: str, eid: str) -> None:

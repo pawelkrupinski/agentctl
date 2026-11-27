@@ -9,11 +9,11 @@ from agentctl.timefmt import ts
 from agentctl.statefile import read_record, note_failure
 from agentctl.repos import server_repo
 from agentctl.trailers import trailer_values
-from agentctl.waitingdir import ChangeRecords, waiting_entries, waiting_state, wlog
+from agentctl.waitingdir import ChangeRecords, entry_final, waiting_state, wlog
 from agentctl.owned import cancel_run
 from agentctl.queueslots import entry_owned, queue_verdict, set_change
 from agentctl.conflicts import pick
-from agentctl.queuerecheck import queued_entries, same_change_source
+from agentctl.queuerecheck import same_change_source
 from agentctl.redland import may_land_on_red
 from agentctl.changekind import facts_for
 from agentctl.statemachines import StaleVersion, change_event, machine_state, open_items
@@ -213,15 +213,15 @@ def batch_order(repo, entries, reds, store):
 
 def supersede_older_waiting(st, d, worktree, branch, eid) -> None:
     """Waiting again replaces this worktree and branch's older waiting entry: only the newest (eid) lands."""
-    for old in waiting_entries(d):
+    for old in ChangeRecords(st, d).waiting():
         if old["id"] != eid and same_change_source(old, worktree, branch):
             supersede(st, d, old, eid, f"{worktree} waits again; only the newest entry lands")
 
 
-def note_waiting(d, log_path, head, eid):
+def note_waiting(st, d, log_path, head, eid):
     """The change's `=== waiting` line in its log, and its verdict line `WAITING <head> (entry <id>, n waiting)` (n:
     the waiting entries, it among them, saved yet or not)."""
-    n = len({x["id"] for x in waiting_entries(d)} | {eid})
+    n = len({x["id"] for x in ChangeRecords(st, d).waiting()} | {eid})
     with open(log_path, "a") as f:
         f.write(f"=== waiting {ts()} {head} as {eid} ({n} waiting)\n")
     return f"WAITING {head} (entry {eid}, {n} waiting)"
@@ -229,7 +229,7 @@ def note_waiting(d, log_path, head, eid):
 
 def cancel_submitted(st: Any, eid: str, how: str = "cancel", repo: str | None = None) -> dict[str, Any]:
     d = waiting_state(repo or server_repo())[0]
-    hits = [e for e in queued_entries(d) + waiting_entries(d) if e["id"] == eid]
+    hits = [e for e in [ChangeRecords(st, d).get(eid)] if e and not entry_final(e.get("status"))]
     if not hits:  # an item no entry carries (stranded): the item alone
         it = st.item("change", eid)
         if not it or machine_state("change", it["state"]).terminal:

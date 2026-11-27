@@ -3,11 +3,10 @@
 
 import os
 from typing import Any, List, Optional, Tuple
-from agentctl.statefile import read_record
 from agentctl.core import git, git_ok, remote
 from agentctl.networksignatures import TRANSIENT_PUSH
 from agentctl.repos import precheck_hook, waiting_supported
-from agentctl.waitingdir import waiting_state, wlog
+from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
 from agentctl.gating import mark_gate_dirty
 from agentctl.clones import fetch_main
 from agentctl.landstate import landed_state
@@ -57,7 +56,7 @@ def _push_change(repo: str, d: str, e: Entry, i: Any, clock: Any, st: Any) -> Op
     with land_lock_if_free(repo, st) as held:
         if not held:
             return "busy"
-        status = (read_record(os.path.join(d, "entries", f"{e['id']}.json")) or {}).get("status")
+        status = (ChangeRecords(st, d).get(e["id"]) or {}).get("status")
         if status != "checked":  # superseded / cancelled since its checks: no push
             return status
         fetch_main(repo)  # a corrupt clone is marked for repair; a failed fetch pushes onto the last known main

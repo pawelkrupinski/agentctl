@@ -239,7 +239,11 @@ class RequeueLoopTest(unittest.TestCase):
         A.open_condition = lambda kind, text, probe, acts, **kw: None if probe.ok else \
             self.opened.append((kind, text, probe, kw)) or {"key": kw.get("key")}
         self.e = {"id": "e1", "seq": 1, "status": "checking", "worktree": "/w", "head": "a" * 40}
-        A.write_json(os.path.join(self.d, "entries", "e1.json"), self.e)
+        A.ChangeRecords(self.st, self.d).save(self.e)
+        probes = dict(A.PROBES)  # the queue's probes read the test's store (the root wires the process's)
+        self.addCleanup(lambda: A.PROBES.update(probes))
+        A.wire_probes({"push_credential": lambda a: A.probe_push_credential(a, self.st),
+                       "infra_requeue": lambda a: A.probe_infra_requeue(a, self.st)})
 
     def tearDown(self):
         A.wlog, A.open_condition = self.saved
@@ -298,10 +302,11 @@ class RequeueLoopTest(unittest.TestCase):
         got = self.credential_probe(since)
         self.assertFalse(got.ok, got.detail)
         self.assertIn("1 change(s) wait", got.detail)
-        e = A.read_record(os.path.join(self.d, "entries", "e1.json"))
-        A.write_json(os.path.join(self.d, "entries", "e1.json"), {**e, "remote": {"pushed_at": since - 5}})
+        recs = A.ChangeRecords(self.st, self.d)
+        e = recs.get("e1")
+        recs.save({**e, "remote": {"pushed_at": since - 5}})
         self.assertFalse(self.credential_probe(since).ok, "a push before the condition opened says nothing")
-        A.write_json(os.path.join(self.d, "entries", "e1.json"), {**e, "remote": {"pushed_at": since + 5}})
+        recs.save({**e, "remote": {"pushed_at": since + 5}})
         got = self.credential_probe(since)
         self.assertTrue(got.ok, got.detail)
         self.assertIn("push succeeded", got.detail)
@@ -309,8 +314,7 @@ class RequeueLoopTest(unittest.TestCase):
     def test_the_credential_condition_clears_when_no_change_waits_on_it(self):
         self.again("its checks stalled (on ci-runner: fatal: could not read Username)", repo=self.d)
         since = self.opened[0][2].args["since"]
-        e = A.read_record(os.path.join(self.d, "entries", "e1.json"))
-        A.write_json(os.path.join(self.d, "entries", "e1.json"), {**e, "status": "rejected"})
+        A.set_change(self.st, self.d, A.ChangeRecords(self.st, self.d).get("e1"), "rejected", cause="check-failed-test")
         self.assertTrue(self.credential_probe(since).ok)
 
     def test_the_credential_condition_is_read_only_where_the_push_failed(self):
@@ -349,7 +353,8 @@ class RequeueLoopTest(unittest.TestCase):
             self.again("its checks stalled (sbt)")
         args = self.opened[0][2].args
         self.assertFalse(A.run_probe("infra_requeue", args).ok)  # checking, the same reason: still stuck
-        A.write_json(os.path.join(self.d, "entries", "e1.json"), {**self.e, "status": "checked", "infra_reason": None})
+        A.set_change(self.st, self.d, {**A.ChangeRecords(self.st, self.d).get("e1"), "infra_reason": None}, "checked",
+                     cause="check-passed")
         self.assertTrue(A.run_probe("infra_requeue", args).ok)
 
     def test_a_checks_fetch_of_main_failing_says_why(self):

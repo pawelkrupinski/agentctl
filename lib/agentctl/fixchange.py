@@ -26,10 +26,16 @@ def red_change_read(store: Any, eid: Optional[str]) -> tuple[Optional[dict[str, 
         return None, str(e) or type(e).__name__
 
 
+def _as_read(fix: dict[str, Any]) -> bool:
+    """A fix its store item cannot correct: of no change, or landed where it says."""
+    return not fix.get("entry") or bool(fix.get("status") == "landed" and fix.get("sha"))
+
+
 def red_fix_fresh(store: Any, fix: Optional[dict[str, Any]]) -> Optional[dict[str, Any]]:
     """The fix red_fix_of read from the facts, corrected by its change's store item: None when that change ended
-    without landing, landed when the store says so; as read when the store has no word on it."""
-    if not fix or not fix.get("entry") or fix.get("status") == "landed":
+    without landing, landed (where) when the store says so -- a landed fix naming no sha too; as read when the store
+    has no word on it."""
+    if not fix or _as_read(fix):
         return fix
     ch = red_change(store, fix["entry"])
     if not ch:

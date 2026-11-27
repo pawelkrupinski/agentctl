@@ -9,7 +9,7 @@ from agentctl.statefile import read_record, write_json
 from agentctl.core import err, reds_dir, slug
 from agentctl.classify import ANSI, norm_line
 from agentctl.repos import gated_repo
-from agentctl.waitingdir import ChangeRecords, waiting_entries
+from agentctl.waitingdir import ChangeRecords
 from agentctl.wait import fetch_failed_log, log_entries
 from agentctl.ciwhy import gate_runs
 from agentctl.land import HOOK_STATUS
@@ -145,11 +145,11 @@ def run_failure_keys(o_r: str, run_id: Any) -> set[str]:
     return keys
 
 
-def base_failure_keys(repo: str, d: str, e: Entry, base: str, now: float) -> dict[str, str]:
+def base_failure_keys(st: Any, repo: str, d: str, e: Entry, base: str, now: float) -> dict[str, str]:
     """{key: where} failing on the change's base: main's red gate runs, and other changes' failed checks on this
     base (a different head) in the last day."""
     out = gate_failure_keys(repo)
-    for k, where in queue_failure_keys(d, e, base, now).items():
+    for k, where in queue_failure_keys(st, d, e, base, now).items():
         out.setdefault(k, where)
     return out
 
@@ -186,10 +186,10 @@ def failed_gate_runs(o_r: str) -> list[tuple[str, Entry]]:
             if decided and decided.get("conclusion") != "success" and decided.get("databaseId")]
 
 
-def queue_failure_keys(d: str, e: Entry, base: str, now: float) -> dict[str, str]:
+def queue_failure_keys(st: Any, d: str, e: Entry, base: str, now: float) -> dict[str, str]:
     """{key: where} of the other changes' (another head's) failed checks on this base in the last day."""
     out: dict[str, str] = {}
-    for o in waiting_entries(d, open_only=False):
+    for o in ChangeRecords(st, d).every():
         for k in other_failure_on(o, e, base, now):
             out.setdefault(k, f"change {o['id']} on the same main")
     return out
@@ -247,7 +247,7 @@ def judge_failure(st: Any, repo: str, d: str, e: Entry, base: str, out: Optional
         return "head", sorted(keys.values()) + ["the checks' time cap"]
     if not keys:
         return "head", unnamed(unjudged) or ["(no failing test named)"]
-    known = base_failure_keys(repo, d, e, base, now)
+    known = base_failure_keys(st, repo, d, e, base, now)
     mine, unrun = head_only(keys, known, own_paths)
     if mine or unjudged:
         return "head", mine + unnamed(unjudged) + [f"{n} (not run on its base)" for n in unrun]

@@ -77,7 +77,7 @@ def run_check_batch(module, script):
         "waiting_state": lambda repo: ("D", "CLONE", "W"),
         "LeaseHold": lambda name, ttl, mx, store=None: FakeHold(log, name, script.get("lease", True)),
         "tree_slot": lambda st, d, i, mx: FakeHold(log, f"slot-{i}", script.get("slot", True)),
-        "batch_members": lambda d, it: members,
+        "batch_members": lambda st, d, it: members,
         "batch_check": batch_check,
         "batch_move": batch_move,
         "batch_drift_check": lambda repo, d, tree, base, tip, red: (log.append(f"drift {red}"), (script["drift"], "dout"))[1],

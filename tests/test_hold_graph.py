@@ -8,7 +8,7 @@ import os, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, sh  # noqa: E402
+from test_agentctl import A, sh, put_change  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 import test_backlog_batch  # noqa: E402
 
@@ -75,7 +75,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
                      full_tip=e["head"], retry_after=0, cause="agent")
         k = self.entry(ek)
         k["seq"] = self.entry(el)["seq"] - 1  # its kept place: older than its parent
-        A.save_entry(self.d, k)
+        put_change(A.CurrentStore(A.process_store), self.d, k)
         return el, ek, eg
 
     def drive_to_rest(self, ids, rounds=12):
@@ -111,7 +111,7 @@ class StackedQueueTest(test_backlog_batch.BacklogBatchTest):
         el, ek, eg = self.the_live_cycle()
         o = self.entry(eo)
         o["seq"] = self.entry(ek)["seq"] - 1
-        A.save_entry(self.d, o)
+        put_change(A.CurrentStore(A.process_store), self.d, o)
         A.set_change(A.CurrentStore(A.process_store), self.d, o, "checking", cause="agent")
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()))
         self.assertEqual(self.hold_of(el).get("blocker"), eo, "landing waits for the older change in flight")

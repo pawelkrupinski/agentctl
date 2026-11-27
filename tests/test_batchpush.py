@@ -82,7 +82,7 @@ def run_push(module, script):
                 return {"id": ident}
 
         patches = {
-            "batch_members": lambda d_, it: members, "tree_slot": lambda st, d_, i: Slot(),
+            "batch_members": lambda st, d_, it: members, "tree_slot": lambda st, d_, i: Slot(),
             "waiting_state": lambda repo: (d, clone, "w"), "land_lock_if_free": lock, "git": git,
             "git_ok": lambda *a: script.get("tree_commit", True), "remote": lambda: "origin",
             "lock_note": rec("lock_note"), "tool_env": lambda: {"T": "1"}, "precheck_hook": lambda tree: "HOOK",

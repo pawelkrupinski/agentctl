@@ -3,7 +3,7 @@ import json, os, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, put_change  # noqa: E402
 from test_red import run  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 from test_agentctl import sh  # noqa: E402
@@ -57,7 +57,7 @@ class ReOfferLoopTest(RedsBase):
         d = A.waiting_state(self.r.path)[0]
         e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": "repo-wt-queued", "head": sha, "commits": [sha]})
         e["status"] = status
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         return e
 
 
@@ -112,7 +112,7 @@ class ReOfferLoopTest(RedsBase):
         sha = self.r.commit("job telemetry in every job, no trailer", at=cwt)
         d = A.waiting_state(self.r.path)[0]
         e.update(head=sha, commits=[e["commits"][0], sha])
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         for _ in range(2):
             self.tick(advance=120)
         it = self.only()
@@ -133,7 +133,7 @@ class ReOfferLoopTest(RedsBase):
                      at=cwt)
         sha = self.r.commit("backtest: judge young alerts, no trailer", at=cwt)
         e.update(head=sha, commits=[sha])
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         self.tick(advance=120)
         it = self.only()
         self.assertEqual(it["state"], "leased", it["data"].get("history", [])[-1:])
@@ -187,12 +187,12 @@ class ReOfferLoopTest(RedsBase):
                      self.CAPTURE_WF.replace("        run:", "        timeout-minutes: 90\n        run:"), at=e["worktree"])
         sha = self.r.commit("shard the capture workflow, no trailer", at=e["worktree"])
         e.update(head=sha, commits=e["commits"] + [sha])
-        A.save_entry(A.waiting_state(self.r.path)[0], e)
+        put_change(A.CurrentStore(A.process_store), A.waiting_state(self.r.path)[0], e)
         self.assertFalse(e.get("fixes"))
         for status in ("waiting", "checking"):
             d = A.waiting_state(self.r.path)[0]
             e["status"] = status
-            A.save_entry(d, e)
+            put_change(A.CurrentStore(A.process_store), d, e)
             self.tick(advance=120)
             it = self.only()
             self.assertEqual(it["state"], "fix-pending",

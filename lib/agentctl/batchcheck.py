@@ -315,7 +315,7 @@ def check_batch(repo: str, bid: str, clock: Clock, st: Any) -> int:
         if not slot.acquire():
             return 0
         _d, clone, _w = waiting_state(repo)
-        return BatchCheck(repo, bid, clock, st, d, f"{clone}-wt-check-{i}", it, batch_members(d, it)).run()
+        return BatchCheck(repo, bid, clock, st, d, f"{clone}-wt-check-{i}", it, batch_members(st, d, it)).run()
     finally:
         slot.release()
         lease.release()

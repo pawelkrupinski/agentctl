@@ -6,7 +6,7 @@ import contextlib, io, json, os, re, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, StallSamples, sh  # noqa: E402
+from test_agentctl import A, StallSamples, put_change, sh  # noqa: E402
 from fake_clock import FakeClock, lagging_clock, on_clock  # noqa: E402
 from test_waiting import REPO_HOOK, WaitingTest, assert_queued_line_names_no_verdict  # noqa: E402
 
@@ -165,7 +165,7 @@ class QueueTest(WaitingTest):
     def test_a_change_cancelled_since_its_checks_is_not_pushed(self):
         d, eid = self.checked_change()
         e = self.entry_of(d, eid)
-        A.write_json(os.path.join(d, "entries", f"{eid}.json"), dict(e, status="cancelled"))
+        put_change(A.CurrentStore(A.process_store), d, dict(e, status="cancelled"))
         self.assertEqual(A.push_change(self.r.path, d, e, *on_clock(self.clock)), "cancelled")
         self.assertNotEqual(self.remote_log()[0], "a: one")
 
@@ -1094,7 +1094,7 @@ class QueueTest(WaitingTest):
         for _ in range(A.QUEUE_INFRA_RETRIES):
             e = A.read_record(os.path.join(d, "entries", f"{eid}.json"))
             e["retry_after"] = 0
-            A.save_entry(d, e)
+            put_change(A.CurrentStore(A.process_store), d, e)
             self.check(eid, rounds=1)
         e = self.entries()[eid.rsplit("-", 1)[-1]]
         self.assertEqual((e["status"], e["infra_retries"]), ("queued", 1 + A.QUEUE_INFRA_RETRIES),
@@ -1537,7 +1537,7 @@ class RemotePickupTest(QueueTest):
         if since_min:
             stamp = A.dt.datetime.fromtimestamp(time.time() - since_min * 60, A.dt.timezone.utc)
             e["round_since"] = stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
-            A.save_entry(d, e)
+            put_change(A.CurrentStore(A.process_store), d, e)
         return d, e
 
     def tick(self, d):
@@ -1609,7 +1609,7 @@ class RemotePickupTest(QueueTest):
     def test_a_replacement_never_adopts_a_run_whose_base_main_no_longer_holds(self):
         d, e = self.checking_entry()
         e["remote"]["base"] = "0" * 40  # not main's ancestor (nor any commit here): no evidence about this main
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         self.state["status"] = "success"
         A.check_entry(self.r.path, e["id"], *on_clock(self.clock))
         self.assertEqual(self.state["cancelled"], [99], "the stray run is cancelled")
@@ -1618,7 +1618,7 @@ class RemotePickupTest(QueueTest):
     def test_a_new_round_clears_the_old_runs_record(self):
         d, e = self.checking_entry()
         e["remote"].update(status="success", collected_at=time.time())  # the last round's run: collected, over
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         other, _ = self.agent("b", "worker/src/main/B.scala", "b\n", msg="b: two")
         sh(other, "git", "push", "-q", "origin", "HEAD:main")
         saved_rc = A.remote_check

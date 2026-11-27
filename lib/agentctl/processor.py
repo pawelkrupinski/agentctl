@@ -11,13 +11,12 @@ from agentctl.clock import Clock
 from agentctl.core import SHORT, _bounded, attempt, err, git, git_ok, host_role, slug
 from agentctl.statefile import write_json
 from agentctl.repos import movies_repo_path
-from agentctl.waitingdir import waiting_entries, waiting_state
+from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.storetoken import _IN_PROCESSOR
 from agentctl.procs import safe_cwd
 from agentctl.owned import restart_if_changed
 from agentctl.clones import clone_shared
 from agentctl.conditions import open_condition, run_probe
-from agentctl.queuerecheck import queued_entries
 from agentctl.beats import write_beat
 from agentctl.sdnotify import SD_READY, sd_notify
 from agentctl.serverclone import ensure_server_clone
@@ -105,7 +104,7 @@ class ProcessorLoop:
         sd_notify("WATCHDOG=1")
 
     def drained(self) -> bool:
-        return self.once and (self.role == "sync" or (not queued_entries(self.d) and not waiting_entries(self.d)))
+        return self.once and (self.role == "sync" or not ChangeRecords(self.store, self.d).open())
 
     def run(self) -> int:
         while not TICK_STOP[0]:  # SIGTERM (systemd's stop): between ticks, never inside one

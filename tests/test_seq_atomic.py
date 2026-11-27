@@ -181,8 +181,9 @@ class WaitingEntriesTest(unittest.TestCase):
         self.assertEqual([e["id"] for e in A.waiting_entries(self.d)], ["a", "b", "x"])
 
     def test_a_batch_member_that_is_gone_is_logged_not_dropped_silently(self):
-        self.put(id="a", status="waiting", seq=1)
-        got = A.batch_members(self.d, {"id": "k#1", "data": {"members": ["a", "ghost"]}})
+        st = A.Store(path=os.path.join(self.d, "store.db"))
+        A.ChangeRecords(st, self.d).save({"id": "a", "status": "waiting", "seq": 1})
+        got = A.batch_members(st, self.d, {"id": "k#1", "data": {"members": ["a", "ghost"]}})
         self.assertEqual([e["id"] for e in got], ["a"])
         with open(os.path.join(self.d, "processor.log")) as f:
             self.assertIn("ghost", f.read())

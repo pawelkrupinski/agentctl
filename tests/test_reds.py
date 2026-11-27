@@ -13,7 +13,7 @@ import json, os, signal, subprocess, sys, time, types, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402
+from test_agentctl import A, put_change  # noqa: E402
 from fake_clock import FakeClock, RealTimeClock  # noqa: E402
 from agentctl.clock import Clock  # noqa: E402
 from test_red import RedBase, run, FAIL_LINE, MOVIES  # noqa: E402
@@ -373,7 +373,7 @@ class FixTest(RedsBase):
         d = A.waiting_state(self.r.path)[0]
         e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": cw, "branch": "copy", "head": copy, "commits": [copy]})
         e["status"] = "waiting"
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": cw, "head": copy, "submitted_at": self.t[0]})
         self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": copy}, event={"cause": "agent"})
         self.tick(advance=60)
@@ -393,7 +393,7 @@ class FixTest(RedsBase):
         d = A.waiting_state(self.r.path)[0]
         e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": "repo-wt-queued", "head": sha, "commits": [sha]})  # no `fixes`
         e["status"] = "waiting"
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         self.tick()
         it = self.only()
         self.assertEqual((it["state"], it["data"]["fix"]["entry"]), ("fix-pending", e["id"]))
@@ -407,7 +407,7 @@ class FixTest(RedsBase):
         e = json.load(open(os.path.join(d, "entries", f"{e['id']}.json")))
         self.r.push(at=wt, ref=f"{sha}:main")  # landed: on main (a landed sha main lacks is no fix)
         e.update(status="landed", landed_sha=sha, landed_at=A.iso_at(self.t[0]))
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         self.tick(advance=60)
         it = self.only()
         self.assertEqual((it["state"], (it["data"]["fix"] or {}).get("status")), ("fix-pending", "landed"))  # verifying from now
@@ -427,7 +427,7 @@ class FixTest(RedsBase):
         d = A.waiting_state(self.r.path)[0]
         e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": "repo-wt-flakes", "head": sha, "commits": [sha]})
         e["status"] = "waiting"
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         self.tick()
         self.assertEqual(self.only()["data"]["fix"]["entry"], e["id"])
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
@@ -459,7 +459,7 @@ class FixTest(RedsBase):
         d = A.waiting_state(self.r.path)[0]
         e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": "repo-wt-gone", "head": sha, "commits": [sha]})
         e["status"] = "waiting"
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         self.tick()
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
         self.st.transition("change", e["id"], "cancelled", ch["version"], event={"cause": "agent"})
@@ -474,7 +474,7 @@ class FixTest(RedsBase):
         sha = self.r.commit("fix FooSpec\n\nFixes-Red: 20", at=wt)
         d = A.waiting_state(self.r.path)[0]
         e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": f"repo-wt-{name}", "head": sha, "commits": [sha]})
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         self.tick()
         self.assertEqual((self.only()["state"], self.only()["data"]["fix"]["entry"]), ("fix-pending", e["id"]))
         return e, os.path.join(d, "entries", f"{e['id']}.json"), wt, sha
@@ -483,8 +483,10 @@ class FixTest(RedsBase):
         # 2026-11-22, Identity takes #349: the queue's entry files live on ci-runner alone; a change the store holds
         # queued or checking is the red's fix on its way whatever the facts' entries read -- never "no fix on its way".
         e, path, wt, sha = self.queued_fix_pending("store-only")
-        self.st.put_item("change", e["id"], "checking", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
-        os.remove(path)  # the facts' queue (the entry files) no longer has it
+        it = self.st.item("change", e["id"])  # the item is made at its queueing (ChangeRecords.save)
+        self.st.transition("change", e["id"], "checking", it["version"], event={"cause": "check-running"})
+        os.remove(path)  # the facts' queue no longer has it: neither its entry file nor its item's record
+        self.st.merge_item("change", e["id"], {"record": None})
         self.t[0] += 3 * A.RED_FIX_GIVEUP
         facts = A.red_fix_facts(self.r.path, self.st)
         self.assertEqual(facts["entries"], [])
@@ -516,7 +518,7 @@ class FixTest(RedsBase):
         ch = self.st.put_item("change", e["id"], "checking", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
         self.st.transition("change", e["id"], "rejected", ch["version"],
                            data={"why": "NOT LANDED: the pre-push checks failed: deploy.LauncherJvmFlagsSpec"}, event={"cause": "agent"})
-        A.save_entry(A.waiting_state(self.r.path)[0], {**e, "status": "rejected"})
+        put_change(A.CurrentStore(A.process_store), A.waiting_state(self.r.path)[0], {**e, "status": "rejected"})
         self.tick(advance=60)
         self.assertEqual(self.only()["state"], "fix-pending")  # within the grace: its worktree may queue it again
         self.t[0] += A.RED_FIX_REQUEUE_GRACE  # the invariant meets it first (the red's own step raced the fixer's move)
@@ -587,7 +589,7 @@ class FixTest(RedsBase):
         d = A.waiting_state(self.r.path)[0]
         e, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": wt, "branch": "repo-wt-stale", "head": sha, "commits": [sha]})
         e["status"] = "waiting"
-        A.save_entry(d, e)
+        put_change(A.CurrentStore(A.process_store), d, e)
         ch = self.st.put_item("change", e["id"], "queued", {"worktree": wt, "head": sha, "submitted_at": self.t[0]})
         self.r.push(at=wt, ref=f"{sha}:main")
         self.st.transition("change", e["id"], "landed", ch["version"], data={"tip": sha}, event={"cause": "agent"})

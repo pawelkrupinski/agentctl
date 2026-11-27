@@ -352,6 +352,19 @@ def an_entry(r, i):
             "cycle_ignore": r.choice([None, [], ["e1"]]), "conflict_told": r.choice([None, None, "e1", "e2"])}
 
 
+class WaitingView:
+    """A queue's records reading `waiting` (waitingdir.ChangeRecords' reader), with a stable repr for the digest."""
+
+    def __init__(self, waiting):
+        self.list = waiting
+
+    def waiting(self):
+        return list(self.list)
+
+    def __repr__(self):
+        return f"WaitingView({self.list!r})"
+
+
 class OverlapHoldTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
@@ -360,7 +373,7 @@ class OverlapHoldTest(unittest.TestCase):
         if r.random() < 0.3:
             e["id"] = "e1"
         waiting = [an_entry(r, i) for i in range(r.randint(0, 3))]
-        case.fake("waiting_entries", lambda rng, d: list(waiting))
+        case.fake("ChangeRecords", lambda rng, st, d: WaitingView(waiting))
         case.fake("overlap_candidate", lambda rng, o, e_, stacks: rng.random() < 0.7)
         case.fake("as_own", lambda rng, x, stacks: {"own": x["id"]})
 

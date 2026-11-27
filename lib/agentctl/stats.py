@@ -10,7 +10,7 @@ from agentctl.timefmt import iso_at
 from agentctl.statemachines import is_terminal
 from agentctl.statsrecords import _num, landing_records, state_spans, watch_record
 from agentctl.core import err, git, host_role
-from agentctl.waitingdir import waiting_entries, wlog
+from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.gating import gate_flows
 from agentctl.statsepisodes import condition_record, gate_run_record, owner_decision_record, red_record
 from agentctl.watchknobs import knob_stats_every, knob_stats_pass_bound, knob_stats_per_pass, knob_stats_settle
@@ -126,7 +126,7 @@ class StatsPass:
             self.since = self.t
             st.meta_set("stats_since", self.since)
         self.deadline = clock.monotonic() + knob_stats_pass_bound()
-        self.entries = {e["id"]: e for e in waiting_entries(d, open_only=False)} if d else {}
+        self.entries = {e["id"]: e for e in ChangeRecords(st, d).every()} if d else {}
         self.waits: Any = None
         self.by_sha: dict[Any, Any] = {}
         self.changes: list[Any] = []

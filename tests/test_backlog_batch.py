@@ -9,7 +9,7 @@ import json, os, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, sh  # noqa: E402
+from test_agentctl import A, sh, put_change  # noqa: E402
 from fake_clock import FakeClock, lagging_clock, on_clock  # noqa: E402
 import test_queue  # noqa: E402 (a module, so the loader runs QueueTest's own tests there only)
 from test_waiting import REPO_HOOK  # noqa: E402
@@ -569,7 +569,7 @@ class PushBatchTest(test_queue.QueueTest):
         self.assertEqual(A.push_candidates(self.r.path, self.d, set(), A.CurrentStore(A.process_store)), [], "the red fix goes first")
         e = self.entry(ef)
         e["status"] = "landed"
-        A.save_entry(self.d, e)
+        put_change(A.CurrentStore(A.process_store), self.d, e)
         self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set(), A.CurrentStore(A.process_store), facts=A.queue_facts(set(), A.CurrentStore(A.process_store)))],
                          [ea, eb])
         self.assertEqual([e["id"] for e in A.push_candidates(self.r.path, self.d, set(), A.CurrentStore(A.process_store))], [ea, eb],
@@ -776,7 +776,7 @@ class OverlapTest(BacklogBatchTest):
         eo = self.edit("older", "web/src/main/Ten.scala", 0, "older's line 1", extra="identity/src/main/I.scala")
         e = self.entry(eo)
         e["status"] = "waiting"  # checked, waiting for the gate to turn green
-        A.save_entry(self.d, e)
+        put_change(A.CurrentStore(A.process_store), self.d, e)
         ey = self.edit("younger", "web/src/main/Ten.scala", 9, "younger's line 10", extra="identity/src/main/Y.scala")
         A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertEqual(self.started, [ey], "checked now, never held behind a change waiting on the gate")
@@ -792,7 +792,7 @@ class OverlapTest(BacklogBatchTest):
         eb = self.edit("b", "web/src/main/Ten.scala", 9, "b's line 10")
         e = self.entry(eb)
         e["seq"] = self.entry(ea)["seq"] - 1  # its kept place: older by seq than the change checking now
-        A.save_entry(self.d, e)
+        put_change(A.CurrentStore(A.process_store), self.d, e)
         A.tick_changes(self.r.path, self.d, *on_clock(self.clock))
         self.assertNotIn(eb, self.started, "b waits for the check in flight")
         self.assertEqual(A.process_store().item("change", eb)["data"]["hold"]["blocker"], ea)

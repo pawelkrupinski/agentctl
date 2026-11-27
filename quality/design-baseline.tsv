@@ -212,7 +212,7 @@ fanout	lib/agentctl/invariants.py	20
 fanout	lib/agentctl/land.py	11
 fanout	lib/agentctl/landdryrun.py	21
 fanout	lib/agentctl/lander.py	12
-fanout	lib/agentctl/landqueue.py	27
+fanout	lib/agentctl/landqueue.py	26
 fanout	lib/agentctl/landwatch.py	10
 fanout	lib/agentctl/localrecheck.py	15
 fanout	lib/agentctl/maintain.py	16
@@ -224,13 +224,13 @@ fanout	lib/agentctl/orphans.py	18
 fanout	lib/agentctl/owned.py	13
 fanout	lib/agentctl/owner.py	19
 fanout	lib/agentctl/ownerwrapper.py	23
-fanout	lib/agentctl/processor.py	28
+fanout	lib/agentctl/processor.py	27
 fanout	lib/agentctl/projector.py	14
 fanout	lib/agentctl/queue.py	11
 fanout	lib/agentctl/queuebatch.py	21
 fanout	lib/agentctl/queuecheck.py	17
-fanout	lib/agentctl/queueclose.py	24
-fanout	lib/agentctl/queuediff.py	22
+fanout	lib/agentctl/queueclose.py	23
+fanout	lib/agentctl/queuediff.py	21
 fanout	lib/agentctl/queueenter.py	27
 fanout	lib/agentctl/queuepush.py	17
 fanout	lib/agentctl/queuesubmit.py	11

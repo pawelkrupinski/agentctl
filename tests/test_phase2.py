@@ -188,17 +188,17 @@ class SubmitTest(Phase2Base):
                                 "branch": "x", "head": head, "commits": [head], "fixes": [], "base": "b" * 40})
         self.assertEqual((r["id"], r["seq"], r["ahead"]), ("20261029-0100-movies-wt-x-ab12cd", 1, 0))
         d = A.waiting_state(self.repo)[0]
-        [e] = A.queued_entries(d)
+        [e] = [e for e in A.waiting_entries(d, open_only=False) if e.get("status") in A.QUEUED]
         self.assertEqual((e["status"], e["worktree"], e["head"]), ("queued", "/Users/p/projects/movies-wt-x", head))
         again = self.remote.submit({"id": r["id"], "worktree": e["worktree"], "head": head, "commits": [head]})
         self.assertEqual(again["seq"], 1)  # a resubmission (the outbox retried) is the same change
         r2 = self.remote.submit({"worktree": "/Users/p/projects/movies-wt-x", "branch": "x", "head": "c" * 40,
                                  "commits": ["c" * 40]})
-        self.assertEqual([x["id"] for x in A.queued_entries(d)], [r2["id"]])  # re-queueing replaces
+        self.assertEqual([x["id"] for x in [e for e in A.waiting_entries(d, open_only=False) if e.get("status") in A.QUEUED]], [r2["id"]])  # re-queueing replaces
         with self.assertRaises(A.StoreUnavailable):
             self.remote.submit({"worktree": "w", "head": "not-a-sha", "commits": ["x"]})
         self.remote.cancel_change(r2["id"])
-        self.assertEqual(A.queued_entries(d), [])
+        self.assertEqual([e for e in A.waiting_entries(d, open_only=False) if e.get("status") in A.QUEUED], [])
 
     def test_land_keeps_a_change_in_the_outbox_while_the_store_is_down_and_the_sync_sends_it(self):
         down = A.RemoteStore("http://127.0.0.1:9", "tok-pawel", timeout=2)
@@ -206,7 +206,7 @@ class SubmitTest(Phase2Base):
         self.assertTrue(A.submit_remote(down, e).get("outbox"))
         self.assertEqual(A.flush_outbox(down), 0)
         self.assertEqual(A.flush_outbox(self.remote), 1)
-        self.assertEqual([x["id"] for x in A.queued_entries(A.waiting_state(self.repo)[0])], [e["id"]])
+        self.assertEqual([x["id"] for x in [e for e in A.waiting_entries(A.waiting_state(self.repo)[0], open_only=False) if e.get("status") in A.QUEUED]], [e["id"]])
         self.assertEqual(os.listdir(A.sync_outbox_dir()), [])
 
 
@@ -958,12 +958,13 @@ class LandHoldTest(Phase2Base):
         os.environ.pop("AGENTCTL_STORE_URL")
         d, _c, _w = A.waiting_state(self.repo)
         self.assertIsNotNone(A.land_hold(A.process_store()))
-        saved = A.waiting_entries, A.current_batch
-        A.waiting_entries = lambda d_, **kw: [{"id": "e1"}]  # a change waits: only the hold stops the batch
+        saved = A.ChangeRecords, A.current_batch
+        A.ChangeRecords = lambda st_, d_: type("R", (), {"waiting": lambda self: [{"id": "e1"}],
+                                                         "every": lambda self: [{"id": "e1"}]})()  # a change waits: only the hold stops the batch
         try:
             self.assertEqual(A.tick_batch(self.repo, d, *on_clock(A.Clock())), ["held"])
         finally:
-            A.waiting_entries, A.current_batch = saved
+            A.ChangeRecords, A.current_batch = saved
         A.write_snapshot(d, A.CurrentStore(A.process_store))
         self.sync()
         st = A.state_read()

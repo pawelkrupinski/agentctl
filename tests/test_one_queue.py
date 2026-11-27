@@ -7,11 +7,12 @@ import json, os, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, Base, sh  # noqa: E402
+from test_agentctl import A, Base, sh, put_change  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
 
 
 class OneQueueBase(Base):
+    OUTBOX = False  # the laptop's outbox: its files alone
     def setUp(self):
         super().setUp()
         self.saved_dir = A.WAITING_DIR
@@ -45,7 +46,7 @@ class OneQueueBase(Base):
     def entry(self, eid, wt, head, status="waiting", seq=1):
         e = {"id": eid, "seq": seq, "status": status, "worktree": wt, "head": head, "commits": [head],
              "created": A.ts()}
-        A.save_entry(self.d, e)
+        A.save_entry(self.d, e) if self.OUTBOX else put_change(A.CurrentStore(A.process_store), self.d, e)
         return e
 
 
@@ -109,6 +110,7 @@ class FakeRemote:
 
 
 class LocalQueueTest(OneQueueBase):
+    OUTBOX = True
     def setUp(self):
         super().setUp()
         self.saved_role, self.saved_ref = os.environ.get("AGENTCTL_ROLE"), A.submit_ref
@@ -275,7 +277,7 @@ class TreeSlotTest(OneQueueBase):
             e = {"id": "c-1", "tree": 1, "tip": "6" * 40, "status": "checked"}
             it = {"id": "b-1", "data": {"tip": "6" * 40, "base": "7" * 40, "tree": 1, "members": ["c-1"]}}
             saved = A.batch_members
-            A.batch_members = lambda d, it_: [e]
+            A.batch_members = lambda st, d, it_: [e]
             try:
                 self.assertEqual(A.push_batch_item(self.r.path, self.d, self.st, it), "batch b-1: its check tree is busy")
             finally:

@@ -74,8 +74,6 @@ wire_probes({"disk_free": probe_disk_free, "quota_reset": probe_quota_reset,
              "http": probe_http, "tcp": probe_tcp, "route": probe_route, "tunnel": probe_tunnel,
              "gate_read": probe_gate_read, "token": probe_token, "git_fetch": probe_git_fetch,
              "clone_health": probe_clone_health,
-             "push_credential": probe_push_credential,
-             "infra_requeue": probe_infra_requeue,
              "batch_progress": probe_batch_progress, "red_read": probe_red_read})
 wire_recover_actions({"clear_hold": recover_clear_hold, "tunnel_reset": recover_tunnel_reset,
                       "clear_flag": recover_clear_flag})
@@ -90,6 +88,8 @@ def wire_collaborators(clock: Clock, store: Any) -> None:
     wire_ci_runs(CiRuns())
     wire_probes({"orphan_landed": lambda a: probe_orphan_landed(a, store), "invariant": lambda a: probe_invariant(a, clock, store),
                  "change_source": lambda a: probe_change_source(a, store),
+                 "push_credential": lambda a: probe_push_credential(a, store),
+                 "infra_requeue": lambda a: probe_infra_requeue(a, store),
                  "red_newer_verdict": lambda a: probe_red_newer_verdict(a, store),
                  "queue_moving": lambda a: probe_queue_moving(store, clock.time())})
     wire_inbox_writer(lambda rec: alert_write(rec, store), clock.time)

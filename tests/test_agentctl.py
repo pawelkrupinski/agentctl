@@ -275,6 +275,19 @@ def make_old(path):
             os.utime(fp, (old, old))
 
 
+def put_change(st, d, e):
+    """Change e as the queue would have written it (docs/design/one-change-model.md step 4: the item is the change):
+    its record and file (ChangeRecords.save), its item in e's status -- a fixture standing for the writers' history."""
+    A.ChangeRecords(st, d).save(e)
+    want = A.change_state_of(e.get("status"))
+    if want and st.item("change", e["id"])["state"] != want:
+        c = st.db()
+        try:
+            c.execute("UPDATE items SET state=? WHERE type='change' AND id=?", (want, e["id"]))
+        finally:
+            c.close()
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

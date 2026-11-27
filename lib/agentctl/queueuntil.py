@@ -8,7 +8,7 @@ from typing import Any
 from agentctl.statemachines import change_state_of, machine_state
 from agentctl.queueknobs import knob_free_wait
 from agentctl.core import attempt, git, remote
-from agentctl.waitingdir import waiting_entries, waiting_state
+from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.landstate import landed_state
 from agentctl.worktrees import worktrees
 from agentctl.cleanup import close_worktree, free_worktree
@@ -25,11 +25,12 @@ def parse_duration(text):
 UNTIL_DONE_AGAIN = "~/bin/agentctl land --until-done"
 
 
-def _unitemed_entries(repo: Any, known: Any, ours: Any) -> Any:
-    """This host's queue entries that `ours` claims and no change item (`known`: their ids) holds yet, as items."""
+def _unitemed_entries(repo: Any, known: Any, ours: Any, store: Any) -> Any:
+    """This host's queue entries that `ours` claims and no change item (`known`: their ids) holds yet, as items: the
+    laptop's outbox (on the server every change is an item from its first write, ChangeRecords.save)."""
     d = attempt(lambda: waiting_state(repo)[0], None, catch=(RuntimeError,))
     return [{"id": e["id"], "state": e["status"], "data": e, "entered_at": e.get("seq") or 0}
-            for e in (waiting_entries(d, open_only=False) if d else [])
+            for e in (ChangeRecords(store, d).every() if d else [])
             if e["id"] not in known and ours(e) and change_state_of(e.get("status"))]
 
 
@@ -43,7 +44,7 @@ def own_change_item(repo, head, store):
         return x.get("head") == head and os.path.realpath(x.get("worktree") or "") == rp
     mine = [it for it in store.items("change") if ours(it.get("data") or {})]
     known = {it["id"] for it in mine}
-    mine += _unitemed_entries(repo, known, ours)
+    mine += _unitemed_entries(repo, known, ours, store)
     open_ = [it for it in mine if not machine_state("change", it["state"]).terminal]
     pool = open_ or mine
     return max(pool, key=lambda it: (it.get("entered_at") or 0, it["id"])) if pool else None

@@ -15,7 +15,7 @@ from agentctl.govknobs import CHECK_LEASE_TTL
 from agentctl.core import err, fmt_age, git, remote, spawn_detached
 from agentctl.repos import precheck_hook
 from agentctl.generated import without_generated
-from agentctl.waitingdir import entry_final, waiting_entries, wlog
+from agentctl.waitingdir import ChangeRecords, entry_final, wlog
 from agentctl.storetoken import detached_env
 from agentctl.conditions import open_condition, run_probe
 from agentctl.queueslots import check_tree, check_tree_slot, set_change
@@ -46,7 +46,7 @@ def backlog_reconcile(d, st):
     batch assembled again, held or gone) is queued again for the next batch (a push batch's: for its verify round, its
     full check kept). Returns what it did."""
     did = []
-    for e in waiting_entries(d, open_only=False):
+    for e in ChangeRecords(st, d).every():
         bid = e.get("backlog_batch")
         if not bid or entry_final(e.get("status")):
             continue

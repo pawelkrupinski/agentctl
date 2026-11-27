@@ -9,7 +9,7 @@ import json, os, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A, sh, approved  # noqa: E402
+from test_agentctl import A, sh, approved, put_change  # noqa: E402
 from fake_clock import FakeClock, on_clock  # noqa: E402
 import test_backlog_batch  # noqa: E402
 
@@ -446,9 +446,9 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         d = os.path.join(self.tmp.name, "ids")
         os.makedirs(os.path.join(d, "entries"))
         now = A.ts()
-        A.save_entry(d, {"id": "a-1", "seq": 1, "worktree": "/w", "branch": "b", "status": "rejected",
+        put_change(A.CurrentStore(A.process_store), d, {"id": "a-1", "seq": 1, "worktree": "/w", "branch": "b", "status": "rejected",
                          "conflict_files": ["x"], "decided": now, "created": now})
-        A.save_entry(d, {"id": "o-2", "seq": 2, "worktree": "/o", "branch": "o", "status": "queued", "created": now})
+        put_change(A.CurrentStore(A.process_store), d, {"id": "o-2", "seq": 2, "worktree": "/o", "branch": "o", "status": "queued", "created": now})
         first, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": "/w", "branch": "b", "head": "1" * 40})
         second, _ = A.queue_change(A.CurrentStore(A.process_store), d, {"worktree": "/x", "branch": "x", "head": "2" * 40})
         self.assertEqual((first["seq"], first["drawn"]), (1, 3), "its old place, a new number")

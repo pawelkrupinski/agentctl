@@ -10,12 +10,12 @@ from agentctl.timefmt import day_hhmmz, hhmmz
 from agentctl.holdgraph import OPEN_PARENT_STATES, stack_map, waiting_on_changes
 from agentctl.core import attempt, host_role, remote
 from agentctl.policy import policy_blocks
-from agentctl.waitingdir import change_item_fields, waiting_entries
+from agentctl.waitingdir import ChangeRecords, change_item_fields
 from agentctl.queuehold import break_hold_cycles, expire_idle_hold, idle_hold_expired, note_hold
 from agentctl.conflicts import conflict_cause, conflict_paths
 from agentctl.queueslots import check_tree_slot, checker_alive, queue_verdict, set_change
 from agentctl.queue import requeue_infra
-from agentctl.queuerecheck import queued_entries, same_change_source
+from agentctl.queuerecheck import same_change_source
 from agentctl.changekind import classify_change, classify_queue, facts_for, facts_tick, kind_order, record_change_kind
 from agentctl.waiting import supersede
 from agentctl.redseen import gate_reds
@@ -71,7 +71,7 @@ def _tick_changes(repo: str, d: str, clock: Any, st: Any) -> list[str]:
     t = clock.time()
     reds = attempt(lambda: gate_reds(repo), set(), catch=(Exception,))
     facts = facts_for(reds, st)  # A FIX OF ANY OPEN RED GOES FIRST (above): each change's KIND, recorded on its item
-    entries = queued_entries(d)
+    entries = ChangeRecords(st, d).queued()
     kinds = classify_queue(repo, d, entries, facts, t, st)
     todo = sorted(entries, key=lambda e: kind_order(kinds, e))  # THE PRIORITY ORDER (changekind.py PRIORITY)
     newest = {}
@@ -83,7 +83,7 @@ def _tick_changes(repo: str, d: str, clock: Any, st: Any) -> list[str]:
         newest[e["id"]] = e
     runs = [e for e in todo if e["id"] in newest]
     did = break_hold_cycles(st, d, runs)  # A HOLD CYCLE IS BROKEN (holdgraph.py)
-    stacks = stack_map(todo, waiting_entries(d, open_only=False))  # A STACKED CHANGE WAITS FOR ITS PARENT
+    stacks = stack_map(todo, ChangeRecords(st, d).every())  # A STACKED CHANGE WAITS FOR ITS PARENT
     # PUSHES FIRST, THEN THE HOLDS (queue simulator, 2026-11-18): the holds below were read before this tick's pushes,
     # and a checked change's push due holds every backlog batch back (backlog_candidates) -- so the tree a finished
     # check had just freed went to the oldest lone check, never to the batch: under load (every tree busy, a tree
@@ -375,7 +375,7 @@ def batch_goes_first(st, d, states=BATCH_FIRST):
     if it and (it.get("data") or {}).get("depth") == "red":  # a red pre-check holds nothing: what lands on red moves
         return None  # main under it, and it pre-checks again (THE BATCH IS THE MECHANISM)
     backlog = it and (it.get("data") or {}).get("depth") in DEEP_BATCHES
-    return it if it and it["state"] in states and (backlog or waiting_entries(d)) else None
+    return it if it and it["state"] in states and (backlog or ChangeRecords(st, d).waiting()) else None
 
 
 def behind_batch(e, it, what):

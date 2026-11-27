@@ -7,7 +7,7 @@ from agentctl.statemachines import machine_state
 from agentctl.queueknobs import knob_batch_retry_max
 from agentctl.core import remote
 from agentctl.repos import repo_of_waiting
-from agentctl.waitingdir import entry_final, waiting_entries, wlog
+from agentctl.waitingdir import ChangeRecords, entry_final, wlog
 from agentctl.conditions import open_condition, run_probe
 
 
@@ -40,10 +40,10 @@ def batch_fail(st, d, it, why, n_changes=0):
     return it
 
 
-def batch_members(d, it):
+def batch_members(st, d, it):
     """The batch's open member entries, in batch order: waiting entries (a red batch's) or a backlog batch's queued ones."""
     ids = it["data"].get("members") or []
-    every = {e["id"]: e for e in waiting_entries(d, open_only=False)}
+    every = {e["id"]: e for e in ChangeRecords(st, d).every()}
     es = {i: e for i, e in every.items() if not entry_final(e.get("status"))}
     gone = [i for i in ids if i not in every]  # a final entry left the batch for a reason; one with no record is odd
     if gone:

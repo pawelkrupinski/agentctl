@@ -20,10 +20,10 @@ from agentctl.eventrows import legacy_cause
 from agentctl.store import Store, store_errors
 from agentctl.repos import server_repo
 from agentctl.trailers import do_not_land
-from agentctl.waitingdir import ChangeRecords, entry_queued_since, waiting_entries, waiting_state
+from agentctl.waitingdir import ChangeRecords, entry_queued_since, waiting_state
 from agentctl.redrecord import red_lease
 from agentctl.conflicts import CONFLICT_PLACE_KEPT
-from agentctl.queuerecheck import queued_entries, same_change_source
+from agentctl.queuerecheck import same_change_source
 from agentctl.cistate import state_read
 from agentctl.laptoprole import laptop_role_refusal, laptop_role_speaks
 from agentctl.waiting import cancel_submitted, supersede
@@ -107,34 +107,32 @@ def conflict_bounced(every, e, now_=None):
 
 def supersede_older(st: Any, d: Any, e: Any) -> None:
     """RE-QUEUEING REPLACES: only the newest entry per worktree and branch runs."""
-    for old in queued_entries(d):
+    for old in ChangeRecords(st, d).queued():
         if old["id"] != e["id"] and same_change_source(old, e["worktree"], e.get("branch")):
             supersede(st, d, old, e["id"], f"{e['worktree']} queued again ({e['head'][:10]}); only the newest entry runs")
 
 
 def queue_change(st, d, fields, entry_id=None):
-    """A submitted change as a queued entry (seq under seq.lock); re-queueing from the same source supersedes the older
-    one. Returns (entry, n ahead). Shared by `land` (phase 1) and POST /v1/changes (phase 2)."""
-    with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a unique seq; never the landing lock (a push holds it)
+    """A submitted change as a queued change: its item (carrying its record) made at once, then its entry's file
+    (ChangeRecords.save); its number from the store's counter (ChangeRecords.draw_seq, under seq.lock: one submission
+    at a time per queue); re-queueing from the same source supersedes the older one. Returns (entry, n ahead). Shared by
+    `land` (phase 1) and POST /v1/changes (phase 2)."""
+    recs = ChangeRecords(st, d)
+    with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # never the landing lock (a push holds it)
         fcntl.flock(seq_lock, fcntl.LOCK_EX)
-        every = waiting_entries(d, open_only=False)
-        # THE COUNTER NEVER GOES BACK (queue simulator, replay 2026-11-17, seed 1006): an entry that took a bounced
-        # entry's place carries an old seq, so max(seq) + 1 handed the NEXT submission the number it had just used --
-        # two submissions of one worktree in the same second got one id, and the second was answered with the first
-        # entry: lost. The id's number is the highest ever drawn (`drawn`), whatever seq an entry ends up with.
-        seq = max([max(int(e["seq"]), int(e.get("drawn") or 0)) for e in every] + [0]) + 1
+        known = recs.get(entry_id) if entry_id else None
+        if known:  # a submission answered again: the change it made
+            return known, max(len(recs.queued()) - 1, 0)
+        seq = recs.draw_seq()
         eid = entry_id or f"{stamp('entry')}-{os.path.basename(fields['worktree'])}-{seq}"
-        if any(x["id"] == eid for x in every):
-            e = next(x for x in every if x["id"] == eid)
-            return e, max(len(queued_entries(d)) - 1, 0)
         e = {**fields, "id": eid, "seq": seq, "drawn": seq, "status": "queued", "created": ts()}
-        bounced = conflict_bounced(every, e)
+        bounced = conflict_bounced(recs.every(), e)
         if bounced:  # A RESOLVED CONFLICT KEEPS ITS PLACE -- and its queue age (the store item's submitted_at)
             e.update(seq=bounced["seq"], requeued_from=bounced["id"],
                      queued_since=entry_queued_since(bounced) or entry_queued_since(e))
-        ChangeRecords(st, d).save(e)
+        recs.save(e)
         supersede_older(st, d, e)
-    return e, max(len(queued_entries(d)) - 1, 0)
+    return e, max(len(recs.queued()) - 1, 0)
 
 
 def check_submission(repo: str, body: dict[str, Any]) -> None:
@@ -165,7 +163,7 @@ def submit_change(st, body, repo=None):
 def supersede_stranded(d, e, st):
     """A submission replaces every older open item of the same worktree that no entry carries (queue_change supersedes
     the entries; an item mirrored from another host's queue has none): SUPERSEDED, never left waiting."""
-    carried = {x["id"] for x in waiting_entries(d, open_only=False)}
+    carried = {x["id"] for x in ChangeRecords(st, d).every()}
     for it in open_items(st, "change"):
         dd = it.get("data") or {}
         if it["id"] in carried or \

@@ -553,7 +553,7 @@ class WaitingTest(Base):
                          "unchecked here (no store): the reconciler checks the trailer again at the push")
         os.environ["AGENTCTL_STORE_TOKEN"] = "tok-pawel"  # the sync's own token (the server thread's process_store() too)
         self.assertEqual(A.flush_outbox(A.CurrentStore(A.process_store)), 1)
-        [e] = A.queued_entries(A.waiting_state(server_repo)[0])
+        [e] = [e for e in A.waiting_entries(A.waiting_state(server_repo)[0], open_only=False) if e.get("status") in A.QUEUED]
         self.assertEqual((e["worktree"], e["commits"]), (wt, [sha]))
 
     def test_the_token_is_handed_to_a_listening_processor(self):

@@ -11,14 +11,14 @@ from agentctl.core import git, host_role, process_cache, remote, spawn_detached
 from agentctl.timefmt import ts
 from agentctl.selfcode import TOOL_PATH
 from agentctl.policy import HOLDS
-from agentctl.waitingdir import ChangeRecords, waiting_entries, wlog
+from agentctl.waitingdir import ChangeRecords, entry_final, wlog
 from agentctl.storetoken import detached_env
 from agentctl.land import run_watched, tool_env
 from agentctl.queueslots import checker_alive, set_change
 from agentctl.queue import VERIFY_MODE
 from agentctl.generated import generated_entry, order_sensitive, without_derived, without_generated
 from agentctl.conflicts import conflict_hunks, hunks_resolve, own_commits_conflict, union_safe
-from agentctl.queuerecheck import queued_entries, same_change_source
+from agentctl.queuerecheck import same_change_source
 from agentctl.redfixes import fixes_of
 from agentctl.identitychange import shared_paths
 from agentctl.changekind import classify_change, facts_for
@@ -188,7 +188,7 @@ class OverlapScan:
     def run(self, entries: Any) -> Any:
         """The (older entry, shared files, conflicting files or None) the change waits for, or None."""
         ids = {x["id"] for x in entries}
-        entries = list(entries) + [w for w in waiting_entries(self.d) if w["id"] not in ids]  # and those waiting for green
+        entries = list(entries) + [w for w in ChangeRecords(self.st, self.d).waiting() if w["id"] not in ids]  # and those waiting for green
         for o in sorted(entries, key=lambda x: x["seq"]):
             if not overlap_candidate(o, self.e, self.stacks):
                 continue
@@ -320,7 +320,7 @@ def queue_join(st, repo, d, e, tree, head, why=None):
     for k in QUEUE_ONLY_FIELDS:
         e.pop(k, None)
     e.update(tip=head, commits=commits, fixes=sorted(fixes_of(repo, commits, st)))
-    line = note_waiting(d, os.path.join(d, f"check-{e['id']}"), head, e["id"]) + (f": {why}" if why else "")
+    line = note_waiting(st, d, os.path.join(d, f"check-{e['id']}"), head, e["id"]) + (f": {why}" if why else "")
     # policy: red-gate
     set_change(st, d, e, "waiting", cause="gate-red", event=change_event(e, line, code=None, final=False), decided=ts())
     wlog(d, f"{e['id']}: {line}")
@@ -420,4 +420,4 @@ def batch_round(d: str, reds: set[str], st: Any, t: float | None,
                 facts: dict[str, Any] | None) -> tuple[float, Any, list[dict[str, Any]]]:
     """What a backlog or push batch's round reads at a green gate: (now, the queue's facts -- queue_facts, read from
     the store when None --, its queued entries)."""
-    return (t if t is not None else epoch_now()), (facts_for(reds, st) if facts is None else facts), queued_entries(d)
+    return (t if t is not None else epoch_now()), (facts_for(reds, st) if facts is None else facts), ChangeRecords(st, d).queued()

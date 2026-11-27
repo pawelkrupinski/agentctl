@@ -150,7 +150,7 @@ class ProjectionTest(unittest.TestCase):
         self.assertEqual({i["id"]: i["state"] for i in A.project_changes(d, st)}, {"w1": "waiting"})
         self.assertIsNone(st.item("change", "q1"))
         self.assertEqual([e["id"] for e in A.waiting_entries(d)], ["w1"])
-        self.assertEqual(A.queued_entries(d), [])
+        self.assertEqual([e for e in A.waiting_entries(d, open_only=False) if e.get("status") in A.QUEUED], [])
         self.assertEqual([s for s in ("queued", "checking", "checked", "pushing", "waiting", "joined", "migrated", "bogus", None)
                           if A.entry_final(s)], ["joined", "migrated", "bogus", None])
 

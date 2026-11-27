@@ -19,7 +19,7 @@ from agentctl.timefmt import ts
 from agentctl.netretry import net_run
 from agentctl.networksignatures import TRANSIENT_PUSH, is_transient_network
 from agentctl.repos import precheck_hook, waiting_supported
-from agentctl.waitingdir import ChangeRecords, waiting_entries, waiting_state
+from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.lander import commit_keys, lander_note_direct
 from agentctl.gating import mark_gate_dirty
 from agentctl.leases import lock_note
@@ -448,14 +448,14 @@ def join(st, repo, log_path, a, head):
     branch = branch_of(repo)
     with open(os.path.join(d, "seq.lock"), "a+") as seq_lock:  # a seq of its own, beside a land queueing meanwhile
         fcntl.flock(seq_lock, fcntl.LOCK_EX)
-        seq = max([e["seq"] for e in waiting_entries(d, open_only=False)] + [0]) + 1
+        seq = ChangeRecords(st, d).draw_seq()
         eid = f"{stamp('entry')}-{os.path.basename(repo)}-{seq}"
         supersede_older_waiting(st, d, repo, branch, eid)
         e = {"id": eid, "seq": seq, "worktree": repo, "branch": branch, "head": head, "commits": commits,
              "fixes": sorted(fixes_of(repo, commits, st)), "status": "waiting", "created": ts(), "tip": head,
              "follow": bool(getattr(a, "follow", False))}
         ChangeRecords(st, d).save(e)
-    print(note_waiting(d, log_path, head, e["id"]), flush=True)
+    print(note_waiting(st, d, log_path, head, e["id"]), flush=True)
     a.waiting = e
     spawn_waiting_processor(repo)
     offer_token(repo)

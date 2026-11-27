@@ -23,7 +23,7 @@ from agentctl.queuepush import DEEP_BATCHES
 def push_batch_item(repo, d, st, it):
     """The tick's push of a passing batch, under the landing lease: main moved -> assembled again; else the tip pushed
     (the batch's fast pass stands for the push: PREPUSH_REUSE_FAST) and verified on main -> every change LANDED."""
-    members = batch_members(d, it)
+    members = batch_members(st, d, it)
     tip, base, i = it["data"]["tip"], it["data"]["base"], it["data"]["tree"]
     if not members:
         batch_move(st, it, "assembling", text=f"batch {it['id']}: its changes are gone")

@@ -13,7 +13,7 @@ from contextlib import suppress
 from agentctl.core import attempt, err
 from agentctl.timefmt import iso_at
 from agentctl.notifyurl import notification_url
-from agentctl.waitingdir import RECORD_KEY, change_item_fields, entry_final, entry_record, waiting_entries, wlog
+from agentctl.waitingdir import RECORD_KEY, entry_final, entry_record, new_change_data, waiting_entries, wlog
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_dir, inbox_kind
 from agentctl.notifier import notify, notify_cause, notify_fix
@@ -35,9 +35,7 @@ def project_changes(d, store):
         state = change_state_of(e.get("status"))
         if not state:
             continue
-        cur = st.put_item("change", e["id"], state, {**change_item_fields(e),
-                                                     "submitted_at": st.clock(),
-                                                     "red_accum0": float(st.meta_get("red_accum", 0) or 0)})
+        cur = st.put_item("change", e["id"], state, new_change_data(st, e))
         if cur["state"] != state and not machine_state("change", cur["state"]).terminal:
             event = {"text": f"{e['id']}: {cur['state']} -> {state}", "refs": {"entry": e["id"]},
                      "cause": PROJECTED_CAUSE.get(state) or reject_cause(""), "detail": "projected"}

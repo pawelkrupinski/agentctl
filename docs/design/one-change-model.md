@@ -94,6 +94,28 @@ copies converge.
 4. **Readers move to the item**, module by module (`changes.records(st)` instead of `waiting_entries(d)`), the
    batch, the tick and the checker last. Each move is a pure read swap (the record is the same dict) proved by the
    tightened invariant and the module's tests.
+   As built: the view is `waitingdir.ChangeRecords(store, d)` -- the writer of step 3 is the reader too: `every()`,
+   `open()`, `waiting()`, `queued()`, `get(id)`, each change its item's `record` with the item's state as its
+   status (`change_record_of`); with no local store (the laptop's outbox) the files. Two problems, solved so:
+   - **(a) the item comes first.** `queue_change` (and `slots.join`) wrote the entry before the projector made the
+     item, so a reader of the items missed a new change for a tick. `ChangeRecords.save` now creates the item --
+     carrying its record, with the projector's creation data (`new_change_data`) -- before it writes the file; the
+     store is the server's own database, so this is synchronous. A laptop whose store is remote writes the outbox
+     file alone, and the sync's `POST /v1/changes` creates the item later, as before.
+   - **(b) no scan of every entry.** The change number came from a scan of every entry ever written (6.8 MB on
+     ci-runner). It is the store's atomic counter, `Store.next_seq("change_seq:<queue dir>")`
+     (`ChangeRecords.draw_seq`), started once above every number the entries and records hold (the counter never
+     goes back). The ~2,000 changes decided before step 3 have no record, and none is backfilled: the view leaves
+     them out, and no reader needs a decided change's full record -- the decided changes it reads are recent
+     (a conflict-bounced place: 24 h, other changes' failures on this base: 1 day, a push since a condition
+     opened, a batch's members, an open red's fix: since the red opened; every one decided after step 3 has its
+     record), or need only the item's own fields (the land-ref sweep reads the items; the stats had sent every
+     decided change's record before step 3). Measured on the 2026-11-27 03:11 copy: all 2,008 decided changes'
+     stats sent, 0 rejected for a conflict in the last 24 h, no change open.
+   Still reading the files, the laptop's or the host's own: `land status`'s outbox line, the outbox's drain
+   (`migrate_local_queue`), `orphans.queued_worktrees` and `redauthors.landed_heads` (a red's author from the
+   landed change: all of history, which the items' own `landed_sha`, `worktree` and `session` hold -- moved with
+   their store argument in step 6), `runowners.queue_entry_worktree`, and the projector (it goes in step 6).
 5. **Writers write the item first, the file as a cache** (rule 3): `save_entry` stays only as the write-through;
    `set_change` is one transition carrying the record.
 6. **The files go** (after a release of step 5 on ci-runner): `save_entry`, `waiting_entries`, `queued_entries`,

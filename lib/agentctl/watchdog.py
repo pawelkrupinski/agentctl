@@ -10,7 +10,7 @@ from typing import Any, Dict
 from agentctl.core import attempt, fmt_age, pid_alive, state_root
 from agentctl.statefile import write_json
 from agentctl.repos import movies_repo_path
-from agentctl.waitingdir import waiting_entries, waiting_state
+from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.storetoken import TOKEN_SHAPE, hand_token, processor_sock, token_request
 from agentctl.notifier import notify
 from agentctl.launchd import SERVICE_LABEL, launchctl
@@ -70,7 +70,7 @@ def watchdog_unheld(st, entries=None, now_=None):
     if entries is None:
         try:
             d, _c, _w = waiting_state(movies_repo_path())
-            entries = {e["id"]: e for e in waiting_entries(d, open_only=False)}
+            entries = {e["id"]: e for e in ChangeRecords(st, d).every()}
         except (Exception, SystemExit):
             entries = {}
     return [f"{it['id']} ({it['state']}, past its deadline, nothing recorded holding it): agentctl issue "

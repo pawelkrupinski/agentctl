@@ -9,7 +9,7 @@ from typing import Any
 from agentctl.timefmt import parse_time, ts
 from agentctl.core import attempt, git, process_cache
 from agentctl.trailers import trailer_values
-from agentctl.waitingdir import waiting_entries, waiting_state
+from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.patches import patch_id
 from agentctl.inboxentry import inbox_write
 from agentctl.redrecord import red_names, red_what
@@ -67,7 +67,7 @@ def _queue_facts(repo: Any, store: Any) -> Any:
     untrailered: list[Any] = []
     try:
         d, _c, _w = waiting_state(repo)
-        for e in waiting_entries(d, open_only=False):
+        for e in ChangeRecords(store, d).every():
             fx = entry_fixes(repo, e, store) if _recent_entry(e) or e.get("fixes") else None
             if fx and not red_unrelated(repo, e):
                 entries.append({**e, "fixes": fx})
@@ -226,6 +226,8 @@ class FixCandidates:
         if e.get("status") in FIX_OPEN:
             return {"entry": e["id"], "status": e["status"], "author": {"worktree": e.get("worktree"),
                                                                         "session": e.get("session")}}
+        if e.get("status") == "landed" and not e.get("landed_sha"):  # landed by a writer of its item alone (the
+            return {"entry": e["id"], "status": "landed"}  # closer by content): its item says where (red_fix_fresh)
         if e.get("status") == "landed" and e.get("landed_sha"):
             at = self.landed_at(e)
             if at >= self.since:  # landed before this spell opened: the run that opened it already outlived it

@@ -6,10 +6,10 @@ from agentctl.statemachines import machine_state
 from agentctl.timefmt import ts
 from agentctl.core import err, git, remote
 from agentctl.leases import lease_live
-from agentctl.waitingdir import ChangeRecords, waiting_entries
+from agentctl.waitingdir import ChangeRecords
 from agentctl.queueslots import check_tree, check_tree_slot, set_change
 from agentctl.queue import land_hold
-from agentctl.queuerecheck import queued_entries, recheck_logged
+from agentctl.queuerecheck import recheck_logged
 from agentctl.redland import may_land_on_red
 from agentctl.changekind import facts_for, facts_tick
 from agentctl.batchrun import assemble, unread_note
@@ -74,11 +74,11 @@ class Assembled(NamedTuple):
 
 def batch_step(repo: str, d: str, seen: dict[str, Any], st: Any) -> list[str]:
     t = st.clock()
-    waiting = waiting_entries(d)
+    waiting = ChangeRecords(st, d).waiting()
     it = current_batch(st, d)
     seen.update(waiting=waiting, batch=it)
     backlog = not waiting and not it and \
-        sum(1 for e in queued_entries(d) if e.get("status") in ("queued", "checked")) >= backlog_min()
+        sum(1 for e in ChangeRecords(st, d).queued() if e.get("status") in ("queued", "checked")) >= backlog_min()
     if not waiting and not it and not backlog:
         return []
     if land_hold(st, t):  # the store's hold: honoured wherever `land hold` ran
@@ -147,9 +147,9 @@ def gate_fix_waits(repo: str, st: Any, reds: Any, waiting: Any) -> bool:
 def waiting_after_release(repo: str, d: str, st: Any, t: float, it: Any, reds: Any) -> list[dict[str, Any]]:
     """The waiting entries, read again when a red fix was released: at green, or while red when the open red names it
     (release_red_fixes: WR self-heals)."""
-    waiting = waiting_entries(d)
+    waiting = ChangeRecords(st, d).waiting()
     if (not it or it["state"] in ("blocked-red", "assembling")) and release_red_fixes(repo, d, st, reds, waiting, t):
-        return waiting_entries(d)
+        return ChangeRecords(st, d).waiting()
     return waiting
 
 
@@ -209,7 +209,7 @@ def batch_assembled(tick: BatchTick, asm: Any) -> list[str]:
     if asm.full and len(kept) < backlog_min():  # one left: it is checked (a push batch's: pushed) alone, as any change
         return batch_left_alone(tick, asm)
     if not kept:
-        if not waiting_entries(d):
+        if not ChangeRecords(tick.st, d).waiting():
             batch_move(tick.st, it, "landed", {"members": []}, text=f"batch {it['id']}: nothing left to land")
         return [f"batch {it['id']}: nothing kept"]
     if not asm.full:  # THE WAITING BATCH AT GREEN: pre-checked as one at red, its verdict kept, or checked as needed

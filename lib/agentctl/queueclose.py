@@ -8,7 +8,6 @@ import time
 from typing import Any
 from contextlib import suppress
 from agentctl.timefmt import ts
-from agentctl.statefile import read_record
 from agentctl.statemachines import StaleVersion, TerminalState, machine_state, open_items
 from agentctl.clock import Clock
 from agentctl.landstate import UNKNOWN, LandState, landed_state
@@ -74,7 +73,7 @@ def _close_landed_entries(repo: Any, st: Any, d: Any, t: Any, did: list[str]) ->
     """The queue entries of d on main by content close as LANDED (lines to did); the ids of the open ones the entries
     cover, whose store items are not looked at again."""
     carried: set[str] = set()
-    for e in waiting_entries(d, open_only=False) if d else []:
+    for e in ChangeRecords(st, d).every() if d else []:
         if entry_final(e.get("status")) or e.get("status") == "pushing":
             continue
         carried.add(e["id"])
@@ -108,7 +107,7 @@ def stranded_changes(repo, d, store, now_ = None):
     push or close it -- opens a STRANDED CHANGE condition naming it; its probe (the item closed, or an entry for it)
     closes it. Returns the ids."""
     st = store
-    entries = {e["id"] for e in waiting_entries(d, open_only=False)}
+    entries = {e["id"] for e in ChangeRecords(st, d).every()}
     out = []
     for it in open_items(st, "change"):
         if it["id"] in entries:
@@ -131,7 +130,7 @@ def probe_change_source(a, store):
     if not it or machine_state("change", it["state"]).terminal:
         return True, f"change {a['id']} is {it['state'] if it else 'gone'}"
     d = waiting_state(a.get("repo") or movies_repo_path())[0]
-    if os.path.exists(os.path.join(d, "entries", f"{a['id']}.json")):
+    if ChangeRecords(store, d).get(a["id"]):
         return True, f"change {a['id']} is in the queue"
     return False, f"change {a['id']} is {it['state']} and no queue entry carries it"
 
@@ -296,7 +295,7 @@ def check_entry(repo: str, eid: str, clock: Clock, store: Any) -> int:
         lease.release()
         return 0
     try:
-        e = read_record(os.path.join(d, "entries", f"{eid}.json"))
+        e = ChangeRecords(store, d).get(eid)
         if not e or e.get("status") not in ("queued", "checking") or e.get("backlog_batch"):  # a backlog batch's
             return 0
         fix = may_land_on_red(facts_for(gate_reds(repo), store), e, repo, store=store).red_fix  # its own tree

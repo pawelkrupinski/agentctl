@@ -683,7 +683,7 @@ class Sim:
         self.verified.add(frozenset(self.patches_of(tip)))
         return True, f"checks passed {where}\n"
 
-    def base_failure_keys(self, repo, d, e, base, now):
+    def base_failure_keys(self, st, repo, d, e, base, now):
         """What fails on the change's base: the open gate red's own test, in the gate's newest run (queuefailure)."""
         return {k: f"Main #{self.red_run}{A.GATE_RUN_WHERE}" for k in A.test_keys([MAIN_FAILS_LINE])} if self.reds else {}
 
@@ -1399,7 +1399,7 @@ class Sim:
         for t in list(self.tasks):
             if not t.done and t.due is not None and t.due <= self.tick:
                 t.step()
-        before = {e["id"]: dict(e) for e in A.queued_entries(self.d)}
+        before = {e["id"]: dict(e) for e in A.waiting_entries(self.d, open_only=False) if e.get("status") in A.QUEUED}
         self.open_before = set(self.reds) | set(self.outside)
         self.known_entries = {e["id"] for e in A.waiting_entries(self.d, open_only=False)}
         reds = set(self.reds)

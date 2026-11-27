@@ -10,10 +10,10 @@ from typing import Any, Iterable
 from agentctl.procrunner import process_runner
 from agentctl.core import err, fmt_age, git, git_ok, host_role
 from agentctl.timefmt import iso_at
-from agentctl.statefile import read_record, read_text_or
+from agentctl.statefile import read_text_or
 from agentctl.networksignatures import credential_failure, redact_credentials
 from agentctl.repos import precheck_hook, repo_of_waiting
-from agentctl.waitingdir import waiting_entries, wlog
+from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.land import tool_env
 from agentctl.queueslots import set_change
 from agentctl.conditions import open_condition, run_probe
@@ -119,7 +119,7 @@ def push_credential_condition(st: Any, d: str, why: str, detail: str | None, rep
     re-queue and naming every change it holds, cleared by the next push that succeeds (probe_push_credential) -- not an
     "infra failure" retried on a timer per change (2026-11-22: four changes held for hours by a dead helper)."""
     repo = repo or repo_of_waiting(d)
-    held = credential_held(waiting_entries(d, open_only=False))
+    held = credential_held(ChangeRecords(st, d).every())
     text = (f"PUSH CREDENTIAL: GitHub refused {host_role()}'s push credential for {os.path.basename(repo)}; "
             f"{len(held)} change(s) wait on it ({', '.join(held[:6])}). Not the vault's and not the changes': "
             f"Its credential helper there must work again (the App helper on ci-runner, gh's login on the laptop). "
@@ -136,14 +136,14 @@ def credential_held(entries: list[dict[str, Any]]) -> list[str]:
             and credential_failure(x.get("why"))]
 
 
-def probe_push_credential(a: dict[str, Any]) -> tuple[bool | None, str]:
+def probe_push_credential(a: dict[str, Any], st: Any) -> tuple[bool | None, str]:
     """A check-branch push of the clone's queue succeeded since the condition opened (save_remote's pushed_at), or no
     change waits on a credential any more. Read from the queue's own records ONLY: never a credential helper (the
     GitHub App's mints a token per call, 2026-11-22 review), and only on the host whose push failed (a["host"]):
     another host's clone and helper say nothing about it, so there it cannot tell."""
     if a.get("host") != host_role():
         return None, f"read on {a.get('host')} only, where the push failed"
-    entries = waiting_entries(a["d"], open_only=False)
+    entries = ChangeRecords(st, a["d"]).every()
     pushed = max((float((x.get("remote") or {}).get("pushed_at") or 0) for x in entries), default=0.0)
     if pushed > float(a.get("since") or 0):
         return True, f"a check-branch push succeeded at {iso_at(pushed)}"
@@ -151,9 +151,9 @@ def probe_push_credential(a: dict[str, Any]) -> tuple[bool | None, str]:
     return not held, f"{len(held)} change(s) wait on it" if held else "no change waits on it"
 
 
-def probe_infra_requeue(a):
+def probe_infra_requeue(a: dict[str, Any], st: Any) -> tuple[bool, str]:
     """Change a['eid'] got past a['reason']: decided, checked, gone, or re-queued for another reason."""
-    e = read_record(os.path.join(a["d"], "entries", f"{a['eid']}.json")) or {}
+    e = ChangeRecords(st, a["d"]).get(a["eid"]) or {}
     stuck = e.get("status") in ("queued", "checking") and e.get("infra_reason") == a.get("reason")
     return not stuck, f"entry {a['eid']}: {e.get('status') or 'gone'}" + (f" ({e.get('why')})" if stuck else "")
 
