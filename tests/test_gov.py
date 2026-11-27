@@ -9,7 +9,7 @@ from test_agentctl import A, TOOL  # noqa: E402
 
 KEYS = ("AGENTCTL_GOV_CPU_FACTOR", "AGENTCTL_RUNNERS_PAGE_CACHE", "AGENTCTL_GOV_DIR", "AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_PRESSURE_PROBE", "AGENTCTL_GOV_LOAD_PROBE",
         "AGENTCTL_GOV_POLL", "AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_PS_PROBE", "AGENTCTL_GOV_BUDGET_GB", "AGENTCTL_GOV_RESERVE_GB", "AGENTCTL_GOV_EVICT_SETTLE",
-        "KINOWO_SBT_WARM_STATE", "AGENTCTL_CHECKS_DIR", "AGENTCTL_MAX_CHECKS")
+        "KINOWO_SBT_WARM_STATE", "AGENTCTL_CHECKS_DIR", "AGENTCTL_MAX_CHECKS", "AGENTCTL_MACHINE")
 
 
 class GovernorTest(unittest.TestCase):
@@ -623,7 +623,7 @@ class MachineCpuTest(unittest.TestCase):
         # an 18-core machine all busy -- never the runner's own core count (a 2-core GitHub runner read as `spare`)
         A.machine_busy_cores, A.machine_cores = (lambda n, **k: float(n)), (lambda: 18)
         try:
-            cap = A.gov_capacity(tickets=[], m=self.m18())
+            cap = A.gov_capacity(tickets=[], m={"cores": 18})
         finally:
             A.machine_busy_cores, A.machine_cores = saved
         self.assertEqual((cap["state"], cap["measured"]), ("starved", 18.0))
