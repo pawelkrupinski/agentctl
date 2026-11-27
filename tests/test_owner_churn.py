@@ -222,12 +222,15 @@ class LeaseClockPauseTest(unittest.TestCase):
 
 class ContactOverTheApiTest(Phase2Base):
     def test_the_laptops_store_calls_say_which_machine_they_are(self):
-        saved = os.environ.get("AGENTCTL_MACHINE")
-        os.environ["AGENTCTL_MACHINE"] = "laptop"
-        self.addCleanup(lambda: os.environ.pop("AGENTCTL_MACHINE", None) if saved is None
-                        else os.environ.__setitem__("AGENTCTL_MACHINE", saved))
-        self.remote.get("owner/convergence")
+        A.RemoteStore(self.url, "tok-pawel", machine="laptop").get("owner/convergence")
         self.assertIsNotNone(self.st.meta_get("contact:laptop"))
+
+    def test_the_tests_fixed_machine_is_never_a_machine_the_calls_speak_for(self):
+        """$AGENTCTL_MACHINE is ONE thing, the tests' fixed machine (JSON, machine.machine_fixed): the harness sets it in
+        every test, and a store call spoke for a machine named by that JSON."""
+        self.assertTrue(os.environ.get("AGENTCTL_MACHINE", "").startswith("{"), "the harness's fixed machine")
+        self.assertNotIn("{", A.contact_machine() or "")
+        self.assertNotIn("{", self.remote._headers().get("X-Agentctl-Machine", ""))
 
 
 if __name__ == "__main__":

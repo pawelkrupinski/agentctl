@@ -21,12 +21,11 @@ from agentctl.storeknobs import knob_store_url
 from agentctl.storecalls import STORE_CALLS, StoreCall
 
 
-def contact_machine():
-    """The machine this process's store calls speak for (A SILENT MACHINE'S LEASE CLOCKS PAUSE): $AGENTCTL_MACHINE, else
-    `laptop` for the laptop's agentctl (the sync role on macOS: its holders are `laptop:...`), else None."""
-    m = os.environ.get("AGENTCTL_MACHINE")
-    if m is not None:
-        return m or None
+def contact_machine() -> str | None:
+    """The machine this process's store calls speak for (A SILENT MACHINE'S LEASE CLOCKS PAUSE): `laptop` for the
+    laptop's agentctl (the sync role on macOS: its holders are `laptop:...`), else None. ($AGENTCTL_MACHINE is the
+    tests' fixed machine, JSON: machine.machine_fixed; it once named this too, so every test's store call spoke for a
+    machine named by that JSON.)"""
     return "laptop" if host_role() == "sync" and sys.platform == "darwin" else None
 
 
@@ -106,9 +105,11 @@ class RemoteStore(RemoteCalls):  # type: ignore[misc,valid-type]
 
     needs_token = True  # a call goes out with the caller's token (the file store reads a local database: Store.needs_token)
 
-    def __init__(self, url, tok = None, clock = None, timeout: int = 60, retries = None) -> None:
+    def __init__(self, url, tok = None, clock = None, timeout: int = 60, retries = None,
+                 machine: str | None = None) -> None:
+        """machine: the machine the calls speak for (X-Agentctl-Machine), None for this host's (contact_machine)."""
         self.url, self._tok, self.clock, self.timeout = url.rstrip("/"), tok, clock or epoch_now, timeout
-        self.retries = retries
+        self.retries, self.machine = retries, machine
         self.path = self.url
 
     def _token(self):
@@ -139,8 +140,9 @@ class RemoteStore(RemoteCalls):  # type: ignore[misc,valid-type]
 
     def _headers(self):
         hdrs = {"Authorization": f"token {self._token()}", "Content-Type": "application/json"}
-        if contact_machine():
-            hdrs["X-Agentctl-Machine"] = contact_machine()
+        machine = self.machine or contact_machine()
+        if machine:
+            hdrs["X-Agentctl-Machine"] = machine
         if host_role() == "sync":  # which machine this laptop is (laptop_role_refusal): every sync client names it
             hdrs["X-Agentctl-Role"] = laptop_role_holder()
         return hdrs

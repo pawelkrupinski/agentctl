@@ -149,7 +149,7 @@ mypy-errors	redview	25
 mypy-errors	redwaits	15
 mypy-errors	remote	42
 mypy-errors	remotejobs	28
-mypy-errors	remotestore	25
+mypy-errors	remotestore	22
 mypy-errors	repos	26
 mypy-errors	reverts	46
 mypy-errors	runexplain	14

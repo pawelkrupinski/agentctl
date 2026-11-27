@@ -11,7 +11,6 @@ laptoprole	AGENTCTL_MACHINE_ID	process-level: a process's identity, secret or te
 launchd	AGENTCTL_LAUNCHCTL	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 machine	AGENTCTL_GOV_FREE_PROBE	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 machine	AGENTCTL_MACHINE	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
-remotestore	AGENTCTL_MACHINE	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 remotestore	AGENTCTL_STORE_DEFAULT_URL	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 remotestore	AGENTCTL_STORE_TOKEN	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 statuspage	AGENTCTL_OPEN	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
