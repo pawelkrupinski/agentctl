@@ -3,7 +3,9 @@
 
 import glob
 import os
+from contextlib import suppress
 from typing import Any
+from agentctl.allowedpaths import allowed_path
 from agentctl.statefile import read_record
 from agentctl.statemachines import open_states
 
@@ -33,3 +35,21 @@ def decided_entry_files(waiting_root: str, cutoff: float, store: Any = None) -> 
     one-change-model step 6 the item is the record: ci-runner kept 1,897 files from before it."""
     paths = glob.glob(os.path.join(glob.escape(waiting_root), "*", "entries", "*.json"))
     return [p for p in paths if _untouched_since(p, cutoff) and _decided(read_record(p), p, store)]
+
+
+EXPIRY_EVERY = 3600  # s between the server tick's looks for decided entry files
+
+
+def expire_entry_files(waiting_root: str, now: float, days: float, store: Any, every: int = EXPIRY_EVERY) -> list[str]:
+    """Where the files are (ci-runner's reconciler, whose store is in-process: the laptop's `maintain` reads a remote store
+    and finds none): at most once per `every` s, the decided entry files untouched for `days` are deleted. The paths gone."""
+    if now - float(store.meta_get("entry_files_expired_at", 0) or 0) < every:
+        return []
+    store.meta_set("entry_files_expired_at", now)
+    gone = []
+    for p in decided_entry_files(waiting_root, now - days * 86400, store):
+        if allowed_path(p):
+            with suppress(OSError):
+                os.unlink(p)
+                gone.append(p)
+    return gone

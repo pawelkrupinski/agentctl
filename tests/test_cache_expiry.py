@@ -58,6 +58,21 @@ class CacheExpiryTest(unittest.TestCase):
         self.assertEqual({os.path.relpath(p, self.root) for p in gone}, self.expire(store=store))
         self.assertTrue(all(os.path.exists(p) for p in keep))
 
+    def test_the_server_tick_expires_decided_entry_files_where_they_are_once_an_hour(self):
+        """`maintain` runs on the laptop, whose store is remote and which holds none of ci-runner's files: the reconciler's
+        own tick deletes them, throttled by a store meta row."""
+        store = A.Store(os.path.join(self.root, "s.db"))
+        old = self.put("waiting/r/entries/a.json", 9, json.dumps({"id": "a", "status": "landed"}))
+        keep = self.put("waiting/r/entries/b.json", 9, json.dumps({"id": "b", "status": "waiting"}))
+        waiting = os.path.join(self.root, "waiting")
+        self.assertEqual([old], A.expire_entry_files(waiting, self.now, 7, store))
+        self.assertFalse(os.path.exists(old))
+        late = self.put("waiting/r/entries/c.json", 9, json.dumps({"id": "c", "status": "landed"}))
+        self.assertEqual([], A.expire_entry_files(waiting, self.now + 60, 7, store))
+        self.assertTrue(os.path.exists(late))
+        self.assertEqual([late], A.expire_entry_files(waiting, self.now + 3601, 7, store))
+        self.assertTrue(os.path.exists(keep))
+
     def test_dry_run_lists_and_removes_nothing(self):
         p = self.put("agentctl-land-a-1.log", 8)
         self.assertEqual(self.expire(dry_run=True), {"agentctl-land-a-1.log"})

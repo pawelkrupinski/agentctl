@@ -38,5 +38,5 @@ MODULES = ("procrunner", "conditionregistry", "escalationtable", "psparse", "gov
            "storecmd", "ciwhycmd", "inboxwait", "inboxcli", "landedchange", "superseded", "park", "orphans",
            "orphanpass", "entryfiles", "maintain", "status", "statuspage", "redcli", "syncsteps", "changerows",
            "invariants", "watchdog", "changelap", "overlapcheck", "entrychecks", "queuediff", "queuecheck",
-           "checkround", "batchselect", "batch", "queuepush", "batchpush", "batchcheck", "batchtick", "serversteps",
+           "checkround", "batchselect", "batch", "queuepush", "batchpush", "batchcheck", "batchtick", "serverhousekeeping", "serversteps",
            "landqueue", "processor", "queueenter", "landdryrun", "slots", "cliparser", "cli")

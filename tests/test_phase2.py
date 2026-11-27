@@ -345,7 +345,7 @@ class ServerSideTest(Phase2Base):
                                  "network watch", "tunnel probe", "red status snapshot", "upkeep", "root checkout", "recovery"])
         server = [n for n, _ in A.server_steps(self.repo, self.tmp, lambda f: f, *on_clock(A.Clock()), registry(A), ctx=case_context())]
         self.assertEqual(server, ["clone health", "landed changes", "stranded changes", "change tick", "land hold", "batch tick", "watches", "land refs",
-                                  "lease archive", "children", "gate summary", "red time", "red tick", "recovery", "issues",
+                                  "lease archive", "entry files", "children", "gate summary", "red time", "red tick", "recovery", "issues",
                                   "reverts", "queue stall", "file events", "timeline", "quiet deadlines", "stats"])
         laptop_only = {"events", "notifier", "alerts", "network watch", "tunnel probe", "red status snapshot", "upkeep", "fixer landing", "dispatcher", "regen holds",
                        "claims"}

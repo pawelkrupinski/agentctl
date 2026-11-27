@@ -6,20 +6,19 @@ from agentctl.context import Context
 from agentctl.statemachines import StaleVersion, TerminalState, machine_state
 from agentctl.clock import Clock
 from agentctl.core import reap_children, slug
-from agentctl.clones import heal_enabled
 from agentctl.filelog import drain_event_log
 from agentctl.waitingdir import wlog
+from agentctl.serverhousekeeping import archive_leases_step, expire_entry_files_step
 from agentctl.inboxentry import inbox_write
 from agentctl.cistate import snapshot_gate_reds
 from agentctl.recovery import maybe_recovery_tick
-from agentctl.serverclone import clone_heal_tick
+from agentctl.serverclone import clone_health_lines
 from agentctl.queuestall import queue_stall_step
 from agentctl.stats import maybe_stats_pass
 from agentctl.timelinecmd import timeline_step
 from agentctl.landhold import tick_land_hold
 from agentctl.reverts import tick_reverts
 from agentctl.issues import tick_issues
-from agentctl.projector import maybe_archive_leases
 from agentctl.queuesubmit import sweep_land_refs
 from agentctl.remote import remote_run_jobs
 from agentctl.batch import say_batch
@@ -88,11 +87,6 @@ def tick_quiet_deadlines(st, now_=None):
     return did
 
 
-def clone_health_step(repo: str, d: str, store: Any, registry: ConditionRegistry) -> Any:
-    """The clone-health step: its heal tick's line logged, or None when healing is off for the repo."""
-    return [wlog(d, f"tick: {x}") for x in [clone_heal_tick(repo, store, registry)] if x] if heal_enabled(repo) else None
-
-
 def logged(d: str, lines: list[str]) -> list[str]:
     """A step's lines, each said in the processor's log."""
     for x in lines:
@@ -111,7 +105,7 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
     the recovery registry. Never the laptop's duties (events -> inbox, the notifier, the network and tunnel watches, the
     fixers, upkeep): those are sync_steps. clock, store and registry (the conditions' probes and actions): the process's
     (cli's), every step's time, store and registry."""
-    return (("clone health", lambda: clone_health_step(repo, d, store, registry)),
+    return (("clone health", lambda: logged(d, clone_health_lines(repo, store, registry))),
             ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, clock, store,
                                                                                                   d)])),
             ("stranded changes", lambda: stranded_changes(repo, d, store)),
@@ -120,7 +114,8 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
             ("batch tick", shared(lambda: say_batch(d, tick_batch(repo, d, clock, store, ctx=ctx)))),
             ("watches", lambda: [wlog(d, f"tick: {x}") for x in tick_watches(clock, store, ctx=ctx)]),
             ("land refs", shared(lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d, store=store)])),
-            ("lease archive", lambda: maybe_archive_leases(d, store)),
+            ("lease archive", lambda: archive_leases_step(d, store)),
+            ("entry files", lambda: expire_entry_files_step(d, clock, store)),
             ("children", reap_children),
             ("gate summary", lambda: maybe_publish_gate(repo, store, registry, ctx=ctx)),
             ("red time", lambda: track_red_time(store, gate_is_red_now())),

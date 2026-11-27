@@ -157,7 +157,7 @@ mypy-errors	runowners	42
 mypy-errors	runqueue	2
 mypy-errors	runsigs	9
 mypy-errors	serverclone	35
-mypy-errors	serversteps	21
+mypy-errors	serversteps	20
 mypy-errors	sessionpaths	8
 mypy-errors	slots	51
 mypy-errors	statemachines	25

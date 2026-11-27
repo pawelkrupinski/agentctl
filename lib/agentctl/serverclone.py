@@ -336,3 +336,9 @@ def clone_heal_tick(repo, store, registry: ConditionRegistry):
     if r.ok is None:
         return None  # cannot tell now (the network): looked at again next tick
     return repair_clone(repo, f"{r.detail}\n{sus.get('error') or ''}".strip(), store, registry)
+
+
+def clone_health_lines(repo: str, store: Any, registry: ConditionRegistry) -> list[str]:
+    """The clone-health step's line (its heal tick's), none when healing is off for the repo or the tick had nothing to say."""
+    line = clone_heal_tick(repo, store, registry) if heal_enabled(repo) else None
+    return [line] if line else []
