@@ -1,7 +1,7 @@
 """THE END-TO-END SCENARIOS (the owner, 2026-11-27): the real store server, the real reconciler tick and sync, the laptop's
 real CLI and a real git remote, together (tests/e2e/e2e_harness.py); GitHub is the stub (tests/e2e/ghstub.py). Each
 scenario is one test, and each FAILS when its behaviour is broken (tests/e2e/mutations.py proves it per scenario)."""
-import io, os, shutil, subprocess, sys, tarfile, unittest
+import os, shutil, socket, subprocess, sys, tarfile, io, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -230,6 +230,76 @@ class MissingCommitTest(E2ETest):
         self.assertNotIn("Traceback (most recent call last)", self.w.reconciler.text())
         self.assertNotEqual(self.w.states()[lost], "landed")
         self.assertNotIn("lost: its commit never reaches ci-runner", self.w.main_log())
+
+
+class Throttle:
+    """A TCP proxy in front of the store that passes the request on and trickles the answer back at `rate` bytes/s
+    (a slow uplink: the 2026-11-26 tunnel's ~40 KB/s, and slower), each connection a thread ended with it."""
+
+    def __init__(self, port, rate):
+        self.target, self.rate, self.stop = ("127.0.0.1", port), rate, threading.Event()
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(16)
+        self.sock.settimeout(0.2)
+        self.url = f"http://127.0.0.1:{self.sock.getsockname()[1]}"
+        self.threads = [threading.Thread(target=self.accept, name="e2e-throttle", daemon=True)]
+        self.threads[0].start()
+
+    def accept(self):
+        while not self.stop.is_set():
+            try:
+                c, _ = self.sock.accept()
+            except (socket.timeout, OSError):
+                continue
+            t = threading.Thread(target=self.relay, args=(c,), name="e2e-throttle-conn", daemon=True)
+            self.threads.append(t)
+            t.start()
+
+    def relay(self, c):
+        up = socket.create_connection(self.target)
+        for s in (c, up):
+            s.settimeout(0.2)
+        try:
+            while not self.stop.is_set():
+                for src, dst, slow in ((c, up, False), (up, c, True)):
+                    try:
+                        data = src.recv(1 if slow else 65536)
+                    except socket.timeout:
+                        continue
+                    if not data:
+                        return
+                    if slow:
+                        self.stop.wait(1.0 / self.rate)
+                    dst.sendall(data)
+        except OSError:
+            return
+        finally:
+            c.close()
+            up.close()
+
+    def close(self):
+        self.stop.set()
+        self.sock.close()
+        for t in self.threads:
+            t.join(5)
+
+
+class SlowLinkTest(E2ETest):
+    STATUS_BOUND = 25  # s: the store call's own bound (remotestore STORE_WAITED_TIMEOUT, 15 s) and the CLI's start
+
+    def test_status_over_a_throttled_link_returns_within_its_bound_naming_the_store(self):
+        proxy = Throttle(self.w.port, rate=20)
+        self.addCleanup(proxy.close)
+        t0 = time.monotonic()
+        r = self.w.cli("status", url=proxy.url, bound=self.STATUS_BOUND + 20)
+        took = time.monotonic() - t0
+        no_traceback(self, r, "status")
+        self.assertLess(took, self.STATUS_BOUND, f"status took {took:.0f} s over the slow link")
+        self.assertEqual(r.returncode, 0, r.stderr[-2000:])
+        self.assertIn("STORE UNREACHABLE", r.stderr)
+        self.assertIn(proxy.url, r.stderr, "it names the store")
+        self.assertTrue(r.stdout.strip(), "the status from the snapshot all the same")
 
 
 def old_checkout(rev):

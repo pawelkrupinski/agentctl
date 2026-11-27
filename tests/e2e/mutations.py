@@ -44,6 +44,12 @@ MUTATIONS = {
         "        if r.returncode != 0:\n            return None\n        _production[c]",
         "        if r.returncode != 0:\n            raise RuntimeError(r.stderr)\n        _production[c]",
         "the red rule raises on a commit the clone lacks (the 2026-11-26 dead tick)"),
+    "SlowLinkTest": (
+        "lib/agentctl/remotestore.py",
+        'return json.loads(open_within(req, timeout or self.timeout) or b"null")',
+        'with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:\n'
+        '                return json.loads(r.read() or b"null")',
+        "a store call bounded per socket read, not in all"),
 }
 
 

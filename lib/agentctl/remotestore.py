@@ -5,6 +5,7 @@ from agentctl.clock import epoch_now
 import json
 import os
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -40,6 +41,30 @@ class _StoreTransient(Exception):
 def http_client_errors():
     import http.client
     return http.client.HTTPException
+
+
+def open_within(req: urllib.request.Request, timeout: float) -> bytes:
+    """The answer's body, read within `timeout` s IN ALL. urlopen's timeout bounds each socket read, so a link
+    trickling a byte now and then never timed out (2026-11-27, the e2e slow link: `status` over a throttled proxy was
+    still reading after 45 s against its 15 s bound). The read runs in a daemon thread the caller waits on for
+    `timeout`: past it the call fails as a timeout like any other (the thread ends with its connection, or the
+    process). Its errors are the caller's, as raised."""
+    got: dict[str, Any] = {}
+
+    def fetch() -> None:
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                got["body"] = r.read()
+        except BaseException as e:  # handed to the caller, raised there
+            got["error"] = e
+    reader = threading.Thread(target=fetch, name="store-call", daemon=True)
+    reader.start()
+    reader.join(timeout)
+    if reader.is_alive():
+        raise TimeoutError(f"no whole answer within {timeout:.0f} s")
+    if "error" in got:
+        raise got["error"]
+    return bytes(got["body"])
 
 
 LACKING_RECHECK = 600  # s a call the store said it lacks is answered from memory (StoreLacksCall) before it is asked again
@@ -151,8 +176,7 @@ class RemoteStore(RemoteCalls):  # type: ignore[misc,valid-type]
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(self.url + path, data=data, method=method, headers=self._headers())
         try:
-            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:
-                return json.loads(r.read() or b"null")
+            return json.loads(open_within(req, timeout or self.timeout) or b"null")
         except urllib.error.HTTPError as e:
             _raise_http_error(e, method, path, self.url, self.clock())
         except (urllib.error.URLError, OSError, ValueError, http_client_errors()) as e:
