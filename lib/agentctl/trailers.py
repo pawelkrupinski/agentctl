@@ -12,11 +12,12 @@ from agentctl.core import git
 TRAILER_SPLIT = re.compile(r"[,;\s]+")
 
 
-def trailer_format(keys: tuple[str, ...], separator: str = "%x09", unfold: bool = False) -> str:
+def trailer_format(keys: tuple[str, ...], separator: str = "%x09", unfold: bool = False, one_line: bool = True) -> str:
     """git's `--format` fragment reading each of `keys` as its trailers' values (the final block, as git reads it),
-    comma-separated within a key and `separator` between keys: the ONE spelling of the `%(trailers...)` read."""
-    opts = ",unfold" if unfold else ""
-    return separator.join(f"%(trailers:key={k},valueonly{opts},separator=%x2C)" for k in keys)
+    comma-separated within a key (one_line; else one value a line) and `separator` between keys: the ONE spelling of
+    the `%(trailers...)` read."""
+    opts = (",unfold" if unfold else "") + (",separator=%x2C" if one_line else "")
+    return separator.join(f"%(trailers:key={k},valueonly{opts})" for k in keys)
 
 
 def commit_trailer_values(repo: str, commit: str, key: str) -> set[str]:
