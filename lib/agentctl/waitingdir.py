@@ -61,7 +61,6 @@ def entry_final(status: Any) -> bool:
     return status not in ENTRY_OPEN
 
 
-
 def save_entry(d: str, e: dict[str, Any]) -> None:
     """The entry, written atomically. A final status on disk is never overwritten by a racing writer's non-final one
     (audit S2: `supersede` raced the checker's save): the disk's status and verdict stand."""

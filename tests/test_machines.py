@@ -154,6 +154,23 @@ class ProjectionTest(unittest.TestCase):
         self.assertEqual([s for s in ("queued", "checking", "checked", "pushing", "waiting", "joined", "migrated", "bogus", None)
                           if A.entry_final(s)], ["joined", "migrated", "bogus", None])
 
+    def test_a_change_decided_on_its_item_first_keeps_that_state_on_its_entry(self):
+        """IS (tests/queue_sim.py): a change cancelled or superseded on its item alone (`land cancel` through the store,
+        a stranded supersede) and then rejected by its checker read `rejected` on its entry and `cancelled` on its
+        item -- two answers to one question. The first decision stands on both: the entry takes the item's state."""
+        root = tempfile.mkdtemp()
+        st = A.Store(path=os.path.join(root, "store.db"))
+        d = os.path.join(root, "w")
+        os.makedirs(os.path.join(d, "entries"))
+        e = {"id": "e1", "seq": 1, "status": "checking", "worktree": "/wt/a", "head": "h"}
+        it = st.put_item("change", "e1", "checking", {"worktree": "/wt/a"})
+        st.transition("change", "e1", "cancelled", it["version"], data={"why": "cancelled by `agentctl land cancel`"},
+                      event={"cause": "agent"})
+        A.set_change(st, d, e, "rejected", cause="check-failed-test", why="NOT LANDED: the pre-push checks failed")
+        disk = A.read_record(os.path.join(d, "entries", "e1.json"))
+        self.assertEqual((st.item("change", "e1")["state"], e["status"], disk["status"]), ("cancelled",) * 3)
+        self.assertEqual(disk["why"], "cancelled by `agentctl land cancel`")
+
     def test_a_final_status_on_disk_stands_against_a_racing_open_write(self):
         """save_entry's race rule (audit S2), characterised before the files go: a decided entry on disk keeps its
         status and verdict when a racing writer saves the entry open."""

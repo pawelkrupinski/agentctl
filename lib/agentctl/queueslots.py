@@ -149,8 +149,10 @@ def _item_data(cur, to, data, fields):
 def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any] | None = None,
                event: dict[str, Any] | None = None, *, cause: str, detail: str | None = None,
                **fields: Any) -> None:
-    """THE writer of a change's state: its item (transition + event) and its entry's status, together. cause: why it
-    moved, one of causes.CAUSES (a keyword every caller names: tests/test_causes.py); detail: a short qualifier."""
+    """THE writer of a change's state: its item (transition + event) and its entry's status, together. An item decided
+    already (by a writer of the item alone: a cancel through the store, a stranded supersede) keeps its decision, and
+    the entry takes it: one state whichever reader asks (tests/queue_sim.py IS). cause: why it moved, one of
+    causes.CAUSES (a keyword every caller names: tests/test_causes.py); detail: a short qualifier."""
     event = {**(event or {}), "cause": checked_cause(cause), **({"detail": detail} if detail else {})}
     cur = st.put_item("change", e["id"], change_state_of(e.get("status")) or "queued", change_item_fields(e))
     data = _item_data(cur, to, data, fields)
@@ -162,6 +164,9 @@ def set_change(st: Any, d: str, e: dict[str, Any], to: str, data: dict[str, Any]
         if not machine_state("change", cur["state"]).terminal:
             st.transition("change", e["id"], to, cur["version"], data=data, event=event)
     e.update(status=to, **fields)
+    if machine_state("change", cur["state"]).terminal and cur["state"] != to:
+        why = (cur.get("data") or {}).get("why")
+        e.update(status=cur["state"], **({"why": why} if why else {}))
     save_entry(d, e)
 
 
