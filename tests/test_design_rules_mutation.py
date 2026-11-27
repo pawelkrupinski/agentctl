@@ -76,15 +76,22 @@ class DesignRulesMutationTest(unittest.TestCase):
             rc, out = run_test(root)
         self.assertEqual(0, rc, out[-1500:])
 
-    def test_the_rules_test_fails_against_every_mutant(self):
-        survivors = []
-        for name, (path, old, new) in MUTANTS.items():
-            with tempfile.TemporaryDirectory() as root:
-                scratch(root)
-                mutate(root, path, old, new)
-                if run_test(root)[0] == 0:
-                    survivors.append(name)
-        self.assertEqual([], survivors, "mutants tests/test_design_rules.py does not catch")
+
+def mutant_test(name, path, old, new):
+    """One test per mutant: the rules test, run against the copy with this one mutation, must fail. (One test running
+    every mutant in turn took ~45 s of the harness's 60 s per-test bound and timed out under load.)"""
+    def test(self):
+        with tempfile.TemporaryDirectory() as root:
+            scratch(root)
+            mutate(root, path, old, new)
+            rc, out = run_test(root)
+        self.assertNotEqual(0, rc, f"tests/test_design_rules.py does not catch the mutant {name!r}")
+    return test
+
+
+for number, (mutant, (mutant_path, mutant_old, mutant_new)) in enumerate(MUTANTS.items()):
+    setattr(DesignRulesMutationTest, f"test_the_rules_test_fails_against_mutant_{number:02d}",
+            mutant_test(mutant, mutant_path, mutant_old, mutant_new))
 
 
 if __name__ == "__main__":
