@@ -11,9 +11,8 @@ from typing import Optional
 from agentctl.clock import epoch_now
 from agentctl.core import (
     attempt, cherry_landed, commit_known, content_twin, git, git_ok, is_ancestor, process_cache, remote, run_cmd)
-from agentctl.clones import fetch_main
+from agentctl.clones import RED_MAIN_REFETCH, fetch_main
 from agentctl.forge import gh_json
-from agentctl.redfixread import RED_MAIN_REFETCH
 from agentctl.trailers import commit_trailer_values
 
 

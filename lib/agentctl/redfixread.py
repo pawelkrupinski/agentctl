@@ -15,7 +15,7 @@ from agentctl.statefile import read_record, write_json
 from agentctl.repos import red_repo_of
 from agentctl.trailers import commit_trailer_values
 from agentctl.workflows import fix_workflow_jobs
-from agentctl.clones import fetch_main
+from agentctl.clones import RED_MAIN_REFETCH, fetch_main
 
 from agentctl.statemachines import open_states
 
@@ -28,7 +28,6 @@ FIX_OPEN = tuple(open_states("change"))  # an entry of any other status (an old 
 # own clone fetched main only to check or push a change, so a fix pushed from elsewhere -- 548dfb3c76, `Fixes-Red: 181`,
 # landed from the laptop -- was never in it: the red was re-offered after each LANDED and put on the owner. A head of
 # main the snapshot names that the clone has not got is fetched once, before the fixes are read.
-RED_MAIN_REFETCH = 300
 _main_fetched = process_cache({})
 
 

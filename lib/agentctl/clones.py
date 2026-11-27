@@ -70,6 +70,10 @@ def note_clone_suspect(repo: str, error: str) -> Any:
     return False
 
 
+# A head of main a clone lacks is fetched at most once per this many seconds (red_main_current, MainContainment).
+RED_MAIN_REFETCH = 300
+
+
 def fetch_main(repo: str) -> Any:
     """git fetch <the forge remote> main in repo: (ok, git's stderr). A corruption signature marks the clone suspect."""
     r = git(repo, "fetch", "--quiet", remote(), "main", check=False)
