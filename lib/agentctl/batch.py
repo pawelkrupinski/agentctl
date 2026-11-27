@@ -6,26 +6,24 @@ import subprocess
 import sys
 from contextlib import suppress
 from typing import Any
-from agentctl.statefile import read_json_file, write_json_file
 from agentctl.selfcode import TOOL_PATH
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.timefmt import ts
 from agentctl.queueknobs import BACKLOG_BATCH_MAX, knob_backlog_batch_max
 from agentctl.govknobs import CHECK_LEASE_TTL
-from agentctl.core import err, fmt_age, git, remote, spawn_detached
+from agentctl.core import err, git, remote, spawn_detached
 from agentctl.repos import precheck_hook
 from agentctl.generated import without_generated
 from agentctl.waitingdir import ChangeRecords, entry_final, wlog
 from agentctl.storetoken import detached_env
-from agentctl.conditions import open_condition, run_probe
+from agentctl.batchitem import batch_move
 from agentctl.queueslots import check_tree, check_tree_slot, set_change
 from agentctl.queue import VERIFY_MODE, forces_full_recheck, range_paths, verify_supported
 from agentctl.queuerecheck import read_overlap, recheck_reason
 from agentctl.changekind import classify_change, facts_for, kind_text
 from agentctl.waiting import batch_order, must_wait, must_wait_why
 from agentctl.batchrun import assemble
-from agentctl.batchitem import batch_key, batch_move
-from agentctl.queuebatchsel import drift_serialize
+from agentctl.batchselect import drift_serialize
 
 
 # EVERY CHANGE IS A MEMBER (2026-11-20, the owner: "batching waiting changes ... structurally"): an identity change joins

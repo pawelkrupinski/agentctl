@@ -3,29 +3,29 @@
 
 import os
 from typing import Any, List, Optional, Tuple
-from agentctl.core import git, remote, commit_known
-from agentctl.networksignatures import TRANSIENT_PUSH
+from agentctl.core import commit_known, git, remote
 from agentctl.repos import precheck_hook, waiting_supported
-from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
-from agentctl.gating import mark_gate_dirty
 from agentctl.clones import fetch_main
-from agentctl.onmain import landed_state
-from agentctl.land import RACE, REDGATE, land_lock_if_free, push_argv, push_bounds, run_watched, tool_env
-from agentctl.queueslots import PUSH_ATTEMPTS_MAX, check_tree, queue_verdict, set_change, tree_slot
+from agentctl.generated import regen_owed, without_generated
+from agentctl.networksignatures import TRANSIENT_PUSH
+from agentctl.gating import mark_gate_dirty
+from agentctl.waitingdir import ChangeRecords, waiting_state, wlog
 from agentctl.conditions import open_condition, run_probe
+from agentctl.land import RACE, REDGATE, land_lock_if_free, push_argv, push_bounds, run_watched, tool_env
+from agentctl.queuefailure import Entry, keys_text
+from agentctl.onmain import landed_state
+from agentctl.landwatch import start_watch
+from agentctl.conflicts import conflict_cause, conflict_paths, union_safe
+from agentctl.queueslots import PUSH_ATTEMPTS_MAX, check_tree, queue_verdict, set_change, tree_slot
 from agentctl.queue import (
     VERIFY_MODE, hook_query, module_overlap, range_paths, verify_areas_supported, verify_supported)
-from agentctl.generated import regen_owed, without_generated
-from agentctl.conflicts import conflict_cause, conflict_paths, union_safe
 from agentctl.queuerecheck import own_diff_changed, read_overlap, recheck_logged, recheck_reason
 from agentctl.redfixes import fixes_of
-from agentctl.changekind import facts_for
 from agentctl.redland import may_land_on_red
+from agentctl.changekind import facts_for
 from agentctl.waiting import already_landed, apply_entry, must_wait, tail_of, waiting_commits
-from agentctl.landwatch import start_watch
 from agentctl.redseen import gate_reds
-from agentctl.queuebatch import queue_join
-from agentctl.queuefailure import Entry, keys_text
+from agentctl.entrychecks import queue_join
 
 
 def push_change(repo: str, d: str, e: Entry, clock: Any, st: Any) -> Optional[str]:

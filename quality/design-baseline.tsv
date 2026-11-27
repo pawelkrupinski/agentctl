@@ -54,6 +54,7 @@ effect	lib/agentctl/cleanup.py	3
 effect	lib/agentctl/config.py	1
 effect	lib/agentctl/core.py	2
 effect	lib/agentctl/culpritfix.py	1
+effect	lib/agentctl/entrychecks.py	1
 effect	lib/agentctl/fixerblockers.py	1
 effect	lib/agentctl/fixerenv.py	1
 effect	lib/agentctl/fixerland.py	1
@@ -88,7 +89,6 @@ effect	lib/agentctl/ownerwrapper.py	2
 effect	lib/agentctl/processorlink.py	1
 effect	lib/agentctl/procs.py	1
 effect	lib/agentctl/procwatch.py	1
-effect	lib/agentctl/queuebatch.py	1
 effect	lib/agentctl/queueenter.py	1
 effect	lib/agentctl/queueuntil.py	1
 effect	lib/agentctl/recovery.py	1
@@ -151,11 +151,11 @@ state	lib/agentctl/netwatch.py	1
 state	lib/agentctl/notifier.py	1
 state	lib/agentctl/onmain.py	3
 state	lib/agentctl/outsideflows.py	1
+state	lib/agentctl/overlapcheck.py	2
 state	lib/agentctl/owned.py	4
 state	lib/agentctl/policy.py	1
 state	lib/agentctl/processor.py	1
 state	lib/agentctl/procrunner.py	1
-state	lib/agentctl/queuebatch.py	2
 state	lib/agentctl/queueenter.py	1
 state	lib/agentctl/queuerecheck.py	1
 state	lib/agentctl/queuesubmit.py	1
@@ -184,10 +184,11 @@ import-io	devtools/selfpush.py	1
 import-io	quality/tools.py	1
 fanout	lib/agentctl/alertprobe.py	12
 fanout	lib/agentctl/ask.py	11
-fanout	lib/agentctl/batch.py	19
+fanout	lib/agentctl/batch.py	17
 fanout	lib/agentctl/batchcheck.py	17
 fanout	lib/agentctl/batchpush.py	15
 fanout	lib/agentctl/batchrun.py	15
+fanout	lib/agentctl/batchselect.py	10
 fanout	lib/agentctl/batchtick.py	16
 fanout	lib/agentctl/blame.py	13
 fanout	lib/agentctl/blamerecords.py	16
@@ -200,6 +201,7 @@ fanout	lib/agentctl/cleanup.py	14
 fanout	lib/agentctl/cli.py	55
 fanout	lib/agentctl/cliparser.py	10
 fanout	lib/agentctl/culpritfix.py	15
+fanout	lib/agentctl/entrychecks.py	13
 fanout	lib/agentctl/fixerland.py	20
 fanout	lib/agentctl/fixerlife.py	26
 fanout	lib/agentctl/fixerprompt.py	11
@@ -229,11 +231,10 @@ fanout	lib/agentctl/ownerwrapper.py	23
 fanout	lib/agentctl/processor.py	27
 fanout	lib/agentctl/projector.py	14
 fanout	lib/agentctl/queue.py	11
-fanout	lib/agentctl/queuebatch.py	21
 fanout	lib/agentctl/queuecheck.py	17
 fanout	lib/agentctl/queuediff.py	21
 fanout	lib/agentctl/queueenter.py	28
-fanout	lib/agentctl/queuepush.py	17
+fanout	lib/agentctl/queuepush.py	18
 fanout	lib/agentctl/queuesubmit.py	11
 fanout	lib/agentctl/recovery.py	15
 fanout	lib/agentctl/redblock.py	15

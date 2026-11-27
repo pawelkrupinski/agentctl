@@ -15,10 +15,10 @@ from agentctl.changekind import facts_for
 from agentctl.waiting import must_wait, waiting_commits
 from agentctl.gov import gov_class_of
 from agentctl.redseen import gate_reds
-from agentctl.queuebatch import run_entry_checks
 from agentctl.queuecheck import (
     adopted_run, check_mode, commits_here, fetched_main, judge_check_failure, requeued_for_infra, round_ended,
     round_head, tip_refused)
+from agentctl.entrychecks import run_entry_checks
 
 
 def check_entry(repo: str, eid: str, clock: Clock, store: Any) -> int:

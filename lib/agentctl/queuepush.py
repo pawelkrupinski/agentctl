@@ -20,11 +20,11 @@ from agentctl.queuerecheck import same_change_source
 from agentctl.changekind import classify_change, classify_queue, facts_for, facts_tick, kind_order, record_change_kind
 from agentctl.waiting import supersede
 from agentctl.redseen import gate_reds
-from agentctl.queuebatch import (
-    OverlapHold, _behind_said, hold_for_overlap, main_conflict, overlap_hold, spawn_executor)
-from agentctl.queuediff import push_change
-from agentctl.queuebatchsel import backlog_held, push_held
 from agentctl.changelap import lap_change_deadline, regen_hold_overdue
+from agentctl.overlapcheck import OverlapHold, _behind_said, hold_for_overlap, main_conflict, overlap_hold
+from agentctl.entrychecks import spawn_executor
+from agentctl.queuediff import push_change
+from agentctl.batchselect import backlog_held, push_held
 
 
 # THE OLDEST VERIFICATION PUSHES FIRST (2026-11-16, workermem: fully checked by 09:15, then its combined tree verified

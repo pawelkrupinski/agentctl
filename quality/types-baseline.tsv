@@ -11,6 +11,7 @@ mypy-errors	batchcheck	29
 mypy-errors	batchitem	11
 mypy-errors	batchpush	18
 mypy-errors	batchrun	26
+mypy-errors	batchselect	19
 mypy-errors	batchtick	36
 mypy-errors	beats	4
 mypy-errors	blame	39
@@ -38,6 +39,7 @@ mypy-errors	configfile	8
 mypy-errors	conflicts	24
 mypy-errors	core	21
 mypy-errors	culpritfix	29
+mypy-errors	entrychecks	14
 mypy-errors	explorer	15
 mypy-errors	fixerblockers	4
 mypy-errors	fixerenv	3
@@ -91,6 +93,7 @@ mypy-errors	orphanpass	7
 mypy-errors	orphanreap	28
 mypy-errors	orphans	15
 mypy-errors	outsideflows	12
+mypy-errors	overlapcheck	24
 mypy-errors	owned	38
 mypy-errors	owner	24
 mypy-errors	ownerleases	23
@@ -104,8 +107,6 @@ mypy-errors	processorlink	16
 mypy-errors	procwatch	2
 mypy-errors	projector	15
 mypy-errors	queue	23
-mypy-errors	queuebatch	38
-mypy-errors	queuebatchsel	19
 mypy-errors	queuecheck	28
 mypy-errors	queuediff	29
 mypy-errors	queueenter	72

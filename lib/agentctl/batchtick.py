@@ -4,18 +4,18 @@
 from typing import Any, NamedTuple
 from agentctl.statemachines import machine_state
 from agentctl.timefmt import ts
-from agentctl.core import err, git, remote
+from agentctl.core import git, remote
 from agentctl.waitingdir import ChangeRecords
 from agentctl.batchitem import batch_fail, batch_move, current_batch, new_batch
 from agentctl.leases import lease_live
+from agentctl.landhold import land_hold
 from agentctl.queueslots import check_tree, check_tree_slot, set_change
 from agentctl.queuerecheck import recheck_logged
 from agentctl.redland import may_land_on_red
-from agentctl.landhold import land_hold
 from agentctl.changekind import facts_for, facts_tick
 from agentctl.batchrun import assemble, unread_note
 from agentctl.redseen import gate_reds
-from agentctl.queuebatchsel import backlog_candidates, backlog_min, push_candidates
+from agentctl.batchselect import backlog_candidates, backlog_min, push_candidates
 from agentctl.batch import (
     backlog_reconcile, batch_kind, batch_ready, batch_round_depth, green_batch_depth, red_precheck,
     release_red_fixes, spawn_batch_executor, union_base)

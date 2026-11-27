@@ -1,16 +1,33 @@
-# agentctl, part `queuebatchsel`: which checked or queued changes a backlog batch or a push batch takes
+# agentctl, part `batchselect`: which queued changes make a batch: the backlog and push batches, their candidates and the rounds
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
+from agentctl.clock import epoch_now
+from agentctl.waitingdir import ChangeRecords
+from agentctl.changekind import classify_change, facts_for
+from agentctl.overlapcheck import backlog_batchable, kind_of, overlap_hold
 from agentctl.holdgraph import push_due
 from agentctl.queueknobs import knob_backlog_batch_max, knob_backlog_batch_min, knob_push_batch_min
 from agentctl.core import git, remote
+from agentctl.batchitem import current_batch
 from agentctl.queueslots import checker_alive
 from agentctl.queuerecheck import verdict_kept
 from agentctl.identitychange import identity_model_commits
-from agentctl.changekind import classify_change
-from agentctl.queuebatch import batch_queued, batch_round, kind_of
-from agentctl.batchitem import current_batch
+
+
+def batch_queued(st: Any, repo: str, d: str, entries: list[dict[str, Any]], facts: dict[str, Any] | None,
+                 t: float) -> list[dict[str, Any]]:
+    """The queued, not-yet-checked entries a batch may take now (backlog_batchable, held behind no change outside it),
+    oldest first."""
+    return sorted((e for e in entries if backlog_batchable(st, repo, d, e, t, facts)
+                   and not overlap_hold(st, repo, d, e, entries, facts, t)), key=lambda e: e["seq"])
+
+
+def batch_round(d: str, reds: set[str], st: Any, t: float | None,
+                facts: dict[str, Any] | None) -> tuple[float, Any, list[dict[str, Any]]]:
+    """What a backlog or push batch's round reads at a green gate: (now, the queue's facts -- queue_facts, read from
+    the store when None --, its queued entries)."""
+    return (t if t is not None else epoch_now()), (facts_for(reds, st) if facts is None else facts), ChangeRecords(st, d).queued()
 
 
 def backlog_min():
