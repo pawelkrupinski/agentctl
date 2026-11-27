@@ -1,5 +1,6 @@
 """The tick's upkeep (2026-10-29: a full disk -- 109 proven-merged idle worktrees and 3,009 leaked test dirs): the
 standing-OK cleanup, ended fixers' trees of closed reds, the test suite's old temp dirs."""
+from functools import partial
 import json, os, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -113,18 +114,22 @@ class RunQueueTest(unittest.TestCase):
     def tearDown(self):
         os.environ["AGENTCTL_MACHINE"] = self.saved
 
+    @property
+    def probe(self):
+        return partial(A.probe_run_queue, load_averages=A.run_queues, cores=A.machine_cores)
+
     def test_the_probe_fails_only_over_three_times_the_cores(self):
-        self.assertFalse(A.run_probe(A.probe_run_queue, {"factor": 3.0}).ok)
+        self.assertFalse(A.run_probe(self.probe, {"factor": 3.0}).ok)
         os.environ["AGENTCTL_MACHINE"] = json.dumps(dict(json.loads(self.saved), cores=18, load1=100.0, load5=50.0))
-        self.assertTrue(A.run_probe(A.probe_run_queue, {"factor": 3.0}).ok)
+        self.assertTrue(A.run_probe(self.probe, {"factor": 3.0}).ok)
 
     def test_wl_opens_only_after_ten_minutes_and_is_an_invariant(self):
         store = A.CurrentStore(A.process_store)
         self.assertEqual(A.RUN_QUEUE_ESCALATE_AFTER, 600)
-        self.assertEqual(A._run_queue_invariant(store), [], "the first sighting: pending, a burst opens nothing")
+        self.assertEqual(A._run_queue_invariant(store, A.run_queues, A.machine_cores), [], "the first sighting: pending, a burst opens nothing")
         saved, A.RUN_QUEUE_ESCALATE_AFTER = A.RUN_QUEUE_ESCALATE_AFTER, 0
         try:
-            self.assertTrue(A._run_queue_invariant(store)[0].startswith("WL: "))
+            self.assertTrue(A._run_queue_invariant(store, A.run_queues, A.machine_cores)[0].startswith("WL: "))
         finally:
             A.RUN_QUEUE_ESCALATE_AFTER = saved
         [c] = [c for c in A.open_conditions(store) if c["key"] == "run-queue"]

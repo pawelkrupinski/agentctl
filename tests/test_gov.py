@@ -110,6 +110,9 @@ class GovernorTest(unittest.TestCase):
     def set_busy(self, cores):
         os.environ["AGENTCTL_GOV_BUSY_PROBE"] = f"echo {cores}"
 
+    def m18(self):
+        return {"cores": 18, "queues": A.run_queues()}
+
     def machine(self, load1, load5, cores=18):
         os.environ["AGENTCTL_MACHINE"] = json.dumps({"ram_gb": 36, "free_gb": 20, "pressure": 40, "swap_used_mb": 0,
             "swap_total_mb": 0, "load1": load1, "load5": load5, "cores": cores, "free_pct": 60, "level": 1})
@@ -120,7 +123,7 @@ class GovernorTest(unittest.TestCase):
         a burst (5-min low) is not; resumes only under LAPTOP_LOAD x the cores."""
         self.set_busy(13.6)
         self.machine(100, 100)
-        cap = A.gov_capacity(tickets=[], m={"cores": 18})
+        cap = A.gov_capacity(tickets=[], m=self.m18())
         self.assertEqual(cap["state"], "starved")
         self.assertIsNone(self.admit("agent", 1), "paused on the run queue")
         self.assertIsNone(self.admit("check", 1))
@@ -129,11 +132,11 @@ class GovernorTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("run queue 100", why)
         self.machine(100, 10)
-        self.assertEqual(A.gov_capacity(tickets=[], m={"cores": 18})["state"], "starved", "kept: 1-min still over 2x")
+        self.assertEqual(A.gov_capacity(tickets=[], m=self.m18())["state"], "starved", "kept: 1-min still over 2x")
         self.machine(30, 60)
-        self.assertEqual(A.gov_capacity(tickets=[], m={"cores": 18})["state"], "ok", "under 2x: resumed")
+        self.assertEqual(A.gov_capacity(tickets=[], m=self.m18())["state"], "ok", "under 2x: resumed")
         self.machine(100, 20)
-        self.assertEqual(A.gov_capacity(tickets=[], m={"cores": 18})["state"], "ok", "a burst: the 5-min load is low")
+        self.assertEqual(A.gov_capacity(tickets=[], m=self.m18())["state"], "ok", "a burst: the 5-min load is low")
 
     def test_pause_when_starved_resume_below_the_low_mark(self):
         """The owner, 2026-11-19: "if cpu is starved then pause until we have enough resources and resume when we have
@@ -620,7 +623,7 @@ class MachineCpuTest(unittest.TestCase):
         # an 18-core machine all busy -- never the runner's own core count (a 2-core GitHub runner read as `spare`)
         A.machine_busy_cores, A.machine_cores = (lambda n, **k: float(n)), (lambda: 18)
         try:
-            cap = A.gov_capacity(tickets=[], m={"cores": 18})
+            cap = A.gov_capacity(tickets=[], m=self.m18())
         finally:
             A.machine_busy_cores, A.machine_cores = saved
         self.assertEqual((cap["state"], cap["measured"]), ("starved", 18.0))

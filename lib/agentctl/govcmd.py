@@ -95,7 +95,8 @@ def gov_evict_cmd(a: Any) -> int:
 
 
 def gov_capacity_cmd(a: Any) -> int:
-    cap, tickets = gov_capacity(), gov_tickets()
+    tickets = gov_tickets()
+    cap = gov_capacity(tickets, gov_machine())
     print(f"{cap['state']}: {cap['busy']:.1f} of {cap['cores']} cores busy ({cap['charged']:g} charged, "
           f"{cap['measured']:.1f} measured, load {machine_load1():.1f}); {len(tickets)} admitted, "
           f"{len(gov_waiters())} waiting")

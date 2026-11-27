@@ -16,7 +16,7 @@ from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json, note_failure, unlink_file
 from agentctl.procs import proc_alive, process_start
 from agentctl.filelock import lock_held
-from agentctl.machine import free_gb, machine_cores, machine_sample
+from agentctl.machine import free_gb, machine_cores, machine_sample, run_queues
 from agentctl.filelog import file_event, note_event, note_events
 from agentctl.causes import governor_cause
 from agentctl.govtickets import gov_bump, gov_change_mark, gov_dir, gov_log, gov_log_end, gov_tickets, gov_wait_change
@@ -72,7 +72,7 @@ GOV_REPORT = 600
 
 
 def gov_machine():
-    """{free, pressure, load1, cores, laptop}: live memory and CPU, and why the laptop is under pressure (laptop_pressure
+    """{free, pressure, load1, cores, queues (1- and 5-min load), laptop}: live memory and CPU, and why the laptop is under pressure (laptop_pressure
     without the load: each class has its own) ($AGENTCTL_GOV_PRESSURE_PROBE / _LOAD_PROBE: the tests')."""
     load1, _cpu, pressure, _swap = machine_sample()
     if os.environ.get("AGENTCTL_GOV_PRESSURE_PROBE"):
@@ -83,7 +83,7 @@ def gov_machine():
         laptop = laptop_pressure(None if knob_laptop_pressure() is not None else pressure_reading(), load=False)
     except Exception:
         laptop = None
-    return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": machine_cores(), "laptop": laptop}
+    return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": machine_cores(), "queues": run_queues(), "laptop": laptop}
 
 
 GOV_ALIVE_TTL = 60.0    # s a waiter's start time, once read, vouches for its pid

@@ -5,6 +5,7 @@ from agentctl.clock import epoch_now
 from agentctl.filelock import FileLock
 from collections.abc import Iterator
 import glob
+from functools import partial
 import os
 import subprocess
 import sys
@@ -36,9 +37,9 @@ def probe_disk_free(a):
     return free >= floor, f"{free:.1f} GB free on {a.get('path') or HOME}"
 
 
-def probe_run_queue(a):
+def probe_run_queue(a, load_averages, cores):
     """The run queue (5-min load) is under `factor` x the cores: false while it is over it."""
-    queues, n = run_queues(), machine_cores()
+    queues, n = load_averages(), cores()
     if not queues:
         return None, "the load average is unreadable"
     return queues[1] <= float(a["factor"]) * n, f"run queue {queues[0]:.0f} (5-min {queues[1]:.0f}) on {n} cores"
@@ -104,11 +105,11 @@ def _disk_invariant(store: Any, pr: Any, min_gb: Any, low: Any) -> Any:
     return [f"WD: {pr.detail}"]
 
 
-def _run_queue_invariant(store: Any) -> list[str]:
+def _run_queue_invariant(store: Any, load_averages: Any, cores: Any) -> list[str]:
     """WL, the run-queue invariant (2026-11-27: 91/118/120 on 18 cores): the 5-min load over RUN_QUEUE_ESCALATE x the
     cores for RUN_QUEUE_ESCALATE_AFTER s is an INVARIANT condition for the owner and the agents, whose heavy work the
     governor already holds meanwhile (gov_capacity); it closes by itself when the queue falls."""
-    pr = run_probe(probe_run_queue, {"factor": RUN_QUEUE_ESCALATE})
+    pr = run_probe(partial(probe_run_queue, load_averages=load_averages, cores=cores), {"factor": RUN_QUEUE_ESCALATE})
     if pr.ok is not False:
         return []
     cond = open_condition("INVARIANT", f"INVARIANT WL: the CPU is oversubscribed -- {pr.detail}, over "
@@ -126,7 +127,7 @@ def maybe_upkeep(store, now_=None):
     min_gb = knob_disk_min_gb()
     pr = run_probe(probe_disk_free, {"path": knob_disk_path() or HOME, "min_gb": min_gb})
     low = pr.ok is False
-    out = _run_queue_invariant(store)
+    out = _run_queue_invariant(store, run_queues, machine_cores)
     if t - _last_upkeep[0] >= knob_upkeep_every() or (low and t - _last_upkeep[0] >= 600):
         _last_upkeep[0] = t
         # in its thread (minutes of git): the tick goes on; it logs to upkeep.log

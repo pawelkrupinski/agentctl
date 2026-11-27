@@ -7,7 +7,7 @@ from typing import Any
 from agentctl.statefile import read_record, write_json
 from agentctl.clock import wall_epoch
 from agentctl.cpu import GOV_SATURATED, RUNQ_STARVED, runq_oversubscribed
-from agentctl.machine import machine_cores, run_queues
+from agentctl.machine import machine_cores
 from agentctl.govtickets import gov_dir, gov_log, gov_tickets
 from agentctl.govbudget import checks_cap, gov_budget
 from agentctl.pressure import gov_busy_cores
@@ -68,7 +68,7 @@ def gov_capacity(tickets: list[dict[str, Any]] | None = None, m: dict[str, Any] 
     busy = max(charged, measured)
     path = os.path.join(gov_dir(), "capacity.json")
     prev = (read_record(path) or {}).get("state", "ok")
-    queues = run_queues()
+    queues = (m or {}).get("queues")  # the run queue the caller read (gov_machine): no ambient read here
     state = _capacity_state(busy, measured, n, prev, queues)
     if state != prev:
         with suppress(OSError):
