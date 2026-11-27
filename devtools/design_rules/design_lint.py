@@ -12,15 +12,25 @@ stateful singletons; a tool's `main()` / a page's `init()` is its composition ro
   import-io  effects run when the module is LOADED, outside any function and the main guard: module-level code does no
              IO, the root does
 
-Each is a row per module (its count), frozen in test/resources/design-baseline.tsv: what is there today may only fall."""
+  mixed      a FUNCTION that both performs an effect -- an injected one directly (model.INJECTED), or a call into an
+             adapter module (`tool_git.Git.here()`, a resolved import of one) -- and decides: its cyclomatic
+             complexity at the `mixed-cyclomatic` limit or past it (3: a loop holding a branch, two branches). Outside
+             the adapter modules, whose functions ARE the leaves; and not a composition root (`main`, a page's
+             `init`), which wires the adapters. Split it: the decision up (pure, the adapter its parameter), the IO
+             down. A row `mixed <file>:<function>`, its value the function's cyclomatic complexity
+             (the owner, 2026-11-27: "move side effects to leaves, with fake implementations for testing")
+
+Each is a row per module (its count) or function, frozen in test/resources/design-baseline.tsv: what is there today
+may only fall."""
 from __future__ import annotations
 
-from typing import Iterable, List, Tuple
+from typing import Dict, FrozenSet, Iterable, List, Tuple
 
-from model import INJECTED_BY_KIND, INJECTED_BY_USE, Module
+from model import INJECTED, INJECTED_BY_KIND, INJECTED_BY_USE, Function, Module
 from rules_table import Rules
 
 Row = Tuple[str, str, float]
+COMPOSITION_ROOTS = ("main", "init")
 
 
 def rows(modules: Iterable[Module], rules: Rules) -> List[Row]:
@@ -31,6 +41,7 @@ def rows(modules: Iterable[Module], rules: Rules) -> List[Row]:
             out.append(("state", m.path, len(m.state)))
         if m.import_io:
             out.append(("import-io", m.path, m.import_io))
+        out += mixed_rows(m, rules)
     return out
 
 
@@ -44,3 +55,43 @@ def effect_rows(m: Module, rules: Rules) -> List[Row]:
         out.append(("effect", m.path, len(touched)))
     out += [("effect", f"{m.path}:{kind}", direct[kind]) for kind in INJECTED_BY_USE if kind in direct]
     return out
+
+
+def dotted_module(path: str) -> str:
+    """`scripts/lib/tool_git.py` -> `scripts.lib.tool_git`: a module path and an import's dotted name compared alike."""
+    stem = path.rsplit(".", 1)[0] if "/" in path or path.endswith((".py", ".js", ".ts")) else path
+    return stem.replace("/", ".")
+
+
+def into_adapter(call: str, adapters: FrozenSet[str]) -> bool:
+    """Whether a call's dotted name (or resolved path) starts with an adapter module's name: its whole dotted path, or
+    its trailing segments (`tool_git` for scripts/lib/tool_git.py, imported from beside it)."""
+    parts = dotted_module(call).split(".")
+    prefixes = {".".join(parts[:n]) for n in range(1, len(parts) + 1)}
+    return any(a == p or a.endswith("." + p) for a in adapters for p in prefixes)
+
+
+def effectful(f: Function, adapters: FrozenSet[str]) -> bool:
+    return any(f.effects.get(kind) for kind in INJECTED) or any(into_adapter(c, adapters) for c in f.calls)
+
+
+def adapter_names(rules: Rules, language: str) -> FrozenSet[str]:
+    return frozenset(dotted_module(module) for lang, module in rules.adapters if lang == language)
+
+
+def is_adapter(m: Module, rules: Rules) -> bool:
+    return any(language == m.language and module == m.path for language, module in rules.adapters)
+
+
+def mixed_rows(m: Module, rules: Rules) -> List[Row]:
+    """The functions of `m` mixing an effect with decisions (`mixed`, above); none in an adapter module."""
+    if is_adapter(m, rules):
+        return []
+    adapters = adapter_names(rules, m.language)
+    limit = rules.limit("mixed-cyclomatic")
+    found: Dict[str, int] = {}
+    for f in m.functions:
+        if f.name not in COMPOSITION_ROOTS and f.cyclomatic >= limit and effectful(f, adapters):
+            key = f"{m.path}:{f.name}"
+            found[key] = max(found.get(key, 0), f.cyclomatic)
+    return [("mixed", key, n) for key, n in sorted(found.items())]

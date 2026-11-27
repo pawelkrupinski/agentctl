@@ -39,6 +39,11 @@ MUTANTS = {
     "no exemptions": ("quality/design.py", "return limits + [r for r in found if (r[0], r[1]) not in admitted]", "return limits + found"),
     "permutations allowed": ("quality/design.py", "if (package, frozenset(names)) not in ALLOWED_PERMUTATIONS:", "if False:"),
     "a stdlib namesake is an import": ("quality/design.py", "if os.path.dirname(path) != LIBRARY and sibling in known:", "if sibling in known:"),
+    "no mixed rule": (CORE + "design_lint.py", "        out += mixed_rows(m, rules)\n", ""),
+    "a composition root is mixed": (CORE + "design_lint.py", "f.name not in COMPOSITION_ROOTS and ", ""),
+    "an adapter's functions are mixed": (CORE + "design_lint.py", "    if is_adapter(m, rules):\n        return []\n", ""),
+    "no split credit": ("quality/ratchet.py", "split_check=design.split_check(root)", "split_check=None"),
+    "the split credit trusts any read": (CORE + "splits.py", "foreign = read_from(after, piece) - (moved & read_from(before, x))", "foreign = set()"),
     "a permutation does not refuse": ("quality/ratchet.py", "            print(line)\n            ok = False", "            print(line)"),
 }
 

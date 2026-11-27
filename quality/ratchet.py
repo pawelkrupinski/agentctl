@@ -26,6 +26,7 @@ each commit of a range is judged by its own step; one commit's trailer never exc
                                              fanout, distance, layer, ...        Coupling:   vendored)
 """
 import contextlib
+import dataclasses
 import io
 import os
 import sys
@@ -106,6 +107,12 @@ def in_checkout(root):
         os.chdir(here)
 
 
+def spec_of(root, ratchet):
+    """The ratchet's spec, the design one with the split credit judging a `Coupling: split of` commit's importers."""
+    spec = SPECS[ratchet]
+    return dataclasses.replace(spec, split_check=design.split_check(root)) if ratchet == "design" else spec
+
+
 def check(root, ranges=(), **measured):
     current = current_rows(root, **measured)
     ok = True
@@ -115,7 +122,7 @@ def check(root, ranges=(), **measured):
             ok = False
             continue
         with in_checkout(root):
-            ok = baseline_ratchet.check(SPECS[ratchet], rows, list(ranges)) and ok
+            ok = baseline_ratchet.check(spec_of(root, ratchet), rows, list(ranges)) and ok
     if "design" in current:
         for line in refused_by_design(root, ranges):
             print(line)
@@ -156,6 +163,7 @@ SEEDED_DESIGN = {
     "direct_clock": "import time\n\n\ndef now():\n    return time.time()\n",  # effect
     "stateful": "CACHE = {}\n\n\ndef remember(key):\n    CACHE[key] = 1\n",  # state
     "loads_io": "import os\n\nHERE = os.listdir('.')\n",  # import-io
+    "runs_each": "import subprocess\n\n\ndef run_each(items):\n    for item in items:\n        if item:\n            subprocess.run([item])\n",  # mixed
 }
 
 

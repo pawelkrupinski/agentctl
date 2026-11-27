@@ -3,7 +3,7 @@ through the Python extractor -- naming (suffix, abbreviation, idiom, the blocked
 collaborator and the collaborator-only fan-out, the data guard, distance with V2 abstractness, layers, the design lint
 (adapters, state, import-time IO, the main guard), the exemption lint -- and the ratchet holding the frozen rows.
 DESIGN_RULES_UNDER_TEST names another copy of the checkout (tests/test_design_rules_mutation.py's)."""
-import ast, contextlib, io, os, sys, tempfile, unittest
+import ast, contextlib, io, os, subprocess, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -23,7 +23,7 @@ import rules_table  # noqa: E402
 
 RULES = rules_table.parse("\n".join([
     "limit\tfanout\t2\tpy", "limit\tdistance\t0.2\tpy", "limit\tdistance-min-modules\t2\tpy",
-    "limit\tdata-methods\t4\tpy", "limit\tdata-decisions\t9\tpy", "limit\tdatabag\t9\tpy", "limit\tdatafanout\t2\tpy",
+    "limit\tmixed-cyclomatic\t3\tpy", "limit\tdata-methods\t4\tpy", "limit\tdata-decisions\t9\tpy", "limit\tdatabag\t9\tpy", "limit\tdatafanout\t2\tpy",
     "suffix\tHandler", "suffix\tImpl", "abbreviation\tcfg", "abbreviation\targs", "idiom\targs",
     "adapter\tpy\tlib/agentctl/clock.py\tclock", "distance\tpy\tlib/agentctl",
     "layer\tpy\tlib/agentctl\t0\tmodules", "layer\tpy\ttools\t1\ttools"]))
@@ -135,6 +135,19 @@ class DesignLintTest(unittest.TestCase):
         self.assertNotIn(("import-io", "x.py"), self.rows("x.py", "import os\n\ndef f():\n    return os.listdir('.')\n\nif __name__ == '__main__':\n    os.listdir('.')\n"))
 
 
+    def test_a_function_doing_io_and_deciding_is_a_mixed_row_and_a_root_an_adapter_or_a_plain_call_is_not(self):
+        each = "import subprocess\n\ndef {name}(items):\n    for item in items:\n        if item:\n            subprocess.run([item])\n"
+        self.assertEqual(3, self.rows("lib/agentctl/x.py", each.format(name="run_each"))[("mixed", "lib/agentctl/x.py:run_each")])
+        self.assertNotIn(("mixed", "lib/agentctl/x.py:main"), self.rows("lib/agentctl/x.py", each.format(name="main")))
+        self.assertNotIn(("mixed", "lib/agentctl/x.py:f"), self.rows("lib/agentctl/x.py", "import subprocess\n\ndef f(a):\n    if a:\n        subprocess.run([a])\n"))
+        clock = "import time\n\ndef wait(items):\n    for item in items:\n        if item:\n            time.sleep(item)\n"
+        self.assertNotIn(("mixed", "lib/agentctl/clock.py:wait"), self.rows("lib/agentctl/clock.py", clock))
+
+    def test_a_call_into_an_adapter_module_is_an_effect_of_the_caller(self):
+        caller = "from agentctl import clock\n\ndef wait(items):\n    for item in items:\n        if item:\n            clock.now()\n"
+        self.assertIn(("mixed", "lib/agentctl/x.py:wait"), self.rows("lib/agentctl/x.py", caller))
+
+
 class ExemptionTest(unittest.TestCase):
     def test_a_row_needs_a_date_and_a_specific_role_led_reason(self):
         text = ("effect\tlib/agentctl/x.py\t2026-11-26\tprocess adapter: runs every git command for the land path and needs the subprocess module\n"
@@ -210,12 +223,73 @@ class RatchetTest(unittest.TestCase):
             self.assertNotIn(("effect", "lib/agentctl/leaky.py"), found)
             self.assertIn(("effect", "lib/agentctl/leaky2.py"), found)
 
+    def test_the_real_rules_table_measures_mixed_functions_under_the_design_trailer(self):
+        with tempfile.TemporaryDirectory() as root:
+            seed(root, {"lib/agentctl/each.py": "import subprocess\n\ndef run_each(items):\n    for item in items:\n        if item:\n            subprocess.run([item])\n"})
+            found = kinds(design.rows(root))
+        self.assertEqual(3, found[("mixed", "lib/agentctl/each.py:run_each")])
+        self.assertEqual(0, found[("limit", "mixed")])
+        self.assertIn("mixed", design.TRAILERS["Design"])
+
     def test_the_selftests_seeded_tree_has_every_design_kind_and_a_blocked_clash(self):
         with tempfile.TemporaryDirectory() as root:
             ratchet.seed_tree(root)
             kinds_found = {k for k, _ in ratchet.current_rows(root, which=("design",))["design"] if k != "limit"}
-            self.assertGreaterEqual(kinds_found, {"suffix", "abbreviation", "effect", "state", "import-io", "fanout"})
+            self.assertGreaterEqual(kinds_found, {"suffix", "abbreviation", "effect", "state", "import-io", "mixed", "fanout"})
             self.assertTrue(design.permutations(root))
+
+
+def git(root, *args):
+    return subprocess.run(["git", "-C", root, *args], capture_output=True, text=True, check=True).stdout.strip()
+
+
+COLLABORATOR = "import time\n\ndef {name}():\n    return time.time()\n"
+CORE = "import subprocess, time\n\ndef run(argv):\n    return subprocess.run(argv)\n\ndef now():\n    return time.time()\n"
+OTHERS = [f"c{i}" for i in range(8)]
+USES = "".join(f"from agentctl.{n} import {n}_name\n" for n in OTHERS)
+
+
+def user(reads):
+    """An importer at the fan-out limit (core and eight collaborators), reading `reads` = [(module, name)]."""
+    imports = "".join(f"from agentctl.{m} import {n}\n" for m, n in reads)
+    calls = "".join(f"    {n}()\n" for _m, n in reads) + "".join(f"    {n}_name()\n" for n in OTHERS)
+    return USES + imports + f"\n\ndef work():\n{calls}"
+
+
+class SplitCreditTest(unittest.TestCase):
+    """THE SPLIT CREDIT (the vendored splits.py through design.split_check): a `Coupling: split of core into gitrepo`
+    commit may raise an importer's fan-out by the piece it now imports, only where what it reads there moved from core."""
+
+    def history(self, root, piece, reads):
+        os.makedirs(os.path.join(root, "lib", "agentctl"))
+        git(root, "init", "-q", "-b", "main")
+        seed(root, {"lib/agentctl/core.py": CORE, "lib/agentctl/user.py": user([("core", "run"), ("core", "now")]),
+                    **{f"lib/agentctl/{n}.py": COLLABORATOR.format(name=f"{n}_name") for n in OTHERS}})
+        RatchetTest.freeze(None, root)
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "base")
+        seed(root, {"lib/agentctl/core.py": "import time\n\ndef now():\n    return time.time()\n",
+                    "lib/agentctl/gitrepo.py": piece, "lib/agentctl/user.py": user(reads)})
+        RatchetTest.freeze(None, root)
+        self.assertIn(("fanout", "lib/agentctl/user.py"), kinds(design.rows(root)))  # 9 -> 10: the piece
+        git(root, "add", "-A")
+        git(root, "commit", "-q", "-m", "split\n\nDesign: the piece is the git leaf\nCoupling: split of core into gitrepo")
+        with ratchet.in_checkout(root), contextlib.redirect_stdout(io.StringIO()) as out:
+            status = ratchet.check(root, ["HEAD^..HEAD"], which=("design",))
+        return status, out.getvalue()
+
+    def test_an_importer_reading_moved_code_from_the_piece_is_credited(self):
+        piece = "import subprocess\n\ndef run(argv):\n    return subprocess.run(argv)\n"
+        with tempfile.TemporaryDirectory() as root:
+            status, out = self.history(root, piece, [("gitrepo", "run"), ("core", "now")])
+        self.assertEqual(0, status, out)
+
+    def test_an_importer_reading_new_code_from_the_piece_is_refused(self):
+        piece = "import subprocess\n\ndef run(argv):\n    return subprocess.run(argv)\n\ndef fresh(argv):\n    return subprocess.run(argv)\n"
+        with tempfile.TemporaryDirectory() as root:
+            status, out = self.history(root, piece, [("gitrepo", "fresh"), ("core", "now")])
+        self.assertEqual(1, status, out)
+        self.assertIn("reads fresh from", out)
 
 
 if __name__ == "__main__":
