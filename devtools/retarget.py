@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Repoint the real modules' imports after a move: every `from agentctl.X import n` where X no longer DEFINES n
-imports n from the module that does (the first in MODULES), the import block rewritten in MODULES order.
+imports n from the module that does (the first in MODULES), the import block rewritten in MODULES order (another
+import among its lines -- the standard library's -- kept, above it; any other statement there refuses the rewrite).
 
 usage: retarget.py <lib/agentctl>     prints each module it rewrote"""
 import ast
@@ -8,6 +9,16 @@ import os
 import sys
 
 from partlist import defined_names, import_lines, module_list
+
+
+def other_imports(tree, imports, lines):
+    """The lines of the other import statements among the agentctl imports' (kept above the rewritten block), or None
+    when a statement that is no import sits there."""
+    first, last = imports[0].lineno - 1, imports[-1].end_lineno
+    between = [n for n in tree.body if n.lineno - 1 < last and n.end_lineno > first and n not in imports]
+    if any(not isinstance(n, (ast.Import, ast.ImportFrom)) for n in between):
+        return None
+    return [line for n in between for line in lines[n.lineno - 1:n.end_lineno]]
 
 
 def retarget(lib):
@@ -34,9 +45,10 @@ def retarget(lib):
             continue
         lines = src.split("\n")
         first, last = imports[0].lineno - 1, imports[-1].end_lineno
-        if any(n.lineno - 1 < last and n.end_lineno > first and n not in imports for n in tree.body):
+        kept = other_imports(tree, imports, lines)
+        if kept is None:
             sys.exit(f"{m}: its agentctl imports are not one block")
-        block = []
+        block = list(kept)
         for source in sorted(want, key=modules.index):
             if source != m:
                 block += import_lines(f"agentctl.{source}", sorted(want[source]))

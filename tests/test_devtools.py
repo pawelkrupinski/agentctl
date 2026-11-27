@@ -263,13 +263,22 @@ class ImportToolsTest(unittest.TestCase):
         self.assertIn("from agentctl.base import TABLE\n", read(lib, "top"))
         self.assertIn("from agentctl.base import TABLE\n", read(lib, "low"))
 
-    def test_retarget_refuses_an_import_block_holding_another_statement(self):
+    def test_retarget_keeps_another_import_among_the_block_above_it(self):
         parts = {"core": "def root():\n    return 1\n", "base": "def helper():\n    return 1\n",
                  "top": "from agentctl.core import helper\nfrom typing import Any\nfrom agentctl.core import root\n"}
         lib = fake_lib(parts)
         r = tool("retarget", lib)
+        self.assertEqual(r.stdout, "retargeted top\n", r.stderr)
+        self.assertEqual("from typing import Any\nfrom agentctl.core import root\nfrom agentctl.base import helper\n",
+                         read(lib, "top"))
+
+    def test_retarget_refuses_an_import_block_holding_another_statement(self):
+        parts = {"core": "def root():\n    return 1\n", "base": "def helper():\n    return 1\n",
+                 "top": "from agentctl.core import helper\nVALUE = 1\nfrom agentctl.core import root\n"}
+        lib = fake_lib(parts)
+        r = tool("retarget", lib)
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("from typing import Any", read(lib, "top"))
+        self.assertIn("VALUE = 1", read(lib, "top"))
 
     def test_unused_drops_only_the_names_nothing_reads(self):
         parts = dict(PARTS, core="import os, re\nfrom agentctl.mid import helper, other  # x\n\n\n"
