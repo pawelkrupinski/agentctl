@@ -27,7 +27,10 @@ Push in small, coherent steps (a regression must be easy to bisect and revert); 
 - **The commit gate** (movies "Tests: the commit gate"): no change without a test that fails before it and passes
   after it, written first whenever feasible. agentctl's layers: `tests/` unit tests through the harness
   (`tests/harness.py`: hermetic HOME, PATH, git config, per-test timeout), the queue simulator (`tests/queue_sim.py`)
-  and its gate (`tests/sim_gate.py`).
+  and its gate (`tests/sim_gate.py`), and the END-TO-END layer (`tests/e2e/`, the owner 2026-11-27): a real `store
+  serve`, the server's tick, the laptop's sync and CLI and a real git remote in one temp root per scenario, GitHub a
+  stub (`ghstub.py` through `$AGENTCTL_GH_CLI`); `python3 tests/e2e/run.py` (~1 min, the hook's `prepush-e2e` step and
+  tests.yml's `e2e` job), `tests/e2e/mutations.py` the proof that each scenario fails when its behaviour breaks.
 - **The suite**: `~/bin/agentctl suite [pattern]` from the worktree (= `python3 tests/run.py`), the touched modules
   while working and the full suite before every push, from a non-git cwd with `AGENTCTL_RED_FIXER`, `FIXER_RECORD` and
   `AGENT_NAME` unset. The pre-push hook runs it again on exactly the pushed commit.
