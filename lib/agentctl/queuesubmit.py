@@ -316,5 +316,5 @@ def submit_ref(repo, d, e):
 
 
 SUBMIT_FIELDS = ("worktree", "branch", "head", "commits", "fixes", "keep_worktree", "claude_pid", "session", "base", "host",
-                 "lander", "commit_keys", "no_batch", "replays", "diagnoses")  # lander.py: who landed it, and its commits' keys;
-# no_batch: land --no-batch (never in a backlog batch); replays: agentctl's FIX REPLAY proofs (redland.py run_fix_replays)
+                 "lander", "commit_keys", "no_batch", "replays", "diagnoses", "opened_by")  # lander.py: who landed it, and its commits' keys;
+# opened_by: the submitting process's actor, the change's opening event's; no_batch: land --no-batch (never in a backlog batch); replays: agentctl's FIX REPLAY proofs (redland.py run_fix_replays)

@@ -221,7 +221,8 @@ def change_item_fields(e: dict[str, Any]) -> dict[str, Any]:
             **({"diagnoses": sorted(e["diagnoses"])} if e.get("diagnoses") else {}),
             **({"replays": e["replays"]} if e.get("replays") else {}),
             **({"submitted_at": since} if since else {}),
-            **({"entry_created_at": created} if created else {})}
+            **({"entry_created_at": created} if created else {}),
+            **({"opened_by": e["opened_by"]} if e.get("opened_by") else {})}
 
 
 def entry_created_at(e: dict[str, Any]) -> float | None:

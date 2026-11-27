@@ -121,7 +121,7 @@ class Store(OfferTable):
                 now_ = self.clock()
                 c.execute("INSERT INTO items VALUES (?,?,?,?,?,?,?,?)",
                           (typ, iid, state, 1, now_, now_ + spec.deadline, 0, json.dumps(data or {})))
-                insert_event(c, opened_event(typ, iid, state, now_))
+                insert_event(c, opened_event(typ, iid, state, now_, (data or {}).get("opened_by")))
             c.execute("COMMIT")
             return self._item(c, typ, iid)
         finally:
@@ -143,7 +143,7 @@ class Store(OfferTable):
                 secs = machine_state(typ, state).deadline if deadline_s is None else deadline_s
                 c.execute("INSERT INTO items VALUES (?,?,?,?,?,?,?,?)",
                           (typ, f"{prefix}{n}", state, 1, now_, now_ + secs, 0, json.dumps(data)))
-                insert_event(c, opened_event(typ, f"{prefix}{n}", state, now_))
+                insert_event(c, opened_event(typ, f"{prefix}{n}", state, now_, data.get("opened_by")))
             c.execute("COMMIT")
             return cast(dict[str, Any], self._item(c, typ, row["id"] if row else f"{prefix}{n}")), row is None
         finally:
@@ -342,12 +342,24 @@ class CurrentStore:
                  actor: str | None = None) -> None:
         self._opener, self._clock, self._actor = opener, clock, actor
 
+    @property
+    def actor(self) -> str | None:
+        """The process's actor (actors.py) this store stamps on what it writes; None for none."""
+        return self._actor
+
     def __getattr__(self, name: str) -> Any:
         found = getattr(self._opener(clock=self._clock), name)
-        if name != "transition" or not self._actor:
+        if not self._actor:
             return found
-        # the process's actor (actors.py) on every move it writes that names none of its own
-        return lambda *a, event=None, **k: found(*a, event={"actor": self._actor, **(event or {})}, **k)
+        # the process's actor (actors.py) on every move it writes that names none of its own, and on every item it
+        # opens (`opened_by` of its data: the opening event's actor, which an older store keeps as a plain field)
+        if name == "transition":
+            return lambda *a, event=None, **k: found(*a, event={"actor": self._actor, **(event or {})}, **k)
+        if name == "put_item":
+            return lambda typ, iid, state, data=None: found(typ, iid, state, {"opened_by": self._actor, **(data or {})})
+        if name == "open_singleton":
+            return lambda typ, state, data, *a, **k: found(typ, state, {"opened_by": self._actor, **data}, *a, **k)
+        return found
 
 
 # §5.4 a condition (the recovery registry folded in), phase 1 step 12: open escalates 10 min after opening, then every

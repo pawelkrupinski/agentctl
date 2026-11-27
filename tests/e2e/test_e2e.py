@@ -73,8 +73,7 @@ class HappyPathTest(E2ETest):
                                  ("checked", "pushing"), ("pushing", "landed")])
         for e in self.w.events(eid):
             self.assertTrue(e["cause"], f"an event with no cause: {e}")
-            if e["from_state"] is not None:  # a move (the opening is the submission's)
-                self.assertTrue(e["actor"], f"a move with no actor: {e}")
+            self.assertTrue(e["actor"], f"an event with no actor: {e}")  # the opening's included
         r = self.w.sync()
         self.assertEqual(r.returncode, 0, r.stderr[-3000:])
         self.assertEqual([ln for ln in r.stderr.splitlines() if re.match(r"agentctl: [\w ]+ failed: ", ln)], [],

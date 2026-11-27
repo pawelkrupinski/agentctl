@@ -65,6 +65,15 @@ class StoreCauseTest(unittest.TestCase):
         st.transition("change", "c1", "checking", self.it["version"], event={"cause": "check-running"})
         self.assertEqual(self.rows()[-1]["actor"], "session:s1")
 
+    def test_the_process_actor_is_the_actor_of_the_items_opening_event(self):
+        st = A.CurrentStore(lambda clock=None: self.st, actor="session:s1")
+        st.put_item("change", "c2", "queued", {})
+        st.open_singleton("hold", "held", {}, "hold-seq", "h")
+        opening = lambda typ, iid: self.st.item_events(typ, iid)[0]
+        self.assertEqual(opening("change", "c2")["actor"], "session:s1")
+        self.assertEqual(opening("hold", "h1")["actor"], "session:s1")
+        self.assertEqual(opening("change", "c1")["actor"], None, "an opening by a store without an actor stays blank")
+
     def test_a_legacy_client_s_move_is_written_unattributed(self):
         to = self.st.transition
         args, kw = A.legacy_cause("transition", ["change", "c1", "checking", 1], {"event": {"text": "x"}}, to)

@@ -51,13 +51,13 @@ def move_event(typ: str, iid: str, frm: str, to: str, version: int, escalate: bo
             **{k: v for k, v in ev.items() if v}, "item_type": typ, "item_id": iid, "from_state": frm, "to_state": to}
 
 
-def opened_event(typ: str, iid: str, state: str, at: float) -> dict[str, Any]:
+def opened_event(typ: str, iid: str, state: str, at: float, actor: str | None = None) -> dict[str, Any]:
     """The row an item's creation writes (`<type>.<state>`, from no state): its entry in the timeline, so a stay in its
     first state starts at an event (2026-11-26: a change's first `queued` stay, a condition's open, a watch's start
-    were in no event). Info and no audience: it reaches no inbox."""
+    were in no event). Info and no audience: it reaches no inbox. `actor`: who opened it (the item's `opened_by`)."""
     return {"kind": f"{typ}.{state}", "severity": "info", "dedupe": f"{typ}:{iid}:opened", "audience": {},
             "text": f"{typ} {iid} opened: {state}", "refs": {}, "cause": OPENED_CAUSE.get(typ), "at": at,
-            "item_type": typ, "item_id": iid, "from_state": None, "to_state": state}
+            "item_type": typ, "item_id": iid, "from_state": None, "to_state": state, "actor": actor}
 
 
 def legacy_cause(method: str, args: list[Any], kwargs: dict[str, Any],

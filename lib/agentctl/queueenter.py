@@ -64,7 +64,8 @@ def submit_to_server(repo, d, fields, store, note="", after_queued=None, waits=F
     which the sync sends). Prints QUEUED / QUEUED-LOCAL / NOT LANDED; returns land's exit code. waits: this land then
     waits for the verdict itself (a red fixer's, fixer_land)."""
     head = fields["head"]
-    e = {**fields, "id": f"{stamp('entry')}-{os.path.basename(repo)}-{os.urandom(3).hex()}"}
+    e = {**fields, "id": f"{stamp('entry')}-{os.path.basename(repo)}-{os.urandom(3).hex()}",
+         "opened_by": getattr(store, "actor", None)}
     if not submit_ref(repo, d, e):
         print(f"NOT LANDED: could not push the change to refs/heads/land/{e['id']} (ci-runner checks it from there): "
               f"{push_failure_why(e.get('push_error'))}: land again")
