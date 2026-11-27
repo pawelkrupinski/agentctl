@@ -480,7 +480,8 @@ class SyncStepsTest(unittest.TestCase):
     def test_sync_steps(self):
         def run(A):
             def go(repo, d, o_r, clock, store, picks):
-                steps = list(A.sync_steps(repo, d, o_r, clock, store, registry(A), ctx=case_context()))
+                steps = list(A.sync_steps(repo, d, o_r, clock, store, registry(A, vendor_drift=lambda a: (True, "")),
+                                          ctx=case_context()))  # not the real movies checkout's drift (the step ran the real probe)
                 out = [name for name, _fn in steps]
                 for k in picks:
                     name, fn = steps[k % len(steps)]
