@@ -6,8 +6,8 @@ import re
 import time
 from typing import Any
 from agentctl.gatesummary import GATE_LINE, GATE_SUMMARY_MAX_AGE
-from agentctl.queue import hold_text
 from agentctl.storestate import NETWORK_SHOWN_FOR
+from agentctl.landhold import hold_text
 
 
 # ---- ONE STATUS MODEL (docs/simplification-2026-10.md item 4): status_data() is THE assembled status (what /api/status

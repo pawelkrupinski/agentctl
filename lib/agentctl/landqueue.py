@@ -16,7 +16,7 @@ from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.procs import safe_cwd
 from agentctl.clones import main_clone
 from agentctl.queueslots import set_change
-from agentctl.queue import hold_text, land_hold
+from agentctl.landhold import hold_text, land_hold
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.waiting import GATE_UNREAD, cancel_entry_remote, cancel_submitted, stop_checker, unread_why
 from agentctl.queuesubmit import landed_sha_of

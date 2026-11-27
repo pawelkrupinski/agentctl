@@ -22,7 +22,7 @@ from agentctl.redrecord import lease_is_live, red_active, red_lease, red_what
 from agentctl.leases import lease_meta
 from agentctl.reverts import REVERT_OPEN, revert_brief, revert_line
 from agentctl.conditions import open_conditions
-from agentctl.queue import hold_row, land_hold
+from agentctl.landhold import hold_row, land_hold
 from agentctl.issues import status_issues
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.owners import owner_record_path

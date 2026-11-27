@@ -34,7 +34,7 @@ from agentctl.clock import epoch_now
 from agentctl.cistate import state_update
 from agentctl.reverts import revert_brief
 from agentctl.owned import start_rev
-from agentctl.queue import hold_row, land_hold
+from agentctl.landhold import hold_row, land_hold
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.queueclose import change_rows
 from agentctl.ask import owner_asks

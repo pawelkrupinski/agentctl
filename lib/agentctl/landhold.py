@@ -1,11 +1,11 @@
 # agentctl, part `landhold`: the land hold (`land hold|release`): an item in the store, so ci-runner's reconciler honours a hold made on the laptop
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import time
 from agentctl.clock import epoch_now
 import os
 from typing import Any
 from agentctl.fixerrecords import agent_name
-from agentctl.queue import land_hold, land_holds
 from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec, TerminalState
 
 
@@ -98,3 +98,44 @@ def tick_land_hold(st: Any) -> list[str]:
     """The reconciler's step: a hold past its deadline expires even while no batch ticks."""
     land_hold(st)
     return []
+
+
+def land_holds(st):
+    return st.items("hold", ["held"])
+
+
+def land_hold(st: Any, now_: float | None = None, expire: bool = True) -> dict[str, Any] | None:
+    """The land hold in force, or None. A hold past its deadline is moved to `expired` here (an event says so): every
+    reader -- the tick, `land status`, the snapshot -- lifts a forgotten hold the moment it is due. expire=False: only
+    read (the status page never writes)."""
+    t = now_ if now_ is not None else epoch_now()
+    live = None
+    for it in land_holds(st):
+        if it["deadline"] <= t:
+            if expire:
+                expire_land_hold(st, it)
+        elif live is None or it["deadline"] > live["deadline"]:
+            live = it
+    return live
+
+
+def expire_land_hold(st: Any, it: dict[str, Any]) -> None:
+    """A hold past its deadline moved to `expired`, an event saying who held it and why (one already moved: left)."""
+    try:
+        st.transition("hold", it["id"], "expired", it["version"],
+                      event={"cause": "timeout", "text": f"land hold {it['id']} expired (held by {it['data'].get('by')}: "
+                                     f"{it['data'].get('why') or 'no reason given'})"})
+    except (StaleVersion, TerminalState):
+        pass
+
+
+def hold_text(h: Any, t: float | None = None) -> str:
+    """`HELD until HH:MM (by, why)` for a hold row ({deadline, data} or the snapshot's {until, by, why})."""
+    until = h.get("until") or h.get("deadline")
+    d = h.get("data") or h
+    return (f"HELD until {time.strftime('%H:%M', time.localtime(float(until)))} (`agentctl land release`; "
+            f"by {d.get('by') or '?'}" + (f": {d['why']}" if d.get("why") else "") + ")")
+
+
+def hold_row(it):
+    return {"id": it["id"], "until": it["deadline"], "by": it["data"].get("by"), "why": it["data"].get("why")} if it else None
