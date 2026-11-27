@@ -17,13 +17,6 @@ MAX_FOREIGN = 2  # files a push may revert to an older main before prepush-check
 LAND_STALL_MIN = 20
 
 
-# NO SILENT WAIT AT GREEN (2026-10-30). Changes waiting while the gate is green, with no hold and no batch checking,
-# bisecting, pushing or held, are a stall: counted per tick (batch-progress.json in the waiting dir) and, past
-# WAITING_GREEN_TICKS ticks, a STALLED condition. Its probe (batch_progress) reads the same count, so the tick that
-# finds the batch moving again -- or nothing waiting, or the gate red -- is the one that clears it.
-WAITING_GREEN_TICKS = 100  # ticks (~10 min) changes may wait at a green gate with no batch moving: then STALLED
-
-
 def knob_max_foreign() -> float:
     return env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)
 
@@ -34,10 +27,6 @@ QUEUE_STALL_AFTER = 60 * 60  # s with open changes and no change moving before Q
 
 def knob_queue_stall_after() -> float:
     return env_num("AGENTCTL_QUEUE_STALL_AFTER", QUEUE_STALL_AFTER)
-
-
-def knob_waiting_green_ticks() -> float:
-    return env_num("AGENTCTL_WAITING_GREEN_TICKS", WAITING_GREEN_TICKS)
 
 
 def knob_land_stall_min() -> float:

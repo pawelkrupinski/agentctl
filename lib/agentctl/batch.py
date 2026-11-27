@@ -10,7 +10,7 @@ from agentctl.statefile import read_json_file, write_json_file
 from agentctl.selfcode import TOOL_PATH
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.timefmt import ts
-from agentctl.queueknobs import BACKLOG_BATCH_MAX, knob_backlog_batch_max, knob_waiting_green_ticks
+from agentctl.queueknobs import BACKLOG_BATCH_MAX, knob_backlog_batch_max
 from agentctl.govknobs import CHECK_LEASE_TTL
 from agentctl.core import err, fmt_age, git, remote, spawn_detached
 from agentctl.repos import precheck_hook
@@ -143,56 +143,6 @@ def union_base(tree, members, base):
         return bases[0]
     r = git(tree, "merge-base", "--octopus", *bases, check=False)
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else base
-
-
-BATCH_MOVING = ("checking", "bisecting", "pushing", "held")  # held: its own STALLED condition says so
-
-
-def batch_progress_path(d: str) -> str:
-    return os.path.join(d, "batch-progress.json")
-
-
-def batch_stalled_why(seen: Any) -> Any:
-    """Why the waiting changes are not moving: their batch's state, or that none was formed."""
-    it, last = seen.get("batch"), (f" ({seen['last']})" if seen.get("last") else "")
-    return f"batch {it['id']} is {it['state']}{last}" if it else f"no batch was formed{last}"
-
-
-def batch_stalled(seen: Any) -> Any:
-    """Changes wait, the gate is green, nothing holds them and no batch is moving."""
-    it = seen.get("batch")
-    return (bool(seen.get("waiting")) and seen.get("reds") is not None and not seen["reds"] and not seen.get("held")
-            and not (it and it["state"] in BATCH_MOVING))
-
-
-def note_batch_progress(d, seen, t, st):
-    """Count this tick: stalled (changes wait, gate green, no hold, no batch moving) or not. Returns the count."""
-    waiting = seen.get("waiting") or []
-    p = batch_progress_path(d)
-    rec = read_json_file(p)
-    if not batch_stalled(seen):
-        if rec.get("ticks"):
-            write_json_file(p, {"ticks": 0, "at": t})
-        return 0
-    n = int(rec.get("ticks") or 0) + 1
-    since = float(rec.get("since") or t) if rec.get("ticks") else t
-    why = batch_stalled_why(seen)
-    write_json_file(p, {"ticks": n, "at": t, "since": since, "why": why, "waiting": [e["id"] for e in waiting]})
-    if n >= knob_waiting_green_ticks():
-        ids = ", ".join(e["id"] for e in waiting)
-        open_condition("STALLED", f"STALLED: {len(waiting)} change(s) waiting while the gate is green for {n} ticks "
-                                  f"({fmt_age(t - since)}): {why}; waiting: {ids}",
-                       run_probe("batch_progress", {"d": d}), [], key=f"waiting-green-{batch_key(d)}",
-                       command="waiting", store=st)
-    return n
-
-
-def probe_batch_progress(a):
-    """The batch tick no longer counts a stall at green (batch-progress.json under the limit)."""
-    rec = read_json_file(batch_progress_path(a["d"]))
-    n = int(rec.get("ticks") or 0)
-    limit = knob_waiting_green_ticks()
-    return n < limit, (f"{n} stalled tick(s) at green: {rec.get('why')}" if n else "no change waits at green")
 
 
 _batch_said = [None]

@@ -57,7 +57,7 @@ def wire_recover_actions(actions: dict[str, Callable[[dict[str, Any], dict[str, 
 PROBE_EVERY = {"disk_free": 300, "quota_reset": 300, "invariant": 60, "waiting_ok": 30, "orphan_landed": 300, "route": 5, "tunnel": 10, "gate_read": 15,
                "workflow_green": 60, "token": 60, "tcp": 60, "http": 120, "git_fetch": 120,
                "clone_health": 120, "infra_requeue": 60, "push_credential": 60, "change_source": 60, "red_newer_verdict": 60,
-               "batch_progress": 30, "red_read": 300, "queue_moving": 60}
+               "red_read": 300, "queue_moving": 60}
 
 
 def probe_words(kind: Any, a: Any) -> Any:
@@ -74,7 +74,6 @@ def probe_words(kind: Any, a: Any) -> Any:
             "change_source": lambda: f"change {a.get('id')} closes or is queued again",
             "clone_health": lambda: f"{a.get('repo')} verifies and fetches {remote()}/main",
             "infra_requeue": lambda: f"queue entry {a.get('eid')} gets past {a.get('reason')}",
-            "batch_progress": lambda: "the waiting changes form a batch (or the gate turns red)",
             "queue_moving": lambda: "a change moves again (or none is open)",
             "red_read": lambda: f"ci-runner reads {', '.join(a.get('repos') or [])} (the agentctl-reader App)",
             "red_newer_verdict": lambda: f"a newer {a.get('workflow')} run than #{a.get('run')} no longer fails this way"}.get(kind, lambda: kind)()

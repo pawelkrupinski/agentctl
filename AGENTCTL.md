@@ -3417,7 +3417,6 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `w6_max` | `AGENTCTL_W6_MAX` | `300` | a due escalation not notified |
 | `w7_max` | `AGENTCTL_W7_MAX` | `300` | phase 2: an event ci-runner wrote that the laptop's sync has not projected (60x its 5 s tick) |
 | `w8_window` | `AGENTCTL_W8_WINDOW` | `3600` | W8 looks at the change items that closed within this |
-| `waiting_green_ticks` | `AGENTCTL_WAITING_GREEN_TICKS` | `100` | ticks (~10 min) changes may wait at a green gate with no batch moving: then STALLED |
 | `waiting_timeout` | `AGENTCTL_WAITING_TIMEOUT` | `86400` | - |
 | `watchdog_misses` | `AGENTCTL_WATCHDOG_MISSES` | `2` | consecutive passes a self-healing invariant (W5, WM, W7) fails before its condition opens |
 | `watchdog_retell` | `AGENTCTL_WATCHDOG_RETELL` | `21600` | s |

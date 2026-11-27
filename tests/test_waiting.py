@@ -338,13 +338,11 @@ class WaitingTest(Base):
         self.assertTrue(verdicts["land"]["verdict"].startswith(f"LANDED {sha}"))
         self.assertEqual(verdicts["land"]["cwd"], wa, "its author's inbox, no land process alive")
 
-    def test_changes_waiting_at_green_with_no_batch_open_a_stalled_condition_that_clears_itself(self):
-        """2026-10-30: two flips changes sat `waiting` at green with nothing said anywhere. Waiting at green while no
-        batch checks, bisects, pushes or is held is counted per tick; past the limit a STALLED condition opens, and
-        the same count clears it once the batch moves."""
+    def test_changes_waiting_at_green_with_no_batch_are_a_queue_stall_not_a_second_detector(self):
+        """2026-10-30: two changes sat `waiting` at green with nothing said anywhere. The per-tick `batch-progress`
+        counter that said so is retired (review 2026-11-26, A D9): queuestall names the same stall -- open changes and
+        none moving -- from the change items, with the head blocker."""
         self.clock = lagging_clock()  # ticks and the batch executor on ONE clock: never the wall beside it (fake_clock.py)
-        os.environ["AGENTCTL_WAITING_GREEN_TICKS"] = "3"
-        self.addCleanup(os.environ.pop, "AGENTCTL_WAITING_GREEN_TICKS", None)
         wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         self.land(wa)  # red: it waits
         d, _c, _w = A.waiting_state(self.r.path)
@@ -352,48 +350,21 @@ class WaitingTest(Base):
         saved = A.check_tree_slot
         A.check_tree_slot = lambda st, repo, d_: None  # every check tree busy: the batch cannot be assembled
         try:
-            for _ in range(2):
+            for _ in range(3):
                 A.tick_batch(self.r.path, d, *on_clock(self.clock))
-            self.assertEqual([c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"].startswith("waiting-green")], [])
-            A.tick_batch(self.r.path, d, *on_clock(self.clock))
-            conds = [c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"].startswith("waiting-green")]
-            self.assertEqual(len(conds), 1)
-            self.assertIn("waiting while the gate is green for 3 ticks", conds[0]["text"])
-            self.assertIn("waiting for a check tree", conds[0]["text"])
-            self.assertFalse(A.run_probe("batch_progress", {"d": d}).ok)
         finally:
             A.check_tree_slot = saved
+        st = A.CurrentStore(A.process_store)
+        changes = st.items("change")
+        self.assertTrue(changes)
+        last = max(float(c.get("entered_at") or 0) for c in changes)
+        self.assertIsNone(A.queue_stall(changes, [], last + 60, after=3600))
+        stall = A.queue_stall(changes, [], last + 3601, after=3600)
+        self.assertIn("QUEUE STALLED", stall)
+        self.assertIn("the head blocker", stall)
+        self.assertEqual([c for c in A.open_conditions(st) if c["key"].startswith("waiting-green")], [])
         self.drive()
         self.assertEqual(self.entries()["1"]["status"], "landed")
-        self.assertTrue(A.run_probe("batch_progress", {"d": d}).ok)
-        A.recovery_tick(A.CurrentStore(A.process_store), force=True)
-        self.assertEqual([c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"].startswith("waiting-green")], [])
-
-    def test_waiting_while_red_or_while_the_batch_checks_is_no_stall(self):
-        os.environ["AGENTCTL_WAITING_GREEN_TICKS"] = "2"
-        self.addCleanup(os.environ.pop, "AGENTCTL_WAITING_GREEN_TICKS", None)
-        wa, _ = self.agent("a", "web/src/main/A.scala", "a\n")
-        self.land(wa)
-        d, _c, _w = A.waiting_state(self.r.path)
-        saved = A.spawn_batch_executor
-        # its executor runs elsewhere from the first tick: the real spawn started a DETACHED red pre-check whose verdict
-        # raced the green ticks below (the stress lane, 2026-11-26: on a loaded machine it finished first and the batch
-        # was left assembling; when it did not, it was still checking) -- the batch checks, red and green alike
-        A.spawn_batch_executor = lambda repo, d_, bid: None
-        try:
-            for _ in range(4):  # red: waiting is right
-                A.tick_batch(self.r.path, d, *on_clock(self.clock))
-        finally:
-            A.spawn_batch_executor = saved
-        self.reds = set()
-        A.spawn_batch_executor = lambda repo, d_, bid: None  # its executor runs elsewhere: the batch stays checking
-        try:
-            for _ in range(4):
-                A.tick_batch(self.r.path, d, *on_clock(self.clock))
-        finally:
-            A.spawn_batch_executor = saved
-        self.assertEqual(self.batch()["state"], "checking")
-        self.assertEqual([c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"].startswith("waiting-green")], [])
 
     def test_status_on_the_laptop_shows_the_batch_ci_runner_keys_by_its_own_waiting_dir(self):
         """2026-10-30: batch var_lib_agentctl_movies_.git#4 checked for an hour; the laptop's `land status` looked

@@ -30,7 +30,7 @@ from agentctl.recovery import recover_clear_hold
 from agentctl.batchitem import status_batch
 from agentctl.processorlink import await_entry, offer_token, spawn_waiting_processor, waiting_processor_alive
 from agentctl.tickservice import waiting_service
-from agentctl.batch import batch_progress_path, batch_row_ids
+from agentctl.batch import batch_row_ids
 from agentctl.batchcheck import check_batch
 from agentctl.statemachines import machine_state
 from agentctl.invariants import change_carrying_batch
@@ -142,10 +142,7 @@ def gate_status_line(reds: set[str]) -> str:
 
 
 def land_status_tail(d: str, rows: list[dict[str, Any]]) -> None:
-    """The status's last lines: a stall at a green gate, an empty queue, a laptop's local entries nothing runs."""
-    prog = read_json_file(batch_progress_path(d)) if host_role() == "server" else {}
-    if prog.get("ticks"):
-        print(f"stall at green: {prog['ticks']} tick(s): {prog.get('why')}")
+    """The status's last lines: an empty queue, a laptop's local entries nothing runs."""
     if not rows:
         print("  (no change queued or waiting)")
     local = ChangeRecords(None, d).open()  # the laptop's outbox

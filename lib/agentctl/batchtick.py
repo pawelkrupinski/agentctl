@@ -17,31 +17,22 @@ from agentctl.redseen import gate_reds
 from agentctl.batchitem import batch_fail, batch_move, current_batch, new_batch
 from agentctl.queuebatchsel import backlog_candidates, backlog_min, push_candidates
 from agentctl.batch import (
-    backlog_reconcile, batch_kind, batch_ready, batch_round_depth, green_batch_depth, note_batch_progress,
+    backlog_reconcile, batch_kind, batch_ready, batch_round_depth, green_batch_depth,
     red_precheck, release_red_fixes, spawn_batch_executor, union_base)
 from agentctl.queuepush import DEEP_BATCHES, check_tree_slot_free
 from agentctl.batchpush import push_batch_item
 
 
 def tick_batch(repo: str, d: str, clock: Any, st: Any) -> list[str]:
-    """One tick of the repository's batch, then its stall count (note_batch_progress). Returns what it did."""
-    seen: dict[str, Any] = {}
+    """One tick of the repository's batch. Returns what it did. A queue that stops moving is named by queuestall."""
     with facts_tick():  # the queue facts read once for the tick (changekind.py)
-        did = _tick_batch(repo, d, st, seen)
-    try:
-        seen["last"] = did[-1] if did else None
-        if seen.get("waiting"):  # the batch as this tick left it (assembled -> checking is no stall)
-            seen["batch"] = current_batch(st, d)
-        note_batch_progress(d, seen, clock.time(), st)
-    except (Exception, SystemExit) as e:  # never the batch's own step
-        err(f"batch progress: {str(e)[:160]}")
-    return did
+        return _tick_batch(repo, d, st)
 
 
-def _tick_batch(repo: str, d: str, st: Any, seen: dict[str, Any]) -> list[str]:
+def _tick_batch(repo: str, d: str, st: Any) -> list[str]:
     """A backlog batch's members brought in line with it (backlog_reconcile), then the batch's step. st: the tick's
     store, on the tick's clock (batch_step and the push read the time on it)."""
-    return backlog_reconcile(d, st) + batch_step(repo, d, seen, st)
+    return backlog_reconcile(d, st) + batch_step(repo, d, st)
 
 
 class BatchTick(NamedTuple):
@@ -72,20 +63,17 @@ class Assembled(NamedTuple):
     range_base: str | None
 
 
-def batch_step(repo: str, d: str, seen: dict[str, Any], st: Any) -> list[str]:
+def batch_step(repo: str, d: str, st: Any) -> list[str]:
     t = st.clock()
     waiting = ChangeRecords(st, d).waiting()
     it = current_batch(st, d)
-    seen.update(waiting=waiting, batch=it)
     backlog = not waiting and not it and \
         sum(1 for e in ChangeRecords(st, d).queued() if e.get("status") in ("queued", "checked")) >= backlog_min()
     if not waiting and not it and not backlog:
         return []
     if land_hold(st, t):  # the store's hold: honoured wherever `land hold` ran
-        seen["held"] = True
         return ["held"]
     reds = gate_reds(repo)
-    seen["reds"] = reds
     tick, acts = batch_plan(repo, d, st, t, it, reds)
     return acts if tick is None else batch_state_step(tick)
 

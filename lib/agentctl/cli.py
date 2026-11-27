@@ -53,7 +53,6 @@ from agentctl.superseded import cmd_supersede
 from agentctl.park import cmd_park, cmd_unpark
 from agentctl.orphans import probe_orphan_landed
 from agentctl.maintain import cmd_maintain
-from agentctl.batch import probe_batch_progress
 from agentctl.cleanuppass import cmd_cleanup
 from agentctl.storecmd import cmd_store
 from agentctl.processstore import process_store
@@ -75,7 +74,7 @@ wire_probes({"disk_free": probe_disk_free, "quota_reset": probe_quota_reset,
              "http": probe_http, "tcp": probe_tcp, "route": probe_route, "tunnel": probe_tunnel,
              "gate_read": probe_gate_read, "token": probe_token, "git_fetch": probe_git_fetch,
              "clone_health": probe_clone_health,
-             "batch_progress": probe_batch_progress, "red_read": probe_red_read})
+             "red_read": probe_red_read})
 wire_recover_actions({"clear_hold": recover_clear_hold, "tunnel_reset": recover_tunnel_reset,
                       "clear_flag": recover_clear_flag})
 
