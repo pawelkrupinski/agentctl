@@ -37,7 +37,7 @@ eval "$(~/bin/agentctl env --print)"        # 1. sbt/java on PATH; a locked vaul
 ~/bin/agentctl land --until-done            # 2. movies agents' LAST step (run_in_background): submit, wait, DONE <sha> ... worktree removed
 ~/bin/agentctl wait run <id> &              # 3. Bash run_in_background=true, then END YOUR TURN
 ~/bin/agentctl ci-why                       # 4. only when land says the red gate refused, or Main is red
-~/bin/agentctl inbox --unread --ack         # 5. your own verdicts (the orchestrator/owner: --ack --all), agent alive or not
+~/bin/agentctl inbox --unread --ack         # 5. your own verdicts (the owner: --audience owner --ack), agent alive or not
 ~/bin/agentctl inbox wait --forever &       # 6. the orchestrator's notifier: Bash run_in_background=true (see "inbox")
 ~/bin/agentctl red claim <run> --note "…"   # 7. assigned a red build? claim it first (see "red")
 ~/bin/agentctl dispatch run <wf.yml> --ref <branch> -f k=v --purpose "…"  # 8. dispatching CI yourself? own it (see "dispatch")

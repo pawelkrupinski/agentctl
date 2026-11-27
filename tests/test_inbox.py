@@ -219,15 +219,37 @@ class InboxTest(unittest.TestCase):
             os.environ["CLAUDE_CODE_SESSION_ID"] = "session-third"
             _, out = self.run_main(["inbox", "--unread", "--ack"])
             self.assertIn("acknowledged 0 entries; 1 left unread", out)
-            _, out = self.run_main(["inbox", "--unread", "--ack", "--all"])  # the owner's
-            self.assertIn("acknowledged 1 entry", out)
-            self.assertTrue(all(e["read"] for e in self.entries()))
+            _, out = self.run_main(["inbox", "--unread", "--ack", "--all"])  # --all never acks another agent's
+            self.assertIn("acknowledged 0 entries; 1 left unread", out)
+            self.assertFalse({e["id"]: e["read"] for e in self.entries()}[theirs])
         finally:
             os.chdir(saved[1])
             if saved[0] is None:
                 os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
             else:
                 os.environ["CLAUDE_CODE_SESSION_ID"] = saved[0]
+
+    def test_owner_audience_entries_are_acked_only_by_an_explicit_audience_owner(self):
+        """2026-11-27: an agent's `inbox --ack --all` acked every agent's and the owner's entries."""
+        saved = os.environ.get("CLAUDE_CODE_SESSION_ID")
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "session-mine"
+        try:
+            rec = {"id": "20261127T100000000000-ev1-issue-open", "time": "t", "at": A.epoch_now(), "command": "issue",
+                   "final": True, "exit": 1, "verdict": "AGENTCTL ISSUE x open", "kind": "OTHER", "verdicts": [],
+                   "tail": [], "item_type": "issue", "item_id": "x", "audience": "owner", "owner": "session-mine"}
+            A.alert_write(rec, A.CurrentStore(A.process_store))
+            _, out = self.run_main(["inbox", "--unread", "--ack", "--all"])
+            self.assertIn("acknowledged 0 entries", out)
+            self.assertFalse(self.entries()[0]["read"])
+            os.environ["CLAUDE_CODE_SESSION_ID"] = "session-orchestrator"
+            _, out = self.run_main(["inbox", "--unread", "--ack", "--audience", "owner"])
+            self.assertIn("acknowledged 1 entry", out)
+            self.assertTrue(self.entries()[0]["read"])
+        finally:
+            if saved is None:
+                os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
+            else:
+                os.environ["CLAUDE_CODE_SESSION_ID"] = saved
 
     def test_a_systemexit_message_is_the_verdict(self):
         # 2026-10-27: two detached watches died on the vault's SystemExit and their entries said "(no output)"

@@ -117,15 +117,25 @@ def inbox_print_entry(e: dict[str, Any], verbose: bool) -> None:
         print(f"    {line}")
 
 
+def entries_to_acknowledge(a: argparse.Namespace, entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """What `--ack` may acknowledge: the entries named by ID or the caller's own, never an owner-audience entry unless
+    `--audience owner` is explicit (the owner's or orchestrator's), which acknowledges every owner entry listed."""
+    owners = entries_of_audience(entries, "owner")
+    if "owner" in {x.strip() for x in (getattr(a, "audience", None) or "").split(",")}:
+        return owners
+    named, owner_ids = set(a.ids or ()), {e["id"] for e in owners}
+    return [e for e in entries if e["id"] in named or (e["id"] not in owner_ids and own_inbox_entry(e))]
+
+
 def inbox_acknowledge(a: argparse.Namespace, entries: list[dict[str, Any]]) -> None:
-    mine = entries if getattr(a, "all", False) else [e for e in entries if e["id"] in (a.ids or ()) or own_inbox_entry(e)]
+    mine = entries_to_acknowledge(a, entries)
     os.makedirs(os.path.join(inbox_dir(), "acked"), exist_ok=True)
     for e in mine:
         open(os.path.join(inbox_dir(), "acked", e["id"]), "a").close()
     note_events([file_event("inbox", e["id"], "unread", "acked", "agent", key="acked") for e in mine])
     left = len(entries) - len(mine)
     print(f"inbox: acknowledged {len(mine)} entr{'y' if len(mine) == 1 else 'ies'}"
-          + (f"; {left} left unread for the agents they belong to (`--all` acks them: the owner's)" if left else ""))
+          + (f"; {left} left unread for the agents they belong to (`--audience owner --ack` acks the owner's)" if left else ""))
 
 
 def caller_identity():

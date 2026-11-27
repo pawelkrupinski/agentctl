@@ -110,7 +110,8 @@ def add_inbox(sub: Subparsers) -> None:
     ib.add_argument("--unread", action="store_true", help="only the entries not acknowledged yet")
     ib.add_argument("--ack", action="store_true", help="acknowledge the entries listed that are YOURS (your session's, "
                                                         "worktree's or agent name's), or those named by ID")
-    ib.add_argument("--all", action="store_true", help="with --ack: every entry listed, anyone's (the owner)")
+    ib.add_argument("--all", action="store_true", help="with --ack: every listed entry that is YOURS, never another agent's (the owner's entries are "
+                    "acked with an explicit `--audience owner`)")
     ib.add_argument("--limit", type=int, default=30, help="the newest N (default 30; 0 = all)")
     ib.add_argument("--count", action="store_true", help="print only how many entries match (every one: no --limit; "
                     "the status line's)")

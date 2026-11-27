@@ -74,7 +74,7 @@ class FileLogTest(unittest.TestCase):
 
     def test_the_inbox_and_the_waiting_entries_write_their_moves(self):
         eid = A.inbox_write("land", "LANDED abc", [], [], 0)
-        A.inbox_acknowledge(argparse.Namespace(all=True, ids=None), [{"id": eid}])
+        A.inbox_acknowledge(argparse.Namespace(all=False, ids=[eid]), [{"id": eid}])
         d = os.path.join(self.root, "w")
         os.makedirs(os.path.join(d, "entries"))
         A.save_entry(d, {"id": "x1", "status": "queued"})
