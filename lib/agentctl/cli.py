@@ -55,7 +55,8 @@ from agentctl.orphans import probe_orphan_landed
 from agentctl.maintain import cmd_maintain
 from agentctl.batch import probe_batch_progress
 from agentctl.cleanuppass import cmd_cleanup
-from agentctl.server import cmd_store, process_store
+from agentctl.storecmd import cmd_store
+from agentctl.processstore import process_store
 from agentctl.invariants import probe_invariant
 from agentctl.watchdog import cmd_watchdog
 from agentctl.status import cmd_ci_why

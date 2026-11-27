@@ -95,7 +95,7 @@ def _remote_call(call: StoreCall) -> Callable[..., object]:
 
 
 # THE STORE'S CALLS AS METHODS, made from the table where the client is defined (storecalls.py): a process importing
-# this module alone has every one (2026-11-26: server.py set them on the class, so it had no `events`)
+# this module alone has every one (2026-11-26: the server module set them on the class, so it had no `events`)
 RemoteCalls = type("RemoteCalls", (), {c.name: _remote_call(c) for c in STORE_CALLS})
 
 

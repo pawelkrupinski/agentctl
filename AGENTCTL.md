@@ -1888,8 +1888,8 @@ The reconciler then takes it, a step per tick:
   and when the hold still stands `$AGENTCTL_REGEN_RECOVERY_WAIT` (2 h) later (the laptop or its JVM unreachable, the
   regen failing) it escalates ONCE to the owner (`REGEN HELD <id>: ...`, what is held and why, whether the laptop
   answered); the change stays held in its place. Its hold kind's recovery is `recover`: never a stuck lap, nor W1.
-  queueclose.py `regen_hold_overdue`, server.py `answer_regen_holds`. queueclose.py `conflict_cause`,
-  `regen_hold`, server.py `conflict_bounced`, `queue_change`; tests: `tests/test_generated.py`.
+  queueclose.py `regen_hold_overdue`, syncsteps.py `answer_regen_holds`. queueclose.py `conflict_cause`,
+  `regen_hold`, changesubmit.py `conflict_bounced`, `queue_change`; tests: `tests/test_generated.py`.
 - **GENERATED FILES ARE NO OVERLAP (2026-11-19 ~06:05Z: six movies changes -- agreement, f2, datalayer3, resolver2-b1,
   enrichment2, resolver2 -- each `held: its check waits for <prev>` because each edits coupling-baseline.tsv: every
   coupling or complexity lane landed one at a time).** A repo registers its generated files in red-repos.json
@@ -2790,7 +2790,7 @@ agent's to `--continue` or `--abort`: commits made on its detached HEAD would be
 it started on every path it ends by (slots.py `sync`).
 The sync fast-forwards the movies ROOT CHECKOUT to <remote>/main each cycle -- only on `main`, clean in its tracked files,
 no rebase/merge/cherry-pick in progress, fast-forward only -- so its `.claude` hooks run main's code (issue 66d831;
-server.py `root_checkout_ff`).
+syncsteps.py `root_checkout_ff`).
 
 ```
 prepush-check: <remote>/main...c972d56a2b49: 1 file changed, 8 insertions(+)
@@ -3016,7 +3016,7 @@ by CurrentStore at the composition root), `cause` (why: ONE word of the closed e
 short `detail`. `Store.transition` REFUSES a move between two states without a cause (MissingCause: a programming
 error; tests/test_causes.py checks every call site); a reminder (self-move) may carry one -- a held change's reminder
 carries its hold kind's (`HOLD_CAUSE`). A store older than the columns migrates in place (old rows NULL); a client older
-than them is written `unattributed` (server.py's shim). Creating an item writes its OPENING event (`<type>.<state>`, from
+than them is written `unattributed` (eventrows.legacy_cause). Creating an item writes its OPENING event (`<type>.<state>`, from
 no state: a change's queue entry, a condition's open, a watch's start). A reject's cause is THE reject classifier's
 (`causes.reject_cause`, ci-why's own infra signatures), its class (infra | test | policy) the event's detail.
 

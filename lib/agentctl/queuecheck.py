@@ -47,7 +47,7 @@ def provisional_hint(tree, e):
 # checks' ratchet failed over them. That is no defect of the change, only a regeneration this host cannot run: the
 # change is HELD in its place (queued, not checked again) and its agent told ONE command -- `agentctl land` in its
 # worktree, which rebases onto main and runs the regen where the JVM is (the laptop's conflict_resolve) -- and the
-# change queued again from that worktree takes the held entry's place and queue age (server.py queue_change). A hold
+# change queued again from that worktree takes the held entry's place and queue age (changesubmit.py queue_change). A hold
 # nobody answers within CONFLICT_PLACE_KEPT is NEVER rejected (the owner, 2026-11-20: "2 drop the reject"): it RECOVERS
 # (regen_hold_overdue, below).
 def regen_hold(st, d, e, tree, failing, out):

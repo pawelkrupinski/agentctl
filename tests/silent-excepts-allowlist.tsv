@@ -26,7 +26,7 @@ lib/agentctl/projector.py	escalation_stale	KeyError, ValueError	a malformed line
 lib/agentctl/psparse.py	parse_ps	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
 lib/agentctl/queuesubmit.py	take_delivery	StaleVersion, StoreUnavailable	another writer moved the item or the store is unreachable: the delivery is taken again next tick
 lib/agentctl/reddispatch.py	red_owned_progress_at	ValueError, TypeError	a malformed line, field or entry is skipped; the rest still count
-lib/agentctl/server.py	unreaped_leases	KeyError, TypeError	a malformed line, field or entry is skipped; the rest still count
+lib/agentctl/storemetrics.py	unreaped_leases	KeyError, TypeError	a malformed line, field or entry is skipped; the rest still count
 lib/agentctl/slots.py	output_file_shared	BlockingIOError	a non-blocking lock another process holds: this one yields to it by design
 lib/agentctl/statusagents.py	status_transcript_last	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
 lib/agentctl/statuspage.py	StatusHandler.do_GET	BrokenPipeError, ConnectionResetError	the status page's client went away mid-response: nothing left to answer

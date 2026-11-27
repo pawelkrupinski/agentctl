@@ -23,7 +23,7 @@ from agentctl.gov import GovTimeout, gov_class_of
 from agentctl.checkslot import check_slot
 from agentctl.localrecheck import check_failures, check_passes, local_cleared, note_local_red, write_baseline_out
 from agentctl.cireport import ci_why
-from agentctl.server import queue_change
+from agentctl.changesubmit import queue_change
 from agentctl.queueenter import change_fields, submit_to_server, sync
 from agentctl.queuecheck import NETWORK_REASON
 from agentctl.queueknobs import knob_baseline, knob_land_stall_min

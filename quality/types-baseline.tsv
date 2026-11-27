@@ -19,6 +19,7 @@ mypy-errors	blamerecords	17
 mypy-errors	branches	66
 mypy-errors	buildview	16
 mypy-errors	changekind	19
+mypy-errors	changesubmit	12
 mypy-errors	checkslot	24
 mypy-errors	cireport	37
 mypy-errors	cistate	1
@@ -148,7 +149,6 @@ mypy-errors	runexplain	15
 mypy-errors	runowners	42
 mypy-errors	runqueue	2
 mypy-errors	runsigs	9
-mypy-errors	server	53
 mypy-errors	serverclone	36
 mypy-errors	serversteps	22
 mypy-errors	sessionpaths	9
@@ -160,7 +160,10 @@ mypy-errors	statusagents	34
 mypy-errors	statusline	4
 mypy-errors	statuspage	30
 mypy-errors	store	21
+mypy-errors	storeapi	28
 mypy-errors	storeauth	22
+mypy-errors	storecmd	10
+mypy-errors	storemetrics	3
 mypy-errors	storestate	7
 mypy-errors	storetoken	46
 mypy-errors	stuckruns	4

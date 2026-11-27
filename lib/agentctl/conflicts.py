@@ -375,7 +375,7 @@ def pick_commits(wt, commits, dropped=None, regen=True, regenerated=None, provis
 # file nor commit; its agent rebased blind). Only a real conflict reaches the agent (generated files are resolved in
 # the check tree, waiting.py GENERATED FILES ARE NO OVERLAP), and its verdict names each conflicting file with the
 # commit of main that last changed it since the change's base; the files are kept on the entry (`conflict_files`), so
-# the change queued again from the same source takes its old place (server.py queue_change, A RESOLVED CONFLICT
+# the change queued again from the same source takes its old place (changesubmit.py queue_change, A RESOLVED CONFLICT
 # KEEPS ITS PLACE).
 def conflict_paths(conflicts):
     """The file paths of a pick's conflict list (a generated file's entry carries its resolution's why)."""

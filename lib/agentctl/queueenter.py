@@ -32,7 +32,7 @@ from agentctl.queuesubmit import (
 from agentctl.fixerblockers import in_fixer
 from agentctl.blamerecords import blame_land_refusal, blame_records_quiet
 from agentctl.tools import check_range
-from agentctl.server import queue_change
+from agentctl.changesubmit import queue_change
 from agentctl.syncsteps import submit_remote
 from agentctl.processorlink import offer_token, spawn_waiting_processor
 from agentctl.landqueue import queue_command

@@ -49,7 +49,7 @@ def red_dispatch(o_r: Any, repo: Any, u: Any, why: Any = "by hand", resume: Any 
     (resume: the same worktree and session), then a detached `agentctl red fixer` that runs `claude -p` there, renews
     the lease by its progress, and releases it with its verdict. (ok, message)."""
     standby = None if on_ci_runner() else laptop_role_standby(store)
-    if standby:  # ONE MACHINE HOLDS THE LAPTOP ROLE (server.py): a standby machine starts no fixer
+    if standby:  # ONE MACHINE HOLDS THE LAPTOP ROLE (storeapi.py): a standby machine starts no fixer
         return False, f"NOT DISPATCHED: {standby}"
     return RedDispatch(o_r, repo, u, why, resume, effort, lease, took, extra, store).run()
 
