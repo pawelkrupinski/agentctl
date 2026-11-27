@@ -1113,7 +1113,7 @@ class Sim:
         ch.outcome, ch.cancelled = None, True
         import argparse, contextlib, io
         with contextlib.redirect_stdout(io.StringIO()):
-            A.cmd_waiting(argparse.Namespace(wcmd="cancel", repo=self.repo, entry=ch.eid, renamed=True, hold_for=None,
+            A.cmd_waiting(argparse.Namespace(wcmd="cancel", repo=self.repo, entry=ch.eid, hold_for=None,
                                              hold_why=None), *on_clock(self.sim_clock))  # a cancel never waits
 
     def records(self):

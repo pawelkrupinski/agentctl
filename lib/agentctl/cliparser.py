@@ -10,7 +10,6 @@ from agentctl.cleanup import SWEEP_IDLE_DAYS
 from agentctl.queueuntil import parse_duration
 from agentctl.waiting import WAITING_HELP
 from agentctl.remotestore import DEFAULT_STORE_URL, STORE_PORT
-from agentctl.launchd import SERVICE_LABEL
 from agentctl.cliops import (
     Subparsers, add_config, add_decide, add_dispatch, add_gov, add_inbox, add_issue, add_laptop, add_lease,
     add_maintain, add_park, add_reap, add_recover, add_red, add_revert, add_status, add_supersede, add_unpark)
@@ -161,18 +160,9 @@ def add_waiting(sub: Subparsers) -> None:
     wg = sub.add_parser("waiting", help="the processor and its queue: changes checked and pushed, held while main is red, batched at green",
                         description=WAITING_HELP, formatter_class=argparse.RawDescriptionHelpFormatter)
     wgs = wg.add_subparsers(dest="wcmd", required=True)
-    wgs.add_parser("status", help="the queued and waiting changes, the batch, the processor, the gate").add_argument("--repo")
-    wgs.add_parser("pause", help="the processor takes no batch until resume (changes still queue)").add_argument("--repo")
-    wgs.add_parser("resume", help="undo pause, and a HELD batch's wait").add_argument("--repo")
-    wgc = wgs.add_parser("cancel", help="drop a queued or waiting change")
-    wgc.add_argument("entry")
-    wgc.add_argument("--repo")
     wgr = wgs.add_parser("run", help="the processor (land starts it detached; one at a time, by lock)")
     wgr.add_argument("--once", action="store_true")
     wgr.add_argument("--service", action="store_true", help="stay when `waiting` is empty (the launchd agent's mode)")
-    wgsv = wgs.add_parser("service", help=f"the processor as a launchd agent ({SERVICE_LABEL}: KeepAlive, RunAtLoad)")
-    wgsv.add_argument("action", choices=("install", "uninstall", "status"))
-    wgsv.add_argument("--repo")
     wgr.add_argument("--repo")
     wcb = wgs.add_parser("check-batch", help="the batch's executor: its check, its bisect (the processor starts it)")
     wcb.add_argument("entry", help="the batch item's id")

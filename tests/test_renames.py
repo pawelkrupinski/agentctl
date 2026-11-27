@@ -1,5 +1,4 @@
-"""Design §14.5: the queue's commands under `land`, the processor under `tick`; the old `waiting` names answer for a
-week, each naming its new one."""
+"""Design §14.5: the queue's commands under `land`, the processor under `tick`; the old `waiting` names are gone."""
 import argparse, contextlib, io, os, subprocess, sys, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -26,7 +25,7 @@ class RenameTest(unittest.TestCase):
             self.calls.clear()
             self.assertEqual(A.main(argv), 0, argv)
             [w] = self.calls
-            self.assertEqual((w.wcmd, w.renamed), (want, True), argv)
+            self.assertEqual(w.wcmd, want, argv)
         self.assertEqual(self.calls[0].action, "status")
 
     def test_land_cancel_needs_the_id(self):
@@ -44,20 +43,21 @@ class RenameTest(unittest.TestCase):
         A.waiting_state = lambda repo: seen.append(repo) or (_ for _ in ()).throw(RuntimeError("stop"))
         try:
             with self.assertRaises(RuntimeError):
-                A.cmd_waiting(argparse.Namespace(wcmd="status", repo=tempfile.gettempdir(), entry=None, renamed=True), *on_clock(FakeClock()))
+                A.cmd_waiting(argparse.Namespace(wcmd="status", repo=tempfile.gettempdir(), entry=None), *on_clock(FakeClock()))
         finally:
             A.waiting_state, A.main_clone, A.movies_repo_path = saved
         self.assertEqual(seen, ["/the/movies/clone"])
 
-    def test_an_old_name_says_its_new_one(self):
-        A.cmd_waiting, A.queue_command = self.saved
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            try:
-                A.cmd_waiting(argparse.Namespace(wcmd="pause", repo="/nonexistent", entry=None), *on_clock(FakeClock()))
-            except (Exception, SystemExit):
-                pass
-        self.assertIn("is now `agentctl land hold`", err.getvalue())
+    def test_the_old_waiting_names_are_gone(self):
+        """The alias period ended (2026-11-05, retired 2026-11-27): `waiting status|pause|resume|cancel|service` no longer
+        parse; `waiting run|check|check-batch|await` stay, the processor's own re-exec and children."""
+        for old in (["status"], ["pause"], ["resume"], ["cancel", "e1"], ["service", "status"]):
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised:
+                A.main(["waiting"] + old)
+            self.assertEqual(raised.exception.code, 2, old)
+            self.assertIn("invalid choice", err.getvalue())
+        self.assertEqual(self.calls, [])
 
 
 if __name__ == "__main__":

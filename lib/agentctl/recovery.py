@@ -188,7 +188,7 @@ def token_unavailable_note(ns: str, why: str, store: Any) -> None:
     _noting_token[0] = True
     try:
         open_condition("UNKNOWN", f"UNKNOWN: token unavailable ({why}): run `secrets unlock {token_vault_key('pawelkrupinski/movies')[0]}` in any session (the store token's vault); the "
-                                  "next land or `waiting status` re-seeds the processor",
+                                  "next land or `land status` re-seeds the processor",
                        run_probe("token", {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2,
                        store=store)
     except (Exception, SystemExit) as e:

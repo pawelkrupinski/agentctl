@@ -30,7 +30,8 @@ only the confirmed culprit rejected. No `waiting` branch. Every verdict goes to 
   agentctl land hold|release                    # stop / restart taking batches (changes still queue)
   agentctl tick [--once]                        # the processor
   agentctl tick service install|uninstall|status   # it as the launchd agent net.bitcashier.agentctl-waiting
-The old names (`waiting status|pause|resume|cancel|run|service`) answer until 2026-11-05, each naming its new one."""
+(`waiting run|check|check-batch|await` are internal: the processor's own re-exec and its children; the laptop's launchd
+job still starts `waiting run --service` until `agentctl tick service install` is run again.)"""
 
 
 GATE_UNREAD = "unread"  # gate_reds' member when the gate could not be read: never green, and no Fixes-Red matches it

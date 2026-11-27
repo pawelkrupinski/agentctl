@@ -139,7 +139,7 @@ def land_queue_subcommand(a: Any, store: Any) -> Any:
     if a.lcmd == "cancel" and not a.entry:
         print("usage: agentctl land cancel <id>")
         return 2
-    w = argparse.Namespace(wcmd=LAND_SUBCOMMANDS[a.lcmd], repo=a.repo, entry=a.entry, renamed=True,
+    w = argparse.Namespace(wcmd=LAND_SUBCOMMANDS[a.lcmd], repo=a.repo, entry=a.entry,
                            hold_for=getattr(a, "hold_for", None), hold_why=getattr(a, "hold_why", None))
     return queue_command(w, store)
 

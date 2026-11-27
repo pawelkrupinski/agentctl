@@ -314,7 +314,7 @@ class WaitingTest(Base):
         self.assertEqual(self.batch()["state"], "held")
         self.assertTrue([x for x in A.process_store().events() if x["kind"] == "batch.held" and x["severity"] == "escalate"])
         self.assertEqual(self.drive(), [], "held: nothing moves until its deadline")
-        self.run_tool("waiting", "resume", cwd=self.r.path)
+        self.run_tool("land", "release", cwd=self.r.path)
         self.assertEqual(self.batch()["state"], "assembling")
 
     def test_the_hooks_stall_signal_counts_as_a_stall(self):
@@ -484,7 +484,7 @@ class WaitingTest(Base):
         notes = [e for e in self.inbox() if e["verdict"].startswith("UNKNOWN: the waiting processor cannot read the gate")]
         self.assertEqual(len(notes), 1, "said once per unread spell")
         self.assertEqual(notes[0]["kind"], "UNKNOWN")
-        rc, out = self.run_tool("waiting", "status", cwd=self.r.path)
+        rc, out = self.run_tool("land", "status", cwd=self.r.path)
         self.assertIn("gate: UNREAD, taken as red", out)
         self.assertNotIn("green", out)
         self.reds = set()
@@ -604,23 +604,25 @@ class WaitingTest(Base):
         with open(fake, "w") as f:
             f.write(f'#!/bin/sh\necho "$*" >> {log}\n[ "$1" = print ] && {{ echo "    state = running"; echo "    pid = 4242"; }}\nexit 0\n')
         os.chmod(fake, 0o755)
-        os.environ.update(AGENTCTL_LAUNCHCTL=fake, AGENTCTL_LAUNCH_AGENTS=os.path.join(t, "LaunchAgents"))
+        role = os.environ.get("AGENTCTL_ROLE")
+        os.environ.update(AGENTCTL_LAUNCHCTL=fake, AGENTCTL_LAUNCH_AGENTS=os.path.join(t, "LaunchAgents"), AGENTCTL_ROLE="sync")  # the laptop's `tick service`
         try:
-            rc, out = self.run_tool("waiting", "service", "install", cwd=self.r.path)
+            rc, out = self.run_tool("tick", "service", "install", cwd=self.r.path)
             self.assertEqual(rc, 0, out)
             plist = open(os.path.join(t, "LaunchAgents", "net.bitcashier.agentctl-waiting.plist")).read()
             for needle in ("<key>KeepAlive</key>", "<key>RunAtLoad</key>", "<string>--service</string>", self.r.path,
                            "service.log"):
                 self.assertIn(needle, plist)
             self.assertIn("bootstrap gui/", open(log).read())
-            rc, out = self.run_tool("waiting", "service", "status", cwd=self.r.path)
+            rc, out = self.run_tool("tick", "service", "status", cwd=self.r.path)
             self.assertIn("running, pid 4242", out)
-            rc, out = self.run_tool("waiting", "service", "uninstall", cwd=self.r.path)
+            rc, out = self.run_tool("tick", "service", "uninstall", cwd=self.r.path)
             self.assertFalse(os.path.exists(os.path.join(t, "LaunchAgents", "net.bitcashier.agentctl-waiting.plist")))
             self.assertIn("bootout gui/", open(log).read())
         finally:
             for k in ("AGENTCTL_LAUNCHCTL", "AGENTCTL_LAUNCH_AGENTS"):
                 os.environ.pop(k, None)
+            os.environ["AGENTCTL_ROLE"] = role or "server"
 
     def test_the_queue_points_at_land(self):
         rc, out = self.run_tool("queue", "add", cwd=self.r.path)

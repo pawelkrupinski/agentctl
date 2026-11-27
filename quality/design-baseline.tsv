@@ -198,7 +198,7 @@ fanout	lib/agentctl/checkslot.py	11
 fanout	lib/agentctl/cireport.py	24
 fanout	lib/agentctl/cleanup.py	14
 fanout	lib/agentctl/cli.py	55
-fanout	lib/agentctl/cliparser.py	11
+fanout	lib/agentctl/cliparser.py	10
 fanout	lib/agentctl/culpritfix.py	15
 fanout	lib/agentctl/fixerland.py	20
 fanout	lib/agentctl/fixerlife.py	26

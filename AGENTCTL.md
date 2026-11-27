@@ -2395,9 +2395,10 @@ at a time: a second `hold` extends it. Its deadline is its expiry: a forgotten h
 next tick (`hold.expired` event), never a manual-only state. The status line says `LAND HELD until HH:MM (by …: why)`,
 and the status page shows it above the batch.
 
-The old names (design §14.5) answer until 2026-11-05, each printing its new one: `waiting status` → `land status`,
-`waiting pause|resume` → `land hold|release`, `waiting cancel` → `land cancel`, `waiting run|service` → `tick
-[service]`. `queue` stays retired (it prints the retirement note). `red list|patrol` are gone (2026-10-30): `red status`.
+The old names (design §14.5) are gone (2026-11-27): `waiting status` → `land status`, `waiting pause|resume` → `land
+hold|release`, `waiting cancel` → `land cancel`, `waiting service` → `tick service`; `waiting run` stays only as the
+laptop launchd job's argv (`waiting run --service`) until `agentctl tick service install` is run again, then it goes
+too. `queue` stays retired (it prints the retirement note). `red list|patrol` are gone (2026-10-30): `red status`.
 
 (`waiting check <id>`, `waiting check-batch <id>`, `waiting await` and `watch` are internal: the executors and `land --follow`.)
 

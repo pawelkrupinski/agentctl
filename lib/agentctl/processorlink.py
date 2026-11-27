@@ -130,7 +130,7 @@ class TokenDrop:
 def offer_token(repo: str) -> bool:
     """Hand this process's store token to the repo's waiting processor when it listens (see THE TOKEN HAND-OFF) AND
     lacks it: asked first (one socket round trip), so an interactive command hands over only on a real transition
-    (2026-10-30: every `land` / `waiting status` handed it over, 175 "handed over" lines in 400). Never fatal; True when
+    (2026-10-30: every `land` / `land status` handed it over, 175 "handed over" lines in 400). Never fatal; True when
     handed over."""
     try:
         d, _c, _w = waiting_state(repo)

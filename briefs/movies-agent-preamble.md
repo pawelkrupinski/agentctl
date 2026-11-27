@@ -43,7 +43,7 @@ Read first: `~/bin/AGENTCTL.md`, which explains `~/bin/agentctl`: env, land, wai
   `~/bin/agentctl inbox` with your worktree as its cwd; the orchestrator reads it. A WATCH RED of yours comes back to
   you as a new message.
 - `land` itself refuses at once (`NOT LANDED: <why>`) only for a dirty tree, a rebase conflict or the squash guard: fix,
-  commit, land again. `agentctl land status` lists the queue; `agentctl land cancel <id>` drops your change (the old `waiting status|cancel` names answer until 2026-11-05).
+  commit, land again. `agentctl land status` lists the queue; `agentctl land cancel <id>` drops your change.
   (A dispatched red fixer's land, and `land --follow`, still run the checks in-process and end at `LANDED`.)
 - Assigned a red build (a run number)? Run `~/bin/agentctl red claim <run> --note "<one line>"` FIRST, so the gate
   status names you as its fixer (`agentctl ci-why`, the status line); land the fix with `Fixes-Red: <run>`.

@@ -945,7 +945,7 @@ class LandHoldTest(Phase2Base):
     def land(self, cmd, **kw):
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = A.cmd_waiting(argparse.Namespace(wcmd=cmd, repo=self.repo, entry=None, renamed=True, **kw), *on_clock(FakeClock()))
+            rc = A.cmd_waiting(argparse.Namespace(wcmd=cmd, repo=self.repo, entry=None, **kw), *on_clock(FakeClock()))
         return rc, out.getvalue()
 
     def test_a_hold_made_on_the_laptop_holds_ci_runners_batch_until_released(self):

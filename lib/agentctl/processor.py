@@ -5,7 +5,6 @@ import argparse
 import contextlib
 import os
 import signal
-import sys
 from typing import Any, Callable, Sequence
 from agentctl.clock import Clock
 from agentctl.core import SHORT, _bounded, attempt, err, git, git_ok, host_role, slug
@@ -39,16 +38,6 @@ from agentctl.queue import hold_row, land_hold
 from agentctl.changekind import HOLD_SHOWN
 from agentctl.queueclose import change_rows
 from agentctl.ask import owner_asks
-
-
-WAITING_RENAMED = {"status": "land status", "pause": "land hold", "resume": "land release", "cancel": "land cancel <id>",
-                   "run": "tick", "service": "tick service"}
-
-
-ALIASES_UNTIL = "2026-11-05"  # the old command names (design §14.5) answer until then, each naming its new one
-# TODO(2026-11-05): drop `waiting` and WAITING_RENAMED. NOT BEFORE the laptop's launchd job stops calling `waiting run
-# --service` (as installed 2026-10-29): the owner reinstalls it with `agentctl tick service install` (which kickstarts
-# it and needs the token handed over again), then the alias goes -- removing it first would stop the sync.
 
 
 class ProcessorLoop:
@@ -152,7 +141,7 @@ TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns betwe
 
 def cmd_tick(a: argparse.Namespace, clock: Clock, store: Any) -> int:
     """`agentctl tick`: the processor (the reconciler's loop of ticks); `tick service install|uninstall|status`: it as the
-    launchd agent (design §14.5: `waiting run` / `waiting service`, renamed)."""
+    launchd agent."""
     if host_role() == "server":  # ci-runner: its own clone, systemd's notify protocol, a clean stop between ticks
         repo = ensure_server_clone(a.repo, store)
         signal.signal(signal.SIGTERM, lambda *_: TICK_STOP.__setitem__(0, True))
@@ -163,7 +152,7 @@ def cmd_tick(a: argparse.Namespace, clock: Clock, store: Any) -> int:
         repo = a.repo or (git(safe_cwd(), "rev-parse", "--show-toplevel", check=False).stdout.strip()
                           if git_ok(safe_cwd(), "rev-parse", "--show-toplevel") else movies_repo_path())
     w = argparse.Namespace(wcmd="service" if a.tcmd == "service" else "run", repo=repo, once=a.once, service=not a.once,
-                           action=a.action, renamed=True)
+                           action=a.action)
     if a.tcmd == "service" and not a.action:
         print("usage: agentctl tick service install|uninstall|status")
         return 2
@@ -171,10 +160,6 @@ def cmd_tick(a: argparse.Namespace, clock: Clock, store: Any) -> int:
 
 
 def cmd_waiting(a: argparse.Namespace, clock: Clock, store: Any) -> int:
-    if a.wcmd in WAITING_RENAMED and not getattr(a, "renamed", False) and \
-            (a.wcmd not in ("run", "service") or sys.stdin.isatty()):
-        err(f"`agentctl waiting {a.wcmd}` is now `agentctl {WAITING_RENAMED[a.wcmd]}` (the old name answers until "
-            f"{ALIASES_UNTIL})")
     if a.wcmd == "run":
         return waiting_run(waiting_repo(a), clock, store, once=a.once, service=getattr(a, "service", False))
     if a.wcmd == "await":  # land's wait on its entry, resumed after a restart on new code

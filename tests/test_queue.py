@@ -1134,7 +1134,7 @@ class QueueTest(WaitingTest):
     def test_cancel_drops_a_queued_change(self):
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
         eid, _ = self.queued(wt)
-        rc, out = self.run_tool("waiting", "cancel", eid, cwd=self.r.path)
+        rc, out = self.run_tool("land", "cancel", eid, cwd=self.r.path)
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.check(eid), 0)
         self.assertEqual(self.pushed(), [], "a cancelled change is never checked or pushed")

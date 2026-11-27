@@ -197,7 +197,7 @@ def remote_decided_by_run(o_r: str, rem: Any, run: Any, name: str, status: Any, 
 
 def save_remote(d, e, rem, st):
     """The remote check's record in the entry, saved at once (a replacement checker adopts it); `remote_run` mirrors the
-    run for the push's hook and `waiting status`."""
+    run for the push's hook and `land status`."""
     e["remote"] = rem
     if rem.get("run") is not None:
         e["remote_run"] = rem["run"]

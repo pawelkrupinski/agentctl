@@ -288,7 +288,7 @@ def token_env(o_r, env=None):
 
 # THE TOKEN HAND-OFF. The processor as a launchd service, or detached once its land exits, gets no answer from the vault
 # (an unlock belongs to the session that made it). So it listens on a unix socket (0600, in a 0700 directory) and a
-# process that can read the vault -- every `land` that joins `waiting`, `waiting status` / `resume`, any command whose
+# process that can read the vault -- every `land` that joins `waiting`, `land status` / `release`, any command whose
 # token() read the vault (seed_processor), and the watchdog's kick (kick_processor) -- hands it the token. It lives only in the processor's memory and environment (a re-exec keeps it; the push's hook and the watches it
 # starts inherit it), never on disk. Until it has one, the gate is unread: taken as red, said once in the inbox.
 def token_sock_path(d: str) -> str:
