@@ -20,7 +20,7 @@ from agentctl.redrecord import lease_is_live, red_lease
 from agentctl.leases import lease_meta
 from agentctl.hostsleep import keep_awake
 from agentctl.red import RED_FIXER_MAX, RED_FIXER_TTL, RED_RELEASE_ASKS
-from agentctl.worktrees import mark_internal
+from agentctl.worktreelife import end_fixer_tree
 from agentctl.fixerblockers import claude_cli, interactive_mode
 from agentctl.fixerland import fixer_mark, fixer_meta_sent
 from agentctl.sessionroll import fixer_rollover
@@ -438,7 +438,7 @@ class RedFixerWrapper:
         rec.update(ended=ts(), rc=rc, verdict=verdict)
         self.save()
         if not rec.get("orphan"):  # an orphan's tree is its author's, never litter
-            mark_internal(self.wt)  # its fixer ended: the tree is agentctl's litter now, never a fixer or owner
+            end_fixer_tree(self.wt, bool(rc), verdict[:200])  # a give-up or a stop: archived and retired
         print(line)
         return rc
 

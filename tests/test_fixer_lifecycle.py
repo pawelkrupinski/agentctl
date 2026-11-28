@@ -5,7 +5,7 @@ renewal, a lapsed heartbeat taken again) were the per-family OWNER wrappers' onl
 "STOPPED: the red's lease was lost" (13 on 11-04) -- most because their red had CLEARED under them -- each a RED FIXER
 failure and a new attempt. And every give-up counted as an attempt: #728 escalated 58 times on 11-02, each owner turn
 ending "GAVE UP: ... the approved flip-unification stage 5 (a resolver rule change, outside red fixing)"."""
-import inspect, json, os, sys, time, unittest
+import glob, inspect, json, os, subprocess, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -77,6 +77,31 @@ class FixerLeaseTest(RedsBase):
         self.assertTrue(self.wait(lambda: self.rec().get("ended")))
         self.assertTrue(self.rec()["verdict"].startswith("ENDED: red cleared"), self.rec()["verdict"])
         self.assertEqual(fixer_entries(), [], "no RED FIXER entry: nothing failed")
+
+    def test_a_stopped_fixers_worktree_is_archived_then_retired_unless_it_holds_unlanded_commits(self):
+        """2026-11-28: a fixer that gave up or was stopped left its worktree (and its uncommitted notes) behind. It is
+        archived and removed with its branch; one holding commits not on main is kept, the next fixer continues in it
+        (FIXER CONTINUITY)."""
+        _it, name = self.start()
+        wt = self.rec()["worktree"]
+        with open(os.path.join(wt, "notes.txt"), "w") as f:
+            f.write("uncommitted notes\n")
+        self.st.revoke(name, "red cleared")
+        self.assertTrue(self.wait(lambda: self.rec().get("ended")))
+        self.assertFalse(os.path.exists(wt), "the stopped fixer's worktree is removed")
+        [archived] = glob.glob(os.path.join(A.state_root("fixer-archive"), "*", "untracked", "notes.txt"))
+        self.assertEqual(open(archived).read(), "uncommitted notes\n", "its uncommitted work is archived first")
+
+    def test_a_stopped_fixers_worktree_with_unlanded_commits_is_kept_for_the_next_fixer(self):
+        _it, name = self.start()
+        wt = self.rec()["worktree"]
+        with open(os.path.join(wt, "work.txt"), "w") as f:
+            f.write("a fix in progress\n")
+        subprocess.run(["git", "add", "work.txt"], cwd=wt, check=True)
+        subprocess.run(["git", "commit", "-qm", "wip"], cwd=wt, check=True)
+        self.st.revoke(name, "red cleared")
+        self.assertTrue(self.wait(lambda: self.rec().get("ended")))
+        self.assertTrue(os.path.exists(os.path.join(wt, "work.txt")), "its unlanded commit stays where the next fixer goes on")
 
     def test_a_fixer_whose_lease_merely_lapsed_takes_it_again_and_goes_on(self):
         """The laptop asleep or the store out of reach past RED_FIXER_TTL, nobody took the red: the living wrapper

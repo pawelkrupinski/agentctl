@@ -273,7 +273,7 @@ effect	lib/agentctl/watchdog.py	1
 effect	lib/agentctl/watchdog.py:files	2
 effect	lib/agentctl/watchknobs.py	1
 effect	lib/agentctl/watchtick.py:files	2
-effect	lib/agentctl/worktreelife.py:files	7
+effect	lib/agentctl/worktreelife.py:files	8
 effect	lib/agentctl/worktrees.py:files	8
 effect	quality/design.py	1
 effect	quality/design.py:files	7
@@ -865,6 +865,7 @@ mixed	lib/agentctl/watchdog.py:kick_processor	8
 mixed	lib/agentctl/watchtick.py:cmd_watch	6
 mixed	lib/agentctl/watchtick.py:finish_watch	9
 mixed	lib/agentctl/workflowdispatch.py:red_verify_dispatch	9
+mixed	lib/agentctl/worktreelife.py:end_fixer_tree	5
 mixed	lib/agentctl/worktreelife.py:fresh_worktree	4
 mixed	lib/agentctl/worktreelife.py:git_in_progress	6
 mixed	lib/agentctl/worktreelife.py:retire_worktree	7

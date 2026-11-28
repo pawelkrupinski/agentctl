@@ -9,6 +9,7 @@ from agentctl.core import PROTECTED_BRANCHES, err, git, git_ok, remote
 from agentctl.paths import state_root
 from agentctl.deletions import log_deletion
 from agentctl.waitingdir import waiting_state
+from agentctl.worktrees import mark_internal
 
 
 class TreeState(NamedTuple):
@@ -77,6 +78,16 @@ def retire_worktree(wt: str, why: str) -> str:
         archived = f"; archived to {dest}"
     refused = remove_tree(wt, state, why)
     return f"worktree {wt} kept: git worktree remove refused: {refused}{archived}" if refused else f"worktree {wt} removed{archived}"
+
+
+def end_fixer_tree(wt: str, gave_up: bool, why: str) -> None:
+    """A red fixer ended. When it gave up or was stopped its tree is archived and removed with its branch -- unless it holds
+    commits not on main, where the next fixer of the red continues (FIXER CONTINUITY); a tree left is agentctl's litter,
+    never a fixer or owner."""
+    state = read_tree(wt) if gave_up and os.path.isdir(wt) else None
+    if state and not state.unmerged:
+        retire_worktree(wt, why)
+    mark_internal(wt)  # a removed tree's tag is pruned by maintain
 
 
 def fresh_worktree(repo: str, kind: str, num: Any) -> tuple[str | None, str | None]:
