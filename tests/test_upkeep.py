@@ -129,6 +129,7 @@ class RunQueueTest(unittest.TestCase):
         finally:
             A.RUN_QUEUE_ESCALATE_AFTER = saved
         [c] = [c for c in A.open_conditions(store) if c["key"] == "run-queue"]
+        self.addCleanup(A.close_condition, c, "closed by hand: the test's own WL leaves no open condition for a repeat", store, registry(A))
         self.assertEqual((c["kind"], c["probe"]["kind"]), ("INVARIANT", "run_queue"))
 
 
