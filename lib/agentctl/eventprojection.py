@@ -12,7 +12,7 @@ from agentctl.timefmt import iso_at
 from agentctl.notifyurl import notification_url
 from agentctl.procs import safe_cwd
 from agentctl.inboxentry import inbox_dir, inbox_kind
-from agentctl.notifier import notify, notify_cause, notify_fix
+from agentctl.notifier import Delivery, notify
 from agentctl.statemachines import machine_state
 from agentctl.redask import ask_interval
 from agentctl.alerts import alert_write
@@ -141,6 +141,7 @@ class EscalationPass:
     def __init__(self, st: Any, *, ctx: Context) -> None:
         self.ctx = ctx
         self.st = st
+        self.delivery = Delivery(True)  # the last notify()'s: why it reached nobody, when it did not
         self.cur = int(st.meta_get("notifier_seq", 0) or 0)
         self.evs = st.events(after=max(0, self.cur - NOTIFY_LOOKBACK), limit=5000)
         self.t = st.clock()
@@ -200,13 +201,14 @@ class EscalationPass:
         if len(tell) > NOTIFY_BURST:
             text = f"{len(tell)} escalations: " + "; ".join(re.sub(r"\s+--\s+`.*$", "", _escalation_line(ev))[:70]
                                                             for _k, ev, _r in tell)
-            ok = notify(f"agentctl: {len(tell)} escalations (catching up)", text[:220], group="agentctl-summary")
-            return (tell if ok else []), (1 if ok else 0)
+            self.delivery = notify(f"agentctl: {len(tell)} escalations (catching up)", text[:220], group="agentctl-summary")
+            return (tell if self.delivery else []), (1 if self.delivery else 0)
         done: list[Any] = []
         for k, ev, r in tell:
             url = attempt(lambda: notification_url(ev, self.st, ctx=self.ctx), None, catch=(Exception,))
-            if not notify(f"agentctl: {ev['kind']}", _escalation_line(ev)[:220], url=url,
-                          group=f"agentctl-{ev.get('item_type')}-{ev.get('item_id')}"):
+            self.delivery = notify(f"agentctl: {ev['kind']}", _escalation_line(ev)[:220], url=url,
+                                   group=f"agentctl-{ev.get('item_type')}-{ev.get('item_id')}")
+            if not self.delivery:
                 break
             done.append((k, ev, r))
         return done, len(done)
@@ -224,7 +226,7 @@ class EscalationPass:
         """notify_failed: both channels failed (invariant WN reads it); cleared once nothing is left undelivered."""
         st = self.st
         if len(done) < len(tell):
-            st.meta_set("notify_failed", json.dumps({"at": self.t, "cause": notify_cause(), "fix": notify_fix(),
+            st.meta_set("notify_failed", json.dumps({"at": self.t, "cause": self.delivery.cause, "fix": self.delivery.fix,
                                                       "pending": len(tell) - len(done)}))
         elif st.meta_get("notify_failed"):
             st.meta_set("notify_failed", "")

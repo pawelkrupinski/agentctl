@@ -1,7 +1,7 @@
 """Events -> the inbox (design §8.2, reconciler phase 1 step 7): the projector writes one inbox entry per event with an
 audience or a non-info severity (never twice), the notifier sends one notification per escalation, and the change
 path writes the inbox only through its events."""
-import ast, os, stat, sys, tempfile, time, unittest
+import ast, json, os, stat, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -242,15 +242,16 @@ class NotifierDeliveryTest(unittest.TestCase):
         saved = A.sys.platform
         A.sys.platform = "darwin"
         try:
-            self.assertIs(A.notify("t", "m", url="https://u"), True)
+            self.assertIs(A.notify("t", "m", url="https://u").ok, True)
             self.assertIn("display notification", self.shown()[-1])  # the fallback ran
             with open(osa, "w") as f:
                 f.write("1")
-            self.assertIs(A.notify("t", "m"), False)
+            got = A.notify("t", "m")
         finally:
             A.sys.platform = saved
-        self.assertIn("Notifications are not allowed", A.notify_cause())
-        self.assertIn("osascript", A.notify_cause())
+        self.assertIs(got.ok, False)
+        self.assertIn("Notifications are not allowed", got.cause)
+        self.assertIn("osascript", got.cause)
 
     def darwin_without_terminal_notifier(self, osascript_body):
         """notify()'s macOS path with no terminal-notifier installed and `osascript_body` as osascript."""
@@ -277,7 +278,7 @@ class NotifierDeliveryTest(unittest.TestCase):
         self.addCleanup(os.environ.pop, "AGENTCTL_NOTIFY_TIMEOUT", None)
         self.escalate("slow")
         self.assertEqual(A.notify_escalations(self.st, ctx=case_context()), 0)
-        self.assertEqual(A.notify_cause(), "osascript: timed out after 1 s")
+        self.assertEqual(json.loads(self.st.meta_get("notify_failed"))["cause"], "osascript: timed out after 1 s")
         ok, detail = A.inv_wn(A.Clock(), self.st)
         self.assertIs(ok, False)
         self.assertIn("(osascript: timed out after 1 s; 1 waiting)", detail)
@@ -288,10 +289,11 @@ class NotifierDeliveryTest(unittest.TestCase):
     def test_a_failing_osascript_keeps_its_exit_code_and_last_stderr_line_and_names_its_own_permission(self):
         self.darwin_without_terminal_notifier("echo starting; echo 'noise' >&2; "
                                               "echo 'execution error: Notifications are not allowed (-1743)' >&2; exit 1")
-        self.assertIs(A.notify("t", "m"), False)
-        self.assertEqual(A.notify_cause(), "osascript: exit 1: execution error: Notifications are not allowed (-1743)")
-        self.assertIn("Script Editor", A.notify_fix())
-        self.assertNotIn("terminal-notifier", A.notify_fix())
+        got = A.notify("t", "m")
+        self.assertIs(got.ok, False)
+        self.assertEqual(got.cause, "osascript: exit 1: execution error: Notifications are not allowed (-1743)")
+        self.assertIn("Script Editor", got.fix)
+        self.assertNotIn("terminal-notifier", got.fix)
 
     def test_each_channel_gets_time_for_an_overloaded_cold_start(self):
         """10 s was the 2026-11-22 osascript's whole cold start under load (XProtect, trustd, then its TCC request)."""
@@ -302,9 +304,10 @@ class NotifierDeliveryTest(unittest.TestCase):
             seen.append(kw.get("timeout"))
             return real(argv, **kw)
         A.wire_runner(FakeRunner(run=run))
-        self.assertIs(A.notify("t", "m"), True)
+        got = A.notify("t", "m")
+        self.assertIs(got.ok, True)
         self.assertEqual(seen, [30])
-        self.assertEqual((A.notify_cause(), A.notify_fix()), ("", ""))
+        self.assertEqual((got.cause, got.fix), ("", ""))
 
     def test_a_failed_delivery_is_not_recorded_and_raises_ONE_condition_naming_the_owners_fix(self):
         os.environ["AGENTCTL_W6_MAX"] = "0"

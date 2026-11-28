@@ -6,6 +6,7 @@ import re
 import shlex
 import subprocess
 import sys
+from dataclasses import dataclass
 from agentctl.procrunner import process_runner
 from agentctl.core import HOME
 from agentctl.watchknobs import knob_notify_timeout
@@ -43,25 +44,25 @@ NOTIFY_FIX = {"terminal-notifier": "allow terminal-notifier in System Settings >
               "none": "no notification channel on this host: set $AGENTCTL_NOTIFY"}
 
 
-_notify_cause = ["", ""]  # (cause, fix) of the last notify() that reached nobody
+@dataclass(frozen=True)
+class Delivery:
+    """What one notify() did: true when a channel got through; else why it reached nobody (cause) and what the owner
+    does about it (fix)."""
+    ok: bool
+    cause: str = ""
+    fix: str = ""
 
-
-def notify_cause():
-    """Why the last notify() reached nobody ("" when it got through)."""
-    return _notify_cause[0]
-
-
-def notify_fix():
-    """What the owner does about the last notify() that reached nobody ("" when it got through)."""
-    return _notify_cause[1]
+    def __bool__(self) -> bool:
+        return self.ok
 
 
 def _delivered(ok, failures=()):
     """failures: (channel, what it said, fix) per channel that failed."""
+    if ok:
+        return Delivery(True)
     failures = list(failures) or [("none", "no channel", NOTIFY_FIX["none"])]
-    _notify_cause[:] = ["", ""] if ok else ["; ".join(f"{c}: {w}" for c, w, _f in failures),
-                                             "; ".join(dict.fromkeys(f for _c, _w, f in failures))]
-    return ok
+    return Delivery(False, "; ".join(f"{c}: {w}" for c, w, _f in failures),
+                    "; ".join(dict.fromkeys(f for _c, _w, f in failures)))
 
 
 def _process_said(r):
@@ -94,8 +95,8 @@ def _channel(ch, argv, fix):
 def notify(title, text, url=None, group=None):
     """A macOS notification, clickable (opens `url` in Chrome) through terminal-notifier; on ANY failure of it (absent,
     not allowed in System Settings, a timeout) the osascript fallback (no click). $AGENTCTL_NOTIFY: a command run with
-    (title, text, url) instead (the tests'). Returns True only when one of them got through (exit 0); else False, the
-    cause in notify_cause() and the owner's fix in notify_fix() -- the notifier records a delivery only on True
+    (title, text, url) instead (the tests'). Returns a Delivery, true only when one of them got through (exit 0); else
+    false, with its cause and the owner's fix -- the notifier records a delivery only on a true one
     (2026-11-03). Each channel is bounded by $AGENTCTL_NOTIFY_TIMEOUT (NOTIFY_TIMEOUT); none is retried."""
     cmd = knob_notify()
     if cmd:
