@@ -6,12 +6,12 @@ from agentctl.conditionregistry import ConditionRegistry
 from agentctl.clock import Clock
 from agentctl.context import Context
 from agentctl.eventprojection import notify_escalations
-from agentctl.redcli import write_red_status_snapshot
 from agentctl.syncplumbing import SyncRole, plumbing_steps
 from agentctl.synclanding import landing_steps
 from agentctl.syncdispatch import DispatchSteps, dispatch_steps
 from agentctl.syncwatches import watch_steps
 from agentctl.syncmaintenance import maintenance_steps
+from agentctl.redstatus import write_red_status_snapshot
 
 
 def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,

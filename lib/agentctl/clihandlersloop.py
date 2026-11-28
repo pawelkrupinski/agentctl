@@ -2,15 +2,15 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-from agentctl.clock import Clock
 from agentctl.conditionregistry import ConditionRegistry
+from agentctl.clock import Clock
 from agentctl.context import Context
-from agentctl.clihandler import Handler
-from agentctl.recovery import cmd_recover
 from agentctl.watchtick import cmd_watch
-from agentctl.redcli import cmd_red
+from agentctl.recovery import cmd_recover
 from agentctl.watchdog import cmd_watchdog
+from agentctl.clihandler import Handler
 from agentctl.tickloop import cmd_tick, cmd_waiting
+from agentctl.redcommands import cmd_red
 
 
 def loop_handlers(clock: Clock, store: Any, registry: ConditionRegistry, ctx: Context) -> dict[str, Handler]:

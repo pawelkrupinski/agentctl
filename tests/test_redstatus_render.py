@@ -24,7 +24,7 @@ OWNERS = [{"family": "fam", "worktree": os.path.expanduser("~/wt"), "alive": Tru
           {"family": "gone", "worktree": "/other/wt", "alive": False, "ended": True, "verdict": "done"},
           {"family": "no worktree", "alive": True}]
 DISPATCH = {"alive": 1, "cap": 3, "blocker": None, "repos_off": {}, "pressure": None}
-MODEL = {"reds": [RED, RED2], "families": FAMILIES, "owners": OWNERS, "dispatcher": DISPATCH}
+MODEL = {"at": 12345.0, "reds": [RED, RED2], "families": FAMILIES, "owners": OWNERS, "dispatcher": DISPATCH}
 SCENARIOS = {
     "reds unread": ({"reds": {"error": "timeout"}}, False),
     "nothing open": ({"reds": [], "dispatcher": DISPATCH}, False),
@@ -50,14 +50,13 @@ def render_all(module):
     with mock.patch.object(module, "revert_line", lambda r, now: f"revert {r['id']} at {now:g}"), \
             mock.patch.object(module, "red_repo_short", lambda repo: f"<{repo}>"), \
             mock.patch.object(module, "RED_PRIMARY", "movies"), \
-            mock.patch.object(importlib.import_module("agentctl.paths"), "HOME", os.path.expanduser("~")), \
-            mock.patch.object(module, "epoch_now", lambda: 12345.0):
+            mock.patch.object(importlib.import_module("agentctl.paths"), "HOME", os.path.expanduser("~")):
         return {name: module.render_red_status(m, verbose) for name, (m, verbose) in SCENARIOS.items()}
 
 
 class RedStatusRenderTest(unittest.TestCase):
     def test_every_scenario_renders_as_it_did(self):
-        got = render_all(importlib.import_module("agentctl.redcli"))
+        got = render_all(importlib.import_module("agentctl.redstatus"))
         for name in SCENARIOS:
             with self.subTest(name):
                 self.assertEqual(got[name], EXPECTED[name], name)

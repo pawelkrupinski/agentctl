@@ -226,7 +226,7 @@ class RevertNoticeTest(unittest.TestCase):
         h = {"gate_text": "gate green", "tick_at": self.t[0], "store_url": None, "store_unreachable": False,
              "waiting": [], "queued": [], "reverts": rows}
         self.assertIn("REVERTED unacked: 1", A.render_status_line(h, self.t[0]))
-        text = A.render_red_status({"reds": [], "reverts": rows, "families": [], "owners": [], "dispatcher": {"error": "-"}})
+        text = A.render_red_status({"at": self.t[0], "reds": [], "reverts": rows, "families": [], "owners": [], "dispatcher": {"error": "-"}})
         self.assertIn("reverts (1 unacked", text)
         self.assertIn(rows[0]["id"], text)
 

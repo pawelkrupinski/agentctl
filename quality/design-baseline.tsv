@@ -641,7 +641,6 @@ mixed	lib/agentctl/redcli.py:drift_overlay	8
 mixed	lib/agentctl/redcli.py:probe_checks	10
 mixed	lib/agentctl/redcli.py:probe_drift	7
 mixed	lib/agentctl/redcli.py:red_cmd_auto	8
-mixed	lib/agentctl/redcli.py:revert_lines	5
 mixed	lib/agentctl/redcrash.py:_crash_evidence	5
 mixed	lib/agentctl/redcrash.py:red_crash_cmd	3
 mixed	lib/agentctl/reddispatch.py:red_backoff_why	9
@@ -871,7 +870,7 @@ fanout	lib/agentctl/recovery.py	14
 fanout	lib/agentctl/redauthors.py	10
 fanout	lib/agentctl/redblock.py	14
 fanout	lib/agentctl/redclaim.py	19
-fanout	lib/agentctl/redcli.py	31
+fanout	lib/agentctl/redcli.py	16
 fanout	lib/agentctl/redcrash.py	20
 fanout	lib/agentctl/reddispatch.py	21
 fanout	lib/agentctl/redearly.py	14

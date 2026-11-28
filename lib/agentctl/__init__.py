@@ -48,6 +48,7 @@ MODULES = ("caches", "procrunner", "conditionregistry", "escalationtable", "pspa
            "statusqueue", "statussections", "statusmachine", "statusstore", "status", "statuspage", "redcli",
            "syncsteps", "queueenter", "landdryrun", "slots", "cliparser", "clihandlerslanding", "outboxflush",
            "regenholds", "syncworktrees", "syncplumbing", "synclanding", "syncdispatch", "syncwatches",
-           "syncmaintenance", "syncloop", "redgate", "redtickstage", "redtickobserve", "redtickprelude",
-           "redtickopen", "redtickstep", "redtick", "redtickothers", "redtickrun", "gatepublish", "serversteps",
-           "tickloop", "clihandlersloop", "clihandlers", "cli")
+           "syncmaintenance", "redgate", "redtickstage", "redtickobserve", "redtickprelude", "redtickopen",
+           "redtickstep", "redtick", "redtickothers", "redtickrun", "gatepublish", "serversteps", "redstatus",
+           "syncloop", "tickloop", "redleasecmds", "reddispatchcmd", "redcommands", "clihandlersloop", "clihandlers",
+           "cli")
