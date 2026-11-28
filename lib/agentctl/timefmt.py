@@ -2,7 +2,9 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's only.
 
 from agentctl.clock import epoch_now
+import argparse
 import datetime as dt
+import re
 import time
 from typing import Any
 
@@ -54,3 +56,9 @@ def age_since(since, now=None):
     return f"{d}d {h}h" if d else f"{h}h {m}m" if h else f"{m}m"
 
 
+def parse_duration(text: object) -> float:
+    """Seconds of `90`, `90s`, `30m`, `3h`."""
+    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smh]?)\s*", str(text))
+    if not m:
+        raise argparse.ArgumentTypeError(f"not a duration: {text!r} (90, 90s, 30m, 3h)")
+    return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]

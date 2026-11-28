@@ -1,7 +1,6 @@
 # agentctl, part `queueuntil`: land --until-done and durable verdicts.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-import argparse
 import os
 import re
 from typing import Any
@@ -13,14 +12,6 @@ from agentctl.onmain import landed_state
 from agentctl.worktrees import worktrees
 from agentctl.cleanup import close_worktree, free_worktree
 from agentctl.paths import claude_session_id
-
-
-def parse_duration(text):
-    """Seconds of `90`, `90s`, `30m`, `3h`."""
-    m = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*([smh]?)\s*", str(text))
-    if not m:
-        raise argparse.ArgumentTypeError(f"not a duration: {text!r} (90, 90s, 30m, 3h)")
-    return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600}[m.group(2)]
 
 
 UNTIL_DONE_AGAIN = "~/bin/agentctl land --until-done"

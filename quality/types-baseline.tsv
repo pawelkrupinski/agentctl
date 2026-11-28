@@ -117,7 +117,7 @@ mypy-errors	queuepush	41
 mypy-errors	queuerecheck	43
 mypy-errors	queueslots	14
 mypy-errors	queuesubmit	27
-mypy-errors	queueuntil	10
+mypy-errors	queueuntil	9
 mypy-errors	recordingpins	30
 mypy-errors	recovery	25
 mypy-errors	red	29

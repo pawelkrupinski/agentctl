@@ -2,14 +2,14 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import argparse
+from agentctl.timefmt import parse_duration
 from agentctl.storeauth import STORE_AUTHS
 from agentctl.core import remote
 from agentctl.ghapp import GHAPP_ROLES
 from agentctl.timelinecmd import add_timeline_commands
+from agentctl.cleanup import SWEEP_IDLE_DAYS
 from agentctl.remotestore import DEFAULT_STORE_URL, STORE_PORT
 from agentctl.waiting import WAITING_HELP
-from agentctl.cleanup import SWEEP_IDLE_DAYS
-from agentctl.queueuntil import parse_duration
 from agentctl.cliops import (
     Subparsers, add_config, add_decide, add_dispatch, add_gov, add_inbox, add_issue, add_laptop, add_lease,
     add_maintain, add_park, add_reap, add_recover, add_red, add_revert, add_status, add_supersede, add_unpark)
