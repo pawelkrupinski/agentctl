@@ -88,7 +88,7 @@ class FixerLeaseTest(RedsBase):
             f.write("uncommitted notes\n")
         self.st.revoke(name, "red cleared")
         self.assertTrue(self.wait(lambda: self.rec().get("ended")))
-        self.assertFalse(os.path.exists(wt), "the stopped fixer's worktree is removed")
+        self.assertTrue(self.wait(lambda: not os.path.exists(wt)), "the stopped fixer's worktree is removed (after its record says ended)")
         [archived] = glob.glob(os.path.join(A.state_root("fixer-archive"), "*", "untracked", "notes.txt"))
         self.assertEqual(open(archived).read(), "uncommitted notes\n", "its uncommitted work is archived first")
 
@@ -101,6 +101,7 @@ class FixerLeaseTest(RedsBase):
         subprocess.run(["git", "commit", "-qm", "wip"], cwd=wt, check=True)
         self.st.revoke(name, "red cleared")
         self.assertTrue(self.wait(lambda: self.rec().get("ended")))
+        self.assertTrue(self.wait(lambda: A.internal_tree(wt)), "kept and tagged: the next fixer goes on in it")
         self.assertTrue(os.path.exists(os.path.join(wt, "work.txt")), "its unlanded commit stays where the next fixer goes on")
 
     def test_a_fixer_whose_lease_merely_lapsed_takes_it_again_and_goes_on(self):
