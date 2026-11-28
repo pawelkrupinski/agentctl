@@ -87,8 +87,7 @@ def problems(root=ROOT, movies=None):
             continue
         if digest(path) != recorded:
             out.append(f"{copy}: edited here (digest differs from VENDORED.tsv): change it in movies, then `vendor.py sync`")
-        theirs = os.path.join(movies, source) if movies else ""
-        if theirs and os.path.isfile(theirs) and digest(theirs) != digest(path):
+        if movies_digest(movies, source) not in ("-", digest(path)):
             out.append(f"{copy}: {DRIFTED}' {source}: `python3 devtools/vendor.py sync`, or write down the "
                        "change for a movies lane")
     return out
@@ -98,11 +97,19 @@ def signature(root=ROOT, movies=None):
     """One digest over the movies files the copies follow (`-` for one missing): it changes whenever movies moves a
     vendored file again, so a sync that failed for one state of movies is tried again for the next."""
     movies = movies_root() if movies is None else movies
-    parts = []
-    for _copy, source, _recorded in read_table(root):
-        theirs = os.path.join(movies, source) if movies else ""
-        parts.append(f"{source}\t{digest(theirs) if theirs and os.path.isfile(theirs) else '-'}\n")
+    parts = [f"{source}\t{movies_digest(movies, source)}\n" for _copy, source, _recorded in read_table(root)]
     return hashlib.sha256("".join(parts).encode()).hexdigest()
+
+
+def movies_digest(movies, source):
+    """The digest of the movies checkout's file `source`, `-` with no checkout or no such file."""
+    theirs = movies_path(movies, source)
+    return digest(theirs) if os.path.isfile(theirs) else "-"
+
+
+def movies_path(movies, source):
+    """`source` in the movies checkout, "" (no file) without one."""
+    return os.path.join(movies, source) if movies else ""
 
 
 def sync(root=ROOT, movies=None):

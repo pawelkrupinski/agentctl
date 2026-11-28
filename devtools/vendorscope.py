@@ -5,7 +5,9 @@ A push that changes ONLY vendored copies (devtools/design_rules/*, devtools/lib/
 mechanical sync (devtools/vendorsync.py): the copies are byte-equal to movies' files, so what can break is what imports
 them. Its scope is `test_vendored` and the tests that import a changed module, plus the simulator gate only when the
 simulator imports one (2026-11-28: a full pre-push suite at load 25-45 timed out twice on a correct 5-file sync and the
-condition stayed open 3 h). Any other push is `full`: the whole suite, e2e and gate.
+condition stayed open 3 h). The ratchet baselines may ride along: the falls a newly vendored engine refuses unrecorded,
+which the sync records (devtools/vendorsync.py; the hook's ratchet judges them, a rise still needing its trailer). Any
+other push is `full`: the whole suite, e2e and gate.
 
 Prints `full`, or `scoped sim=<0|1> <test module>...` (the patterns tests/run.py takes)."""
 import os
@@ -22,11 +24,13 @@ from agentctl.statefile import read_text_or  # noqa: E402
 
 ALWAYS = ("test_vendored", "test_vendor_drift", "test_design_rules", "test_design_rules_mutation", "test_quality_ratchet")
 SIMULATORS = ("queue_sim.py", "sim_gate.py")
+BASELINES = ("quality/quality-baseline.tsv", "quality/types-baseline.tsv", "quality/design-baseline.tsv")
 
 
 def vendored_only(changed, copies):
-    """A non-empty change of vendored copies and the table alone."""
-    return bool(changed) and set(changed) <= set(copies) | {vendor.TABLE}
+    """A change of vendored copies and the table, with at most the ratchet baselines beside them."""
+    synced = set(copies) | {vendor.TABLE}
+    return bool(set(changed) & synced) and set(changed) <= synced | set(BASELINES)
 
 
 def imports_any(source, stems, package=True):

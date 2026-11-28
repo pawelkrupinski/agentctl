@@ -54,6 +54,11 @@ MUTATIONS = {
         '    if state == "idle":\n        auto.start()\n',
         '    if state == "idle":\n        pass\n',
         "a mechanical vendor drift is no longer synced by the script: it waits for an agent (or nobody)"),
+    "VendorFallLockTest": (
+        "devtools/vendorsync.py",
+        '            self.record_falls(tools, f"the ratchets (exit {status}): {out.strip()}")',
+        '            raise Failed(f"the ratchets (exit {status}): {out.strip()}")',
+        "a vendored rule refusing unrecorded falls sends a mechanical sync to an agent"),
     "SlowLinkTest": (
         "lib/agentctl/remotestore.py",
         'return json.loads(open_within(req, timeout or self.timeout) or b"null")',

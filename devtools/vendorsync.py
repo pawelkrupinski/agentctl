@@ -9,7 +9,9 @@ load 25-45), and drifted into side fixes. So the laptop's sync loop (lib/agentct
   1. a detached worktree of origin/main (no branch, nothing to delete)
   2. `vendor.py sync`; nothing changed -> done
   3. the scoped tests (devtools/vendorscope.py: test_vendored and the tests importing a changed copy), the simulator gate
-     when the simulator imports one, the ratchets' selftest and check
+     when the simulator imports one, the ratchets' selftest and check; a check the new copies refuse is answered by
+     `ratchet.py update` when what it records is only FALLS (movies' fall lock, 2a65c3fb37: an unrecorded fall refuses),
+     the baselines then committed with the copies
   4. a commit of exactly the changed copies and VENDORED.tsv, pushed with devtools/selfpush.py (the pre-push hook scopes
      its suite the same way: a vendored-only push runs the scoped tests)
   5. the worktree is removed
@@ -29,7 +31,7 @@ import vendor  # noqa: E402
 import vendorscope  # noqa: E402
 from agentctl.clock import epoch_now  # noqa: E402
 from agentctl.procrunner import ProcessRunner  # noqa: E402
-from agentctl.statefile import write_json  # noqa: E402
+from agentctl.statefile import read_text_or, write_json  # noqa: E402
 
 FAILED_EXIT = 3
 TAIL = 1200  # characters of a failing step's output kept in the verdict
@@ -67,14 +69,30 @@ class VendorSync:
         """The scoped tests, the simulator gate when reached, the ratchets: raises Failed on the first that fails."""
         copies = [c for c, _s, _d in vendor.read_table(self.tree)]
         kind, sim, tests = vendorscope.scope(changed, copies, self.read_tests(self.tree))
-        if kind != "scoped":
+        if kind != "scoped" or not set(changed) <= set(copies) | {vendor.TABLE}:
             raise Failed(f"the sync changed more than the vendored copies: {changed}")
         self.python("the scoped tests", "tests/run.py", "-j", TEST_JOBS, *tests)
         if sim:
             self.python("the simulator gate", "tests/sim_gate.py")
         tools = self.python("the quality tools", "quality/tools.py").strip().splitlines()[-1]
         self.step("the ratchets", [tools, "quality/ratchet.py", "selftest"])
-        self.step("the ratchets", [tools, "quality/ratchet.py", "check"])
+        status, out = self.run([tools, "quality/ratchet.py", "check"], self.tree)
+        if status:
+            self.record_falls(tools, f"the ratchets (exit {status}): {out.strip()}")
+
+    def record_falls(self, tools, refused):
+        """The check refused: `update` answers it when the baselines it writes only FELL (rows lowered or gone), and the
+        check then passes; anything else -- a rise, a new row, a changed limit -- raises Failed for the agent."""
+        before = {b: self.baseline_rows(b) for b in vendorscope.BASELINES}
+        self.step("the ratchets' update", [tools, "quality/ratchet.py", "update"])
+        grown = [f"{b}: {' '.join(row)}" for b in vendorscope.BASELINES
+                 for row in only_grown(before[b], self.baseline_rows(b))]
+        if grown:
+            raise Failed(f"{refused}\n`ratchet.py update` would record not only falls: {'; '.join(grown[:10])}")
+        self.step("the ratchets after recording the falls", [tools, "quality/ratchet.py", "check"])
+
+    def baseline_rows(self, rel):
+        return baseline_rows(read_text_or(os.path.join(self.tree, rel), ""))
 
     def unlanded(self):
         """The movies checkout's vendored sources that are not origin/main's (an edit not landed, or a checkout behind
@@ -102,6 +120,7 @@ class VendorSync:
             if not changed:
                 return "nothing to sync"
             self.verify(changed)
+            changed = self.changed()  # with the baselines a recorded fall changed
             self.step("git add", ["git", "add", "--", *changed])
             self.step("git commit", ["git", "commit", "-q", "-m", "Vendor sync: the copies equal the movies checkout's files again\n\n"
                                      "Mechanical (devtools/vendorsync.py): copied byte for byte, the scoped tests, the simulator gate where "
@@ -114,6 +133,21 @@ class VendorSync:
 
 class Failed(Exception):
     pass
+
+
+def baseline_rows(text):
+    """A baseline's `kind<TAB>key<TAB>value` rows as {(kind, key): value}."""
+    lines = [x.split("\t") for x in text.splitlines() if x.strip() and not x.startswith("#")]
+    return {(x[0], x[1]): x[2] for x in lines if len(x) == 3}
+
+
+def only_grown(before, after):
+    """The rows of `after` that are no fall from `before`: added, raised, or a limit changed (sorted, as (kind, key, value))."""
+    def grew(key, value):
+        if key not in before:
+            return True
+        return value != before[key] if key[0] == "limit" else float(value) > float(before[key])
+    return sorted((k[0], k[1], v) for k, v in after.items() if grew(k, v))
 
 
 def verdict(sync, now):

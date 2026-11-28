@@ -27,6 +27,15 @@ class ScopeTest(unittest.TestCase):
         self.assertIn("test_vendored", tests)
         self.assertNotIn("test_other", tests)
 
+    def test_the_ratchet_baselines_a_sync_recorded_falls_in_stay_scoped(self):
+        """The fall lock (movies 2a65c3fb37): a vendored engine that refuses unrecorded falls makes the sync record them;
+        the baselines are judged by the hook's ratchet itself (a rise still needs its trailer), not by the full suite."""
+        kind, _sim, tests = vendorscope.scope([MODEL, TABLE, "quality/design-baseline.tsv"], self.copies, SOURCES)
+        self.assertEqual(kind, "scoped")
+        self.assertIn("test_quality_ratchet", tests)
+        self.assertEqual(vendorscope.scope(["quality/design-baseline.tsv"], self.copies, SOURCES)[0], "full",
+                         "a baseline alone is no sync")
+
     def test_any_other_file_makes_the_push_full(self):
         self.assertEqual(vendorscope.scope([MODEL, "lib/agentctl/core.py"], self.copies, SOURCES)[0], "full")
         self.assertEqual(vendorscope.scope([], self.copies, SOURCES)[0], "full")
@@ -57,15 +66,22 @@ class ReachTest(unittest.TestCase):
 
 
 class FakeRunner:
-    """Answers each command from `plan` (a substring of its argv -> (status, output)), records them all."""
+    """Answers each command from `plan` (a substring of its argv -> (status, output), or a list of them taken in turn,
+    the last repeating), records them all; `effects` (a substring -> a function) does what a command would."""
 
-    def __init__(self, plan):
-        self.plan, self.calls = plan, []
+    def __init__(self, plan, effects=None):
+        self.plan, self.calls, self.effects = plan, [], effects or {}
 
     def __call__(self, argv, cwd):
         line = " ".join(argv)
         self.calls.append(line)
-        return next((v for k, v in self.plan.items() if k in line), (0, ""))
+        for k, effect in self.effects.items():
+            if k in line:
+                effect()
+        answer = next((v for k, v in self.plan.items() if k in line), (0, ""))
+        if isinstance(answer, list):
+            return answer.pop(0) if len(answer) > 1 else answer[0]
+        return answer
 
 
 class VendorSyncTest(unittest.TestCase):
@@ -81,9 +97,49 @@ class VendorSyncTest(unittest.TestCase):
             with open(os.path.join(self.tree, "tests", name), "w") as f:
                 f.write(text)
 
-    def sync(self, plan):
-        run = FakeRunner(plan)
+    def sync(self, plan, effects=None):
+        run = FakeRunner(plan, effects)
         return vendorsync.VendorSync(run, "/root", self.tree, 60, lambda tree: SOURCES, lambda: "/movies"), run
+
+    BASELINE = "quality/design-baseline.tsv"
+
+    def baseline(self, text=None):
+        path = os.path.join(self.tree, self.BASELINE)
+        if text is not None:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w") as f:
+                f.write(text)
+        with open(path) as f:
+            return f.read()
+
+    def fall_lock_sync(self, updated):
+        """A vendored engine that refuses the baseline's unrecorded falls: `check` fails until `update` writes `updated`."""
+        self.baseline("# header\nlimit\tfanout\t9\nfanout\tagentctl.a\t12\nfanout\tagentctl.b\t11\n")
+        return self.sync({"git status": [(0, f" M {MODEL}\n"), (0, f" M {MODEL}\n M {self.BASELINE}\n")],
+                          "quality/tools.py": (0, "/venv/python\n"),
+                          "ratchet.py check": [(1, "design FELL BELOW quality/design-baseline.tsv, UNRECORDED"), (0, "OK")]},
+                         {"ratchet.py update": lambda: self.baseline(updated)})
+
+    def test_a_fall_the_vendored_engine_now_refuses_unrecorded_is_recorded_and_pushed_with_the_sync(self):
+        """2026-11-28 (movies 2a65c3fb37, THE FALL LOCK): a vendored rule that refuses a fall the baseline does not record
+        is no API change for an agent: the sync records the falls (`ratchet.py update`) and commits the baseline too."""
+        sync, run = self.fall_lock_sync("# header\nlimit\tfanout\t9\nfanout\tagentctl.a\t10\n")
+        self.assertEqual(sync.execute(), f"synced: {MODEL}, {self.BASELINE}")
+        text = "\n".join(run.calls)
+        self.assertIn(f"git add -- {MODEL} {self.BASELINE}", text)
+        self.assertLess(text.index("ratchet.py update"), text.index("git commit"))
+        self.assertTrue(any("selfpush.py" in c for c in run.calls))
+
+    def test_an_update_that_would_record_a_rise_or_a_new_row_is_left_to_the_agent(self):
+        for updated in ("# header\nlimit\tfanout\t9\nfanout\tagentctl.a\t13\n",
+                        "# header\nlimit\tfanout\t9\nfanout\tagentctl.a\t12\nfanout\tagentctl.c\t10\n",
+                        "# header\nlimit\tfanout\t10\n"):
+            sync, run = self.fall_lock_sync(updated)
+            with self.assertRaises(vendorsync.Failed) as raised:
+                sync.execute()
+            self.assertIn("not only falls", str(raised.exception))
+            self.assertIn("UNRECORDED", str(raised.exception), "the first check's why is kept")
+            self.assertFalse(any("selfpush" in c for c in run.calls))
 
     def test_a_movies_file_that_is_not_origin_mains_is_never_pushed(self):
         """A sync copies the movies checkout's working files: an unlanded edit (or a checkout behind main) is no sync."""

@@ -589,6 +589,35 @@ class VendorAutoSyncTest(VendorDriftWorld):
         self.assertEqual(self.owner_escalations(), [])
 
 
+class VendorFallLockTest(VendorDriftWorld):
+    """2026-11-28, condition vendor-drift.3: movies vendored a ratchet rule (2a65c3fb37, THE FALL LOCK: a fall the
+    baseline does not record refuses the push). A rule that only asks agentctl to record its falls is still mechanical:
+    the laptop's script records them (`ratchet.py update`) and pushes the baseline with the copies, no condition, no agent."""
+    BASELINE = "quality/design-baseline.tsv"
+    RATCHET = ("import sys\n"
+               "B = 'quality/design-baseline.tsv'\n"
+               "if sys.argv[1:2] == ['update']:\n"
+               "    open(B, 'w').write('limit\\tfanout\\t9\\nfanout\\tagentctl.a\\t10\\n')\n"
+               "elif sys.argv[1:2] == ['check'] and '\\t12' in open(B).read():\n"
+               "    print('design FELL BELOW quality/design-baseline.tsv, UNRECORDED (1 rows)')\n"
+               "    sys.exit(1)\n")
+
+    def test_a_vendored_rule_refusing_unrecorded_falls_still_syncs_with_no_agent(self):
+        self.w.write("quality/ratchet.py", self.RATCHET, at=self.bin)
+        self.w.write(self.BASELINE, "limit\tfanout\t9\nfanout\tagentctl.a\t12\n", at=self.bin)
+        self.toy_suite(True)
+        self.sync()
+        self.until_autosync("done")
+        self.assertIsNone(self.condition(), self.w.diagnosis())
+        self.assertEqual(self.claude_calls("--bg"), [], "no agent is dispatched")
+        git_dir = os.path.join(self.w.root, "github", "bin.git")
+        self.assertEqual(H.sh(self.w.root, "git", "--git-dir", git_dir, "show", f"main:{self.BASELINE}").strip(),
+                         "limit\tfanout\t9\nfanout\tagentctl.a\t10", "the recorded fall reached origin/main")
+        changed = H.sh(self.w.root, "git", "--git-dir", git_dir, "show", "--name-only", "--format=", "main").split()
+        self.assertIn(self.BASELINE, changed, "in the sync's own commit")
+        self.assertIn(vendor_table(), changed)
+
+
 class SlowLinkTest(E2ETest):
     STATUS_BOUND = 25  # s: the store call's own bound (remotestore STORE_WAITED_TIMEOUT, 15 s) and the CLI's start
 
