@@ -452,7 +452,7 @@ class SyncStepsTest(unittest.TestCase):
                      "drain_event_log"):
             case.fake(name, lambda rng, *a, **k: rng.choice([None, 1]))
         recovery = case.recorded("maybe_recovery_tick", lambda rng, *a, **k: rng.choice([None, 1]))
-        case.put("maybe_recovery_tick", lambda store, registry, now: recovery(store, now))  # as recorded before the registry
+        case.put("maybe_recovery_tick", lambda store, registry, now, ran_at: recovery(store, now))  # as recorded before the registry
         for name in ("trust_asks", "close_landed_worktrees", "migrate_local_queue", "close_landed_changes", "answer_regen_holds",
                      "revert_notes", "fixers_land_watch", "maybe_upkeep", "root_checkout_ff", "explorer_tick"):
             case.fake(name, lambda rng, *a, **k: [f"x{i}" for i in range(rng.randint(0, 2))])
@@ -609,17 +609,17 @@ class RefreshPinnedTest(unittest.TestCase):
         case.fake("pin_release_tag", lambda rng, repo: rng.choice([None, "tag1"]))
         case.fake("read_pins", lambda rng, o_r, tag: raising(rng, 0.2, rng.choice([None, {}, {"uk": "9"}]), rng.choice([RuntimeError, SystemExit])))
         case.fake("print_error", lambda rng, m: None)
-        case.put("_pin_tried", [r.choice([0.0, NOW - 10, NOW - 99999])])
+        tried = r.choice([0.0, NOW - 10, NOW - 99999])
         stored = [None, "", json.dumps({"at": 1, "repo": "o", "tag": "t", "pins": {"uk": "5"}}), json.dumps({"at": 2, "tag": "t", "pins": {"uk": "6"}, "repo": "o"}),
                   "{{", json.dumps({"pins": {}})]
         st = Probe(case, "st", meta_get=lambda rng, k, d=None: raising(rng, 0.1, rng.choice(stored)),
                    meta_set=lambda rng, k, v: raising(rng, 0.2, None))
-        return ("o/r", "/repo", st, r.choice([None, NOW]), r.random() < 0.3, r.choice([None, "server", "sync"]))
+        return ("o/r", "/repo", st, {"pins": tried}, r.choice([None, NOW]), r.random() < 0.3, r.choice([None, "server", "sync"]))
 
     def test_refresh_pinned_recording(self):
         def run(A):
             def go(*a):
-                return A.refresh_pinned_recording(*a), A._pin_tried[0]
+                return A.refresh_pinned_recording(*a), a[3]["pins"]
             return go
         check(self, "refresh_pinned_recording", self.build, run, 4000)
 

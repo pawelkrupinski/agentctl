@@ -22,7 +22,6 @@ from agentctl.redrecord import red_active
 from agentctl.paths import state_root
 
 
-_last_upkeep = [0.0]
 RUN_QUEUE_ESCALATE = 3.0         # x the cores: the 5-min load over it ...
 RUN_QUEUE_ESCALATE_AFTER = 600   # ... for this many seconds opens the WL invariant
 
@@ -115,17 +114,20 @@ def _run_queue_invariant(store: Any, machine: MachineProbe) -> list[str]:
     return [f"WL: {pr.detail}"] if cond else []
 
 
-def maybe_upkeep(store, now_=None, *, machine):
+def maybe_upkeep(store, now_=None, *, machine, ran_at):
     """The tick's upkeep step: at most every UPKEEP_EVERY s, or within 10 min when the disk is low (DISK_MIN_GB); and
     WD, the disk invariant: still low with the last upkeep done, an INVARIANT condition whose probe is that same
-    free-space check (it closes itself once space is back; it escalates only while it stays open)."""
+    free-space check (it closes itself once space is back; it escalates only while it stays open). ran_at: the
+    process's throttles (Caches.ran_at), "upkeep" when the last one started."""
     t = now_ if now_ is not None else epoch_now()
     min_gb = knob_disk_min_gb()
     pr = run_probe(partial(probe_disk_free, machine=machine), {"path": knob_disk_path() or HOME, "min_gb": min_gb})
     low = pr.ok is False
     out = _run_queue_invariant(store, machine)
-    if t - _last_upkeep[0] >= knob_upkeep_every() or (low and t - _last_upkeep[0] >= 600):
-        _last_upkeep[0] = t
+    last = ran_at.get("upkeep", 0.0)
+    if t - last >= knob_upkeep_every() or (low and t - last >= 600):
+        ran_at["upkeep"] = t
+
         # in its thread (minutes of git): the tick goes on; it logs to upkeep.log
         done = run_bounded("upkeep", lambda: run_upkeep(store), 1)
         out.append(f"{'done' if done else 'started'}{' (the disk is low: ' + pr.detail + ')' if low else ''} "

@@ -24,3 +24,7 @@ class Caches:
     fix_replay_proofs: dict[Any, Any] = field(default_factory=dict)  # (base, head) -> the replays' proofs, run once per base and head
     flow_bounds: dict[Any, Any] = field(default_factory=dict)  # (main sha, workflow path) -> the workflow's timeout bound
     production: dict[str, bool] = field(default_factory=dict)  # sha -> whether it touches a production path (a commit never changes)
+    ran_at: dict[str, float] = field(default_factory=dict)  # a throttled step ("upkeep", "recovery", ...) -> when it last ran
+    route_seen: list[Any] = field(default_factory=lambda: ["unseen"])  # the default route at the network watch's last look
+    batch_said: list[Any] = field(default_factory=lambda: [None])  # the batch tick's lines last said in the journal
+

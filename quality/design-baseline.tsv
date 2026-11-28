@@ -258,7 +258,6 @@ effect	quality/tools.py:network	1
 effect	quality/typecheck.py	1
 effect	quality/typecheck.py:files	3
 state	lib/agentctl/allowedpaths.py	1
-state	lib/agentctl/batch.py	1
 state	lib/agentctl/changekind.py	1
 state	lib/agentctl/clock.py	1
 state	lib/agentctl/clones.py	1
@@ -281,20 +280,15 @@ state	lib/agentctl/landedtwin.py	2
 state	lib/agentctl/laptoprole.py	1
 state	lib/agentctl/leases.py	1
 state	lib/agentctl/live.py	4
-state	lib/agentctl/netwatch.py	1
 state	lib/agentctl/notifier.py	1
 state	lib/agentctl/onmain.py	3
 state	lib/agentctl/overlapcheck.py	2
 state	lib/agentctl/owned.py	4
 state	lib/agentctl/policy.py	1
 state	lib/agentctl/procrunner.py	1
-state	lib/agentctl/queuesubmit.py	1
-state	lib/agentctl/recordingpins.py	1
-state	lib/agentctl/recovery.py	1
 state	lib/agentctl/redrecord.py	1
 state	lib/agentctl/redrepos.py	1
 state	lib/agentctl/redretired.py	1
-state	lib/agentctl/redtick.py	2
 state	lib/agentctl/repos.py	1
 state	lib/agentctl/serverclone.py	1
 state	lib/agentctl/status.py	3
@@ -302,7 +296,6 @@ state	lib/agentctl/statusagents.py	3
 state	lib/agentctl/statuspage.py	1
 state	lib/agentctl/storetoken.py	2
 state	lib/agentctl/tickloop.py	1
-state	lib/agentctl/upkeep.py	1
 mixed	devtools/baselinemerge.py:drive	4
 mixed	devtools/baselinemerge.py:install	5
 mixed	devtools/baselinemerge.py:script	3

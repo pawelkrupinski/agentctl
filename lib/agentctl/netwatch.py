@@ -72,9 +72,6 @@ def uplink_loss():
         return 1.0
 
 
-_last_route = ["unseen"]  # the route at the last look; None while offline
-
-
 def open_outage(store, kind, text, probe, on_recover, **kw):
     """open_condition for the laptop's own network or tunnel outage -- which is also the store's (ci-runner's, through
     the tunnel): its inbox entry and this host's state are written whether the store answers or not, so the watch's
@@ -87,12 +84,14 @@ def open_outage(store, kind, text, probe, on_recover, **kw):
         return None
 
 
-def network_watch(store, route=None, kick=None):
+def network_watch(store, seen, route=None, kick=None):
     """React to the laptop's network changing (another Wi-Fi, a hotspot, back online): the tunnel's ssh rides the old
     route and would take ServerAlive's 30 s to notice, the gate line says UNREAD until the next read. A changed default
-    route kickstarts the tunnel at once and marks the gate dirty. Returns 'changed', 'offline' or ''."""
+    route kickstarts the tunnel at once and marks the gate dirty. Returns 'changed', 'offline' or ''. seen: the
+    process's one-cell memo of the route at the last look (Caches.route_seen; None while offline)."""
     r = (route or default_route)()
-    prev, _last_route[0] = _last_route[0], r
+    prev, seen[0] = seen[0], r
+
     if prev == "unseen" or r == prev:
         return ""
     if r is None:

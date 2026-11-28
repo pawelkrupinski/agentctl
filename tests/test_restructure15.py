@@ -111,10 +111,10 @@ class SweepLandRefsTest(unittest.TestCase):
         case.fake("git", lambda rng, repo, *a, **k: proc(rng, "\n".join(refs), rng.choice([0, 0, 0, 1])) if a[0] == "ls-remote"
                   else proc(rng, "", rng.choice([0, 1])))
         case.fake("print_error", lambda rng, m: None)
-        case.put("_last_ref_sweep", [r.choice([0.0, NOW - 5, NOW - 9999])])
+        swept = r.choice([0.0, NOW - 5, NOW - 9999])
         items = [{"id": r.choice(ids), "state": r.choice(["landed", "queued", "dead"])} for _ in range(r.randint(0, 3))]
         st = Probe(case, "store", items=lambda rng, typ: raising(rng, 0.1, items))
-        return ("/repo", "/d", st, r.choice([None, NOW]))
+        return ("/repo", "/d", st, {"land refs": swept}, r.choice([None, NOW]))
 
     def test_sweep(self):
         check(self, "sweep_land_refs", self.build, lambda A: A.sweep_land_refs, 4000)

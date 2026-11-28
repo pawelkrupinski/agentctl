@@ -24,9 +24,6 @@ import time
 from typing import Any, Optional
 
 
-_last_ref_sweep = [0.0]
-
-
 HOOK_CAPABILITIES = "scripts/hooks/pre-push-capabilities"  # movies' versioned list, one capability a line (# comments)
 LAND_REFS = "land-refs"  # the pre-push hook checks nothing on a refs/heads/land/ ref
 
@@ -56,11 +53,11 @@ def push_failure_why(text: object) -> str:
     return f"git said `{said[:240]}` -- {whose}"
 
 
-def _ref_sweep_due(t: float) -> bool:
-    """Whether a sweep is due (marked done by this call)."""
-    if t - _last_ref_sweep[0] < knob_land_ref_sweep():
+def _ref_sweep_due(t: float, ran_at: dict[str, float]) -> bool:
+    """Whether a sweep is due (marked done by this call, in the process's throttles)."""
+    if t - ran_at.get("land refs", 0.0) < knob_land_ref_sweep():
         return False
-    _last_ref_sweep[0] = t
+    ran_at["land refs"] = t
     return True
 
 
@@ -95,13 +92,14 @@ def _delete_land_ref(repo: Any, ref: str, note: str) -> list[str]:
     return ([ref + note] if note else []) + [f"{ref}: deleted" if dr.returncode == 0 else f"{ref}: could not delete"]
 
 
-def sweep_land_refs(repo, d, store, now_=None):
+def sweep_land_refs(repo, d, store, ran_at, now_=None):
     """Every LAND_REF_SWEEP_EVERY s: each remote land/<entry> ref whose change is decided, deleted. Since phase 2 the
     changes live in ci-runner's STORE, not in entries/ (2026-11-04: every queued change looked unknown and lost its
     ref at the next sweep): a change either source holds open keeps its ref; one NEITHER knows is deleted only past
     LAND_REF_UNKNOWN_AGE, and logged."""
     t = now_ if now_ is not None else epoch_now()
-    if not _ref_sweep_due(t):
+    if not _ref_sweep_due(t, ran_at):
+
         return []
     r = git(repo, "ls-remote", "--heads", remote(), "refs/heads/land/*", check=False)
     if r.returncode != 0:

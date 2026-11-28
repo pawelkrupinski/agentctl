@@ -144,17 +144,16 @@ def union_base(tree, members, base):
     return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else base
 
 
-_batch_said = [None]
-
-
-def say_batch(d, lines):
+def say_batch(d, lines, said):
     """The batch tick's lines: every one in processor.log, and in the reconciler's journal when they change (the
-    journal had no batch line at all; a repeated `waiting for a check tree` is said once)."""
+    journal had no batch line at all; a repeated `waiting for a check tree` is said once; said: the lines last said,
+    Caches.batch_said)."""
     for x in lines:
         wlog(d, f"tick: {x}")
-    if lines and lines != _batch_said[0]:
+    if lines and lines != said[0]:
         print_error("batch: " + "; ".join(lines))
-    _batch_said[0] = lines or _batch_said[0]
+    said[0] = lines or said[0]
+
     return lines
 
 

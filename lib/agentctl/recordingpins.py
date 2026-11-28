@@ -62,9 +62,6 @@ def read_pins(o_r, tag):
     return pins
 
 
-_pin_tried = [0.0]
-
-
 def stored_pins(st):
     """The pins record the store holds (PIN_META), or None."""
     try:
@@ -88,20 +85,21 @@ def store_pins(rec, st):
     return rec
 
 
-def refresh_pinned_recording(o_r, repo, st, now_ = None, force: bool = False, role = None):
+def refresh_pinned_recording(o_r, repo, st, ran_at, now_ = None, force: bool = False, role = None):
     """The convergence pins, never fatal. The reconciler (role server) copies the store's record into its cache and
     never reads release assets itself. The laptop (local, or the sync in remote-store mode) re-reads them from the
     release at most every PIN_REFRESH s (PIN_RETRY s after a failure) with the token it holds, and writes them into the
-    store; pins read but not yet stored (the store did not answer) are stored at the next call."""
+    store; pins read but not yet stored (the store did not answer) are stored at the next call. ran_at: the process's
+    throttles (Caches.ran_at), "pins" when a re-read was last tried."""
     t = now_ if now_ is not None else epoch_now()
     rec = read_record(pinned_path()) or {}
     if (role or host_role()) == "server":
         return _server_pins(st, rec)
     if rec.get("pins") and not rec.get("stored"):
         rec = store_pins(rec, st)
-    if not force and _pins_fresh(rec, t):
+    if not force and _pins_fresh(rec, t, ran_at.get("pins", 0.0)):
         return rec
-    _pin_tried[0] = t
+    ran_at["pins"] = t
     try:
         return _reread_pins(o_r, repo, st, rec, t)
     except (Exception, SystemExit) as e:
@@ -109,9 +107,9 @@ def refresh_pinned_recording(o_r, repo, st, now_ = None, force: bool = False, ro
     return rec
 
 
-def _pins_fresh(rec, t):
-    """Whether the pins were read lately (PIN_REFRESH) or tried lately (PIN_RETRY)."""
-    return t - float(rec.get("at") or 0) < PIN_REFRESH or t - _pin_tried[0] < PIN_RETRY
+def _pins_fresh(rec, t, tried):
+    """Whether the pins were read lately (PIN_REFRESH) or tried lately (PIN_RETRY: `tried`, when last tried)."""
+    return t - float(rec.get("at") or 0) < PIN_REFRESH or t - tried < PIN_RETRY
 
 
 def _server_pins(st, rec):

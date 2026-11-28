@@ -82,8 +82,8 @@ def flush_outbox(st: Any) -> int:
 class _SyncDuties:
     """The steps of the laptop's sync loop that keep state or wrap a collaborator: clock and store are the process's (cli's)."""
 
-    def __init__(self, repo: str, o_r: str, clock: Clock, store):
-        self.repo, self.o_r, self.clock, self.store = repo, o_r, clock, store
+    def __init__(self, repo: str, o_r: str, clock: Clock, store, ran_at: dict[str, float]):
+        self.repo, self.o_r, self.clock, self.store, self.ran_at = repo, o_r, clock, store, ran_at
         self.last_mirror = 0.0
         self.role: bool | None = None  # None: not claimed in this loop yet (a step run on its own: a test)
 
@@ -101,7 +101,8 @@ class _SyncDuties:
     def pins(self) -> None:
         """The convergence pins read with the owner's token the processor holds and written into the store: the
         reconciler on ci-runner reads them from there (ci-lander may not read releases). Bounded: a network read."""
-        if not run_bounded("pins", lambda: refresh_pinned_recording(self.o_r, self.repo, self.store, role="sync"),
+        if not run_bounded("pins", lambda: refresh_pinned_recording(self.o_r, self.repo, self.store, self.ran_at, role="sync")
+,
                            knob_step_bound()):
             print_error("pinned recording: still reading from an earlier cycle")
 
@@ -139,7 +140,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
                registry: ConditionRegistry, *, ctx: Context) -> Sequence[tuple[str, Callable[[], Any]]]:
     """The laptop's loop once the store is remote: it never ticks. clock, store and registry (the conditions' probes and
     actions): the process's (cli's)."""
-    s = _SyncDuties(repo, o_r, clock, store)
+    s = _SyncDuties(repo, o_r, clock, store, ctx.caches.ran_at)
     land_pace = LandWatchPace()  # the fixers' landing look is paced per loop, not per process
     duty = s.duty
     return (("laptop role", s.claim_role),
@@ -158,11 +159,11 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
             ("revert notes", duty(lambda: [print_error(x) for x in revert_notes(store)])),
             ("fixer landing", lambda: [print_error(f"red: {x}") for x in fixers_land_watch(pace=land_pace)]),
             ("vendor drift", duty(partial(vendor_drift_step, store, registry.check("vendor_drift"), clock.time, os.path.dirname(TOOL_PATH), vendor_drift_auto(os.path.dirname(TOOL_PATH), state_root("vendor-autosync.json"), clock.time)))),  # vendordrift.py
-            ("network watch", lambda: network_watch(store)), ("tunnel probe", lambda: tunnel_watch(store)),
+            ("network watch", lambda: network_watch(store, ctx.caches.route_seen)), ("tunnel probe", lambda: tunnel_watch(store)),
             ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store, ctx=ctx), 1)),
-            ("upkeep", lambda: [print_error(f"upkeep: {x}") for x in maybe_upkeep(store, machine=ctx.machine)]),
+            ("upkeep", lambda: [print_error(f"upkeep: {x}") for x in maybe_upkeep(store, machine=ctx.machine, ran_at=ctx.caches.ran_at)]),
             ("root checkout", lambda: [print_error(x) for x in root_checkout_ff(repo)]),
-            ("recovery", lambda: maybe_recovery_tick(store, registry, clock.time())))
+            ("recovery", lambda: maybe_recovery_tick(store, registry, clock.time(), ctx.caches.ran_at)))
 
 
 # THE LAPTOP ANSWERS A REGEN HOLD ITSELF (2026-11-20, phase8-units: held a day for `cd <worktree> && agentctl land`, a

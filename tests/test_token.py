@@ -260,8 +260,9 @@ class MissingTokenNotedThroughTheStoreTest(unittest.TestCase):
         A.recovery_tick = lambda *a, **k: None
         try:
             A.token_missing("movies", "locked", now_=1000)
-            A.maybe_recovery_tick(st, registry(A), 0.0)
-            A.maybe_recovery_tick(st, registry(A), 0.0)  # taken: once
+            ran: dict[str, float] = {}
+            A.maybe_recovery_tick(st, registry(A), 0.0, ran)
+            A.maybe_recovery_tick(st, registry(A), 0.0, ran)  # taken: once
         finally:
             A.open_condition, A.recovery_tick = saved
             A._token_missing.clear()

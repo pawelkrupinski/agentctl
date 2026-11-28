@@ -25,8 +25,7 @@ class PinsBase(Phase2Base):
             os.environ.pop(k, None)
         for name in ("read_pins", "pin_release_tag"):
             self.addCleanup(setattr, A, name, getattr(A, name))
-        self.addCleanup(A._pin_tried.__setitem__, 0, 0.0)
-        A._pin_tried[0] = 0.0
+        self.ran_at: dict[str, float] = {}  # the pins' throttle (Caches.ran_at)
         os.environ["AGENTCTL_REDS_DIR"] = os.path.join(self.tmp, "state", "reds")  # pinned-recording.json beside it
         self.reads = []
         self.pins = {"pl": "528", "de": "528"}
@@ -60,27 +59,27 @@ class SyncWritesTheStoreTest(PinsBase):
     def test_the_sync_reads_the_pins_with_its_token_and_writes_them_into_the_store(self):
         self.laptop()
         self.assertEqual(A.host_role(), "sync")
-        rec = A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), now_=T)
+        rec = A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at, now_=T)
         self.assertEqual(self.reads, [(MOVIES, "convergence-fixtures")])
         self.assertTrue(rec["stored"])
         self.assertEqual(self.stored(), {"at": T, "repo": MOVIES, "tag": "convergence-fixtures",
                                          "pins": {"pl": "528", "de": "528"}})
         self.assertEqual(A.pinned_recording(), "528")
-        A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), now_=T + A.PIN_REFRESH - 1)
+        A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at, now_=T + A.PIN_REFRESH - 1)
         self.assertEqual(len(self.reads), 1)  # hourly
         self.pins = {"pl": "528", "de": "600"}
-        A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), now_=T + A.PIN_REFRESH + 1)
+        A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at, now_=T + A.PIN_REFRESH + 1)
         self.assertEqual(self.stored()["pins"], {"pl": "528", "de": "600"})
 
     def test_pins_read_while_the_store_is_down_are_stored_at_the_next_call_without_a_new_read(self):
         os.environ["AGENTCTL_STORE_RETRIES"] = "0"
         self.laptop(url="http://127.0.0.1:9")  # nothing listens there
-        rec = A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), now_=T)
+        rec = A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at, now_=T)
         self.assertFalse(rec.get("stored"))
         self.assertIsNone(self.stored())
         self.assertEqual(A.pinned_recording(), "528")  # the laptop's own view has them meanwhile
         self.laptop()
-        rec = A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), now_=T + 10)
+        rec = A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at, now_=T + 10)
         self.assertTrue(rec["stored"])
         self.assertEqual(self.stored()["at"], T)
         self.assertEqual(len(self.reads), 1)
@@ -93,9 +92,9 @@ class SyncWritesTheStoreTest(PinsBase):
             raise RuntimeError("HTTP Error 403: Forbidden")
         A.read_pins = refused
         for t in (T, T + 5, T + A.PIN_RETRY - 1):
-            A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), now_=t)
+            A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at, now_=t)
         self.assertEqual(len(self.reads), 1)
-        A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), now_=T + A.PIN_RETRY)
+        A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at, now_=T + A.PIN_RETRY)
         self.assertEqual(len(self.reads), 2)
 
     def test_the_sync_loop_has_a_bounded_pins_step(self):
@@ -109,15 +108,15 @@ class SyncWritesTheStoreTest(PinsBase):
 class ReconcilerReadsTheStoreTest(PinsBase):
     def test_the_reconciler_copies_the_stored_pins_and_never_reads_release_assets(self):
         self.server()
-        self.assertEqual(A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), force=True), {})  # nothing stored yet: silent
+        self.assertEqual(A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at, force=True), {})  # nothing stored yet: silent
         self.assertEqual(A.pinned_runs(), [])
         self.st.meta_set(A.PIN_META, json.dumps({"at": T, "repo": MOVIES, "tag": "convergence-fixtures",
                                                  "pins": {"pl": "528", "de": "600"}}))
-        rec = A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store))
+        rec = A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at)
         self.assertEqual(rec["pins"], {"pl": "528", "de": "600"})
         self.assertEqual(A.pinned_recording(), "528/600")
         # the laptop offline for two days: the last stored pins stand, and `status` says how old they are
-        self.assertEqual(A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), now_=T + 2 * 86400)["pins"],
+        self.assertEqual(A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at, now_=T + 2 * 86400)["pins"],
                          {"pl": "528", "de": "600"})
         line = A.pins_status(now_=T + 2 * 86400)
         self.assertIn("pins: 528/600 (convergence-fixtures), read 2 d ago", line)
@@ -125,9 +124,9 @@ class ReconcilerReadsTheStoreTest(PinsBase):
 
     def test_end_to_end_the_laptop_stores_and_the_reconciler_reads(self):
         self.laptop()
-        A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), now_=A.epoch_now())
+        A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at, now_=A.epoch_now())
         self.server()
-        self.assertEqual(A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store))["pins"], {"pl": "528", "de": "528"})
+        self.assertEqual(A.refresh_pinned_recording(MOVIES, self.repo, A.CurrentStore(A.process_store), self.ran_at)["pins"], {"pl": "528", "de": "528"})
         self.assertEqual(A.pinned_recording(), "528")
         self.assertNotIn("STALE", A.pins_status())
 

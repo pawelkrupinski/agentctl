@@ -68,11 +68,11 @@ class UpkeepTest(unittest.TestCase):
         runs = []
         saved = A.run_upkeep
         A.run_upkeep = lambda store: runs.append(1) or []
-        A._last_upkeep[0] = 0.0
+        ran: dict[str, float] = {}
         try:
-            self.assertTrue(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_000.0, machine=fixed_machine()))
+            self.assertTrue(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_000.0, machine=fixed_machine(), ran_at=ran))
             A._bounded["upkeep"].join(5)
-            self.assertEqual(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_000.0 + 60, machine=fixed_machine()), [])
+            self.assertEqual(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_000.0 + 60, machine=fixed_machine(), ran_at=ran), [])
             self.assertEqual(runs, [1])
         finally:
             A.run_upkeep = saved
@@ -83,13 +83,13 @@ class DiskTest(unittest.TestCase):
         runs, saved = [], A.run_upkeep
         A.run_upkeep = lambda store: runs.append(1) or []
         os.environ["AGENTCTL_DISK_MIN_GB"] = "1e12"  # far more than any disk: low
-        A._last_upkeep[0] = 10_000.0  # an upkeep ran a minute ago: not hourly yet
+        ran = {"upkeep": 10_000.0}  # an upkeep ran a minute ago: not hourly yet
         try:
             # low, an upkeep just ran (the 10-min floor) and it is done: WD opens
-            self.assertTrue(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_060.0, machine=fixed_machine())[0].startswith("WD: "))
+            self.assertTrue(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_060.0, machine=fixed_machine(), ran_at=ran)[0].startswith("WD: "))
             self.assertEqual([c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"] == "disk-free"][0]["kind"], "INVARIANT")
-            A._last_upkeep[0] = 0.0
-            out = A.maybe_upkeep(A.CurrentStore(A.process_store), now_=20_000.0, machine=fixed_machine())  # low: the upkeep runs at once
+            ran["upkeep"] = 0.0
+            out = A.maybe_upkeep(A.CurrentStore(A.process_store), now_=20_000.0, machine=fixed_machine(), ran_at=ran)  # low: the upkeep runs at once
             A._bounded["upkeep"].join(5)
             self.assertIn("the disk is low", out[0])
             self.assertEqual(runs, [1])

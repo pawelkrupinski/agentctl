@@ -39,10 +39,8 @@ import threading
 from typing import Any
 
 
-
 # -- the tick's red step (the processor; ci-why never acts)
 _red_lock = threading.Lock()
-_last_red_tick = [0.0]
 
 
 def tick_stage(what: Any, stage: Any, default: Any = None, after: Any = "") -> Any:
@@ -161,7 +159,7 @@ def red_tick_repo(repo, store, registry, snap=None, dispatch=False, *, ctx):
     if not gated_repo(o_r):
         return []
     with _red_lock:
-        _last_red_tick[0] = ctx.clock.time()
+        ctx.caches.ran_at["red tick"] = ctx.clock.time()
         recheck_local(repo, wait=False, machine=ctx.machine)
         acts = red_tick(store, o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch, registry=registry, ctx=ctx)
     for line in acts:
@@ -217,9 +215,6 @@ def red_observe_gate(o_r, snap, *, ctx):
     return obs
 
 
-_last_others_tick = [0.0]
-
-
 def tick_other_repo(store: Any, o_r: str, now_: Any, dispatch: bool, registry: ConditionRegistry, *, ctx: Context) -> list[str]:
     """One other watched repo's red tick: its lines, prefixed with the repo; none (its skip said) when it fails."""
     try:
@@ -248,9 +243,9 @@ def red_tick_others(store, registry, now_=None, dispatch=False, force=True, *, c
     this machine's when there is one (Fixes-Red trailers, authors); without one (ci-runner) its reds open and clear
     by its gate runs alone."""
     acts = []
-    if not force and ctx.clock.time() - _last_others_tick[0] < knob_red_others_every():
+    if not force and ctx.clock.time() - ctx.caches.ran_at.get("red others", 0.0) < knob_red_others_every():
         return acts
-    _last_others_tick[0] = ctx.clock.time()
+    ctx.caches.ran_at["red others"] = ctx.clock.time()
     unread = []
     for c in red_repos():
         o_r = c["repo"]
@@ -283,7 +278,8 @@ def red_others_skipped(said, o_r, why, now_=None):
 
 def maybe_red_tick(repo, store, registry, *, ctx):
     """At most every RED_TICK_INTERVAL s, from the processor's duties. Bounded; never fatal."""
-    if ctx.clock.time() - _last_red_tick[0] < knob_red_tick():
+    if ctx.clock.time() - ctx.caches.ran_at.get("red tick", 0.0) < knob_red_tick():
+
         return
 
     def work():

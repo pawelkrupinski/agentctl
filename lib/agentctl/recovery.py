@@ -144,16 +144,14 @@ def note_missing_tokens(store: Any) -> None:
         token_unavailable_note(ns, why, store)
 
 
-_last_recovery = [0.0]
-
-
-def maybe_recovery_tick(store: Any, registry: ConditionRegistry, now: float) -> None:
+def maybe_recovery_tick(store: Any, registry: ConditionRegistry, now: float, ran_at: dict[str, float]) -> None:
     """A tick's recovery step at now (the tick's clock): the missing tokens' notes, then the condition machine's
-    recheck at most every 5 s."""
+    recheck at most every 5 s (ran_at: the process's throttles, Caches.ran_at)."""
     note_missing_tokens(store)
-    if now - _last_recovery[0] < 5:
+    if now - ran_at.get("recovery", 0.0) < 5:
         return
-    _last_recovery[0] = now
+    ran_at["recovery"] = now
+
     recovery_tick(store, registry)
 
 

@@ -62,9 +62,24 @@ class OwnedCachesTest(unittest.TestCase):
         self.assertIsNone(A.red_others_skipped(said, "o/r", "HTTP 500", now_=1001))
         self.assertIsNotNone(A.red_others_skipped(other, "o/r", "HTTP 500", now_=1002), "another memo has not said it")
 
+    def test_a_throttle_is_its_contexts_own(self):
+        ran, saved = [], A.recovery_tick
+        A.recovery_tick = lambda store, registry: ran.append(store)
+        try:
+            first, second = case_context(), harness.context_with(case_context().runs)
+            A.maybe_recovery_tick("one", None, 1000.0, first.caches.ran_at)
+            A.maybe_recovery_tick("one again", None, 1001.0, first.caches.ran_at)  # within 5 s: throttled
+            A.maybe_recovery_tick("two", None, 1001.0, second.caches.ran_at)  # another context's throttle: not
+        finally:
+            A.recovery_tick = saved
+        self.assertEqual(ran, ["one", "two"])
+
     def test_the_moved_memos_are_no_module_level_state(self):
-        for name in ("_identity_known", "_trailer_fixes", "_link_reads", "_never_green_at", "_others_said"):
+        for name in ("_identity_known", "_trailer_fixes", "_link_reads", "_never_green_at", "_others_said",
+                     "_last_upkeep", "_last_recovery", "_last_ref_sweep", "_pin_tried", "_last_red_tick",
+                     "_last_others_tick", "_last_route", "_batch_said"):
             self.assertFalse(hasattr(A, name), name)
+
 
 
 if __name__ == "__main__":

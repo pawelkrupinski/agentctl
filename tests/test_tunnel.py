@@ -148,16 +148,16 @@ class TunnelTest(unittest.TestCase):
         self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.epoch_now() + 10, down, uplink=clean), "kicked")
 
     def test_network_change_kicks_the_tunnel_and_marks_the_gate(self):
-        A._last_route[0] = "unseen"
+        seen = ["unseen"]  # the route at the last look (Caches.route_seen)
         home, phone = ("en0", "172.30.154.83"), ("en0", "172.20.10.1")
         saved, A.mark_gate_dirty = A.mark_gate_dirty, (lambda: self.inbox.append("DIRTY"))
         try:
-            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), lambda: home, lambda: self.kicks.append(1)), "")  # first look: no change
-            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), lambda: home, lambda: self.kicks.append(1)), "")
-            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), lambda: None, lambda: self.kicks.append(1)), "offline")
+            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), seen, lambda: home, lambda: self.kicks.append(1)), "")  # first look: no change
+            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), seen, lambda: home, lambda: self.kicks.append(1)), "")
+            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), seen, lambda: None, lambda: self.kicks.append(1)), "offline")
             self.assertEqual(self.kicks, [])
-            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), lambda: phone, lambda: self.kicks.append(1)), "changed")  # back online
-            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), lambda: home, lambda: self.kicks.append(1)), "changed")  # another network
+            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), seen, lambda: phone, lambda: self.kicks.append(1)), "changed")  # back online
+            self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), seen, lambda: home, lambda: self.kicks.append(1)), "changed")  # another network
             self.assertEqual(len(self.kicks), 2)
             self.assertEqual(self.inbox, ["DIRTY", "DIRTY"])
         finally:

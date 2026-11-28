@@ -1157,11 +1157,9 @@ class QueueTest(WaitingTest):
         self.assertEqual(self.remote_refs(), [f"refs/heads/land/{eid}"])
         self.assertEqual(self.entries()[eid.rsplit("-", 1)[-1]]["ref"], f"refs/heads/land/{eid}")
         d, _c, _w = A.waiting_state(self.r.path)
-        A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)), [], "queued: its ref stays")
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store), {}), [], "queued: its ref stays")
         self.assertEqual(self.check(eid), 0)  # landed
-        A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)), [f"refs/heads/land/{eid}: deleted"])
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store), {}), [f"refs/heads/land/{eid}: deleted"])
         self.assertEqual(self.remote_refs(), [])
 
     def test_sweep_keeps_the_ref_of_a_change_only_the_store_holds_open(self):
@@ -1173,8 +1171,7 @@ class QueueTest(WaitingTest):
         eid, _out = self.queued(wt)
         d, _c, _w = A.waiting_state(self.r.path)
         A.process_store().merge_item("change", eid, {"record": None})  # held by the store alone: no queue record
-        A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)), [], "open in the store: its ref stays")
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store), {}), [], "open in the store: its ref stays")
         self.assertEqual(self.remote_refs(), [f"refs/heads/land/{eid}"])
         # unknown to both: kept while young, deleted (and logged) past 24 h. ONE frozen clock for the sweep and the
         # expected age (2026-11-26, Red #273: the expectation read the wall, the sweep a clock 400 s behind it: an hour apart at a boundary)
@@ -1183,8 +1180,7 @@ class QueueTest(WaitingTest):
         clock_module.wire_clock(FakeClock(time.time()))
         sh(self.r.path, "git", "push", "--quiet", "origin", f"{sha}:refs/heads/land/20200101-000000-x-aaaaaa",
            f"{sha}:refs/heads/land/{time.strftime('%Y%m%d-%H%M%S')}-y-bbbbbb")
-        A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)),
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store), {}),
                          ["refs/heads/land/20200101-000000-x-aaaaaa: unknown to entries and store, %d h old" % (
                              A.entry_id_age("20200101-000000", A.epoch_now()) // 3600),
                           "refs/heads/land/20200101-000000-x-aaaaaa: deleted"])
@@ -1201,8 +1197,7 @@ class QueueTest(WaitingTest):
         sh(self.r.path, "git", "push", "--quiet", "origin", f"{sha}:refs/heads/land/20200101-000000-x-aaaaaa")
         stamp = A.entry_stamp_epoch("20200101-000000")  # an entry id's stamp is UTC (ids.stamp)
         clock_module.wire_clock(FakeClock(stamp + 30 * 3600 + 600))
-        A._last_ref_sweep[0] = 0
-        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store)),
+        self.assertEqual(A.sweep_land_refs(self.r.path, d, A.CurrentStore(A.process_store), {}),
                          ["refs/heads/land/20200101-000000-x-aaaaaa: unknown to entries and store, 30 h old",
                           "refs/heads/land/20200101-000000-x-aaaaaa: deleted"])
 

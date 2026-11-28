@@ -12,7 +12,21 @@ the real collaborator (a Probe's: None). Recorded, it moved park_duty's and refr
 suite run in many."""
 import contextlib, hashlib, json, os, random, sys, threading, time
 from unittest import mock
-from harness import WiredMachine  # noqa: E402
+from harness import WiredMachine, case_context  # noqa: E402
+
+
+# The memos digests were recorded WITH, as call data (they moved to caches.py before this rule): every other memo is not
+ARGUMENT_MEMOS = frozenset({"identity_known", "trailer_fixes", "link_reads", "never_green_at", "others_said", "zombies_seen",
+                            "main_fetched", "lander_landed_at", "regen_answered", "missing_row_said", "kept_known",
+                            "fix_replay_proofs", "flow_bounds", "production"})
+
+
+def owned_memos():
+    """The ids of the running test's context's memos (lib/agentctl/caches.py): a memo handed down is no more call data
+    than the context it came from, so a digest reads the same as before the memo left its module."""
+    caches = case_context().caches
+    return {id(v) for name, v in vars(caches).items() if name not in ARGUMENT_MEMOS}
+
 
 DIGESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "restructure4-digests.json")
 
@@ -62,6 +76,10 @@ class Case:
             # (lib/agentctl/machine.py), by keyword or by position
             k.pop("ctx", None)
             k.pop("known", None)  # a memo the context owns (caches.py): no more call data than the context
+            owned = owned_memos()
+            k = {n: v for n, v in k.items() if id(v) not in owned}
+            a = tuple(x for x in a if id(x) not in owned)
+
             probe = (sys.modules["agentctl.machine"].MachineProbe, WiredMachine)
             if issubclass(type(k.get("machine")), probe):
                 del k["machine"]
