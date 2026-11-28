@@ -62,7 +62,7 @@ def run_report(o_r: str, run_id: Any, tail: int, repo: Optional[str], *, ctx: Co
 def outside_runs(o_r: str, snap: Optional[dict[str, Any]], *, ctx: Context) -> tuple[list[Row], Any]:
     """(the reds outside the gate, why they could not be listed or None): from the snapshot when given."""
     if snap:
-        return outside_from_snap(snap, ctx=ctx), snap.get("outside_error")
+        return outside_from_snap(snap, runs=ctx.runs), snap.get("outside_error")
     if not gated_repo(o_r):
         return [], None
     try:
@@ -107,7 +107,7 @@ class GateReport:
         self.out: list[str] = []
         self.parts: list[str] = []
         self.red = False
-        self.gate = gate_from_snap(snap, ctx=self.ctx) if snap else gate_runs(o_r, ctx=self.ctx)
+        self.gate = gate_from_snap(snap, runs=self.ctx.runs) if snap else gate_runs(o_r, ctx=self.ctx)
         others, self.others_err = outside_runs(o_r, snap, ctx=self.ctx)
         self.lrepo = scan_repo_for(o_r, repo)
         self.lstale = local_stale(self.lrepo)
@@ -308,7 +308,7 @@ def ci_state_refresh(o_r: str, write: bool = True, store: Any = None, *, ctx: Co
     change items a check/ branch run's owner is read from (none: matched by the worktree holding its commit)."""
     gate = gate_runs(o_r, ctx=ctx)
     snap = {"at": ctx.clock.time(), "repo": o_r, "outside_error": None, "outside": [],
-            "gate": gate_snap_rows(o_r, gate, ctx=ctx)}
+            "gate": gate_snap_rows(o_r, gate, runs=ctx.runs)}
     if gated_repo(o_r):
         snap.update(outside_snap(o_r, ctx=ctx))
         snap["callable_only"] = sorted(main_callable_flows(o_r))  # their reds wait for red_callable_evidence

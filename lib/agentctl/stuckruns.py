@@ -5,6 +5,7 @@ from agentctl.timefmt import parse_time
 from agentctl.core import attempt
 from agentctl.runqueue import queue_full
 from agentctl.forge import runner_queue, stuck_durations
+from agentctl.ciruns import CiRuns
 from agentctl.context import Context
 from agentctl.outsideflows import stuck_history, stuck_timeout
 from agentctl.red import STUCK_FACTOR, STUCK_FLOOR
@@ -85,7 +86,7 @@ def stuck_runs(lists: dict[str, Any], now_: float | None = None, o_r: Any = None
     only on labels whose every runner is up with all slots busy, carries `queued`; one waiting on a run it dispatched,
     `waits_on`. Neither is a red."""
     t = now_ if now_ is not None else ctx.clock.time()
-    jobs_of = jobs_of or (lambda r: run_jobs(o_r, r, ctx=ctx))
+    jobs_of = jobs_of or (lambda r: run_jobs(o_r, r, runs=ctx.runs))
     if history_of is None and o_r:
         history_of = lambda name: stuck_history(o_r, name, ctx=ctx)  # noqa: E731
     if timeout_of is None and o_r:
@@ -154,9 +155,9 @@ def job_starts(jobs: list[dict[str, Any]] | None) -> list[float]:
     return sorted(parse_time(j["startedAt"]).timestamp() for j in jobs or [] if j.get("startedAt"))
 
 
-def run_jobs(o_r: Any, run: dict[str, Any], *, ctx: Context) -> list[dict[str, Any]] | None:
+def run_jobs(o_r: Any, run: dict[str, Any], *, runs: CiRuns) -> list[dict[str, Any]] | None:
     """The run's jobs ([{name, status, startedAt, ...}]), or None when they cannot be read."""
     try:
-        return ctx.runs.run_jobs(o_r, run.get("databaseId"))
+        return runs.run_jobs(o_r, run.get("databaseId"))
     except (Exception, SystemExit):
         return None

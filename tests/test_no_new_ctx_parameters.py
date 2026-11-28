@@ -24,15 +24,15 @@ CEILINGS = {
     "changekind": 2,
     "checkround": 3,
     "cireport": 9,
-    "ciwhy": 13,
+    "ciwhy": 9,
     "ciwhycmd": 1,
-    "cliregistry": 1,
-    "cliselftest": 1,
-    "cliprobes": 1,
     "clihandlers": 1,
-    "clihandlersloop": 1,
     "clihandlerslanding": 1,
+    "clihandlersloop": 1,
+    "cliprobes": 1,
+    "cliregistry": 1,
     "entrychecks": 1,
+    "eventprojection": 2,
     "gatepublish": 2,
     "gov": 1,
     "invariants": 2,
@@ -42,8 +42,6 @@ CEILINGS = {
     "notifyurl": 4,
     "outsideflows": 4,
     "overlapcheck": 4,
-    "tickloop": 3,
-    "eventprojection": 2,
     "queuecheck": 1,
     "queuediff": 3,
     "queueenter": 10,
@@ -67,7 +65,6 @@ CEILINGS = {
     "reduntracked": 11,
     "redvault": 4,
     "redverify": 7,
-    "redwaits": 2,
     "runsigs": 2,
     "selfci": 3,
     "serversteps": 1,
@@ -76,12 +73,17 @@ CEILINGS = {
     "storeapi": 1,
     "storecmd": 2,
     "storemetrics": 2,
-    "stuckruns": 2,
+    "stuckruns": 1,
     "syncsteps": 1,
+    "tickloop": 3,
     "waiting": 3,
     "watchdog": 2,
     "watchtick": 10,
 }
+
+# the SUM of the ceilings, 276 before 3eecdc3a split `cli` (its 2 became 6 module rows): a split moves ctx parameters
+# between modules, it never adds one, so the sum only falls (lower it with the ceilings it follows)
+TOTAL_CEILING = 272
 
 
 def takes_ctx(fn):
@@ -107,6 +109,14 @@ class NoNewCtxParametersTest(unittest.TestCase):
         now = counts()
         rose = {m: (CEILINGS.get(m, 0), n) for m, n in now.items() if n > CEILINGS.get(m, 0)}
         self.assertEqual({}, rose, "a function takes `ctx`: take the dependency it reads (clock, runner, inbox, runs, store)")
+
+    def test_a_split_does_not_raise_the_total(self):
+        self.assertLessEqual(sum(CEILINGS.values()), TOTAL_CEILING,
+                             "the ceilings sum past TOTAL_CEILING: a split must migrate as many `ctx` parameters as it adds rows")
+        self.assertLessEqual(sum(counts().values()), TOTAL_CEILING)
+
+    def test_the_total_ceiling_is_lowered_with_the_count(self):
+        self.assertEqual(TOTAL_CEILING, sum(counts().values()), "lower TOTAL_CEILING to the count")
 
     def test_no_ceiling_stays_above_its_count(self):
         now = counts()

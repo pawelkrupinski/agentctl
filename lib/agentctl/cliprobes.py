@@ -20,5 +20,5 @@ def environment_probes(machine: MachineProbe, clock: Clock, store: Any, ctx: Con
     runs through the context), the watchdog's invariants (the process's store and clock bound in), and the plain
     network, token and CI checks."""
     return [partial(probe_disk_free, machine=machine), partial(probe_run_queue, machine=machine),
-            partial(probe_quota_reset, ctx=ctx), partial(probe_invariant, clock=clock, st=store, ctx=ctx), probe_waiting_ok, probe_workflow_green, probe_http, probe_tcp,
+            partial(probe_quota_reset, runs=ctx.runs), partial(probe_invariant, clock=clock, st=store, ctx=ctx), probe_waiting_ok, probe_workflow_green, probe_http, probe_tcp,
             probe_route, probe_tunnel, probe_gate_read, probe_token, probe_git_fetch, probe_clone_health, probe_red_read]

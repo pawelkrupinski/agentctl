@@ -15,7 +15,7 @@ from agentctl.classify import SETUP_STEP
 from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, gh_json, run_id_of_number
 from agentctl.gating import GATING_CHECKS_FILE, gate_flows, gating_checks
 from agentctl.redrepos import red_gate_flows
-from agentctl.ciruns import Run
+from agentctl.ciruns import CiRuns, Run
 from agentctl.context import Context
 from agentctl.gitrepo import commit_known
 from agentctl.paths import state_root
@@ -297,33 +297,33 @@ def run_target(o_r, target, *, ctx):
     return r["databaseId"], said
 
 
-def gate_snap_rows(o_r: str, gate: list[tuple[Any, Any, Any, Any]], *, ctx: Context) -> list[dict[str, Any]]:
+def gate_snap_rows(o_r: str, gate: list[tuple[Any, Any, Any, Any]], *, runs: CiRuns) -> list[dict[str, Any]]:
     """The snapshot's `gate` rows of gate_runs' units (the inverse of gate_from_snap): each with its listed runs."""
-    mine = ctx.runs.main_runs_of(o_r)
+    mine = runs.main_runs_of(o_r)
     return [{"name": n, "decided": d, "newer": nw, "since": st[0], "count": st[1],
              "runs": mine.gate.get(n, []), "no_verdict": mine.no_verdict.get(n)} for n, d, nw, st in gate]
 
 
-def gate_from_snap(snap: Any, *, ctx: Context) -> Any:
+def gate_from_snap(snap: Any, *, runs: CiRuns) -> Any:
     out = []
     for g in snap["gate"]:
-        ctx.runs.main_runs_of(snap["repo"]).gate[g["name"]] = g["runs"]
-        ctx.runs.main_runs_of(snap["repo"]).no_verdict[g["name"]] = g.get("no_verdict")
+        runs.main_runs_of(snap["repo"]).gate[g["name"]] = g["runs"]
+        runs.main_runs_of(snap["repo"]).no_verdict[g["name"]] = g.get("no_verdict")
         out.append((g["name"], g["decided"], g["newer"], (g["since"], g["count"])))
     return out
 
 
-def outside_from_snap(snap: Any, *, ctx: Context) -> Any:
+def outside_from_snap(snap: Any, *, runs: CiRuns) -> Any:
     out = []
     for g in snap["outside"]:
-        ctx.runs.main_runs_of(snap["repo"]).outside[g["name"]] = g["runs"]
+        runs.main_runs_of(snap["repo"]).outside[g["name"]] = g["runs"]
         out.append((g["name"], g["decided"], g["since"], g["count"]))
     return out
 
 
-def run_in_lists(o_r: str, n: Any, *, ctx: Context) -> Any:
+def run_in_lists(o_r: str, n: Any, *, runs: CiRuns) -> Any:
     """(workflow, run) of a known run of the repository's main a number or id names, else None."""
-    known = [(name, r) for name, runs in ctx.runs.main_runs_of(o_r).lists() for r in runs]
+    known = [(name, r) for name, listed in runs.main_runs_of(o_r).lists() for r in listed]
     for key in ("number", "databaseId"):  # a run NUMBER first (the repo's convention), an id only failing that
         found = next(((name, r) for name, r in known if str(r.get(key)) == n), None)
         if found:
@@ -347,7 +347,7 @@ def run_listed_or_viewed(o_r: Any, n: Any, *, ctx: Context) -> Any:
 def resolve_run(o_r, n, *, ctx):
     """(workflow, run) of the run on main a number or id names, else (None, None)."""
     n = str(n).lstrip("#")
-    known = run_in_lists(o_r, n, ctx=ctx)
+    known = run_in_lists(o_r, n, runs=ctx.runs)
     if known:
         return known
     try:

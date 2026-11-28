@@ -24,6 +24,6 @@ def main(argv: list[str] | None = None, clock: Clock | None = None, runner: Proc
     ctx = wire_process(clock, runner or ProcessRunner(), store)
     registry = condition_registry(clock, store, ctx)
     if args == ["--selftest"]:
-        return selftest(ctx, main)
+        return selftest(clock, ctx.runs, main)
     a = parser().parse_args(argv)
     return run_command(a, command_handlers(clock, store, registry, ctx)[a.cmd], store)

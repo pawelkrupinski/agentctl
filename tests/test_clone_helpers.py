@@ -82,7 +82,7 @@ class GateSnapRowsTest(unittest.TestCase):
     def test_rows_carry_their_listed_runs_and_no_verdict(self):
         case_context().runs.main_runs_of("o/r").gate["wf"], case_context().runs.main_runs_of("o/r").no_verdict["wf"] = [{"n": 1}], {"n": 2}
         try:
-            rows = A.gate_snap_rows("o/r", [("wf", {"n": 0}, True, (5.0, 3)), ("other", None, False, (None, 0))], ctx=case_context())
+            rows = A.gate_snap_rows("o/r", [("wf", {"n": 0}, True, (5.0, 3)), ("other", None, False, (None, 0))], runs=case_context().runs)
         finally:
             case_context().runs.clear()
         self.assertEqual(rows, [{"name": "wf", "decided": {"n": 0}, "newer": True, "since": 5.0, "count": 3,
@@ -94,9 +94,9 @@ class GateSnapRowsTest(unittest.TestCase):
         case_context().runs.main_runs_of("o/r").gate["wf"], case_context().runs.main_runs_of("o/r").no_verdict["wf"] = [{"n": 1}], None
         try:
             unit = ("wf", {"n": 0}, False, (1.0, 2))
-            rows = A.gate_snap_rows("o/r", [unit], ctx=case_context())
+            rows = A.gate_snap_rows("o/r", [unit], runs=case_context().runs)
             case_context().runs.clear()
-            self.assertEqual(A.gate_from_snap({"repo": "o/r", "gate": rows}, ctx=case_context()), [unit])
+            self.assertEqual(A.gate_from_snap({"repo": "o/r", "gate": rows}, runs=case_context().runs), [unit])
             self.assertEqual(case_context().runs.main_runs_of("o/r").gate["wf"], [{"n": 1}])
         finally:
             case_context().runs.clear()

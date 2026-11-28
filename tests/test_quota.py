@@ -73,11 +73,11 @@ class QuotaTest(unittest.TestCase):
                 {"number": 6, "databaseId": 60, "createdAt": "2027-01-15T07:00:00Z", "conclusion": "failure"}]
         A.gh_json = lambda *a, **k: runs
         try:
-            A.run_jobs = lambda o_r, r, ctx=None: [{"name": "preflight", "conclusion": "failure"}]
-            ok, why = A.probe_quota_reset({"workflow": "Record scrape fixtures", "since": since, "job": "preflight"}, ctx=case_context())
+            A.run_jobs = lambda o_r, r, runs=None: [{"name": "preflight", "conclusion": "failure"}]
+            ok, why = A.probe_quota_reset({"workflow": "Record scrape fixtures", "since": since, "job": "preflight"}, runs=case_context().runs)
             self.assertEqual(ok, False)
-            A.run_jobs = lambda o_r, r, ctx=None: [{"name": "preflight", "conclusion": "success"}, {"name": "leg", "conclusion": "failure"}]
-            ok, why = A.probe_quota_reset({"workflow": "Record scrape fixtures", "since": since, "job": "preflight"}, ctx=case_context())
+            A.run_jobs = lambda o_r, r, runs=None: [{"name": "preflight", "conclusion": "success"}, {"name": "leg", "conclusion": "failure"}]
+            ok, why = A.probe_quota_reset({"workflow": "Record scrape fixtures", "since": since, "job": "preflight"}, runs=case_context().runs)
             self.assertTrue(ok, why)
         finally:
             A.gh_json, A.run_jobs = saved

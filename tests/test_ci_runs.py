@@ -54,7 +54,7 @@ class CiRunsTest(Base):
         self.assertEqual(A.workflow_main_runs("o/r", "new.yml", ctx=case_context()), [])
         self.assertIsNone(A.newest_decided_main("o/r", "new.yml", ctx=case_context()))
         self.assertIsNone(A.newest_green_main("o/r", "new.yml", ctx=case_context()))
-        cleared, why = A.probe_quota_reset({"repo": "o/r", "workflow": "new.yml", "job": "preflight", "since": 0}, ctx=case_context())
+        cleared, why = A.probe_quota_reset({"repo": "o/r", "workflow": "new.yml", "job": "preflight", "since": 0}, runs=case_context().runs)
         self.assertFalse(cleared)
         self.assertIn("no run of new.yml since", why)
         self.assertEqual(A._own_runs("o/r", "new.yml", ctx=case_context()), [])

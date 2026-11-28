@@ -202,14 +202,14 @@ def red_gate_snap(o_r, store, *, ctx):
         if r:
             latest[wf] = {k: r.get(k) for k in fields}
     return {"at": ctx.clock.time(), "repo": o_r, "outside": [], "outside_error": None,
-            "gate": gate_snap_rows(o_r, gate, ctx=ctx),
+            "gate": gate_snap_rows(o_r, gate, runs=ctx.runs),
             "latest": latest}
 
 
 def red_observe_gate(o_r, snap, *, ctx):
     """{key: observation} of another watched repo: its gate workflows' red runs (no outside workflows, local checks,
     branch predictions or convergence kicks -- those are the primary's), and its stuck gate runs."""
-    gate = gate_from_snap(snap, ctx=ctx)
+    gate = gate_from_snap(snap, runs=ctx.runs)
     rows = [(n, d, ctx.runs.main_runs_of(snap["repo"]).gate.get(n, []), True) for n, d, _nw, _s in gate]
     obs = red_obs_of_units(gate_red_units(o_r, rows))
     obs.update(stuck_obs(snap))

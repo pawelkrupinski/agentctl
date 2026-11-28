@@ -403,7 +403,7 @@ def red_observe(o_r, repo, snap, *, ctx):
     """{key: observation} of everything red on main now: the gate, every other workflow (its newest decided run, audit
     #7), main's local checks, the branch runs that predict main red, and the stuck runs (audit #8). A report-only gate
     run's reds (gate_report_only) are outside the gate's."""
-    gate, outside, mine = gate_from_snap(snap, ctx=ctx), outside_from_snap(snap, ctx=ctx), ctx.runs.main_runs_of(snap["repo"])
+    gate, outside, mine = gate_from_snap(snap, runs=ctx.runs), outside_from_snap(snap, runs=ctx.runs), ctx.runs.main_runs_of(snap["repo"])
     rows = [(n, d, mine.gate.get(n, []), not gate_report_only(o_r, n, d, ctx=ctx)[0]) for n, d, _nw, _s in gate]
     others = [(n, r, mine.outside.get(n, []), False) for n, r, _s, _c in outside]
     units = gate_red_units(o_r, rows, others) + local_units(repo) + predict_units(o_r, snap)

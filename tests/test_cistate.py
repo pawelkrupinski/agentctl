@@ -36,8 +36,8 @@ class SnapshotTest(RedBase):
         red, line = A.ci_why(MOVIES, summary=True, snap=A.ci_state_load(MOVIES), repo=self.r.path, store=A.process_store(), ctx=case_context())
         self.assertFalse(red)
         self.assertTrue(line.startswith("gate green · reds: Identity capture #2104 → offering"), line)
-        self.assertEqual([n for n, *_ in A.gate_from_snap(snap, ctx=case_context())], ["Main", "Identity model convergence", "Identity takes"])
-        self.assertEqual([n for n, *_ in A.outside_from_snap(snap, ctx=case_context())], ["Identity capture"])
+        self.assertEqual([n for n, *_ in A.gate_from_snap(snap, runs=case_context().runs)], ["Main", "Identity model convergence", "Identity takes"])
+        self.assertEqual([n for n, *_ in A.outside_from_snap(snap, runs=case_context().runs)], ["Identity capture"])
 
     def test_no_red_anywhere_says_no_reds(self):
         self.put("runs.json", green_gate(self, self.sha))
