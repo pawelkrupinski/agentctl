@@ -434,6 +434,13 @@ class VendorDriftWorld(E2ETest):
         os.makedirs(os.path.dirname(theirs))
         with open(os.path.join(H.BIN, copy)) as f, open(theirs, "w") as g:
             g.write(f.read() + "# movies moved ahead\n")
+        # the movies checkout is a clone whose origin/main HAS the file: vendorsync copies only what movies has landed
+        origin = os.path.join(w.root, "github", "movies.git")
+        H.sh(w.root, "git", "init", "-q", "--bare", "-b", "main", origin)
+        H.sh(movies, "git", "init", "-q", "-b", "main")
+        H.sh(movies, "git", "remote", "add", "origin", origin)
+        w.commit("movies ahead", at=movies)
+        H.sh(movies, "git", "push", "-q", "origin", "HEAD:main")
         w.write(".claude/settings.json", '{"permissions": {"defaultMode": "auto"}}', at=w.home)
         self.claude = os.path.join(w.root, "claude")
         w.extra_env.update(AGENTCTL_CLAUDE=os.path.join(H.HERE, "claude_stub.py"), E2E_CLAUDE_DIR=self.claude,
