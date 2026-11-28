@@ -14,13 +14,13 @@ import argparse
 import os
 import subprocess
 import sys
+from typing import Mapping
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib"))
 from agentctl.clock import Clock  # noqa: E402
 from agentctl.filelock import FileLock  # noqa: E402
 
 REPORT_EVERY = 30  # s between "waiting for the push lock" lines
-LOCK = os.environ.get("AGENTCTL_PUSH_LOCK") or os.path.expanduser("~/.cache/agentctl/selfpush.lock")
 
 
 def git(*args: str, check: bool = False, capture: bool = False) -> subprocess.CompletedProcess:
@@ -34,7 +34,11 @@ def rebase_in_progress() -> bool:
     return any(os.path.isdir(p) for p in paths)
 
 
-def take_lock(wait: float) -> FileLock | None:
+def lock_path(environ: Mapping[str, str]) -> str:
+    return environ.get("AGENTCTL_PUSH_LOCK") or os.path.expanduser("~/.cache/agentctl/selfpush.lock")
+
+
+def take_lock(wait: float, path: str) -> FileLock | None:
     """The push lock, held, or None after `wait` seconds; prints who it waits behind every 30 s."""
     next_report = [0.0]
 
@@ -43,7 +47,7 @@ def take_lock(wait: float) -> FileLock | None:
             print(f"selfpush: waiting for the push lock ({int(waited)} s; another push holds it)", flush=True)
             next_report[0] = waited + REPORT_EVERY
 
-    lock = FileLock(LOCK, timeout=wait, clock=Clock(), on_wait=report, poll=1.0)
+    lock = FileLock(path, timeout=wait, clock=Clock(), on_wait=report, poll=1.0)
     return lock if lock.acquire() else None
 
 
@@ -74,7 +78,7 @@ def push_under_lock() -> int:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--wait", type=float, default=3 * 3600, help="give up waiting for the lock after this long")
-    held = take_lock(ap.parse_args().wait)
+    held = take_lock(ap.parse_args().wait, lock_path(os.environ))
     if held is None:
         print("selfpush: NOT PUSHED -- timed out waiting for the push lock")
         return 1

@@ -15,17 +15,20 @@ import subprocess
 import sys
 import urllib.request
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-LOCK = os.path.join(HERE, "tools.lock")
-HOME = os.environ.get("AGENTCTL_QUALITY_HOME") or os.path.expanduser("~/.cache/agentctl-quality")
+def default_lock():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools.lock")
 
 
-def venv_dir(lock=LOCK):
+def quality_home():
+    return os.environ.get("AGENTCTL_QUALITY_HOME") or os.path.expanduser("~/.cache/agentctl-quality")
+
+
+def venv_dir(lock):
     digest = hashlib.sha256(open(lock, "rb").read()).hexdigest()[:12]
-    return os.path.join(HOME, f"tools-{digest}-py{sys.version_info[0]}{sys.version_info[1]}")
+    return os.path.join(quality_home(), f"tools-{digest}-py{sys.version_info[0]}{sys.version_info[1]}")
 
 
-def ensure(lock=LOCK, run=subprocess.run):
+def ensure(lock, run=subprocess.run):
     """The venv's python; installs the venv when it is missing. Raises SystemExit naming the fix when it cannot."""
     venv = venv_dir(lock)
     python = os.path.join(venv, "bin", "python")
@@ -44,7 +47,7 @@ def ensure(lock=LOCK, run=subprocess.run):
     return python
 
 
-def relock(lock=LOCK):
+def relock(lock):
     pins = re.findall(r"^([A-Za-z0-9_.-]+)==(\S+)", open(lock).read(), re.M)
     head = [line for line in open(lock).read().splitlines() if line.startswith("#")]
     out = head[:]
@@ -58,6 +61,6 @@ def relock(lock=LOCK):
 
 if __name__ == "__main__":
     if "--relock" in sys.argv:
-        relock()
+        relock(default_lock())
     else:
-        print(ensure())
+        print(ensure(default_lock()))

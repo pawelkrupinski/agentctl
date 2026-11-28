@@ -18,7 +18,7 @@ effect	devtools/baselinemerge.py	1
 effect	devtools/baselinemerge.py:files	6
 effect	devtools/govstep.py	2
 effect	devtools/intra.py:files	1
-effect	devtools/mkmodule.py:files	6
+effect	devtools/mkmodule.py:files	4
 effect	devtools/movedefs.py:files	5
 effect	devtools/partlist.py:files	4
 effect	devtools/retarget.py:files	3
@@ -305,10 +305,6 @@ state	lib/agentctl/statuspage.py	1
 state	lib/agentctl/storetoken.py	2
 state	lib/agentctl/tickloop.py	1
 state	lib/agentctl/upkeep.py	1
-import-io	devtools/mkmodule.py	6
-import-io	devtools/movedefs.py	5
-import-io	devtools/selfpush.py	1
-import-io	quality/tools.py	1
 mixed	devtools/baselinemerge.py:drive	4
 mixed	devtools/baselinemerge.py:install	5
 mixed	devtools/baselinemerge.py:script	3

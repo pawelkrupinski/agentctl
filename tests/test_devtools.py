@@ -504,12 +504,12 @@ class SelfPushTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("selfpush", os.path.join(DEV, "selfpush.py"))
         sp = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(sp)
-        sp.LOCK, sp.REPORT_EVERY = os.path.join(self.tmp, "held"), 1
-        with open(sp.LOCK, "a+") as holder:
+        held_path, sp.REPORT_EVERY = os.path.join(self.tmp, "held"), 1
+        with open(held_path, "a+") as holder:
             fcntl.flock(holder, fcntl.LOCK_EX)
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                self.assertIsNone(sp.take_lock(3.5))
+                self.assertIsNone(sp.take_lock(3.5, held_path))
         stamps = [int(l.split("(")[1].split(" s")[0]) for l in buf.getvalue().splitlines()]
         self.assertEqual(len(stamps), len(set(stamps)), stamps)  # never repeated
         self.assertGreaterEqual(len(stamps), 3)
