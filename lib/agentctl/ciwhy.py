@@ -304,7 +304,7 @@ def gate_snap_rows(o_r: str, gate: list[tuple[Any, Any, Any, Any]], *, ctx: Cont
              "runs": mine.gate.get(n, []), "no_verdict": mine.no_verdict.get(n)} for n, d, nw, st in gate]
 
 
-def gate_from_snap(snap, *, ctx):
+def gate_from_snap(snap: Any, *, ctx: Context) -> Any:
     out = []
     for g in snap["gate"]:
         ctx.runs.main_runs_of(snap["repo"]).gate[g["name"]] = g["runs"]
@@ -313,7 +313,7 @@ def gate_from_snap(snap, *, ctx):
     return out
 
 
-def outside_from_snap(snap, *, ctx):
+def outside_from_snap(snap: Any, *, ctx: Context) -> Any:
     out = []
     for g in snap["outside"]:
         ctx.runs.main_runs_of(snap["repo"]).outside[g["name"]] = g["runs"]

@@ -291,11 +291,11 @@ def _reset_process_state():
         runner, real = mod.__dict__.get("_runner"), mod.__dict__.get("ProcessRunner")
         if isinstance(runner, list) and real is not None and mod.__name__ == "agentctl.procrunner":
             runner[:] = [real()]
-        # the composition root's wiring (cli.wire_collaborators: the inbox's clock and writer, the probes reading the
+        # the composition root's wiring (cliprocess.wire_collaborators: the inbox's clock and writer, the probes reading the
         # clock and store): what main wired with a test's FakeClock ends with that test. 2026-11-25 (agentctl CI red
         # since e4d02a4): a test's standing clock stamped the next test's inbox entries 400 s behind the wall, and
         # test_orphans' infra retry read its verdict as older than its submit -- in CI's worker order only.
-        if mod.__name__ == "agentctl.cli":
+        if mod.__name__ == "agentctl.cliprocess":
             mod.wire_collaborators(mod.Clock(), mod.CurrentStore(mod.process_store))
 
 

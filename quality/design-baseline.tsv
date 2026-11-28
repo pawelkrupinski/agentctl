@@ -832,7 +832,6 @@ fanout	lib/agentctl/cireport.py	23
 fanout	lib/agentctl/ciwhy.py	11
 fanout	lib/agentctl/cleanup.py	17
 fanout	lib/agentctl/cleanuppass.py	10
-fanout	lib/agentctl/cli.py	59
 fanout	lib/agentctl/cliparser.py	10
 fanout	lib/agentctl/conditions.py	10
 fanout	lib/agentctl/culpritfix.py	16

@@ -12,7 +12,7 @@ WALL = re.compile(r"\btime\.(time|monotonic|monotonic_ns|time_ns|sleep|clock_get
                   r"\bdate\.today\b|\bClock\(\)")
 MARK = "# wall:"
 # the clock itself, and the composition root where the real Clock is made
-CLOCK_MODULE, COMPOSITION_ROOT = "clock.py", "cli.py"
+CLOCK_MODULE, COMPOSITION_ROOT = "clock.py", ("cli.py", "cliprocess.py")  # cli and the module holding its process wiring
 
 
 def wall_reads(root=LIB):
@@ -25,7 +25,7 @@ def wall_reads(root=LIB):
             marked, before = MARK in line or before.lstrip().startswith(MARK), line
             code = line.split("#")[0] if line.lstrip().startswith("#") else re.sub(r'""".*|#.*', "", line)
             m = WALL.search(code)
-            if not m or marked or name == CLOCK_MODULE or (name == COMPOSITION_ROOT and m.group(0) == "Clock()"):
+            if not m or marked or name == CLOCK_MODULE or (name in COMPOSITION_ROOT and m.group(0) == "Clock()"):
                 continue
             found.append(f"{name}:{n}: {line.strip()}")
     return found

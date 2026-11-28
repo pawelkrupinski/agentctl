@@ -302,7 +302,7 @@ def _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None, *
     return WatchLoop(repo, sha, pushed_at, o_r, flows, own, clock, claim, store, ctx=ctx).run()
 
 
-def cmd_watch(a, clock, store, *, ctx):
+def cmd_watch(a: Any, clock: Any, store: Any, *, ctx: Context) -> Any:
     a.inbox_cwd = a.agent_cwd or a.close or a.repo or safe_cwd()  # its inbox entry routes to the agent's worktree
     repo = main_clone(a.repo or safe_cwd())
     os.chdir(repo)  # not the worktree: --close removes it, and so may its agent

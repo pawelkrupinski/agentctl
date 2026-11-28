@@ -50,7 +50,7 @@ def red_am_fixer():
     return 1
 
 
-def cmd_red(a, clock, st, registry, *, ctx):
+def cmd_red(a: Any, clock: Any, st: Any, registry: Any, *, ctx: Context) -> Any:
     if a.rcmd == "am-fixer":
         return red_am_fixer()
     if a.rcmd == "probe":

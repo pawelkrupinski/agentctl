@@ -211,7 +211,7 @@ def alert_merge_into(d: Any, live: Any, rec: Any) -> Any:
     return live["id"]
 
 
-def alert_write(rec, st, red=None, condition=None, d=None):
+def alert_write(rec: Any, st: Any, red: Any = None, condition: Any = None, d: Any = None) -> Any:
     """THE ONE WAY AN ENTRY ENTERS THE INBOX: routed (audience, item), merged into its item's live alert when there is
     one, closing what its verdict closes. Returns the id of the entry that carries it (the live one when merged)."""
     d = d or inbox_dir()

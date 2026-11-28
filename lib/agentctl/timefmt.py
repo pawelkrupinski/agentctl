@@ -43,7 +43,7 @@ def day_hhmmz(t: float | str) -> str:
     return time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(float(t)))
 
 
-def age_since(since, now=None):
+def age_since(since: Any, now: Any = None) -> str:
     """'3d 4h' / '5h 12m' / '7m' since an ISO time, or '?' when it cannot be read."""
     try:
         t = dt.datetime.fromisoformat(str(since).replace("Z", "+00:00"))

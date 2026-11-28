@@ -49,7 +49,7 @@ class VerdictTee:
 WAIT_KINDS_DEFAULT = "INVARIANT,NETWORK,RED_STARVED,RED,BRANCH_RED,FIX_FAILED,FIX_NOT_COUNTED,NOT_LANDED,PRECHECK_REFUSED,STALLED,UNKNOWN,RED_UNCLAIMED,RED_BUDGET,RED_AUTHOR,RED_ESCALATE,BLOCKED,FIXER_FAILED,DIAGNOSED,UNLANDED_ORPHAN,ORPHAN_SUBMITTED,RED_REVERT,LAUNCH_FAILED,REVERTED,REVERT_NOTICE"
 
 
-def inbox_command(a):
+def inbox_command(a: Any) -> Any:
     """The inbox's name for a parsed command, or None when it writes no entry. `land status|hold|release|cancel` write
     none: a queue subcommand answers its caller there and then, and a monitor polling `land status` wrote 2,692 entries
     in three days, acked by hand (2026-11-16). Only a verdict that may outlive the agent that started it goes there."""

@@ -13,7 +13,8 @@ sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402,F401  (the harness)
 
 LIB = os.path.join(os.path.dirname(HERE), "lib", "agentctl")
-COMPOSITION_ROOT = "cli"
+# the composition root is the entry `cli` and the modules it splits its wiring into (the fan-out split, 2026-11-28)
+COMPOSITION_ROOT = ("cli", "cliprocess", "cliwiring")
 
 # module.function -> what removes it (the work list; R5b, 2026-11-27: each needs its collaborator threaded from cli through
 # the modules that read it today, which reach the landing and queue lanes)
@@ -44,7 +45,7 @@ def ambient_readers(sources, module, getters):
     source}), outside the getters' own `module` and the composition root; the imports are no read."""
     found = set()
     for name, source in sorted(sources.items()):
-        if name in (module, COMPOSITION_ROOT):
+        if name in (module, *COMPOSITION_ROOT):
             continue
         for top in ast.parse(source).body:
             if isinstance(top, (ast.Import, ast.ImportFrom)):
@@ -71,7 +72,7 @@ def reader_counts(sources):
 def locators():
     found = {}
     for f in sorted(os.listdir(LIB)):
-        if not f.endswith(".py") or f[:-3] == COMPOSITION_ROOT:
+        if not f.endswith(".py") or f[:-3] in COMPOSITION_ROOT:
             continue
         tree = ast.parse(open(os.path.join(LIB, f)).read())
         for fn in tree.body:
@@ -90,7 +91,7 @@ class NoServiceLocators(unittest.TestCase):
         names = {k.split(".")[1] for k in FROZEN if k.split(".")[1].startswith("wire_")}
         callers = set()
         for f in os.listdir(LIB):
-            if f.endswith(".py") and f[:-3] != COMPOSITION_ROOT:
+            if f.endswith(".py") and f[:-3] not in COMPOSITION_ROOT:
                 for n in ast.walk(ast.parse(open(os.path.join(LIB, f)).read())):
                     if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id in names:
                         callers.add(f"{f[:-3]} calls {n.func.id}")

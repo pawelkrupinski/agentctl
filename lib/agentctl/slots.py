@@ -172,7 +172,7 @@ def land_owner_only(repo: Any) -> Any:
     return owner_only and in_fixer()
 
 
-def cmd_land(a, clock, store, *, ctx):
+def cmd_land(a: Any, clock: Any, store: Any, *, ctx: Context) -> Any:
     if getattr(a, "lcmd", None):
         return land_queue_subcommand(a, store, ctx=ctx)
     refused = land_start_refusal(a)

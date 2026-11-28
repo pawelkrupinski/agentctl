@@ -44,4 +44,6 @@ MODULES = ("caches", "procrunner", "conditionregistry", "escalationtable", "pspa
            "redcli", "changerows", "changelap", "overlapcheck", "entrychecks", "queuediff", "batchselect", "batch",
            "syncsteps", "invariants", "watchdog", "queueinfra", "queuecheck", "checkround", "queuepush", "batchpush",
            "batchcheck", "batchtick", "serversteps", "landqueue", "tickloop", "queueenter", "landdryrun", "slots",
-           "cliparser", "cli")
+           "cliparser", "cliprobes", "cliprobesstore", "clihandler", "clihandlersmachine", "clihandlerstools",
+           "clihandlersrecords", "clihandlersloop", "clihandlerslanding", "cliprocess", "cliwiring", "cliregistry",
+           "clihandlers", "cliselftest", "cli")
