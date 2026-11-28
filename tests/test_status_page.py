@@ -5,6 +5,7 @@ import contextlib, io, json, os, socket, subprocess, sys, tempfile, time, unitte
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+from harness import case_context  # noqa: E402
 from test_agentctl import A  # noqa: E402
 
 T = 1_800_000_000.0
@@ -75,8 +76,7 @@ class Base(unittest.TestCase):
         A.cached_dispatch_blocker = lambda ttl=60: None
         A.port_open = lambda port, host="127.0.0.1", timeout=2.0: True
         A.process_alive = lambda pid, start=None: pid == 4242
-        for c in (A._status_wt, A._status_wt_reads, A._status_said, A._status_last, A._status_reading):
-            c.clear()
+        case_context().caches.status.clear()  # the status reads' memory (caches.StatusMemos)
 
     def tearDown(self):
         for n, f in self.patched.items():
@@ -164,7 +164,7 @@ class DataTest(Base):
 
     def test_every_section_from_the_store_and_the_filesystem(self):
         st, wt = self.world()
-        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T)
+        d = A.status_data(memos=case_context().caches.status, machine=A.machine_probe(A.knob_machine()), store=st, now_=T)
         self.assertNotIn("SECRET", json.dumps(d, default=str), "a lease's secret never leaves the process")
         h = d["header"]
         self.assertTrue(h["gate_red"])
@@ -204,7 +204,7 @@ class DataTest(Base):
     def test_a_failing_source_is_an_error_in_its_own_section_only(self):
         st, _wt = self.world()
         st.fail = {"items"}
-        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T)
+        d = A.status_data(memos=case_context().caches.status, machine=A.machine_probe(A.knob_machine()), store=st, now_=T)
         for k in ("reds", "landing", "conditions"):
             self.assertIn("tunnel is down", d[k]["error"])
         self.assertIsInstance(d["agents"], list)
@@ -218,14 +218,14 @@ class DataTest(Base):
         self.addCleanup(hang.set)
         st.events = lambda after=0, limit=500: hang.wait(3) or orig(after, limit)
         t0 = time.time()
-        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=0.5)
+        d = A.status_data(memos=case_context().caches.status, machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=0.5)
         self.assertLess(time.time() - t0, 2.5)
         self.assertIn("no answer within", d["events"]["error"])
         self.assertIsInstance(d["reds"], list)
 
     def test_the_servers_reads_show_a_slow_source_from_its_last_read(self):
         st, _wt = self.world()
-        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=2, keep=True)
+        d = A.status_data(memos=case_context().caches.status, machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=2, keep=True)
         self.assertEqual(len(d["events"]), A.STATUS_EVENTS)
         self.assertEqual(d["stale"], {})
         self.assertIn("events", d["took"])
@@ -233,15 +233,15 @@ class DataTest(Base):
         orig = st.events
         st.events = lambda after=0, limit=500: gate.wait(10) and orig(after, limit)
         t0 = time.time()
-        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=0.5, keep=True)
+        d = A.status_data(memos=case_context().caches.status, machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=0.5, keep=True)
         self.assertLess(time.time() - t0, 2.5)
         self.assertEqual(len(d["events"]), A.STATUS_EVENTS, "the last finished read, not an error")
         self.assertIn("still reading", d["stale"]["events"])
-        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=0.5, keep=True)
+        d = A.status_data(memos=case_context().caches.status, machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=0.5, keep=True)
         self.assertIn("events", d["stale"], "the read still going is not started twice")
         gate.set()
-        A._status_reading["events"].join(10)
-        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=2, keep=True)
+        case_context().caches.status.reading["events"].join(10)
+        d = A.status_data(memos=case_context().caches.status, machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=2, keep=True)
         self.assertNotIn("events", d["stale"])
 
     def test_old_fixer_records_are_not_opened(self):
@@ -257,7 +257,7 @@ class DataTest(Base):
     def test_an_unreachable_remote_store(self):
         os.environ["AGENTCTL_STORE_URL"] = "http://127.0.0.1:9"
         try:
-            d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=A.RemoteStore("http://127.0.0.1:9", tok="x", timeout=1), now_=T)
+            d = A.status_data(memos=case_context().caches.status, machine=A.machine_probe(A.knob_machine()), store=A.RemoteStore("http://127.0.0.1:9", tok="x", timeout=1), now_=T)
         finally:
             os.environ.pop("AGENTCTL_STORE_URL", None)
         self.assertFalse(d["store"]["reachable"])
@@ -306,9 +306,9 @@ class AgentDetailTest(Base):
         A.status_git = git
         os.environ["AGENTCTL_STATUS_AGENT_BOUND"] = "1"
         try:
-            rows = {a["worktree"]: a for a in A.status_agents(self.store(fast, slow), T, records=[])}
+            rows = {a["worktree"]: a for a in A.status_agents(self.store(fast, slow), T, case_context().caches.status, records=[])}
             self.assertFalse(release.is_set())
-            self.assertTrue(held and A._status_wt_reads[slow].is_alive(),
+            self.assertTrue(held and case_context().caches.status.worktree_reads[slow].is_alive(),
                             "the page answered while the slow worktree's read was still held: it never waits for it")
             self.assertEqual([c["subject"] for c in rows[fast]["commits"]], ["c1", "c0"])
             self.assertNotIn("git_stale", rows[fast])
@@ -316,8 +316,8 @@ class AgentDetailTest(Base):
             self.assertNotIn("commits", rows[slow])
             self.assertEqual(rows[slow]["pid"], 4243, "the slow row keeps everything but its git details")
             release.set()
-            A._status_wt_reads[slow].join(10)
-            rows = {a["worktree"]: a for a in A.status_agents(self.store(fast, slow), T, records=[])}
+            case_context().caches.status.worktree_reads[slow].join(10)
+            rows = {a["worktree"]: a for a in A.status_agents(self.store(fast, slow), T, case_context().caches.status, records=[])}
             self.assertEqual([c["subject"] for c in rows[slow]["commits"]], ["c1", "c0"],
                              "the background read filled the cache for the next refresh")
         finally:
@@ -330,13 +330,13 @@ class AgentDetailTest(Base):
         real, calls = A.status_git, []
         A.status_git = lambda w, *a, **k: calls.append(a[0]) or real(w, *a, **k)
         try:
-            A.status_worktree(wt, 5)
+            A.status_worktree(wt, 5, case_context().caches.status)
             self.assertEqual(sorted(calls), ["log", "log", "status"])
             calls.clear()
-            A.status_worktree(wt, 5)
+            A.status_worktree(wt, 5, case_context().caches.status)
             self.assertEqual(calls, [], "HEAD unchanged, status young: all from the cache")
             self.commit(wt, 7)
-            out = A.status_worktree(wt, 5)
+            out = A.status_worktree(wt, 5, case_context().caches.status)
             self.assertEqual(calls, ["log", "log"])
             self.assertEqual(out["commits"][0]["subject"], "c7")
         finally:
@@ -382,8 +382,8 @@ class ServerTest(Base):
     def setUp(self):
         super().setUp()
         self.saved_cached = A.status_cached
-        A.status_cached = lambda machine: {"at": T, "reds": []}
-        self.srv = A.status_page_server("127.0.0.1", 0, A.machine_probe(A.knob_machine()))
+        A.status_cached = lambda machine, memos: {"at": T, "reds": []}
+        self.srv = A.status_page_server("127.0.0.1", 0, A.machine_probe(A.knob_machine()), case_context().caches.status)
         self.port = self.srv.server_address[1]
         import threading
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
@@ -432,7 +432,7 @@ class ServerTest(Base):
 
     def test_agent_and_stream_routes_name_what_is_wrong(self):
         saved = A.live_lookup
-        A.live_lookup = lambda ident: {"id": ident} if ident == "77" else None
+        A.live_lookup = lambda ident, memos: {"id": ident} if ident == "77" else None
         try:
             self.assertEqual(self.get("/agent/nobody")[0:2], (404, "no such agent: an id from the page's Agents section\n"))
             self.assertEqual(self.get("/agent/77")[0], 200)
@@ -445,7 +445,7 @@ class ServerTest(Base):
 
     def test_a_failing_route_is_that_requests_500_alone(self):
         saved = A.status_cached
-        A.status_cached = lambda machine: 1 / 0
+        A.status_cached = lambda machine, memos: 1 / 0
         try:
             self.assertEqual(self.get("/api/status")[0:2], (500, "error: ZeroDivisionError: division by zero\n"))
         finally:
@@ -494,7 +494,7 @@ class AgentMetaPathTest(Base):
         outside = os.path.join(self.root, "elsewhere.jsonl")
         with open(outside, "w") as f:
             f.write('{"type": "assistant", "message": {"content": "leaked"}}\n')
-        a = A.status_agent_enrich({"transcript": outside, "run": None}, bound=1)
+        a = A.status_agent_enrich({"transcript": outside, "run": None}, case_context().caches.status, bound=1)
         self.assertNotIn("said", a)
 
 
@@ -505,7 +505,7 @@ class StartTest(Base):
         self.page: dict = {}  # the process's served page (Caches.status_page)
         A.port_open = self.patched["port_open"]
         self.saved_warm = A.status_warm
-        A.status_warm = lambda machine: None
+        A.status_warm = lambda machine, memos: None
 
     def tearDown(self):
         srv = self.page.get("server")
@@ -528,12 +528,12 @@ class StartTest(Base):
         A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK = taken.getsockname()[1], self.free_port()
         try:
             with contextlib.redirect_stderr(io.StringIO()) as e:
-                url = A.status_page_start(A.machine_probe(A.knob_machine()), self.page)
+                url = A.status_page_start(A.machine_probe(A.knob_machine()), self.page, case_context().caches.status)
         finally:
             taken.close()
         self.assertEqual(url, f"http://agentctl.localhost:{A.STATUS_PAGE_FALLBACK}/")
         self.assertIn("already listens", e.getvalue())
-        self.assertEqual(A.status_page_start(A.machine_probe(A.knob_machine()), self.page), url, "once per process")
+        self.assertEqual(A.status_page_start(A.machine_probe(A.knob_machine()), self.page, case_context().caches.status), url, "once per process")
         self.assertEqual(A.status_page_url(), url)
         opened = os.path.join(self.root, "opened")
         os.environ["AGENTCTL_OPEN"] = os.path.join(self.root, "fake-open")
@@ -549,7 +549,7 @@ class StartTest(Base):
     def test_switched_off(self):
         os.environ["AGENTCTL_STATUS_PAGE"] = "off"
         try:
-            self.assertIsNone(A.status_page_start(A.machine_probe(A.knob_machine()), self.page))
+            self.assertIsNone(A.status_page_start(A.machine_probe(A.knob_machine()), self.page, case_context().caches.status))
         finally:
             os.environ.pop("AGENTCTL_STATUS_PAGE")
 

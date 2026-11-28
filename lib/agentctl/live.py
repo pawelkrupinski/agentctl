@@ -7,10 +7,11 @@ import os
 import re
 import threading
 from typing import Any
+from agentctl.caches import StatusMemos
 from agentctl.statefile import mtime, read_json_file, read_record, tail_bytes
 from agentctl.clock import epoch_now
 from agentctl.watchknobs import knob_live_globs
-from agentctl.core import attempt, process_cache
+from agentctl.core import attempt
 from agentctl.claudefiles import bg_transcript, claude_projects_root
 from agentctl.procs import record_alive
 from agentctl.paths import dispatches_dir, reds_dir
@@ -35,10 +36,7 @@ LIVE_ROWS_MAX = 12              # extra rows (sessions, subagents) on the page
 LIVE_STALL = 30 * 60            # s without output mid-turn: a subagent (no pid to check) is taken as failed
 LIVE_REGISTRY_TTL = 5           # s a registry read is reused
 LIVE_ID_RE = re.compile(r"(?:fixer|session|task)-[A-Za-z0-9_-]{1,100}")
-_live_leased = process_cache({})               # agent id -> entry, of the lease holders the last Agents read saw (no store read here)
-_live_reg = {"at": 0.0, "reg": None}
 _live_reg_lock = threading.Lock()
-_live_info = process_cache({})                 # transcript -> ((size, mtime), tail info)
 
 
 def live_globs():
@@ -82,14 +80,14 @@ def live_id_part(s):
     return re.sub(r"[^A-Za-z0-9_-]", "_", str(s))[:100]
 
 
-_live_metas = process_cache({})                # subagent .meta.json -> (mtime, its JSON)
 
 
-def live_meta(p):
+def live_meta(p, metas):
+    """A subagent's .meta.json, read again when its mtime moved (metas: StatusMemos.metas)."""
     m = mtime(p)
-    hit = _live_metas.get(p)
+    hit = metas.get(p)
     if not hit or hit[0] != m:
-        hit = _live_metas[p] = (m, read_json_file(p) if m else {})
+        hit = metas[p] = (m, read_json_file(p) if m else {})
     return hit[1]
 
 
@@ -97,8 +95,8 @@ class RegistryRead:
     """One read of the registry: a method per source (fixer records, dispatch records, the leased holders, the subagent
     globs), each adding its agents; a transcript has one id, the first source's."""
 
-    def __init__(self, t: float) -> None:
-        self.t = t
+    def __init__(self, t: float, memos: StatusMemos) -> None:
+        self.t, self.memos = t, memos
         self.reg: dict[str, dict[str, Any]] = {}
         self.seen: set[str] = set()
 
@@ -143,7 +141,7 @@ class RegistryRead:
                      pid=r.get("pid"), process_start=r.get("process_start"), worktree=r.get("worktree"))
 
     def leased(self) -> None:
-        for aid, e in list(_live_leased.items()):
+        for aid, e in list(self.memos.leased.items()):
             self.add(aid, e.get("transcript"), **{k: v for k, v in e.items() if k not in ("id", "transcript")})
 
     def _own_and_fresh(self, p: str) -> bool:
@@ -158,17 +156,17 @@ class RegistryRead:
                 continue
             stem = os.path.basename(p).rsplit(".", 1)[0]
             real = live_transcript_ok(p)
-            meta = live_meta(real[:-len(".jsonl")] + ".meta.json") if real else {}
+            meta = live_meta(real[:-len(".jsonl")] + ".meta.json", self.memos.metas) if real else {}
             self.add(f"task-{live_id_part(stem)}", p, kind="subagent",
                      label=str(meta.get("description") or f"subagent {stem}")[:120], agent_type=meta.get("agentType"),
                      finished=bool(meta.get("finished")))
 
 
-def live_registry_read(t: float | None = None) -> dict[str, dict[str, Any]]:
+def live_registry_read(memos: StatusMemos, t: float | None = None) -> dict[str, dict[str, Any]]:
     """{agent id: entry} of every agent whose transcript may be streamed, from files only (fixer records, dispatch
     records, the subagent globs) plus the lease holders the last Agents read saw. One transcript has one id: a fixer's
     wins over its session's."""
-    read = RegistryRead(epoch_now() if t is None else t)
+    read = RegistryRead(epoch_now() if t is None else t, memos)
     read.fixers()
     read.sessions()
     read.leased()
@@ -176,20 +174,22 @@ def live_registry_read(t: float | None = None) -> dict[str, dict[str, Any]]:
     return read.reg
 
 
-def live_registry(fresh: bool = False):
+def live_registry(memos: StatusMemos, fresh: bool = False):
+    """The live registry (live_registry_read), read again past LIVE_REGISTRY_TTL (memos.registry: the last read)."""
+    reg = memos.registry
     with _live_reg_lock:
-        if fresh or _live_reg["reg"] is None or epoch_now() - _live_reg["at"] >= LIVE_REGISTRY_TTL:
-            _live_reg["reg"], _live_reg["at"] = live_registry_read(), epoch_now()
-        return _live_reg["reg"]
+        if fresh or reg.get("reg") is None or epoch_now() - reg.get("at", 0.0) >= LIVE_REGISTRY_TTL:
+            reg["reg"], reg["at"] = live_registry_read(memos), epoch_now()
+        return reg["reg"]
 
 
-def live_lookup(aid):
+def live_lookup(aid, memos: StatusMemos):
     """The registry entry of a known agent id, else None (an id that is not one is never looked up)."""
     if not isinstance(aid, str) or not LIVE_ID_RE.fullmatch(aid):
         return None
-    e = live_registry().get(aid)
+    e = live_registry(memos).get(aid)
     if e is None:  # a fixer dispatched or a subagent started within the cache's life
-        e = live_registry(fresh=True).get(aid)
+        e = live_registry(memos, fresh=True).get(aid)
     if e and not live_transcript_ok(e["transcript"]):
         return None
     return e
@@ -215,13 +215,14 @@ def live_track(info, rec):
     return info
 
 
-def live_tail_info(path, max_bytes = 256 << 10):
-    """{stop, last_ts, api_error, size, mtime} from the transcript's last max_bytes, cached by its size and mtime."""
+def live_tail_info(path, tails, max_bytes = 256 << 10):
+    """{stop, last_ts, api_error, size, mtime} from the transcript's last max_bytes, cached by its size and mtime (tails:
+    StatusMemos.tails)."""
     try:
         sig = (os.path.getsize(path), mtime(path))
     except (OSError, TypeError):
         return {}
-    hit = _live_info.get(path)
+    hit = tails.get(path)
     if hit and hit[0] == sig:
         return dict(hit[1])
     info = {"stop": None, "last_ts": None, "api_error": False}
@@ -235,7 +236,7 @@ def live_tail_info(path, max_bytes = 256 << 10):
         except ValueError:
             pass
     info.update(size=sig[0], mtime=sig[1])
-    _live_info[path] = (sig, info)
+    tails[path] = (sig, info)
     return dict(info)
 
 
@@ -288,7 +289,7 @@ def _leased_agents(agents: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return leased
 
 
-def _mark_live(agents: list[dict[str, Any]], reg: dict[str, dict[str, Any]], t: float) -> set[str]:
+def _mark_live(agents: list[dict[str, Any]], reg: dict[str, dict[str, Any]], t: float, tails: dict[str, Any]) -> set[str]:
     """Give each row whose transcript is registered its live id and state; the ids it shows."""
     by_path = {e["transcript"]: e for e in reg.values()}
     shown = set()
@@ -297,32 +298,32 @@ def _mark_live(agents: list[dict[str, Any]], reg: dict[str, dict[str, Any]], t: 
         e = by_path.get(real) if real else None
         if e:
             a["live"] = e["id"]
-            a["live_state"], a["live_why"] = live_state({**e, "ended": a.get("ended") or e.get("ended")}, live_tail_info(real), t)
+            a["live_state"], a["live_why"] = live_state({**e, "ended": a.get("ended") or e.get("ended")}, live_tail_info(real, tails), t)
             shown.add(e["id"])
     return shown
 
 
-def _extra_row(e: dict[str, Any], t: float) -> tuple[float, dict[str, Any]] | None:
+def _extra_row(e: dict[str, Any], t: float, tails: dict[str, Any]) -> tuple[float, dict[str, Any]] | None:
     """(its mtime, the Agents row) of a registered agent no row shows, when it wrote within LIVE_RECENT."""
     m = mtime(e["transcript"])
     if t - m > LIVE_RECENT:
         return None
-    st, why = live_state(e, live_tail_info(e["transcript"]), t)
+    st, why = live_state(e, live_tail_info(e["transcript"], tails), t)
     return m, {"pid": e.get("pid"), "holder": None, "kind": e["kind"], "label": e.get("label"),
                "worktree": e.get("worktree"), "leases": [], "live": e["id"], "live_state": st,
                "live_why": why, "alive": st in ("working", "waiting on background"),
                "last_progress": m, "transcript": e["transcript"]}
 
 
-def live_annotate(agents: list[dict[str, Any]], t: float | None = None) -> list[dict[str, Any]]:
+def live_annotate(agents: list[dict[str, Any]], memos: StatusMemos, t: float | None = None) -> list[dict[str, Any]]:
     """Give each Agents row whose transcript may be streamed its live id and state (a lease holder's transcript
     becomes known as session-<stem>), then add a row for every other known session or subagent written within
     LIVE_RECENT (newest first, LIVE_ROWS_MAX at most)."""
     t = epoch_now() if t is None else t
-    _live_leased.clear()
-    _live_leased.update(_leased_agents(agents))
-    reg = live_registry(fresh=True)
-    shown = _mark_live(agents, reg, t)
-    extra = [row for row in (_extra_row(e, t) for e in reg.values() if e["id"] not in shown and e["kind"] != "fixer") if row]
+    memos.leased.clear()
+    memos.leased.update(_leased_agents(agents))
+    reg = live_registry(memos, fresh=True)
+    shown = _mark_live(agents, reg, t, memos.tails)
+    extra = [row for row in (_extra_row(e, t, memos.tails) for e in reg.values() if e["id"] not in shown and e["kind"] != "fixer") if row]
     extra.sort(key=lambda x: -x[0])
     return agents + [a for _m, a in extra[:LIVE_ROWS_MAX]]

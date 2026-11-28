@@ -83,12 +83,22 @@ class OwnedCachesTest(unittest.TestCase):
         self.assertFalse(A.run_bounded("step", lambda: None, 0.05, first), "still running: not started twice")
         self.assertTrue(A.run_bounded("step", lambda: None, 1, second), "another context's step is its own")
 
+    def test_a_status_read_is_kept_by_its_own_contexts_memos(self):
+        first, second = case_context().caches.status, harness.context_with(case_context().runs).caches.status
+        A.status_sources((("x", lambda: "first", 1),), 5, first, keep=True)
+        self.assertEqual(first.last["x"][1], "first")
+        self.assertEqual(second.last, {}, "another context's status reads keep nothing of it")
+        first.clear()
+        self.assertEqual(first.last, {})
+
     def test_the_moved_memos_are_no_module_level_state(self):
+
 
         for name in ("_identity_known", "_trailer_fixes", "_link_reads", "_never_green_at", "_others_said",
                      "_last_upkeep", "_last_recovery", "_last_ref_sweep", "_pin_tried", "_last_red_tick",
                      "_last_others_tick", "_last_route", "_batch_said", "_bounded", "_step_errors", "_status_page",
-                     "_tick_memo"):
+                     "_tick_memo", "_status_wt", "_status_wt_reads", "_status_said", "_status_last", "_status_reading",
+                     "_status_cache", "_live_leased", "_live_info", "_live_metas", "_live_reg"):
             self.assertFalse(hasattr(A, name), name)
 
 

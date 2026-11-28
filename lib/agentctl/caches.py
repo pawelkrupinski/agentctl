@@ -8,6 +8,26 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class StatusMemos:
+    """What the status reads keep between refreshes (the status page's server, `red status`): one dict per concept."""
+    assembled: dict[str, Any] = field(default_factory=dict)  # "at", "data": the model status_cached assembled last
+    last: dict[str, Any] = field(default_factory=dict)  # source name -> (finished at, result, took s) of its last read
+    reading: dict[str, Any] = field(default_factory=dict)  # source name -> the thread reading it
+    worktrees: dict[str, Any] = field(default_factory=dict)  # worktree -> {"head", "commits", ..., "at"}: its last git read
+    worktree_reads: dict[str, Any] = field(default_factory=dict)  # worktree -> the thread reading it
+    said: dict[str, Any] = field(default_factory=dict)  # transcript -> ((size, mtime), (text, at)): what it said last
+    leased: dict[str, Any] = field(default_factory=dict)  # agent id -> entry, of the lease holders the last Agents read saw
+    registry: dict[str, Any] = field(default_factory=dict)  # "at", "reg": the live registry read last
+    tails: dict[str, Any] = field(default_factory=dict)  # transcript -> ((size, mtime), its tail's info)
+    metas: dict[str, Any] = field(default_factory=dict)  # a subagent's .meta.json -> (mtime, its JSON)
+
+    def clear(self) -> None:
+        """Every memo emptied (a simulated seed's fresh process)."""
+        for memo in vars(self).values():
+            memo.clear()
+
+
+@dataclass(frozen=True)
 class Caches:
     """One dict per concept, empty at birth; what a field maps is said where it is read."""
     identity_known: dict[Any, Any] = field(default_factory=dict)  # (entry id, head) -> identity_change's verdict
@@ -31,5 +51,6 @@ class Caches:
     bounded: dict[str, Any] = field(default_factory=dict)  # a bounded step's name -> the thread it runs in (core.run_bounded)
     step_errors: dict[str, Any] = field(default_factory=dict)  # a tick step -> its last error (None: it ended well)
     status_page: dict[str, Any] = field(default_factory=dict)  # the status page this process serves: its url and server
+    status: StatusMemos = field(default_factory=StatusMemos)  # what the status reads keep between refreshes
 
 

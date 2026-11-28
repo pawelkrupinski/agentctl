@@ -450,7 +450,7 @@ class LiveStreamTest(unittest.TestCase):
                 r.choice([None, 0.25, 2]), r.choice([5, 15]), r.choice([4, 30] if unbounded else [4, 30, 3000]))
 
     def test_live_stream(self):
-        check(self, "live_stream", self.build, lambda A: A.live_stream, 3000)
+        check(self, "live_stream", self.build, lambda A: lambda e, start, write, *rest: A.live_stream(e, start, write, case_context().caches.status, *rest), 3000)
 
 
 class LiveTailPollTest(unittest.TestCase):

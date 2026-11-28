@@ -8,8 +8,9 @@ import sys
 import re
 import threading
 import urllib.parse
-from typing import Any
+from typing import Any, cast
 from contextlib import suppress
+from agentctl.caches import StatusMemos
 from agentctl.procrunner import process_runner
 from agentctl.statefile import read_json_file, write_json
 from agentctl.clock import epoch_now
@@ -116,6 +117,11 @@ class StatusPageEndpoint(http.server.BaseHTTPRequestHandler):
     server_version = "agentctl-status"
     ROUTES = {"/": "page", "/api/status": "api", "/stream": "stream", "/log": "log"}
 
+    @property
+    def memos(self) -> StatusMemos:
+        """What the status reads of the server this request came to keep between refreshes."""
+        return cast("StatusServer", self.server).memos
+
     def log_message(self, *_a: Any) -> None:
         pass
 
@@ -167,10 +173,10 @@ class StatusPageEndpoint(http.server.BaseHTTPRequestHandler):
         self.send(200, STATUS_PAGE_HTML, "text/html; charset=utf-8")
 
     def api(self, _u: Any) -> None:
-        self.send(200, json.dumps(status_cached(self.server.machine), default=str), "application/json")
+        self.send(200, json.dumps(status_cached(self.server.machine, self.memos), default=str), "application/json")
 
     def agent_page(self, u: Any) -> None:
-        if not live_lookup(urllib.parse.unquote(u.path[len("/agent/"):])):
+        if not live_lookup(urllib.parse.unquote(u.path[len("/agent/"):]), self.memos):
             return self.send(404, NO_SUCH_AGENT, PLAIN)
         self.send(200, AGENT_PAGE_HTML, "text/html; charset=utf-8")
 
@@ -185,7 +191,7 @@ class StatusPageEndpoint(http.server.BaseHTTPRequestHandler):
 
     def stream(self, u: Any) -> None:
         q = urllib.parse.parse_qs(u.query)
-        e = live_lookup((q.get("agent") or [""])[0])
+        e = live_lookup((q.get("agent") or [""])[0], self.memos)
         if not e:
             return self.send(404, NO_SUCH_AGENT, PLAIN)
         start = self.stream_offset(q)
@@ -220,22 +226,23 @@ class StatusPageEndpoint(http.server.BaseHTTPRequestHandler):
         def write(b: bytes) -> None:
             self.wfile.write(b)
             self.wfile.flush()
-        live_stream(e, int(start), write, closed=lambda: live_peer_closed(self.connection))
+        live_stream(e, int(start), write, self.memos, closed=lambda: live_peer_closed(self.connection))
 
 
 class StatusServer(http.server.ThreadingHTTPServer):
-    """The page's server: its handlers read the status model of `machine` (the processor's probe)."""
+    """The page's server: its handlers read the status model of `machine` (the processor's probe), keeping what the
+    reads keep between refreshes in `memos` (the process's StatusMemos)."""
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address: tuple[str, int], machine: MachineProbe) -> None:
+    def __init__(self, address: tuple[str, int], machine: MachineProbe, memos: StatusMemos) -> None:
         super().__init__(address, StatusPageEndpoint)
-        self.machine = machine
+        self.machine, self.memos = machine, memos
 
 
-def status_page_server(host, port, machine):
+def status_page_server(host, port, machine, memos):
     """The page's HTTP server (not started)."""
-    return StatusServer((host, port), machine)
+    return StatusServer((host, port), machine, memos)
 
 
 
@@ -251,19 +258,19 @@ def _write_status_page_file(url, port, why) -> None:
         print_error(f"status page: {status_page_file()} not written: {e}")
 
 
-def _bind_status_page(port, why, machine):
+def _bind_status_page(port, why, machine, memos):
     """The page's server on 127.0.0.1:port, or None -- the reason appended to `why`."""
     try:
         if port == STATUS_PAGE_PORT and port_open(port, timeout=0.5):
             why.append(f"port {port}: something already listens on it (not shadowed)")
             return None
-        return status_page_server("127.0.0.1", port, machine)
+        return status_page_server("127.0.0.1", port, machine, memos)
     except (OSError, ValueError) as e:
         why.append(f"port {port}: {e}")
         return None
 
 
-def status_page_start(machine: MachineProbe, page: dict[str, Any]) -> Any:
+def status_page_start(machine: MachineProbe, page: dict[str, Any], memos: StatusMemos) -> Any:
     """Serve the page from a daemon thread of this process, once (page: the process's served page, Caches.status_page,
     its url and server once started): 127.0.0.1:80, else :3015 ($AGENTCTL_STATUS_PORT: that
     port alone; AGENTCTL_STATUS_PAGE=off: none). Writes status-page.json (its URL, for `status --open`). Returns the URL
@@ -276,11 +283,11 @@ def status_page_start(machine: MachineProbe, page: dict[str, Any]) -> Any:
              else [STATUS_PAGE_PORT, STATUS_PAGE_FALLBACK])
     why: list[str] = []
     for p in ports:
-        srv = _bind_status_page(p, why, machine)
+        srv = _bind_status_page(p, why, machine, memos)
         if srv is None:
             continue
         threading.Thread(target=srv.serve_forever, daemon=True, name="status-page").start()
-        threading.Thread(target=lambda: status_warm(machine), daemon=True, name="status-warm").start()  # the first refresh has data
+        threading.Thread(target=lambda: status_warm(machine, memos), daemon=True, name="status-warm").start()  # the first refresh has data
         url = f"http://{STATUS_PAGE_HOST}/" if p == 80 else f"http://{STATUS_PAGE_HOST}:{p}/"
         page.update(url=url, server=srv)
         if why:
@@ -292,9 +299,9 @@ def status_page_start(machine: MachineProbe, page: dict[str, Any]) -> Any:
     return None
 
 
-def status_warm(machine: MachineProbe) -> None:
+def status_warm(machine: MachineProbe, memos: StatusMemos) -> None:
     try:
-        status_cached(machine)
+        status_cached(machine, memos)
     except (Exception, SystemExit) as e:
         print_error(f"status page: the first read failed: {str(e)[:200]}")
 

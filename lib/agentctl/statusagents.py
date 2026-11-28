@@ -10,12 +10,13 @@ import threading
 import time
 from contextlib import suppress
 from typing import Any
+from agentctl.caches import StatusMemos
 from agentctl.procrunner import process_runner
 from agentctl.statefile import mtime, tail_bytes
 from agentctl.clock import epoch_now
 from agentctl.timefmt import iso_epoch
 from agentctl.watchknobs import knob_status_agent_bound
-from agentctl.core import print_error, process_cache
+from agentctl.core import print_error
 from agentctl.procs import process_alive
 from agentctl.fixerrecords import fixer_records
 from agentctl.live import live_annotate, live_transcript_ok
@@ -115,13 +116,10 @@ STATUS_GIT_TIMEOUT = 120    # s one git call may run (in its background read; ne
 STATUS_DIRTY_TTL = 60       # s a worktree's `git status` is shown again before it is read again
 
 
-_status_wt = process_cache({})             # worktree -> {"head", "commits", "recent_files", "dirty", "dirty_at", "error", "at"}
 
 
-_status_wt_reads = process_cache({})       # worktree -> the thread reading it
 
 
-_status_said = process_cache({})           # transcript path -> ((size, mtime), (text, at))
 
 
 _status_wt_lock = threading.Lock()
@@ -191,9 +189,10 @@ def _worktree_log(wt: Any) -> Any:
     return commits, recent
 
 
-def status_worktree_read(wt, head):
-    """One background read of a worktree into _status_wt: the commits again only when HEAD moved (or is unknown)."""
-    c = dict(_status_wt.get(wt) or {})
+def status_worktree_read(wt, head, worktrees):
+    """One background read of a worktree into worktrees (StatusMemos.worktrees): the commits again only when HEAD moved
+    (or is unknown)."""
+    c = dict(worktrees.get(wt) or {})
     try:
         if head is None or c.get("head") != head or "commits" not in c:
             commits, recent = _worktree_log(wt)
@@ -206,7 +205,7 @@ def status_worktree_read(wt, head):
         c["error"] = str(e)[:200]
     c["at"] = epoch_now()
     with _status_wt_lock:
-        _status_wt[wt] = c
+        worktrees[wt] = c
 
 
 STATUS_GIT_FIELDS = ("commits", "recent_files", "dirty")  # what a worktree's git read shows on the page
@@ -218,13 +217,14 @@ def _worktree_fresh(c: Any, head: Any) -> bool:
                 and epoch_now() - float(c.get("dirty_at") or 0) < STATUS_DIRTY_TTL)
 
 
-def _read_and_wait(wt: str, head: Any, bound: float) -> Any:
+def _read_and_wait(wt: str, head: Any, bound: float, memos: StatusMemos) -> Any:
     """Start the worktree's read (one at a time: a running one is joined) and wait `bound` s for it; the thread."""
     with _status_wt_lock:
-        th = _status_wt_reads.get(wt)
+        th = memos.worktree_reads.get(wt)
         if not (th and th.is_alive()):
-            th = threading.Thread(target=status_worktree_read, args=(wt, head), daemon=True, name="status:git")
-            _status_wt_reads[wt] = th
+            th = threading.Thread(target=status_worktree_read, args=(wt, head, memos.worktrees), daemon=True,
+                                  name="status:git")
+            memos.worktree_reads[wt] = th
             th.start()
     th.join(bound)
     return th
@@ -249,35 +249,35 @@ def _worktree_view(c: dict[str, Any], head: Any) -> dict[str, Any]:
     return out
 
 
-def status_worktree(wt, bound):
+def status_worktree(wt, bound, memos: StatusMemos):
     """{commits, recent_files, dirty} of a worktree: from the cache when its HEAD has not moved and its status is young;
     else from a read (one per worktree at a time) the caller waits `bound` s for -- a slower read is shown from the last
     one, `git_stale` saying so, and fills the cache for the next refresh."""
     head = status_head(wt)
-    c = _status_wt.get(wt)
+    c = memos.worktrees.get(wt)
     if not _worktree_fresh(c, head):
-        th = _read_and_wait(wt, head, bound)
-        c = _status_wt.get(wt)
+        th = _read_and_wait(wt, head, bound, memos)
+        c = memos.worktrees.get(wt)
         if th.is_alive():
             return _still_reading(c, bound)
     return _worktree_view(c or {}, head)
 
 
-def status_said(path):
-    """status_transcript_last, cached by the transcript's size and mtime."""
+def status_said(path, said):
+    """status_transcript_last, cached by the transcript's size and mtime (said: StatusMemos.said)."""
     try:
         sig = (os.path.getsize(path), mtime(path))
     except (OSError, TypeError):
         return None, None
-    hit = _status_said.get(path)
+    hit = said.get(path)
     if hit and hit[0] == sig:
         return hit[1]
     v = status_transcript_last(path)
-    _status_said[path] = (sig, v)
+    said[path] = (sig, v)
     return v
 
 
-def status_agent_enrich(a, bound=None):
+def status_agent_enrich(a, memos: StatusMemos, bound=None):
     b = bound if bound is not None else knob_status_agent_bound()
     if a.get("alive") is None and a.get("pid"):
         try:
@@ -286,15 +286,15 @@ def status_agent_enrich(a, bound=None):
             a["alive"] = None
     wt = a.get("worktree")
     if wt and os.path.isdir(wt):
-        a.update({k: v for k, v in status_worktree(wt, b).items() if v is not None})
+        a.update({k: v for k, v in status_worktree(wt, b, memos).items() if v is not None})
     a["logs"] = status_agent_logs(a.get("run"))
     transcript = live_transcript_ok(a.get("transcript"))  # a lease's meta: only a transcript the page may stream
     if transcript:
-        a["said"], a["said_at"] = status_said(transcript)
+        a["said"], a["said_at"] = status_said(transcript, memos.said)
     return a
 
 
-def status_enrich_all(agents, bound=None):
+def status_enrich_all(agents, memos: StatusMemos, bound=None):
     """Every agent's details at once, each in a thread of its own; the wait is one agent's bound (plus a margin), and an
     agent still unread then keeps its row with `detail_error`."""
     b = bound if bound is not None else knob_status_agent_bound()
@@ -302,7 +302,7 @@ def status_enrich_all(agents, bound=None):
 
     def work(i, a):
         try:
-            status_agent_enrich(a, b)
+            status_agent_enrich(a, memos, b)
         except (Exception, SystemExit) as e:
             a["detail_error"] = f"{type(e).__name__}: {str(e)[:200]}"
         done.add(i)
@@ -374,7 +374,7 @@ def _agent_started(a: dict[str, Any]) -> float:
     return float(s) if isinstance(s, (int, float)) else iso_epoch(s) or 0.0
 
 
-def status_agents(st, t, records=None):
+def status_agents(st, t, memos: StatusMemos, records=None):
     """Every agent holding a red lease (fixer or claim) and every fixer dispatched (alive, or ended within
     STATUS_AGENT_RECENT): pid alive, worktree, tier, lease progress, its worktree's last commits, its logs."""
     agents: dict[str, Any] = {}
@@ -384,9 +384,9 @@ def status_agents(st, t, records=None):
             _merge_fixer(agents, rec)
     out = [_settled_agent(a) for a in agents.values()]
     out.sort(key=lambda a: (not a["leases"], not a.get("alive"), -_agent_started(a)))
-    out = status_enrich_all(out[:STATUS_AGENTS_MAX])
+    out = status_enrich_all(out[:STATUS_AGENTS_MAX], memos)
     try:
-        return live_annotate(out, t)
+        return live_annotate(out, memos, t)
     except (Exception, SystemExit) as e:  # the live panes are extra: never the section's
         print_error(f"status page: live ids: {type(e).__name__}: {str(e)[:200]}")
         return out

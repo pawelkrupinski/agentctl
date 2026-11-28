@@ -523,7 +523,7 @@ class StatusPageStartTest(unittest.TestCase):
     def test_status_page_start(self):
         def run(A):
             def go(page):
-                got = A.status_page_start(A.machine_probe(A.knob_machine()), page)
+                got = A.status_page_start(A.machine_probe(A.knob_machine()), page, case_context().caches.status)
                 return got, page.get("url"), sorted(page)
             return go
         check(self, "status_page_start", self.build, run, 3000)

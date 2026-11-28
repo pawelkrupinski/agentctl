@@ -25,10 +25,10 @@ class FrozenClockTest(unittest.TestCase):
         slow = [(f"s{i}", lambda: done.wait(5), 1) for i in range(5)]
         self.addCleanup(lambda: [done.set()] + [t.join(5) for t in threading.enumerate() if t.name.startswith("status:s")])
         t0 = time.monotonic()
-        A.status_sources(slow, 0.4)
+        A.status_sources(slow, 0.4, case_context().caches.status)
         self.assertLess(time.monotonic() - t0, 1.2)  # one 0.4 s deadline, not 5 of them in turn
         out: dict = {}
-        A.status_read("x", lambda: time.sleep(0.2), out, False)
+        A.status_read("x", lambda: time.sleep(0.2), out, False, {})
         self.assertGreaterEqual(out["x"][2], 0.15)
 
     def test_the_store_probe_measures_its_latency(self):

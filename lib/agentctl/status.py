@@ -6,11 +6,12 @@ import json
 import os
 import threading
 import time
+from agentctl.caches import StatusMemos
 from agentctl.statefile import read_json_file, read_record
 from agentctl.clock import epoch_now
 from agentctl.timefmt import parse_time
 from agentctl.watchknobs import knob_status_bound
-from agentctl.core import HOME, SHORT, process_cache
+from agentctl.core import HOME, SHORT
 from agentctl.forge import RED_CONCLUSIONS, forge_run_url
 from agentctl.redrepos import red_family
 from agentctl.cistate import state_read
@@ -65,32 +66,31 @@ def status_error(e):
     return {"error": f"{type(e).__name__}: {str(e).replace('agentctl: ', '')[:300]}"}
 
 
-_status_last = process_cache({})      # source name -> (finished at, result, took s) of its last read (the server's own reads only)
-_status_reading = process_cache({})   # source name -> the thread reading it
 
 
-def status_sources(sources, bound, keep=False):
+def status_sources(sources, bound, memos: StatusMemos, keep=False):
     """({name: what fn returned, or {"error": ...}}, {"stale": {name: why}, "took": {name: s}}): every (name, fn, factor)
     in a daemon thread of its own, joined against one deadline (bound * factor s each). keep (the server's): a source
     still reading then shows its LAST finished read, `stale` saying since when, and its read goes on in the background
     for the next refresh (one read per source at a time) -- a slow source never empties its section; else it is an
-    error."""
+    error. memos: the status reads' memory (the last read, the read under way, of each source)."""
     out, threads = {}, []
     start = time.monotonic()  # wall: a thread join's bound is real time, whatever the injected clock says
     for name, fn, factor in sources:
-        th = _status_reading.get(name) if keep else None
+        th = memos.reading.get(name) if keep else None
         if not (th and th.is_alive()):
-            th = threading.Thread(target=status_read, args=(name, fn, out, keep), daemon=True, name=f"status:{name}")
+            th = threading.Thread(target=status_read, args=(name, fn, out, keep, memos.last), daemon=True,
+                                  name=f"status:{name}")
             th.start()
             if keep:
-                _status_reading[name] = th
+                memos.reading[name] = th
         threads.append((name, th, bound * factor))
     for _name, th, b in threads:
         th.join(max(0.0, start + b - time.monotonic()))  # wall: as above
-    return status_answers(threads, out, keep)
+    return status_answers(threads, out, keep, memos.last)
 
 
-def status_read(name: Any, fn: Any, out: Any, keep: Any) -> Any:
+def status_read(name: Any, fn: Any, out: Any, keep: Any, last: dict[str, Any]) -> Any:
     """One source read in its thread: its answer (or its error) and how long it took, into out (and, keep, the last)."""
     t0 = time.monotonic()  # wall: how long the read really took
     try:
@@ -99,19 +99,19 @@ def status_read(name: Any, fn: Any, out: Any, keep: Any) -> Any:
         v = status_error(e)
     out[name] = (epoch_now(), v, round(time.monotonic() - t0, 2))  # wall: as above
     if keep:
-        _status_last[name] = out[name]
+        last[name] = out[name]
 
 
-def status_answers(threads: Any, out: Any, keep: Any) -> Any:
+def status_answers(threads: Any, out: Any, keep: Any, last: dict[str, Any]) -> Any:
     """Each source's answer once the deadline passed: its read, else (keep) its last finished one marked stale, else an
     error."""
     res, stale, took = {}, {}, {}
     for name, th, b in threads:
-        got = out.get(name) or (_status_last.get(name) if keep and not th.is_alive() else None)
+        got = out.get(name) or (last.get(name) if keep and not th.is_alive() else None)
         if got:
             res[name], took[name] = got[1], got[2]
-        elif keep and name in _status_last:
-            at, res[name], _took = _status_last[name]
+        elif keep and name in last:
+            at, res[name], _took = last[name]
             stale[name] = f"still reading after {b:.0f} s; shown as of {time.strftime('%H:%M:%S', time.localtime(at))}"
         else:
             res[name] = {"error": f"no answer within {b:.0f} s"}
@@ -381,7 +381,8 @@ def open_status_store(store: Any, only: Any) -> tuple[Any, Any]:
         return None, status_error(e)
 
 
-def status_section_sources(t: float, repo: str, need: Any, machine: MachineProbe) -> tuple[Any, ...]:
+def status_section_sources(t: float, repo: str, need: Any, machine: MachineProbe,
+                           memos: StatusMemos) -> tuple[Any, ...]:
     """The status model's sections: (name, producer, weight) each, every producer reading the store through `need`."""
     return (("header", lambda: status_header(t), 1),
                ("store", lambda: status_store_probe(need(), t), 1),
@@ -390,7 +391,7 @@ def status_section_sources(t: float, repo: str, need: Any, machine: MachineProbe
                ("families", lambda: status_families(need(), t), 1),
                ("untracked", lambda: [{"repo": o_r, **r} for o_r, r in red_untracked_list(need())], 1),
                ("owners", lambda: owners_status(need(), t), 1),
-               ("agents", lambda: status_agents(need(), t), 2),
+               ("agents", lambda: status_agents(need(), t, memos), 2),
                ("landing", lambda: status_landing(need(), t), 1),
                ("conditions", lambda: status_conditions(need(), t), 1),
                ("issues", lambda: status_issues(need(), t), 1),
@@ -398,9 +399,9 @@ def status_section_sources(t: float, repo: str, need: Any, machine: MachineProbe
                ("events", lambda: status_events(need()), 1))
 
 
-def status_data(store=None, now_=None, bound=None, keep=False, only=None, *, machine):
+def status_data(store=None, now_=None, bound=None, keep=False, only=None, *, machine, memos):
     """THE STATUS MODEL (/api/status): every section from its own bounded source; a failing one is {"error": ...} in
-    its place. only: just these sections (a renderer's)."""
+    its place. only: just these sections (a renderer's). memos: the status reads' memory (StatusMemos)."""
     t = now_ if now_ is not None else epoch_now()
     b = bound if bound is not None else knob_status_bound()
     d = state_read()
@@ -411,22 +412,23 @@ def status_data(store=None, now_=None, bound=None, keep=False, only=None, *, mac
         if st is None:
             raise RuntimeError(st_err["error"])
         return st
-    sources = status_section_sources(t, repo, need, machine)
-    res, meta = status_sources(tuple(x for x in sources if not only or x[0] in only), b, keep=keep)
+    sources = status_section_sources(t, repo, need, machine, memos)
+    res, meta = status_sources(tuple(x for x in sources if not only or x[0] in only), b, memos, keep=keep)
     if "error" in res.get("store", {}):
         res["store"] = {**res["store"], "remote": store_url(), "reachable": False}
     return {"at": t, "repo": repo, "home": HOME, **res, **meta}
 
 
-_status_cache = {"at": 0.0, "data": None}
 _status_cache_lock = threading.Lock()
 
 
-def status_cached(machine: MachineProbe):
+def status_cached(machine: MachineProbe, memos: StatusMemos):
+    """The status model, assembled again past STATUS_CACHE (memos.assembled: the last one)."""
+    model = memos.assembled
     with _status_cache_lock:  # one assembly at a time: refreshing tabs share it
-        if _status_cache["data"] is None or epoch_now() - _status_cache["at"] >= STATUS_CACHE:
-            _status_cache["data"] = status_data(keep=True, machine=machine)
-            _status_cache["at"] = epoch_now()
-        return _status_cache["data"]
+        if model.get("data") is None or epoch_now() - model.get("at", 0.0) >= STATUS_CACHE:
+            model["data"] = status_data(keep=True, machine=machine, memos=memos)
+            model["at"] = epoch_now()
+        return model["data"]
 
 

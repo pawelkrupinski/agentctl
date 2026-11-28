@@ -110,7 +110,7 @@ class StatusAgentsTest(unittest.TestCase):
         return (st, NOW, maybe(r, recs, 0.4))[:r.choice([2, 3, 3])]
 
     def test_status_agents(self):
-        check(self, "status_agents", self.build, lambda A: A.status_agents, 4000)
+        check(self, "status_agents", self.build, lambda A: lambda st, t, *records: A.status_agents(st, t, case_context().caches.status, *records), 4000)
 
 
 class StatusWorktreeTest(unittest.TestCase):
@@ -123,17 +123,17 @@ class StatusWorktreeTest(unittest.TestCase):
                       "dirty_at": r.choice([state[0] - 10, state[0] - 60, state[0] - 100, 0]), "at": state[0] - 5, "error": r.choice([None, "boom"])}, 0.8)
         if c is not None and r.random() < 0.15:
             c.pop("commits")
-        case.put("_status_wt", {wt: c} if c else {})
+        worktrees = {wt: c} if c else {}
         alive = r.random() < 0.4
 
         def thread(**kw):
             case.log.append(["Thread", sorted(kw)])
             return types.SimpleNamespace(is_alive=case.recorded("is_alive", lambda rng: alive), start=case.recorded("start", lambda rng: None),
                                          join=case.recorded("join", lambda rng, b: None))
-        case.put("_status_wt_reads", {wt: thread()} if r.random() < 0.3 else {})
+        reads = {wt: thread()} if r.random() < 0.3 else {}
         case.fake("status_head", lambda rng, w: head)
         case.put("threading", types.SimpleNamespace(Thread=thread, Lock=__import__("threading").Lock))
-        return (wt, r.choice([0.5, 3.0, 12.0]))
+        return (wt, r.choice([0.5, 3.0, 12.0]), case.A.StatusMemos(worktrees=worktrees, worktree_reads=reads))
 
     def test_status_worktree(self):
         check(self, "status_worktree", self.build, lambda A: A.status_worktree, 4000)

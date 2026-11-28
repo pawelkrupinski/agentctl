@@ -1,6 +1,7 @@
 # agentctl, part `livestream`: an agent's live stream: its transcript tailed, its secrets masked, served as server-sent events
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from agentctl.caches import StatusMemos
 from agentctl.clock import epoch_now, wall_epoch
 from typing import Any
 import json
@@ -236,12 +237,12 @@ def _blank_info() -> Any:
     return {"stop": None, "last_ts": None, "api_error": False}
 
 
-def live_stream(e: Any, start: Any, write: Any, closed: Any = lambda: False, poll: Any = None, ping: Any = LIVE_PING,
-                max_secs: Any = LIVE_STREAM_MAX) -> Any:
+def live_stream(e: Any, start: Any, write: Any, memos: StatusMemos, closed: Any = lambda: False, poll: Any = None,
+                ping: Any = LIVE_PING, max_secs: Any = LIVE_STREAM_MAX) -> Any:
     """Write the transcript of entry e from `start` as SSE frames through write() until closed(), max_secs, or a write
-    raises (a gone or slow client)."""
+    raises (a gone or slow client). memos: the status reads' memory (the registry, the transcripts' tails)."""
     poll = poll if poll is not None else knob_live_poll()
-    stream = LiveStream(e, start, write, ping)
+    stream = LiveStream(e, start, write, ping, memos)
     t0 = wall_epoch()
     try:
         while not closed() and wall_epoch() - t0 < max_secs:
@@ -254,12 +255,12 @@ def live_stream(e: Any, start: Any, write: Any, closed: Any = lambda: False, pol
 class LiveStream:
     """One stream of an agent's transcript: its tail, what is known of the agent (info), the frames of each step."""
 
-    def __init__(self, e: Any, start: Any, write: Any, ping: Any) -> None:
-        self.e, self.write, self.ping = e, write, ping
+    def __init__(self, e: Any, start: Any, write: Any, ping: Any, memos: StatusMemos) -> None:
+        self.e, self.write, self.ping, self.memos = e, write, ping, memos
         self.tail = LiveTail(e["transcript"], start)
         self.info = _blank_info()
         if start:
-            self.info.update({k: v for k, v in live_tail_info(e["transcript"]).items() if k in ("stop", "last_ts", "api_error")})
+            self.info.update({k: v for k, v in live_tail_info(e["transcript"], memos.tails).items() if k in ("stop", "last_ts", "api_error")})
         write(b"retry: 3000\n\n" + sse_frame("meta", {"id": e["id"], "kind": e.get("kind"), "label": e.get("label"),
                                                       "transcript": e["transcript"], "from": start}))
         self.last_out = self.refreshed = epoch_now()
@@ -304,7 +305,7 @@ class LiveStream:
         """The `state` frame when the agent's state changed since it was last said (the registry entry re-read every 5 s)."""
         if epoch_now() - self.refreshed >= 5:
             with suppress(Exception, SystemExit):
-                self.e = live_registry().get(self.e["id"], self.e)
+                self.e = live_registry(self.memos).get(self.e["id"], self.e)
         self.refreshed = epoch_now()
         self.info["mtime"] = mtime(self.e["transcript"]) or wall_epoch()
         st = live_state(self.e, self.info)

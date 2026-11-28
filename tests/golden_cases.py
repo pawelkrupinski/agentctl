@@ -25,7 +25,8 @@ def owned_memos():
     """The ids of the running test's context's memos (lib/agentctl/caches.py): a memo handed down is no more call data
     than the context it came from, so a digest reads the same as before the memo left its module."""
     caches = case_context().caches
-    return {id(v) for name, v in vars(caches).items() if name not in ARGUMENT_MEMOS}
+    owned = {id(v) for name, v in vars(caches).items() if name not in ARGUMENT_MEMOS}
+    return owned | {id(v) for v in vars(caches.status).values()}  # the status reads' memory, and each of its memos
 
 
 DIGESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "restructure4-digests.json")

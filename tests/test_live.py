@@ -4,6 +4,7 @@ import json, os, sys, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+from harness import case_context  # noqa: E402
 from test_agentctl import A  # noqa: E402
 from test_status_page import Base  # noqa: E402
 
@@ -25,9 +26,7 @@ class LiveBase(Base):
             self.saved.setdefault(k, os.environ.get(k))
         os.environ["AGENTCTL_CLAUDE_PROJECTS"] = self.projects
         os.environ["AGENTCTL_LIVE_GLOBS"] = os.path.join(self.root, "tmp", "*", "*", "tasks", "*.output")
-        A._live_reg.update(at=0.0, reg=None)
-        A._live_leased.clear()
-        A._live_info.clear()
+        case_context().caches.status.clear()  # the status reads' memory (caches.StatusMemos)
 
     def transcript(self, wt, session, lines=None):
         d = os.path.join(self.projects, A.live_slug(wt))
@@ -74,7 +73,7 @@ class MappingTest(LiveBase):
         real = self.subagent("a01e71d6262987b68", {"description": "Live output", "finished": True})
         with open(os.path.join(self.tasks, "bash1.output"), "w") as f:  # a background shell's output: not an agent
             f.write("plain text\n")
-        reg = A.live_registry_read()
+        reg = A.live_registry_read(case_context().caches.status)
         self.assertEqual(sorted(reg), ["fixer-2527-2", "session-aaaa-1111", "task-a01e71d6262987b68"])
         self.assertEqual(reg["fixer-2527-2"]["transcript"], os.path.realpath(p))
         self.assertEqual(reg["session-aaaa-1111"]["transcript"], os.path.realpath(p2))
@@ -86,22 +85,22 @@ class MappingTest(LiveBase):
         p = self.transcript("/w/x", "s-2")
         self.fixer(9, 1, log=p)
         self.fixer(9, 3, log=os.path.join(self.root, "state", "reds", "9", "claude-3.log"))
-        self.assertEqual(sorted(A.live_registry_read()), ["fixer-9-1"])
+        self.assertEqual(sorted(A.live_registry_read(case_context().caches.status)), ["fixer-9-1"])
 
     def test_lease_holders_become_known_through_the_agents_section(self):
         p = self.transcript("/w/y", "lease-sess")
         rows = A.live_annotate([{"pid": None, "holder": "laptop:claim:x", "kind": "claim", "transcript": p,
-                                 "leases": [{"name": "red/k"}]}], A.epoch_now())
+                                 "leases": [{"name": "red/k"}]}], case_context().caches.status, A.epoch_now())
         self.assertEqual(rows[0]["live"], "session-lease-sess")
-        self.assertEqual(A.live_lookup("session-lease-sess")["transcript"], os.path.realpath(p))
+        self.assertEqual(A.live_lookup("session-lease-sess", case_context().caches.status)["transcript"], os.path.realpath(p))
 
     def test_recent_sessions_and_subagents_get_rows_of_their_own(self):
         self.subagent("abc", {"description": "probe"})
-        rows = A.live_annotate([], A.epoch_now())
+        rows = A.live_annotate([], case_context().caches.status, A.epoch_now())
         self.assertEqual([(r["live"], r["label"], r["kind"]) for r in rows], [("task-abc", "probe", "subagent")])
         old = A.epoch_now() - A.LIVE_RECENT - 60
-        os.utime(A.live_registry_read()["task-abc"]["transcript"], (old, old))
-        self.assertEqual(A.live_annotate([], A.epoch_now()), [])
+        os.utime(A.live_registry_read(case_context().caches.status)["task-abc"]["transcript"], (old, old))
+        self.assertEqual(A.live_annotate([], case_context().caches.status, A.epoch_now()), [])
 
 
 class PathTest(LiveBase):
@@ -130,16 +129,16 @@ class PathTest(LiveBase):
         self.fixer(5, 1, transcript="/etc/passwd")
         self.fixer(5, 2, transcript=os.path.join(self.projects, "..", "..", "x.jsonl"))
         self.dispatch("d", session="../../etc/passwd", worktree="/w")
-        self.assertEqual(A.live_registry_read(), {})
+        self.assertEqual(A.live_registry_read(case_context().caches.status), {})
 
     def test_lookup_takes_ids_only(self):
         p = self.transcript("/w/q", "s-q")
         self.fixer(7, 1, transcript=p)
-        self.assertEqual(A.live_lookup("fixer-7-1")["transcript"], os.path.realpath(p))
+        self.assertEqual(A.live_lookup("fixer-7-1", case_context().caches.status)["transcript"], os.path.realpath(p))
         for bad in (p, "fixer-7-1/../x", "../fixer-7-1", "fixer-nope", "other-7-1", "", None, "fixer-" + "a" * 200):
-            self.assertIsNone(A.live_lookup(bad), bad)
+            self.assertIsNone(A.live_lookup(bad, case_context().caches.status), bad)
         os.remove(p)  # gone since the registry was read
-        self.assertIsNone(A.live_lookup("fixer-7-1"))
+        self.assertIsNone(A.live_lookup("fixer-7-1", case_context().caches.status))
 
 
 class StateTest(LiveBase):
@@ -164,10 +163,10 @@ class StateTest(LiveBase):
                                           entry("user", message={"content": [{"type": "tool_result"}]}),
                                           entry("assistant", message={"content": [], "stop_reason": "end_turn"}),
                                           entry("cost-state")])
-        self.assertEqual(A.live_tail_info(p)["stop"], "end_turn")
+        self.assertEqual(A.live_tail_info(p, {})["stop"], "end_turn")
         with open(p, "a") as f:
             f.write(entry("queue-operation", content="a message"))
-        self.assertIsNone(A.live_tail_info(p)["stop"])
+        self.assertIsNone(A.live_tail_info(p, {})["stop"])
 
 
 class MaskTest(unittest.TestCase):
@@ -284,7 +283,7 @@ class StreamServerTest(LiveBase):
         os.environ["AGENTCTL_LIVE_POLL"] = "0.05"
         self.saved_cached = A.status_cached
         A.status_cached = lambda machine: {"at": 0, "agents": []}
-        self.srv = A.status_page_server("127.0.0.1", 0, A.machine_probe(A.knob_machine()))
+        self.srv = A.status_page_server("127.0.0.1", 0, A.machine_probe(A.knob_machine()), case_context().caches.status)
         self.port = self.srv.server_address[1]
         import threading
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
@@ -374,7 +373,7 @@ class StreamServerTest(LiveBase):
                 with open(self.p, "a") as f:
                     f.write(entry("user", message={"content": "fresh"}))
             return calls[0] > 5
-        A.live_stream(A.live_lookup("fixer-31-1"), 0, writes.append, closed=closed, poll=0, max_secs=60)
+        A.live_stream(A.live_lookup("fixer-31-1", case_context().caches.status), 0, writes.append, case_context().caches.status, closed=closed, poll=0, max_secs=60)
         steps = [sse_events(w.decode()) for w in writes if b"event: reset" in w or b"event: entry" in w][1:]  # after the history
         self.assertEqual([[e["event"] for e in evs] for evs in steps][0][0], "reset")
         self.assertNotIn("entry", [e["event"] for e in steps[0]])
@@ -456,9 +455,9 @@ class StreamServerTest(LiveBase):
             writes.append(b)
             if len(writes) > 1:
                 raise TimeoutError("timed out")  # what a full socket buffer past LIVE_SEND_TIMEOUT raises
-        e = A.live_lookup("fixer-31-1")
+        e = A.live_lookup("fixer-31-1", case_context().caches.status)
         with self.assertRaises(OSError):
-            A.live_stream(e, 0, write, poll=0.01, max_secs=5)
+            A.live_stream(e, 0, write, case_context().caches.status, poll=0.01, max_secs=5)
         self.assertEqual(len(writes), 2)
 
 

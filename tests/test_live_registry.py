@@ -11,6 +11,7 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+from harness import case_context  # noqa: E402
 from test_agentctl import A  # noqa: E402,F401 (puts lib on the path)
 
 T0 = 1_000_000.0
@@ -46,12 +47,12 @@ def run_registry(module, script):
             "mtime": lambda p: T0 - script.get("age", {}).get(p, 0) * AGE, "read_record": lambda p: copy.deepcopy(files.get(p)),
             "live_transcript_ok": lambda p: p if p in ok else None,
             "live_session_transcript": lambda s, wt=None: script.get("sessions", {}).get(s),
-            "live_globs": lambda: script.get("patterns", ["/G/*"]), "live_meta": lambda p: script.get("meta", {}).get(p, {}),
-            "_live_leased": copy.deepcopy(script.get("leased", {})), "os": FakeOs(script.get("owners", {})),
+            "live_globs": lambda: script.get("patterns", ["/G/*"]), "live_meta": lambda p, metas: script.get("meta", {}).get(p, {}),
+            "os": FakeOs(script.get("owners", {})),
         }
         for name, fake in patches.items():
             stack.enter_context(mock.patch.object(module, name, fake))
-        return module.live_registry_read(T0)
+        return module.live_registry_read(module.StatusMemos(leased=copy.deepcopy(script.get("leased", {}))), T0)
 
 
 def run_state(module, script):
@@ -66,14 +67,14 @@ def run_annotate(module, script):
     leased = {}
     with contextlib.ExitStack() as stack:
         patches = {
-            "live_transcript_ok": lambda p: p if p in ok else None, "_live_leased": leased,
-            "live_registry": lambda fresh=False: copy.deepcopy(script["reg"]),
-            "mtime": lambda p: T0 - script.get("age", {}).get(p, 0), "live_tail_info": lambda p: dict(script.get("infos", {}).get(p, {})),
+            "live_transcript_ok": lambda p: p if p in ok else None,
+            "live_registry": lambda memos, fresh=False: copy.deepcopy(script["reg"]),
+            "mtime": lambda p: T0 - script.get("age", {}).get(p, 0), "live_tail_info": lambda p, tails: dict(script.get("infos", {}).get(p, {})),
             "record_alive": lambda rec: script.get("alive", {}).get(rec.get("pid")),
         }
         for name, fake in patches.items():
             stack.enter_context(mock.patch.object(module, name, fake))
-        return module.live_annotate(agents, T0), dict(leased)
+        return module.live_annotate(agents, module.StatusMemos(leased=leased), T0), dict(leased)
 
 
 def E(aid, path, kind="session", **more):
