@@ -159,13 +159,13 @@ def newest_branch_runs(o_r: Any, *, ctx: Context) -> Any:
             newest_main.setdefault(wf, r)
         elif tracked_branch(b, recorded):
             latest.setdefault((b, wf), r)
-    newer_gate_mains(o_r, newest_main, ctx=ctx)
+    newer_gate_mains(o_r, newest_main, ctx.runs)
     return latest, newest_main
 
 
-def newer_gate_mains(o_r: str, newest_main: Any, *, ctx: Context) -> Any:
+def newer_gate_mains(o_r: str, newest_main: Any, runs: Any) -> Any:
     """The gate and outside workflows' own lists of main's runs, a newer completed one replacing the listing's."""
-    for wf, rs in ctx.runs.main_runs_of(o_r).lists():
+    for wf, rs in runs.main_runs_of(o_r).lists():
         m = next((r for r in rs if r.get("status") == "completed"), None)
         if m and (wf not in newest_main or m["databaseId"] > newest_main[wf]["databaseId"]):
             newest_main[wf] = m

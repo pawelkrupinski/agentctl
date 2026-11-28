@@ -228,11 +228,11 @@ def _failed_step_names(job: dict[str, Any]) -> list[str]:
     return [str(s.get("name")) for s in job.get("steps") or [] if s.get("conclusion") in FIX_STEP_FAILED and s.get("name")]
 
 
-def _run_step_failures(d: dict[str, Any], rid: Any, *, ctx: Context) -> dict[str, list[str]] | None:
+def _run_step_failures(d: dict[str, Any], rid: Any, runs: Any) -> dict[str, list[str]] | None:
     """{job name: its failed steps' names} of run rid, read through gh; None when they cannot be read or the run lists
     no job."""
     try:
-        jobs = ctx.runs.run_jobs(red_repo_of(d), rid)
+        jobs = runs.run_jobs(red_repo_of(d), rid)
     except (Exception, SystemExit):
         return None
     if not jobs:
@@ -246,7 +246,7 @@ def _run_step_record(d: dict[str, Any], rid: Any, *, ctx: Context) -> dict[str, 
     path = reds_dir("runsteps", f"{rid}.json")
     rec: Any = read_record(path)
     if rec is None:
-        rec = _run_step_failures(d, rid, ctx=ctx)
+        rec = _run_step_failures(d, rid, ctx.runs)
         if rec is not None:
             with suppress(OSError):
                 os.makedirs(os.path.dirname(path), exist_ok=True)

@@ -20,7 +20,7 @@ CEILINGS = {
     "batchcheck": 3,
     "batchselect": 7,
     "batchtick": 10,
-    "branches": 3,
+    "branches": 2,
     "changefields": 1,
     "changekind": 2,
     "checkround": 3,
@@ -58,8 +58,8 @@ CEILINGS = {
     "reddispatchcmd": 1,
     "redfixcheck": 9,
     "redfixes": 11,
-    "redfixread": 5,
-    "redgate": 3,
+    "redfixread": 4,
+    "redgate": 2,
     "redhold": 10,
     "redland": 2,
     "redlease": 2,
@@ -77,11 +77,14 @@ CEILINGS = {
     "redtickprelude": 1,
     "redtickrun": 2,
     "redtickstep": 1,
-    "reduntracked": 11,
+    "reduntracked": 10,
     "redvault": 4,
-    "redverify": 7,
+    "redverify": 6,
     "runsigs": 2,
     "selfci": 3,
+    "serverbatchsteps": 1,
+    "serverchangesteps": 1,
+    "servergatesteps": 1,
     "serversteps": 1,
     "slots": 15,
     "statuspage": 2,
@@ -99,7 +102,7 @@ CEILINGS = {
 
 # the SUM of the ceilings, 276 before 3eecdc3a split `cli` (its 2 became 6 module rows): a split moves ctx parameters
 # between modules, it never adds one, so the sum only falls (lower it with the ceilings it follows)
-TOTAL_CEILING = 272
+TOTAL_CEILING = 270
 
 
 def takes_ctx(fn):

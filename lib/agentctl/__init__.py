@@ -48,8 +48,9 @@ MODULES = ("caches", "procrunner", "conditionregistry", "escalationtable", "pspa
            "statusqueue", "statussections", "statusmachine", "statusstore", "status", "statuspage", "redcli",
            "syncsteps", "outboxflush", "regenholds", "syncworktrees", "syncplumbing", "synclanding", "syncdispatch",
            "syncwatches", "syncmaintenance", "redgate", "redtickstage", "redtickobserve", "redtickprelude",
-           "redtickopen", "redtickstep", "redtick", "redtickothers", "redtickrun", "gatepublish", "serversteps",
-           "redstatus", "syncloop", "redleasecmds", "reddispatchcmd", "landsteps", "landrefusal", "landsync",
-           "landprecheck", "changefields", "landsubmit", "queueenter", "landdryrun", "landuntil", "slots",
-           "cliparser", "clihandlerslanding", "redprobechecks", "redprobe", "redcommands", "tickstate",
-           "processorloop", "processorsetup", "tickloop", "tickcmd", "clihandlersloop", "clihandlers", "cli")
+           "redtickopen", "redtickstep", "redtick", "redtickothers", "redtickrun", "gatepublish", "redstatus",
+           "syncloop", "redleasecmds", "reddispatchcmd", "landsteps", "landrefusal", "landsync", "landprecheck",
+           "changefields", "landsubmit", "queueenter", "landdryrun", "landuntil", "slots", "cliparser",
+           "clihandlerslanding", "redprobechecks", "redprobe", "redcommands", "tickstate", "processorloop",
+           "servergatesteps", "serverreportsteps", "serverchangesteps", "serverbatchsteps", "serverhousesteps",
+           "serversteps", "processorsetup", "tickloop", "tickcmd", "clihandlersloop", "clihandlers", "cli")

@@ -51,9 +51,9 @@ class CiRunsTest(Base):
         A.main_workflow_files = lambda o_r: {}
 
     def test_a_workflow_not_on_main_is_no_runs_for_every_reader(self):
-        self.assertEqual(A.workflow_main_runs("o/r", "new.yml", ctx=case_context()), [])
-        self.assertIsNone(A.newest_decided_main("o/r", "new.yml", ctx=case_context()))
-        self.assertIsNone(A.newest_green_main("o/r", "new.yml", ctx=case_context()))
+        self.assertEqual(A.workflow_main_runs("o/r", "new.yml", case_context().runs), [])
+        self.assertIsNone(A.newest_decided_main("o/r", "new.yml", case_context().runs))
+        self.assertIsNone(A.newest_green_main("o/r", "new.yml", case_context().runs))
         cleared, why = A.probe_quota_reset({"repo": "o/r", "workflow": "new.yml", "job": "preflight", "since": 0}, runs=case_context().runs)
         self.assertFalse(cleared)
         self.assertIn("no run of new.yml since", why)
@@ -63,7 +63,7 @@ class CiRunsTest(Base):
         import contextlib, io
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            A.workflow_main_runs("o/r", "new.yml", ctx=case_context())
+            A.workflow_main_runs("o/r", "new.yml", case_context().runs)
             A._own_runs("o/r", "new.yml", ctx=case_context())
         self.assertNotIn("could not list", err.getvalue())
         self.assertEqual(err.getvalue().count("new.yml is not on main yet"), 1, err.getvalue())

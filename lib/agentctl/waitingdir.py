@@ -245,3 +245,10 @@ def entry_queued_since(e: dict[str, Any]) -> float | None:
 def lander_fields(e: dict[str, Any]) -> dict[str, Any]:
     """The lander fields a change item carries from its queue entry (its creation copies them)."""
     return {k: e[k] for k in ("branch", "session", "lander", "commit_keys") if e.get(k)}
+
+
+def logged(d: str, lines: list[str]) -> list[str]:
+    """A step's lines, each said in the processor's log."""
+    for x in lines:
+        wlog(d, f"tick: {x}")
+    return lines

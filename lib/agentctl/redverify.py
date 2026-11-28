@@ -38,7 +38,7 @@ def red_verify_scheduled(store, it, f, sha, o_r, repo, t, *, ctx):
         red_move(store, it, "fix-pending", line, data={"fix": {**f, "verify_by": t + RED_VERIFY_HOLD}},
                  deadline_s=RED_VERIFY_HOLD, severity="info")
         return [line]
-    since = [r for r in workflow_main_runs(o_r, f.get("verify_file"), ctx=ctx) if f.get("verify_file")
+    since = [r for r in workflow_main_runs(o_r, f.get("verify_file"), ctx.runs) if f.get("verify_file")
              and r.get("createdAt") and parse_time(r["createdAt"]).timestamp() >= float(f.get("next_run_at") or 0) - 60]
     why = (f"its {hhmmz(f['next_run_at'])} run #{since[-1].get('number')} ended {since[-1].get('conclusion')} "
            f"without deciding it" if since else f"no {wf} run was dispatched for its {hhmmz(f['next_run_at'])} slot")
@@ -238,14 +238,14 @@ RED_VERIFY_HOLD = 30 * 60       # s a run that will decide the fix, still undeci
 VERIFY_RUNS_TTL = 5 * 60
 
 
-def workflow_main_runs(o_r, wfile, *, ctx):
+def workflow_main_runs(o_r, wfile, runs):
     """The newest 30 runs on main of workflow file wfile (read at most every VERIFY_RUNS_TTL); [] when unread."""
     try:
         # listing: a fix is verified by a run CONTAINING it, the newest 30 read; none there keeps it pending, never refuted
-        return ctx.runs.main_runs(o_r, wfile, 30, fresh_for=VERIFY_RUNS_TTL)
+        return runs.main_runs(o_r, wfile, 30, fresh_for=VERIFY_RUNS_TTL)
     except (Exception, SystemExit) as e:
         print_error(f"red verify: could not list {wfile} ({str(e)[:120]})")
-        return ctx.runs.last_listed(o_r, wfile, 30) or []
+        return runs.last_listed(o_r, wfile, 30) or []
 
 
 def red_verify_plan(o_r, repo, workflow, after, *, ctx):
@@ -256,7 +256,7 @@ def red_verify_plan(o_r, repo, workflow, after, *, ctx):
     slot = cron_next(workflow_crons(txt), after) if path else None
     if slot is None:
         return None
-    runs = [r for r in workflow_main_runs(o_r, os.path.basename(path), ctx=ctx) if not is_cancelled(r)]
+    runs = [r for r in workflow_main_runs(o_r, os.path.basename(path), ctx.runs) if not is_cancelled(r)]
     duration = pct(stuck_durations(runs), 0.9) or RED_VERIFY_DURATION
     return {"slot": slot, "by": slot + duration + knob_red_verify_slack(),
             "file": os.path.basename(path)}
@@ -265,7 +265,7 @@ def red_verify_plan(o_r, repo, workflow, after, *, ctx):
 def red_verify_run_on_way(o_r, repo, f, *, ctx):
     """The undecided run on main of a scheduled fix's workflow that will decide it -- created since its slot, or one
     containing the fix -- or None."""
-    for r in workflow_main_runs(o_r, f["verify_file"], ctx=ctx) if f.get("verify_file") else []:
+    for r in workflow_main_runs(o_r, f["verify_file"], ctx.runs) if f.get("verify_file") else []:
         if r.get("status") != "completed" and (
                 run_since_slot(r, f) or (repo and r.get("headSha") and contains_local(repo, f.get("sha"), r["headSha"]))):
             return r

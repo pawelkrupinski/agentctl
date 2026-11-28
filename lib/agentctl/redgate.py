@@ -19,11 +19,11 @@ def red_open_flows(o_r, store):
                    and it["data"].get("repo") == o_r and it["data"].get("workflow")} - gate)
 
 
-def newest_decided_main(o_r, workflow, *, ctx):
+def newest_decided_main(o_r, workflow, runs):
     """The newest decided (success / failure / timed_out) run of a workflow on main, or None."""
     # listing: None here means none decided among the newest 10 -- the callers treat it as unread, not green
-    runs = ctx.runs.main_runs(o_r, workflow, 10)
-    return next((r for r in runs if r.get("status") == "completed"
+    listed = runs.main_runs(o_r, workflow, 10)
+    return next((r for r in listed if r.get("status") == "completed"
                  and r.get("conclusion") in ("success", "failure", "timed_out")), None)
 
 
@@ -35,7 +35,7 @@ def red_gate_snap(o_r, store, *, ctx):
     latest = {n: {k: d.get(k) for k in fields} for n, d, _nw, _st in gate if d}
     for wf in red_open_flows(o_r, store):  # an open red's own workflow, outside the gate: read so it can clear
         try:
-            r = newest_decided_main(o_r, wf, ctx=ctx)
+            r = newest_decided_main(o_r, wf, ctx.runs)
         except (Exception, SystemExit):
             r = None
         if r:

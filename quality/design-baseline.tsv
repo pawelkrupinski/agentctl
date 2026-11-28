@@ -331,7 +331,6 @@ fanout	lib/agentctl/reverts.py	11
 fanout	lib/agentctl/runowners.py	12
 fanout	lib/agentctl/runsigs.py	10
 fanout	lib/agentctl/serverclone.py	11
-fanout	lib/agentctl/serversteps.py	27
 fanout	lib/agentctl/slots.py	30
 fanout	lib/agentctl/statusagents.py	13
 fanout	lib/agentctl/statuspage.py	18
