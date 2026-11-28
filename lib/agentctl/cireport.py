@@ -3,7 +3,7 @@
 
 from agentctl.context import Context
 from typing import Any, Optional
-from agentctl.core import err, remote
+from agentctl.core import print_error, remote
 from agentctl.forge import RED_CONCLUSIONS, is_cancelled
 from agentctl.repos import gated_repo, scan_repo_for
 from agentctl.workflows import LOCAL_FLOW
@@ -151,7 +151,7 @@ class GateReport:
             self.flakes = [it for it in red_active(self.store).values() if it["data"].get("red_kind") == "flake"]
             self.untracked = red_untracked_runs(self.store, self.o_r, units, ctx=self.ctx)
         except (Exception, SystemExit) as e:  # who is fixing is information: the gate's verdict stands without it
-            err(f"red: could not tell who is fixing ({str(e)[:160]})")
+            print_error(f"red: could not tell who is fixing ({str(e)[:160]})")
 
     def state_of(self, name: str, run: dict[str, Any]) -> Any:
         return self.states.get((name, run.get("databaseId")))

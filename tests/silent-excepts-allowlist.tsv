@@ -20,7 +20,7 @@ lib/agentctl/live.py	live_tail_info	ValueError	a torn or foreign line / field of
 lib/agentctl/owned.py	Owned._signals	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
 lib/agentctl/ownerwrapper.py	OwnerWrapper._release_heartbeat	StoreUnavailable	the store cannot be reached: the release / cancel is retried by the next tick, and the lease expires on its own
 lib/agentctl/ownerwrapper.py	OwnerWrapper._release	StoreUnavailable	the store cannot be reached: the release / cancel is retried by the next tick, and the lease expires on its own
-lib/agentctl/procs.py	_proc_cwds	FileNotFoundError, PermissionError, ProcessLookupError	a process gone or not ours to read: its cwd is simply not listed
+lib/agentctl/procs.py	_process_cwds	FileNotFoundError, PermissionError, ProcessLookupError	a process gone or not ours to read: its cwd is simply not listed
 lib/agentctl/procwatch.py	wp_rss_gb	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
 lib/agentctl/eventprojection.py	escalation_stale	KeyError, ValueError	a malformed line, field or entry is skipped; the rest still count
 lib/agentctl/psparse.py	parse_ps	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
@@ -29,8 +29,8 @@ lib/agentctl/reddispatch.py	red_owned_progress_at	ValueError, TypeError	a malfor
 lib/agentctl/storemetrics.py	unreaped_leases	KeyError, TypeError	a malformed line, field or entry is skipped; the rest still count
 lib/agentctl/slots.py	output_file_shared	BlockingIOError	a non-blocking lock another process holds: this one yields to it by design
 lib/agentctl/statusagents.py	status_transcript_last	ValueError	a torn or foreign line / field of a log or state text is skipped; the rest still count
-lib/agentctl/statuspage.py	StatusHandler.do_GET	BrokenPipeError, ConnectionResetError	the status page's client went away mid-response: nothing left to answer
-lib/agentctl/statuspage.py	StatusHandler.stream	ConnectionError, TimeoutError	the status stream's client is gone or too slow to take a frame: its connection ends
+lib/agentctl/statuspage.py	StatusPageEndpoint.do_GET	BrokenPipeError, ConnectionResetError	the status page's client went away mid-response: nothing left to answer
+lib/agentctl/statuspage.py	StatusPageEndpoint.stream	ConnectionError, TimeoutError	the status stream's client is gone or too slow to take a frame: its connection ends
 lib/agentctl/storeauth.py	store_secret	FileExistsError	another process made the secret first: the one made is read next
 lib/agentctl/testtmp.py	_suite_root_in_use	FileNotFoundError, ProcessLookupError, ValueError	no owner file, a dead runner or a torn pid: the root's newest mtime decides
 devtools/stats.py	part_lists	ValueError, KeyError, TypeError	a malformed line, field or entry is skipped; the rest still count

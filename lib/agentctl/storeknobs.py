@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
-from agentctl.knobread import env_num, env_text
+from agentctl.knobread import env_number, env_text
 
 
 # A MISSING TOKEN IS SAID ON ITS TRANSITION (2026-10-30: the laptop processor's service.log held ~842,000 lines of
@@ -13,7 +13,7 @@ TOKEN_MISSING_SUMMARY = 600  # s between the summaries of a still-missing token 
 
 
 def knob_token_summary() -> float:
-    return env_num("AGENTCTL_TOKEN_SUMMARY", TOKEN_MISSING_SUMMARY)
+    return env_number("AGENTCTL_TOKEN_SUMMARY", TOKEN_MISSING_SUMMARY)
 
 
 # A SILENT MACHINE'S LEASE CLOCKS PAUSE (2026-11-03: the family owners restarted 22 / 11 / 3 times, ended "STOPPED: the
@@ -32,11 +32,11 @@ CONTACT_PAUSE_MAX = 12 * 3600   # s a silent machine's leases are paused at most
 
 
 def knob_contact_gap() -> float:
-    return env_num("AGENTCTL_CONTACT_GAP", CONTACT_GAP)
+    return env_number("AGENTCTL_CONTACT_GAP", CONTACT_GAP)
 
 
 def knob_contact_pause_max() -> float:
-    return env_num("AGENTCTL_CONTACT_PAUSE_MAX", CONTACT_PAUSE_MAX)
+    return env_number("AGENTCTL_CONTACT_PAUSE_MAX", CONTACT_PAUSE_MAX)
 
 
 DEFAULT_REMOTE = "origin"  # GitHub's remote name in every clone (laptop and ci-runner)
@@ -119,27 +119,27 @@ CLONE_LOCK_WAIT = 300         # the swap waits this long for the clone's users t
 
 
 def knob_clone_lock_wait() -> float:
-    return env_num("AGENTCTL_CLONE_LOCK_WAIT", CLONE_LOCK_WAIT)
+    return env_number("AGENTCTL_CLONE_LOCK_WAIT", CLONE_LOCK_WAIT)
 
 
 def knob_clone_repair_retry() -> float:
-    return env_num("AGENTCTL_CLONE_REPAIR_RETRY", CLONE_REPAIR_RETRY)
+    return env_number("AGENTCTL_CLONE_REPAIR_RETRY", CLONE_REPAIR_RETRY)
 
 
 def knob_clone_timeout() -> float:
-    return env_num("AGENTCTL_CLONE_TIMEOUT", CLONE_TIMEOUT)
+    return env_number("AGENTCTL_CLONE_TIMEOUT", CLONE_TIMEOUT)
 
 
 def knob_remote_ghost() -> float:
-    return env_num("AGENTCTL_REMOTE_GHOST", REMOTE_GHOST)
+    return env_number("AGENTCTL_REMOTE_GHOST", REMOTE_GHOST)
 
 
 def knob_store_retries() -> float:
-    return env_num("AGENTCTL_STORE_RETRIES", STORE_RETRIES)
+    return env_number("AGENTCTL_STORE_RETRIES", STORE_RETRIES)
 
 
 def knob_store_retry_base() -> float:
-    return env_num("AGENTCTL_STORE_RETRY_BASE", STORE_RETRY_BASE)
+    return env_number("AGENTCTL_STORE_RETRY_BASE", STORE_RETRY_BASE)
 
 
 def knob_state_file() -> str:

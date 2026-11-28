@@ -5,7 +5,7 @@ import os
 import subprocess
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import err, git
+from agentctl.core import print_error, git
 from agentctl.repos import batching, precheck_hook
 from agentctl.buildview import BUILD_VIEW_PATHS, build_view_change, read_build
 from agentctl.queue import (
@@ -313,7 +313,7 @@ def own_diff_changed(tree, base, tip, moved, new_head):
             r = process_runner().run(["git", "patch-id", "--stable"], cwd=tree, input=diff.stdout, capture_output=True,
                                text=True, timeout=60)
         except (OSError, subprocess.TimeoutExpired) as e:  # an unreadable git is told: the recheck then runs in full
-            err(f"patch-id of {a[:10]}..{b[:10]}: unreadable ({str(e)[:160]})")
+            print_error(f"patch-id of {a[:10]}..{b[:10]}: unreadable ({str(e)[:160]})")
             return None
         return (r.stdout.split() or [""])[0] if r.returncode == 0 else None
     old, new = pid(base, tip), pid(moved, new_head)

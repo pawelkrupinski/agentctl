@@ -9,7 +9,7 @@ from agentctl.timefmt import age_since, iso_at
 from agentctl.watchknobs import (
     WATCH_TIMEOUT, knob_watch_conv_start, knob_watch_error_poll, knob_watch_follow_lease, knob_watch_poll,
     knob_watch_stall_min, knob_watch_timeout)
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.tokenerrors import NoToken
 from agentctl.repos import slug
 from agentctl.procs import safe_cwd
@@ -126,13 +126,13 @@ class WatchClaim:
                     it = st.item("watch", self.sha)
             return "theirs", it
         except (Exception, SystemExit) as e:
-            err(f"watch {self.sha[:10]}: the store did not answer ({str(e)[:120]}): watched here, unclaimed")
+            print_error(f"watch {self.sha[:10]}: the store did not answer ({str(e)[:120]}): watched here, unclaimed")
             return None, None
 
     def wait_theirs(self, it):
         """Another live follower watches it: its verdict is read from the item, polled until decided, our own bound,
         or its claim lapsing (then ours)."""
-        err(f"watch: {self.sha[:10]} is already watched by {it['data'].get('followed_by')}: its verdict is read from "
+        print_error(f"watch: {self.sha[:10]} is already watched by {it['data'].get('followed_by')}: its verdict is read from "
             "the store, not watched twice")
         t0, timeout = self.clock.time(), knob_watch_timeout()
         delays = backoff(knob_watch_poll(), 300)
@@ -154,7 +154,7 @@ class WatchClaim:
             if self.mine(it):
                 st.update_item("watch", self.sha, it["version"], self.lease(self.clock.time()))
         except (Exception, SystemExit) as e:  # renewed at the next look; a lapse lets the tick evaluate it meanwhile
-            err(f"watch {self.sha[:10]}: could not renew its claim ({str(e)[:120]})")
+            print_error(f"watch {self.sha[:10]}: could not renew its claim ({str(e)[:120]})")
 
     def mine(self, it):
         return bool(it) and watch_outcome(it) not in ("ok", "red") and (it.get("data") or {}).get("followed_by") == self.me
@@ -168,7 +168,7 @@ class WatchClaim:
             if self.mine(it):
                 st.update_item("watch", self.sha, it["version"], {"followed_by": None, "followed_until": 0})
         except (Exception, SystemExit) as e:  # it lapses by itself
-            err(f"watch {self.sha[:10]}: could not give its claim up ({str(e)[:120]})")
+            print_error(f"watch {self.sha[:10]}: could not give its claim up ({str(e)[:120]})")
 
     def finish(self, state, line, red_runs=()):
         """ok / red: the verdict on the item (finish_watch, told: this follower printed it). Anything else (unknown,
@@ -181,7 +181,7 @@ class WatchClaim:
             if it and watch_outcome(it) not in ("ok", "red"):
                 finish_watch(st, it, state, line, list(red_runs), told=True, ctx=self.ctx)
         except (Exception, SystemExit) as e:
-            err(f"watch {self.sha[:10]}: could not write its verdict to the store ({str(e)[:120]})")
+            print_error(f"watch {self.sha[:10]}: could not write its verdict to the store ({str(e)[:120]})")
 
 
 class WatchLoop:
@@ -222,7 +222,7 @@ class WatchLoop:
             return
         if (kind, run["databaseId"]) not in self.said:
             self.said.add((kind, run["databaseId"]))
-            err(f"{name}: following run #{run.get('number')} ({run.get('status')}, head {str(run.get('headSha'))[:10]})")
+            print_error(f"{name}: following run #{run.get('number')} ({run.get('status')}, head {str(run.get('headSha'))[:10]})")
         if kind in self.done:
             print(f"{name} #{run.get('number')}: {run.get('conclusion')}", flush=True)
 
@@ -233,7 +233,7 @@ class WatchLoop:
             self.seen = watch_look(self.repo, self.sha, self.o_r, self.flows, self.done, self.pushed_at, self.t0,
                                    self.clock.time(), self.on_run, ctx=self.ctx)
             if self.unreachable is not None:
-                err(f"watch: GitHub answers again after {age_since(iso_at(self.unreachable))} ({self.failures} failed reads)")
+                print_error(f"watch: GitHub answers again after {age_since(iso_at(self.unreachable))} ({self.failures} failed reads)")
             self.unreachable, self.failures, self.err_delays = None, 0, None
         except NoToken as e:  # no vault for this process: retrying cannot help
             return self.verdict(2, f"WATCH UNKNOWN: no token ({str(e).replace('agentctl: ', '')}); "
@@ -244,7 +244,7 @@ class WatchLoop:
             if self.unreachable is None:
                 self.unreachable = self.clock.time()
                 self.err_delays = backoff(knob_watch_error_poll(), 300)
-            err(f"watch: could not read the runs ({self.last_error}) [{self.failures} failed, unreachable for "
+            print_error(f"watch: could not read the runs ({self.last_error}) [{self.failures} failed, unreachable for "
                 f"{age_since(iso_at(self.unreachable))}]")
         return None
 
@@ -296,7 +296,7 @@ class WatchLoop:
 
 
 def _watch(repo, sha, pushed_at, o_r, flows, own, clock, fixes=(), claim=None, *, store, ctx):
-    err(f"watching Main and the convergence for {sha[:10]} (up to "
+    print_error(f"watching Main and the convergence for {sha[:10]} (up to "
         f"{int(knob_watch_timeout() // 60)} min; `--no-watch` skips this)"
         + (f"; its Fixes-Red {', '.join(fixes)} is verified by the red's own item (`agentctl red status`)" if fixes else ""))
     return WatchLoop(repo, sha, pushed_at, o_r, flows, own, clock, claim, store, ctx=ctx).run()
@@ -339,7 +339,7 @@ def tick_watch(st, it, t, *, ctx):
     try:
         verdict = watch_eval(watch_clone(dd), it["id"], dd["pushed_at"], dd["o_r"], flows, t, ctx=ctx)
     except (Exception, SystemExit) as e:  # unreadable now: tried again at the next look, the deadline bounds it
-        err(f"watch {it['id'][:10]}: could not read the runs ({str(e)[:120]})")
+        print_error(f"watch {it['id'][:10]}: could not read the runs ({str(e)[:120]})")
         verdict = None
     if verdict is None:
         st.update_item("watch", it["id"], it["version"], {"next_at": t + knob_watch_poll()})
@@ -363,9 +363,9 @@ def finish_watch(st, it, state, line, red_runs, told=False, *, ctx):
             ev["audience"] = {}
         st.transition("watch", it["id"], state, it["version"], data={"verdict": line}, event={**ev, "cause": "ci-verdict"})
     if state == "ok" and not told and dd.get("close") and os.path.isdir(dd["close"]):
-        err(close_worktree(dd["close"]))
+        print_error(close_worktree(dd["close"]))
     for wf, n in red_runs:
         try:
             red_attach(st, wf, n, author={"session": dd.get("session"), "worktree": dd.get("worktree")}, ctx=ctx)
         except (Exception, SystemExit) as e:
-            err(f"watch {it['id'][:10]}: could not attach {wf} #{n} ({str(e)[:120]})")
+            print_error(f"watch {it['id'][:10]}: could not attach {wf} #{n} ({str(e)[:120]})")

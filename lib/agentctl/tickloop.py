@@ -12,7 +12,7 @@ from agentctl.selfcode import code_version
 from agentctl.statemachines import MACHINES, machine_state
 from agentctl.clock import Clock, epoch_now
 from agentctl.tickknobs import knob_step_join, knob_tick
-from agentctl.core import SHORT, _bounded, attempt, err, git, git_ok, host_role, process_cache, run_bounded
+from agentctl.core import SHORT, _bounded, attempt, print_error, git, git_ok, host_role, process_cache, run_bounded
 from agentctl.tokenerrors import NoToken
 from agentctl.procs import safe_cwd
 from agentctl.sdnotify import SD_READY, sd_notify
@@ -73,7 +73,7 @@ class ProcessorLoop:
                            command="waiting", store=self.store)
             self.stalled_noted = True
         except (Exception, SystemExit) as e:
-            err(f"STALLED could not be noted ({str(e)[:160]}); the loop goes on")
+            print_error(f"STALLED could not be noted ({str(e)[:160]}); the loop goes on")
 
     def settle(self, failed: bool) -> None:
         """What a round leaves: the failures in a row (and the stall note they earn), the round file, the snapshot."""
@@ -88,7 +88,7 @@ class ProcessorLoop:
             try:
                 write_snapshot(self.d, self.store)
             except Exception as e:
-                err(f"the snapshot could not be written: {e}")
+                print_error(f"the snapshot could not be written: {e}")
         sd_notify("WATCHDOG=1")
 
     def drained(self) -> bool:
@@ -193,7 +193,7 @@ def run_step(name: str, step: Callable[[], Any]) -> bool | None:
     if _step_errors.get(name):  # it failed after the tick stopped waiting for it
         step_failed(name, _step_errors.pop(name))
     if not run_bounded(f"step:{name}", work, knob_step_join()):
-        err(f"{name}: still running after {knob_step_join():.0f} s; the tick goes on (it ends "
+        print_error(f"{name}: still running after {knob_step_join():.0f} s; the tick goes on (it ends "
             "in its own thread)")
         return None
     why = _step_errors.pop(name, None)
@@ -208,7 +208,7 @@ STEP_NO_TOKEN = "no token"
 
 def step_failed(name, why):
     if why is not STEP_NO_TOKEN:
-        err(f"{name} failed: {why}")
+        print_error(f"{name} failed: {why}")
 
 
 def _open_items(st: Any, typ: str) -> list[Any]:

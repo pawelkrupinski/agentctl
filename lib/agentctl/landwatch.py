@@ -6,7 +6,7 @@ from typing import Any
 from agentctl.clock import epoch_now
 from agentctl.timefmt import parse_time
 from agentctl.watchknobs import knob_watch_conv_start
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.repos import movies_repo_path, red_repo_clone, slug
 from agentctl.clones import main_clone
 from agentctl.forge import is_cancelled
@@ -75,7 +75,7 @@ def watch_clone(dd):
             if slug(p) == o_r:
                 return p
         except (Exception, SystemExit) as e:
-            err(f"land watch: no slug for {p} ({str(e)[:160]}); looking for the clone")
+            print_error(f"land watch: no slug for {p} ({str(e)[:160]}); looking for the clone")
     c = red_repo_clone(o_r)
     if c:
         return c
@@ -143,7 +143,7 @@ def _watch_red_lines(o_r: Any, sha: Any, flows: Any, reds: Any, *, ctx: Context)
         try:
             failed = failed_jobs(o_r, r["databaseId"], ctx=ctx)
         except (Exception, SystemExit) as e:  # the verdict stands without the job names
-            err(f"could not read the jobs of run {r['databaseId']} ({str(e)[:120]})")
+            print_error(f"could not read the jobs of run {r['databaseId']} ({str(e)[:120]})")
             failed = []
         lines.append(f"WATCH RED: {flows[kind][0]} #{r.get('number')} {', '.join(failed) or r.get('conclusion')} "
                      f"(it contains your {sha[:10]}: if your change broke it, fix forward now with `Fixes-Red: "

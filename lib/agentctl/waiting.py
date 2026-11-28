@@ -7,7 +7,7 @@ from typing import Any
 from agentctl.statefile import note_failure, read_record
 from agentctl.statemachines import StaleVersion, change_event, machine_state, open_items
 from agentctl.timefmt import ts
-from agentctl.core import SHORT, err, git, remote
+from agentctl.core import SHORT, print_error, git, remote
 from agentctl.repos import server_repo, slug
 from agentctl.trailers import commit_trailer_values
 from agentctl.waitingdir import ChangeRecords, entry_final, waiting_state, wlog
@@ -164,7 +164,7 @@ def cancel_entry_remote(st: Any, e: dict[str, Any], why: str) -> None:
         try:
             cancel_run(slug(e["worktree"]) if os.path.isdir(e.get("worktree") or "") else SHORT["movies"], rem["run"], why)
         except (Exception, SystemExit) as ex:
-            err(f"could not cancel run {rem['run']} of {e['id']}: {str(ex)[:120]}")
+            print_error(f"could not cancel run {rem['run']} of {e['id']}: {str(ex)[:120]}")
 
 
 def stop_checker(e: dict[str, Any]) -> None:

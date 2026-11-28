@@ -59,8 +59,8 @@ class OwnedTest(unittest.TestCase):
             def sleep(rng, s):
                 now[0] += s
             case.put("time", types.SimpleNamespace(time=lambda: now[0], sleep=case.recorded("sleep", sleep)))
-            case.fake("env_num", lambda rng, name, default: rng.choice([3, 15]))
-            case.fake("err", lambda rng, m: None)
+            case.fake("env_number", lambda rng, name, default: rng.choice([3, 15]))
+            case.fake("print_error", lambda rng, m: None)
             case.fake("restart_if_changed", lambda rng, owned: None)
             waiters = [FakeWaiter(case, f"w{i}") for i in range(r.randint(0, 3))]
             return (waiters, r.choice([2, 9, 40, 200]), r.choice([1, 5, 20]), r.choice([5, 30, 60]))
@@ -244,7 +244,7 @@ class NetWatchTest(unittest.TestCase):
             case.fake("state_read", lambda rng: rng.choice([{}, {"network": {"at": 5}}, {"network": {}}]))
             case.fake("state_update", lambda rng, **k: None)
             case.fake("mark_gate_dirty", lambda rng: None)
-            case.fake("err", lambda rng, m: None)
+            case.fake("print_error", lambda rng, m: None)
             case.fake("open_outage", lambda rng, *a, **k: None)
             probed = case.recorded("run_probe", lambda rng, kind, *a: types.SimpleNamespace(detail=rng.choice(["tunnel ok", "tunnel 5s", "x down", "the tunnel is not answering 5s", "ok"]), ok=True))
             case.put("run_probe", lambda check, *a: probed(A.probe_kind(check), *a))  # recorded by kind, as before the opener ran the function it imports

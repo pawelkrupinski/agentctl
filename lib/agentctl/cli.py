@@ -70,7 +70,7 @@ from agentctl.statuspage import cmd_status
 from agentctl.redcli import cmd_red
 from agentctl.invariants import probe_invariant
 from agentctl.watchdog import cmd_watchdog
-from agentctl.processor import cmd_tick, cmd_waiting
+from agentctl.tickloop import cmd_tick, cmd_waiting
 from agentctl.queueenter import cmd_land_precheck
 from agentctl.slots import cmd_land
 from agentctl.cliparser import parser

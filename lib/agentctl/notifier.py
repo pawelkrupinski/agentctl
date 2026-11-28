@@ -12,7 +12,7 @@ from agentctl.watchknobs import knob_notify_timeout
 from agentctl.watchknobs import knob_notifier, knob_notify
 
 
-def applescript_str(text):
+def applescript_string(text):
     return '"' + str(text).replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
@@ -64,7 +64,7 @@ def _delivered(ok, failures=()):
     return ok
 
 
-def _proc_said(r):
+def _process_said(r):
     """A failed channel's exit code and the last line it printed (stderr's, else stdout's): the real cause, short."""
     def last(b):
         return next((x.strip() for x in reversed((b or b"").decode(errors="replace").splitlines()) if x.strip()), "")
@@ -88,7 +88,7 @@ def _channel(ch, argv, fix):
         return ch, _run_said(e), NOTIFY_FIX_TIMEOUT.format(ch=ch)
     except (OSError, subprocess.SubprocessError) as e:
         return ch, _run_said(e), fix
-    return None if r.returncode == 0 else (ch, _proc_said(r), fix)
+    return None if r.returncode == 0 else (ch, _process_said(r), fix)
 
 
 def notify(title, text, url=None, group=None):
@@ -110,8 +110,8 @@ def notify(title, text, url=None, group=None):
         if f is None:
             return _delivered(True)
         failures.append(f)
-    f = _channel("osascript", ["osascript", "-e", f"display notification {applescript_str(text)} with title "
-                               f"{applescript_str(title)} " 'sound name "Basso"'], NOTIFY_FIX["osascript"])
+    f = _channel("osascript", ["osascript", "-e", f"display notification {applescript_string(text)} with title "
+                               f"{applescript_string(title)} " 'sound name "Basso"'], NOTIFY_FIX["osascript"])
     if f is None:
         return _delivered(True)
     return _delivered(False, failures + [f])

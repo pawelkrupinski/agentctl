@@ -5,7 +5,7 @@ import subprocess
 import time
 from typing import Any, Callable, Optional, Sequence, TypeVar
 from agentctl.procrunner import process_runner
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.networksignatures import is_transient_network
 
 
@@ -51,7 +51,7 @@ def _wait_or_give_up(what: str, tries: int, delay: Optional[float], why: str, el
     `budget` s), raise TransientNetwork."""
     if delay is None or elapsed + delay > budget:
         raise TransientNetwork(f"{what}: the network failed {tries} tries ({why})")
-    err(f"{what}: {why} -- the network's, tried again in {delay:g} s ({tries}/{most})")
+    print_error(f"{what}: {why} -- the network's, tried again in {delay:g} s ({tries}/{most})")
     sleep(delay)
 
 

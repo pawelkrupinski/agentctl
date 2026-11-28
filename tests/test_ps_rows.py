@@ -41,7 +41,7 @@ class PsReadingsTest(unittest.TestCase):
 
     def test_the_procwatch_rows_take_the_command_name_and_skip_a_garbled_row(self):
         text = "  10 1 2048 3.5 /usr/bin/java\n  x 1 2 3 foo\n  11 10 100\n  12 10 100 0.0 /a/b c\n"
-        self.assertEqual(A.proc_rows(A.FixedMachine({"ps": text})), [(10, 1, 2048, 3.5, "java"), (12, 10, 100, 0.0, "b c")])
+        self.assertEqual(A.watched_process_rows(A.FixedMachine({"ps": text})), [(10, 1, 2048, 3.5, "java"), (12, 10, 100, 0.0, "b c")])
 
     def test_the_busy_cores_sum_pcpu_less_waiters_and_idle_claude(self):
         text = "50.0 /bin/java -x\n100 agentctl gov admit --fd 3\n2.0 /usr/bin/claude\nx y\n20.0\n150 node\n"

@@ -28,7 +28,7 @@ works, and the one namespace is deliberate, because a test's `A.x = fake` patch 
 - **Subprocesses go through many paths.** There are 186 `git(` calls, 35 `git_ok(`, 45 raw `subprocess.run/Popen`,
   8 `spawn_detached` and 8 `sh(`. Some are bounded by `run_cmd` and some are not. Tests fake them with PATH shims
   (fake_claude.py, fake_forgejo_gh.py) or with real temporary git repositories.
-- **Environment reads are scattered.** There are 153 `os.environ` reads and 113 `env_num(...)` reads at call sites.
+- **Environment reads are scattered.** There are 153 `os.environ` reads and 113 `env_number(...)` reads at call sites.
   config.py's knob scan finds them, but nothing holds them in one place.
 
 The goal is the same behaviour with seams that are explicit: a test builds a context with fakes and nothing global
@@ -38,7 +38,7 @@ is patched.
 
 Counts are per part (lib/agentctl/<part>.py), from grep, rounded. A dash means none.
 
-| part | Store() | time.time() | git/git_ok | subprocess | Forgejo (gh_json/api/FORGEJO_GH) | os.environ / env_num |
+| part | Store() | time.time() | git/git_ok | subprocess | Forgejo (gh_json/api/FORGEJO_GH) | os.environ / env_number |
 |---|---|---|---|---|---|---|
 | core | - | - | 3 | 7 | 3 (+ api, token) | 27 / - |
 | branches | 4 | 16 | 13 | 3 | 5 | 24 / 7 |
@@ -147,7 +147,7 @@ the next step. The order goes from smallest blast radius and most test pain to l
    `ctx.runner`, then `git` and `git_ok` (221), one part per commit. The slots and cleanup parts (59 git calls) go
    last. Tests that need real git keep a real temporary repository behind the real Runner. Only process-shaped
    fakes (`process_cwds`, `launchctl_kick`, `run_cmd`, the hung-sbt fakes) move to FakeRunner.
-7. **Env.** Replace `env_num("AGENTCTL_X", D)` and `os.environ.get("AGENTCTL_X")` with `ctx.env.num` and
+7. **Env.** Replace `env_number("AGENTCTL_X", D)` and `os.environ.get("AGENTCTL_X")` with `ctx.env.num` and
    `ctx.env.get`. config.py's knob scan learns the new call shape, and its test keeps AGENTCTL.md's table in step.
    Identity and environment values for child processes (FIXER_IDENTITY_ENV, `token_env`, `detached_env`) stay
    explicit environment handling: they are what a child receives, not knobs.

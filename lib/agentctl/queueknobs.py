@@ -1,7 +1,7 @@
 # agentctl, part `queueknobs`: the land and queue knobs: landing, batches, holds, waits, pushes, regen
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.knobread import env_num
+from agentctl.knobread import env_number
 from agentctl.knobread import env_text
 
 
@@ -18,7 +18,7 @@ LAND_STALL_MIN = 20
 
 
 def knob_max_foreign() -> float:
-    return env_num("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)
+    return env_number("AGENTCTL_MAX_FOREIGN", MAX_FOREIGN)
 
 
 # the owner, 2026-11-26: keep the STALLED alert, warn-only, at 60 min (policy.py `queue-stall`)
@@ -26,11 +26,11 @@ QUEUE_STALL_AFTER = 60 * 60  # s with open changes and no change moving before Q
 
 
 def knob_queue_stall_after() -> float:
-    return env_num("AGENTCTL_QUEUE_STALL_AFTER", QUEUE_STALL_AFTER)
+    return env_number("AGENTCTL_QUEUE_STALL_AFTER", QUEUE_STALL_AFTER)
 
 
 def knob_land_stall_min() -> float:
-    return env_num("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN)
+    return env_number("AGENTCTL_LAND_STALL_MIN", LAND_STALL_MIN)
 
 
 # ---------------------------------------------------------------- the backlog batch (the owner, 2026-11-17)
@@ -278,115 +278,115 @@ FIXER_LAND_WAIT = 2 * 3600  # s a fixer's land waits for its queued change's ver
 
 
 def knob_backlog_batch_max() -> float:
-    return env_num("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX)
+    return env_number("AGENTCTL_BACKLOG_BATCH_MAX", BACKLOG_BATCH_MAX)
 
 
 def knob_backlog_batch_min() -> float:
-    return env_num("AGENTCTL_BACKLOG_BATCH_MIN", BACKLOG_BATCH_MIN)
+    return env_number("AGENTCTL_BACKLOG_BATCH_MIN", BACKLOG_BATCH_MIN)
 
 
 def knob_batch_retry_max() -> float:
-    return env_num("AGENTCTL_BATCH_RETRY_MAX", BATCH_RETRY_MAX)
+    return env_number("AGENTCTL_BATCH_RETRY_MAX", BATCH_RETRY_MAX)
 
 
 def knob_change_hold_max() -> float:
-    return env_num("AGENTCTL_CHANGE_HOLD_MAX", CHANGE_HOLD_MAX)
+    return env_number("AGENTCTL_CHANGE_HOLD_MAX", CHANGE_HOLD_MAX)
 
 
 def knob_hold_idle_ttl() -> float:
-    return env_num("AGENTCTL_HOLD_IDLE_TTL", HOLD_IDLE_TTL)
+    return env_number("AGENTCTL_HOLD_IDLE_TTL", HOLD_IDLE_TTL)
 
 
 def knob_drift_stall() -> float:
-    return env_num("AGENTCTL_DRIFT_STALL", DRIFT_STALL)
+    return env_number("AGENTCTL_DRIFT_STALL", DRIFT_STALL)
 
 
 def knob_fixer_land_wait() -> float:
-    return env_num("AGENTCTL_FIXER_LAND_WAIT", FIXER_LAND_WAIT)
+    return env_number("AGENTCTL_FIXER_LAND_WAIT", FIXER_LAND_WAIT)
 
 
 def knob_fixer_land_watch() -> float:
-    return env_num("AGENTCTL_FIXER_LAND_WATCH", FIXER_LAND_WATCH_EVERY)
+    return env_number("AGENTCTL_FIXER_LAND_WATCH", FIXER_LAND_WATCH_EVERY)
 
 
 def knob_free_wait() -> float:
-    return env_num("AGENTCTL_FREE_WAIT", FREE_WAIT)
+    return env_number("AGENTCTL_FREE_WAIT", FREE_WAIT)
 
 
 def knob_generated_regen_timeout() -> float:
-    return env_num("AGENTCTL_GENERATED_REGEN_TIMEOUT", GENERATED_REGEN_TIMEOUT)
+    return env_number("AGENTCTL_GENERATED_REGEN_TIMEOUT", GENERATED_REGEN_TIMEOUT)
 
 
 def knob_infra_same_max() -> float:
-    return env_num("AGENTCTL_INFRA_SAME_MAX", INFRA_SAME_MAX)
+    return env_number("AGENTCTL_INFRA_SAME_MAX", INFRA_SAME_MAX)
 
 
 def knob_landed_look() -> float:
-    return env_num("AGENTCTL_LANDED_LOOK", LANDED_LOOK_EVERY)
+    return env_number("AGENTCTL_LANDED_LOOK", LANDED_LOOK_EVERY)
 
 
 def knob_lander_landed_every() -> float:
-    return env_num("AGENTCTL_LANDER_LANDED_EVERY", LANDER_LANDED_EVERY)
+    return env_number("AGENTCTL_LANDER_LANDED_EVERY", LANDER_LANDED_EVERY)
 
 
 def knob_land_before_queue_seconds() -> float:
-    return env_num("AGENTCTL_LAND_BEFORE_QUEUE_SECONDS", LAND_BEFORE_QUEUE_SECONDS)
+    return env_number("AGENTCTL_LAND_BEFORE_QUEUE_SECONDS", LAND_BEFORE_QUEUE_SECONDS)
 
 
 def knob_land_lease_max() -> float:
-    return env_num("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX)
+    return env_number("AGENTCTL_LAND_LEASE_MAX", LAND_LEASE_MAX)
 
 
 def knob_land_lease_ttl() -> float:
-    return env_num("AGENTCTL_LAND_LEASE_TTL", LAND_LEASE_TTL)
+    return env_number("AGENTCTL_LAND_LEASE_TTL", LAND_LEASE_TTL)
 
 
 def knob_land_lock_timeout() -> float:
-    return env_num("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT)
+    return env_number("AGENTCTL_LAND_LOCK_TIMEOUT", LAND_LOCK_TIMEOUT)
 
 
 def knob_land_ref_sweep() -> float:
-    return env_num("AGENTCTL_LAND_REF_SWEEP", LAND_REF_SWEEP_EVERY)
+    return env_number("AGENTCTL_LAND_REF_SWEEP", LAND_REF_SWEEP_EVERY)
 
 
 def knob_land_ref_unknown_age() -> float:
-    return env_num("AGENTCTL_LAND_REF_UNKNOWN_AGE", LAND_REF_UNKNOWN_AGE)
+    return env_number("AGENTCTL_LAND_REF_UNKNOWN_AGE", LAND_REF_UNKNOWN_AGE)
 
 
 def knob_land_wait_report_min() -> float:
-    return env_num("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN)
+    return env_number("AGENTCTL_LAND_WAIT_REPORT_MIN", LAND_WAIT_REPORT_MIN)
 
 
 def knob_note_precheck_wait() -> float:
-    return env_num("AGENTCTL_NOTE_PRECHECK_WAIT", NOTE_PRECHECK_WAIT)
+    return env_number("AGENTCTL_NOTE_PRECHECK_WAIT", NOTE_PRECHECK_WAIT)
 
 
 def knob_push_batch_min() -> float:
-    return env_num("AGENTCTL_PUSH_BATCH_MIN", PUSH_BATCH_MIN)
+    return env_number("AGENTCTL_PUSH_BATCH_MIN", PUSH_BATCH_MIN)
 
 
 def knob_push_stall_secs() -> float:
-    return env_num("AGENTCTL_PUSH_STALL_SECS", PUSH_STALL_SECS)
+    return env_number("AGENTCTL_PUSH_STALL_SECS", PUSH_STALL_SECS)
 
 
 def knob_push_wall_min() -> float:
-    return env_num("AGENTCTL_PUSH_WALL_MIN", PUSH_WALL_MIN)
+    return env_number("AGENTCTL_PUSH_WALL_MIN", PUSH_WALL_MIN)
 
 
 def knob_regen_recovery_wait() -> float:
-    return env_num("AGENTCTL_REGEN_RECOVERY_WAIT", REGEN_RECOVERY_WAIT)
+    return env_number("AGENTCTL_REGEN_RECOVERY_WAIT", REGEN_RECOVERY_WAIT)
 
 
 def knob_unheld_grace() -> float:
-    return env_num("AGENTCTL_UNHELD_GRACE", UNHELD_GRACE)
+    return env_number("AGENTCTL_UNHELD_GRACE", UNHELD_GRACE)
 
 
 def knob_until_done_deadline() -> float:
-    return env_num("AGENTCTL_UNTIL_DONE_DEADLINE", UNTIL_DONE_DEADLINE)
+    return env_number("AGENTCTL_UNTIL_DONE_DEADLINE", UNTIL_DONE_DEADLINE)
 
 
 def knob_waiting_timeout() -> float:
-    return env_num("AGENTCTL_WAITING_TIMEOUT", WAITING_AWAIT_TIMEOUT)
+    return env_number("AGENTCTL_WAITING_TIMEOUT", WAITING_AWAIT_TIMEOUT)
 
 
 def knob_baseline() -> str:

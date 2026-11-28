@@ -9,7 +9,7 @@ from agentctl.statemachines import change_event
 from agentctl.clock import epoch_now
 from agentctl.timefmt import iso_at
 from agentctl.queueknobs import knob_infra_same_max
-from agentctl.core import err, host_role
+from agentctl.core import print_error, host_role
 from agentctl.repos import repo_of_waiting
 from agentctl.networksignatures import credential_failure, redact_credentials
 from agentctl.waitingdir import ChangeRecords, wlog
@@ -82,7 +82,7 @@ def requeue_condition(st: Any, d: str, e: dict[str, Any], why: str, reason: str,
         if n_same >= QUEUE_INFRA_RETRIES or age >= knob_infra_same_max():
             infra_requeue_condition(st, d, e, why, reason, n_same, age, detail, repo)
     except (Exception, SystemExit) as x:
-        err(f"{e['id']}: re-queued {n_same} times for {reason}, and its condition could not be opened ({str(x)[:160]})")
+        print_error(f"{e['id']}: re-queued {n_same} times for {reason}, and its condition could not be opened ({str(x)[:160]})")
 
 
 STALLED_REASON = "its checks stalled"

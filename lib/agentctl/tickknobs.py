@@ -1,7 +1,7 @@
 # agentctl, part `tickknobs`: the tick and upkeep knobs: the tick and its steps, upkeep, maintenance, cleanup, polls
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.knobread import env_num
+from agentctl.knobread import env_number
 from agentctl.knobread import env_text
 
 
@@ -14,11 +14,11 @@ STEP_BOUND = 120  # s one tick step may run before it is abandoned (the red tick
 
 
 def knob_tick() -> float:
-    return env_num("AGENTCTL_TICK", TICK)
+    return env_number("AGENTCTL_TICK", TICK)
 
 
 def knob_step_bound() -> float:
-    return env_num("AGENTCTL_STEP_BOUND", STEP_BOUND)
+    return env_number("AGENTCTL_STEP_BOUND", STEP_BOUND)
 
 
 # A CLEANUP IS BOUNDED PER TREE AND AS A WHOLE (2026-11-22: the upkeep's `cleanup --execute --no-remote` ran past its
@@ -137,75 +137,75 @@ DISPATCH_FIND_POLL = 5  # s between those polls ($AGENTCTL_DISPATCH_FIND_POLL)
 
 
 def knob_assign_bound() -> float:
-    return env_num("AGENTCTL_ASSIGN_BOUND", ASSIGN_BOUND)
+    return env_number("AGENTCTL_ASSIGN_BOUND", ASSIGN_BOUND)
 
 
 def knob_attach_poll() -> float:
-    return env_num("AGENTCTL_ATTACH_POLL", ATTACH_POLL)
+    return env_number("AGENTCTL_ATTACH_POLL", ATTACH_POLL)
 
 
 def knob_cache_expire_days() -> float:
-    return env_num("AGENTCTL_CACHE_EXPIRE_DAYS", CACHE_EXPIRE_DAYS)
+    return env_number("AGENTCTL_CACHE_EXPIRE_DAYS", CACHE_EXPIRE_DAYS)
 
 
 def knob_cleanup_item_timeout() -> float:
-    return env_num("AGENTCTL_CLEANUP_ITEM_TIMEOUT", CLEANUP_ITEM_TIMEOUT)
+    return env_number("AGENTCTL_CLEANUP_ITEM_TIMEOUT", CLEANUP_ITEM_TIMEOUT)
 
 
 def knob_cleanup_remove_reserve() -> float:
-    return env_num("AGENTCTL_CLEANUP_REMOVE_RESERVE", CLEANUP_REMOVE_RESERVE)
+    return env_number("AGENTCTL_CLEANUP_REMOVE_RESERVE", CLEANUP_REMOVE_RESERVE)
 
 
 def knob_dispatch_find() -> float:
-    return env_num("AGENTCTL_DISPATCH_FIND", DISPATCH_FIND)
+    return env_number("AGENTCTL_DISPATCH_FIND", DISPATCH_FIND)
 
 
 def knob_dispatch_find_poll() -> float:
-    return env_num("AGENTCTL_DISPATCH_FIND_POLL", DISPATCH_FIND_POLL)
+    return env_number("AGENTCTL_DISPATCH_FIND_POLL", DISPATCH_FIND_POLL)
 
 
 def knob_fetch_timeout() -> float:
-    return env_num("AGENTCTL_FETCH_TIMEOUT", FETCH_TIMEOUT)
+    return env_number("AGENTCTL_FETCH_TIMEOUT", FETCH_TIMEOUT)
 
 
 def knob_gate_publish() -> float:
-    return env_num("AGENTCTL_GATE_PUBLISH", GATE_PUBLISH)
+    return env_number("AGENTCTL_GATE_PUBLISH", GATE_PUBLISH)
 
 
 def knob_log_rotate_keep() -> float:
-    return env_num("AGENTCTL_LOG_ROTATE_KEEP", LOG_ROTATE_KEEP)
+    return env_number("AGENTCTL_LOG_ROTATE_KEEP", LOG_ROTATE_KEEP)
 
 
 def knob_log_rotate_max() -> float:
-    return env_num("AGENTCTL_LOG_ROTATE_MAX", LOG_ROTATE_MAX)
+    return env_number("AGENTCTL_LOG_ROTATE_MAX", LOG_ROTATE_MAX)
 
 
 def knob_min_interval() -> float:
-    return env_num("AGENTCTL_MIN_INTERVAL", MIN_INTERVAL)
+    return env_number("AGENTCTL_MIN_INTERVAL", MIN_INTERVAL)
 
 
 def knob_park_digest_days() -> float:
-    return env_num("AGENTCTL_PARK_DIGEST_DAYS", PARK_DIGEST_DAYS)
+    return env_number("AGENTCTL_PARK_DIGEST_DAYS", PARK_DIGEST_DAYS)
 
 
 def knob_restart_check() -> float:
-    return env_num("AGENTCTL_RESTART_CHECK", OWNERS_RESTART_CHECK)
+    return env_number("AGENTCTL_RESTART_CHECK", OWNERS_RESTART_CHECK)
 
 
 def knob_step_join() -> float:
-    return env_num("AGENTCTL_STEP_JOIN", STEP_JOIN)
+    return env_number("AGENTCTL_STEP_JOIN", STEP_JOIN)
 
 
 def knob_sweep_hour() -> float:
-    return env_num("AGENTCTL_SWEEP_HOUR", MAINTAIN_SWEEP_HOUR)
+    return env_number("AGENTCTL_SWEEP_HOUR", MAINTAIN_SWEEP_HOUR)
 
 
 def knob_sync_mirror() -> float:
-    return env_num("AGENTCTL_SYNC_MIRROR", SYNC_MIRROR_EVERY)
+    return env_number("AGENTCTL_SYNC_MIRROR", SYNC_MIRROR_EVERY)
 
 
 def knob_upkeep_every() -> float:
-    return env_num("AGENTCTL_UPKEEP_EVERY", UPKEEP_EVERY)
+    return env_number("AGENTCTL_UPKEEP_EVERY", UPKEEP_EVERY)
 
 
 def knob_launch_agents() -> str:

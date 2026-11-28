@@ -7,7 +7,7 @@ import re
 import subprocess
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import err, host_role
+from agentctl.core import print_error, host_role
 from agentctl.launchd import launchctl
 from agentctl.statefile import read_json_file, write_json_file
 from agentctl.store import StoreUnavailable
@@ -41,7 +41,7 @@ def launchctl_kick():
         return
     r = launchctl("kickstart", "-k", f"gui/{os.getuid()}/{TUNNEL_LABEL}", timeout=30)  # $AGENTCTL_LAUNCHCTL: the tests'
     if r.returncode == 124:
-        err(f"launchctl kickstart {TUNNEL_LABEL}: no answer in 30 s")
+        print_error(f"launchctl kickstart {TUNNEL_LABEL}: no answer in 30 s")
 
 
 TUNNEL_KICK_MIN_GAP = 60
@@ -83,7 +83,7 @@ def open_outage(store, kind, text, probe, on_recover, **kw):
     try:
         return open_condition(kind, text, probe, on_recover, store=store, **kw)
     except StoreUnavailable as e:
-        err(f"{kind}: the store did not answer, the condition is not recorded there ({str(e)[:120]})")
+        print_error(f"{kind}: the store did not answer, the condition is not recorded there ({str(e)[:120]})")
         return None
 
 
@@ -96,11 +96,11 @@ def network_watch(store, route=None, kick=None):
     if prev == "unseen" or r == prev:
         return ""
     if r is None:
-        err(f"the network went away (was {prev[0]} via {prev[1]})")
+        print_error(f"the network went away (was {prev[0]} via {prev[1]})")
         open_outage(store, "NETWORK", f"NETWORK: offline (no default route; was {prev[0]} via {prev[1]})", run_probe(probe_route),
                        [("tunnel_reset", {})], key="network-offline", inbox=False)  # the kick: below, on the way back
         return "offline"
-    err(f"the network {'is back' if prev is None else 'changed'} ({prev[0] if prev else '-'} via {prev[1] if prev else '-'} -> "
+    print_error(f"the network {'is back' if prev is None else 'changed'} ({prev[0] if prev else '-'} via {prev[1] if prev else '-'} -> "
         f"{r[0]} via {r[1]}): "
         f"kickstarting {TUNNEL_LABEL}, the gate is read at once")
     (kick or launchctl_kick)()
@@ -108,7 +108,7 @@ def network_watch(store, route=None, kick=None):
     try:
         recovery_recheck_all(store)  # a new route: every open condition is probed again now, its backoff reset
     except StoreUnavailable as e:  # the tunnel is not back yet: the next tick's probes run on their own schedule
-        err(f"the store did not answer the recheck ({str(e)[:120]})")
+        print_error(f"the store did not answer the recheck ({str(e)[:120]})")
     mark_gate_dirty()
     return "changed"
 
@@ -141,7 +141,7 @@ class TunnelCycle:
         st = self.st
         was_down = bool(st.get("pending_since") or st.get("network"))
         if was_down:
-            err("the tunnel answers again: the gate is read at once")
+            print_error("the tunnel answers again: the gate is read at once")
             mark_gate_dirty()  # the status line leaves `gate UNREAD` at the next duties tick, not at the 45 s mark
         if st.get("fails") or was_down:
             st.update(fails=0, pending_since=None, escalated=False, network=False)
@@ -155,7 +155,7 @@ class TunnelCycle:
         if not st.get("network"):
             msg = (f"NETWORK: the laptop's uplink loses {int(loss * 100)}% of packets to 1.1.1.1, so the tunnel (localhost:{tunnel_ports()[0][0]}) "
                    f"{self.r}s; not a tunnel fault, nothing to restart -- the gate reads come back with the network")
-            err(msg)
+            print_error(msg)
             open_outage(self.store, "NETWORK", msg, self.res or run_probe(probe_tunnel), [("tunnel_reset", {})], key="tunnel",
                         command="tunnel")
         st.update(network=True, pending_since=None, escalated=False)  # the kick/escalation clock starts on a good uplink
@@ -168,7 +168,7 @@ class TunnelCycle:
         st = self.st
         if st["fails"] < 2 or self.t - st.get("last_kick", 0) < TUNNEL_KICK_MIN_GAP:
             return "down"
-        err(f"the tunnel {self.r} {st['fails']} probes in a row; kickstarting {TUNNEL_LABEL}")
+        print_error(f"the tunnel {self.r} {st['fails']} probes in a row; kickstarting {TUNNEL_LABEL}")
         (self.kick or launchctl_kick)()
         st["last_kick"] = self.t
         st["pending_since"] = st.get("pending_since") or self.t

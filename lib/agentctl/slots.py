@@ -14,7 +14,7 @@ from typing import Any
 from agentctl.clock import epoch_now
 from agentctl.ids import stamp
 from agentctl.timefmt import ts
-from agentctl.core import branch_of, err, git, remote
+from agentctl.core import branch_of, print_error, git, remote
 from agentctl.networksignatures import TRANSIENT_PUSH, is_transient_network
 from agentctl.netretry import net_run
 from agentctl.repos import precheck_hook, slug, waiting_supported
@@ -88,7 +88,7 @@ class Stash:
         if r.returncode != 0:
             r = git(self.repo, "stash", "apply", self.sha, check=False)
         if r.returncode != 0:
-            err(f"could not re-apply stash {self.name} ({self.sha[:10]}): {r.stderr.strip()[:200]}; it is kept: "
+            print_error(f"could not re-apply stash {self.name} ({self.sha[:10]}): {r.stderr.strip()[:200]}; it is kept: "
                 f"`git stash list | grep {self.name}`")
             return False
         for i, line in enumerate(git(self.repo, "stash", "list", "--format=%H").splitlines()):
@@ -148,7 +148,7 @@ def land_start_refusal(a: Any) -> Any:
     """The exit code of a land that must not start (its verdict printed), or None."""
     shared = (getattr(a, "until_done", False) or getattr(a, "follow", False)) and output_file_shared(sys.stdout)
     if shared:
-        err(f"land did not start: another running land writes its output file {shared}, so their verdicts would mix "
+        print_error(f"land did not start: another running land writes its output file {shared}, so their verdicts would mix "
             "(2026-11-18). Run it again into a file of its own -- best, no redirect at all: the Bash tool's "
             "run_in_background output is the task's own")
         return LAND_SHARED_OUTPUT
@@ -217,7 +217,7 @@ def land_in_worktree(repo, a, clock, store, *, ctx):
         if dirty:
             stash = Stash(repo)
             stash.save()
-            err(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
+            print_error(f"stashed local changes as {stash.name} ({stash.sha[:10]})")
         queued = land_queued(repo, main_ref, sh, a, clock, store, ctx=ctx)
         if queued is not None:
             return queued
@@ -276,7 +276,7 @@ def land_rounds(repo: str, main_ref: Any, sh: Any, log_path: Any, a: Any, clock:
             rc = land_loop(repo, main_ref, sh, log_path, a, clock, store, ctx=ctx)
         if rc != MAIN_MOVED:
             break
-        err(f"{remote()}/main moved since the check: checking again on it, outside the lock")
+        print_error(f"{remote()}/main moved since the check: checking again on it, outside the lock")
     return rc
 
 
@@ -366,7 +366,7 @@ def land_synced(repo: str, main_ref: Any, sh: Any, a: Any, clock: Any, store: An
 
 def land_push(repo: str, main_ref: Any, log_path: Any, a: Any, clock: Any, store: Any, attempt: Any, head: str, *, ctx: Context) -> Any:
     """One push of head to main, its output appended to the land log: land's exit code, or PUSH_AGAIN."""
-    err(f"pushing {head[:10]} to {remote()}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
+    print_error(f"pushing {head[:10]} to {remote()}/main (attempt {attempt + 1}/{LAND_RETRIES + 1}; hook log: {log_path})")
     lock_note(f"push of {head[:10]}")
     a.pushed_at = clock.time()
     rc, out = run_watched(push_argv(remote(), head), repo, tool_env(), log_path, "push", **push_bounds())
@@ -423,7 +423,7 @@ def push_refused_verdict(repo: str, log_path: Any, clock: Any, store: Any, attem
     fault leaves attempts, else refused."""
     race = RACE.search(out)
     if race and attempt < LAND_RETRIES:
-        err(f"push race ({race.group(0)}): refetch, rebase, retry")
+        print_error(f"push race ({race.group(0)}): refetch, rebase, retry")
         clock.sleep(min(30, 2 + 3 * attempt))
         return PUSH_AGAIN
     if race and not REDGATE.search(out):
@@ -431,7 +431,7 @@ def push_refused_verdict(repo: str, log_path: Any, clock: Any, store: Any, attem
         return 1
     remote_fault = TRANSIENT_PUSH.search(out or "")
     if remote_fault and attempt < LAND_RETRIES:  # the remote's (or the network's) fault: retried, never the change's
-        err(f"push failed remote-side ({remote_fault.group(0)}): retry")
+        print_error(f"push failed remote-side ({remote_fault.group(0)}): retry")
         clock.sleep(min(60, 5 + 10 * attempt))
         return PUSH_AGAIN
     return refused(store, repo, out, log_path, f"the push failed remote-side ({remote_fault.group(0)}), {LAND_RETRIES} "

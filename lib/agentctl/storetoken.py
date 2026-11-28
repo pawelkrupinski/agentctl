@@ -12,7 +12,7 @@ from agentctl.clock import epoch_now
 from agentctl.storeknobs import TOKEN_MISSING_SUMMARY, knob_sock_dir, knob_token_summary
 from agentctl.blameknobs import knob_no_secrets
 from agentctl.fixerknobs import knob_detached, knob_interactive
-from agentctl.core import HOME, _tokens, err, on_ci_runner, process_cache, run_cmd
+from agentctl.core import HOME, _tokens, print_error, on_ci_runner, process_cache, run_cmd
 from agentctl.tokenerrors import NoReadAccess, NoToken
 from agentctl.ghapp import ghapp_config, ghapp_enabled, ghapp_token
 from agentctl.repos import movies_repo_path, slug
@@ -104,7 +104,7 @@ def seed_processor(tok: str) -> None:
         if os.path.exists(path):
             hand_token(path, tok)
     except (Exception, SystemExit) as e:
-        err(f"the processor was not handed the token ({str(e)[:160]})")
+        print_error(f"the processor was not handed the token ({str(e)[:160]})")
 
 
 def token_request(path, timeout=3):
@@ -239,7 +239,7 @@ def token_missing(ns, why, now_=None):
                f"{fmt_age(t - m['since'])} since it went ({why})"
         m["said"], m["note"] = t, why  # the condition again, in case the first note could not be written
     if not interactive_foreground():  # a foreground command prints its NoToken itself: the log is the long-lived ones'
-        err(line)
+        print_error(line)
     return line
 
 
@@ -247,7 +247,7 @@ def token_back(ns):
     """The token is there again: said once, when it had been missing."""
     m = _token_missing.pop(ns, None)
     if m:
-        err(f"the {ns} token is back ({m['reads']} read(s) failed while it was missing)")
+        print_error(f"the {ns} token is back ({m['reads']} read(s) failed while it was missing)")
 
 
 def detached_env(repo):
@@ -268,13 +268,13 @@ def token_env(o_r, env=None):
         try:
             env["GH_TOKEN"] = ghapp_token(o_r)
         except (Exception, SystemExit) as e:
-            err(f"no GitHub App token for {o_r} ({str(e)[:160]}); the command runs on its own auth")
+            print_error(f"no GitHub App token for {o_r} ({str(e)[:160]}); the command runs on its own auth")
     elif store_credential(o_r):
         with no_vault():
             try:
                 env[token_env_name(o_r)] = token(o_r)
             except (Exception, SystemExit) as e:
-                err(f"no token for {o_r} ({str(e)[:160]}); the command runs on its own auth")
+                print_error(f"no token for {o_r} ({str(e)[:160]}); the command runs on its own auth")
     return env
 
 

@@ -10,7 +10,7 @@ from agentctl.statefile import mtime, read_record, read_text_or, unlink_file, wr
 from agentctl.clock import wall_epoch
 from agentctl.filelock import FileLock
 from agentctl.timefmt import ts
-from agentctl.core import _bounded, err, git, pid_alive, remote
+from agentctl.core import _bounded, print_error, git, pid_alive, remote
 from agentctl.repos import precheck_hook
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.fixerrecords import fixer_records
@@ -104,7 +104,7 @@ def _recheck_guarded(repo, main, machine):
         finally:
             lock.release()
     except (Exception, SystemExit) as e:
-        err(f"local recheck: skipped ({str(e).replace('agentctl: ', '')[:200]})")
+        print_error(f"local recheck: skipped ({str(e).replace('agentctl: ', '')[:200]})")
         return []
 
 
@@ -151,7 +151,7 @@ def _recheck_in_tree(repo, main, hook, tree, base, synth, failing, machine):
     log_path = reds_dir("local", "recheck.log")
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     tree_hook = os.path.join(tree, os.path.relpath(hook, repo))
-    err(f"local checks were recorded on an older main: rechecking {', '.join(failing)} on {remote()}/main {main[:10]}")
+    print_error(f"local checks were recorded on an older main: rechecking {', '.join(failing)} on {remote()}/main {main[:10]}")
     with check_slot(repo, f"local recheck {main[:10]}", "check", machine=machine) as slot:
         env = {**slot.env(tool_env()), "PREPUSH_BASELINE_DIR": "",
                "PREPUSH_SKIP": " ".join(c for c in hook_checks(tree_hook) if c not in failing)}

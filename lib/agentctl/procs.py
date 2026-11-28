@@ -17,7 +17,7 @@ def process_start(pid: int) -> str:
     return str(r.stdout).strip()
 
 
-def proc_alive(pid: Any, start: Any = None) -> bool:
+def process_alive(pid: Any, start: Any = None) -> bool:
     if not pid or not pid_alive(int(pid)):
         return False
     r = run_cmd(["ps", "-o", "stat=", "-p", str(int(pid))])
@@ -30,7 +30,7 @@ def proc_alive(pid: Any, start: Any = None) -> bool:
 def record_alive(rec: Any) -> bool:
     """The process a record names (its `pid`, and `process_start` when it has one) is running: the ONE reading of a
     fixer, owner, dispatch or probe record's liveness."""
-    return proc_alive(rec.get("pid"), rec.get("process_start"))
+    return process_alive(rec.get("pid"), rec.get("process_start"))
 
 
 # ---------------------------------------------------------------- orphans
@@ -70,7 +70,7 @@ class Terminated(SystemExit):
 PROC_ROOT = "/proc"  # Linux: every process's cwd is <PROC_ROOT>/<pid>/cwd
 
 
-def _proc_cwds(pids: Any) -> dict[int, str]:
+def _process_cwds(pids: Any) -> dict[int, str]:
     res: dict[int, str] = {}
     for pid in pids:
         try:
@@ -88,7 +88,7 @@ def lsof_cwds(pids: Any) -> dict[int, str]:
     `lsof -a -p <pids> -d cwd` (always pid-scoped)."""
     pids = [int(x) for x in pids]
     if os.path.isdir(os.path.join(PROC_ROOT, "self")):
-        return _proc_cwds(pids)
+        return _process_cwds(pids)
     res = {}
     for i in range(0, len(pids), 200):
         r = run_cmd(["lsof", "-nP", "-a", "-p", ",".join(map(str, pids[i:i + 200])), "-d", "cwd", "-Fpn"])

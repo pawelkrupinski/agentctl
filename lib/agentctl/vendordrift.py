@@ -19,7 +19,7 @@ import os
 import subprocess
 from typing import Any, Callable
 
-from agentctl.core import err, pid_alive, run_cmd, spawn_detached
+from agentctl.core import print_error, pid_alive, run_cmd, spawn_detached
 from agentctl.repos import bin_repo
 from agentctl.statefile import read_json_file, unlink_file, write_json
 from agentctl.conditions import open_condition, run_probe
@@ -113,4 +113,4 @@ def vendor_drift_step(store: Any, check: Callable[[dict[str, Any]], tuple[bool |
             f"change to adapt: {why}")
     c = open_condition(VENDOR_DRIFT_KIND, text, probe, [], key=VENDOR_DRIFT_KEY, inbox=False, store=store, grace=0)
     if c:
-        err(text)
+        print_error(text)

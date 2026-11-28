@@ -9,7 +9,7 @@ import os
 from agentctl.statefile import load_record
 from agentctl.selfcode import TOOL_PATH
 from agentctl.redknobs import knob_red_families
-from agentctl.core import err, git, git_ok, process_cache, remote, run_cmd
+from agentctl.core import print_error, git, git_ok, process_cache, remote, run_cmd
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.classify import norm_line
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_conf, red_repo_of, red_repo_short
@@ -151,7 +151,7 @@ def load_families(path: str) -> list[dict[str, Any]]:
         fams = load_record(path).get("families") or []
         return [dict(x, _jobs=[re.compile(j) for j in x.get("jobs") or []]) for x in fams if x.get("name")]
     except (OSError, ValueError, re.error) as e:
-        err(f"red families: {path} unreadable ({e}): none apply")
+        print_error(f"red families: {path} unreadable ({e}): none apply")
         return []
 
 

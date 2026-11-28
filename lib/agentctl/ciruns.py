@@ -5,7 +5,7 @@
 import re
 from typing import Any, Callable
 from agentctl.clock import epoch_now
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.forge import RUN_FIELDS, gh_json
 
 Run = dict[str, Any]  # a workflow run as gh lists it (RUN_FIELDS)
@@ -109,7 +109,7 @@ class CiRuns:
         """Said once per repository and workflow file per process, not every cycle."""
         if (o_r, wfile) not in self._not_on_main_said:
             self._not_on_main_said.add((o_r, wfile))
-            err(f"{wfile} is not on main yet: no run of it gates anything until it lands")
+            print_error(f"{wfile} is not on main yet: no run of it gates anything until it lands")
 
     def recent_main(self, o_r: str, limit: int) -> list[Run]:
         """Main's newest `limit` runs across every workflow, newest first."""

@@ -64,7 +64,7 @@ class AlertRouteTest(unittest.TestCase):
         case.fake("lease_is_live", lambda rng, row, t: rng.random() < 0.4)
         case.fake("red_family", lambda rng, d: maybe(rng, "fam", 0.5))
         case.fake("owner_alive", lambda rng, st, fam, t: rng.random() < 0.4)
-        case.fake("env_num", lambda rng, name, default: rng.choice([default, 1, 3]))
+        case.fake("env_number", lambda rng, name, default: rng.choice([default, 1, 3]))
         states = list(A.MACHINES["red"]) + ["bogus"]
         red = maybe(r, {"id": "r1", "state": r.choice(states), "level": r.choice([None, 0, 1, 2, 3]),
                         "data": maybe(r, {"key": r.choice([None, "k"])}, 0.7)}, 0.5)
@@ -104,7 +104,7 @@ class StatusAgentsTest(unittest.TestCase):
         case.fake("status_fixer_records", lambda rng, t: recs)
         case.fake("status_enrich_all", lambda rng, agents: agents)
         case.fake("live_annotate", lambda rng, out, t: raising(rng, 0.2, list(reversed(out)), lambda m: RuntimeError(m * 100)))
-        case.fake("err", lambda rng, m: None)
+        case.fake("print_error", lambda rng, m: None)
         case.put("STATUS_AGENTS_MAX", r.choice([2, 16]))
         st = Probe(case, "st", list=lambda rng, prefix: rows)
         return (st, NOW, maybe(r, recs, 0.4))[:r.choice([2, 3, 3])]
@@ -147,10 +147,10 @@ class AwaitEntryTest(unittest.TestCase):
 
         def sleep(secs):
             clock["now"] += secs
-        case.fake("env_num", lambda rng, name, default: rng.choice([15, 30, 200, 900]))
+        case.fake("env_number", lambda rng, name, default: rng.choice([15, 30, 200, 900]))
         case.fake("spawn_waiting_processor", lambda rng, repo: None)
         case.fake("restart_if_changed", lambda rng, owned: None)
-        case.fake("err", lambda rng, m: None)
+        case.fake("print_error", lambda rng, m: None)
         states = ["queued", "checking", "checked", "waiting", "pushing", "landed", "rejected", "superseded", "cancelled", "bogus"]
 
         def item(rng, typ, eid):
@@ -239,7 +239,7 @@ class LanderRecordsTest(unittest.TestCase):
                                                                 ("repo", lambda: rng.choice(["o/a", "o/b", None])), ("change", lambda: "c"),
                                                                 ("landed_commits", lambda: {"s": "p"}), ("worktree", lambda: "/w"),
                                                                 ("branch", lambda: "b")) if rng.random() < 0.6}, 0.9)} for i in range(rng.randint(0, 3))]
-        case.fake("err", lambda rng, m: None)
+        case.fake("print_error", lambda rng, m: None)
         return (Probe(case, "store", items=items), r.choice([None, "o/a", "o/b"]))[:r.choice([1, 2, 2])]
 
     def test_lander_records(self):
@@ -273,7 +273,7 @@ class RedJoinedIdleTest(unittest.TestCase):
         r = case.rng
         case.fake("red_joined_progress", lambda rng, store, row, why: None)
         case.fake("red_fixes_red_commits", lambda rng, wt, names: rng.choice([None, "a" * 40]))
-        case.fake("env_num", lambda rng, name, default: rng.choice([default, 100, 5000]))
+        case.fake("env_number", lambda rng, name, default: rng.choice([default, 100, 5000]))
         meta = {k: g() for k, g in (("joined_at", lambda: r.choice([NOW - 10, NOW - 100, NOW - 500, NOW - 4000, NOW - 5000, 0])), ("progressed", lambda: r.choice([True, False])),
                                     ("worktree", lambda: "/w")) if r.random() < 0.85}
         row = {"item": r.choice(["red:r1", "", None, "r1"]), "holder": "h", "meta": json.dumps(meta)}
@@ -304,7 +304,7 @@ class RedSpawnTest(unittest.TestCase):
         case.fake("red_revert", lambda rng, o_r, repo, u, culprit: (rng.random() < 0.5, "reverted"))
         case.fake("red_dispatch", lambda rng, *a, **k: (True, "dispatched"))
         case.fake("ts", lambda rng: "T")
-        case.fake("env_num", lambda rng, n, d: d)
+        case.fake("env_number", lambda rng, n, d: d)
         case.fake("red_what", lambda rng, pic: "what")
         pic = {k: g() for k, g in (
             ("workflow", lambda: "W"), ("key", lambda: "k"), ("job", lambda: r.choice([None, "j"])), ("jobs", lambda: ["a"]), ("kind", lambda: r.choice([None, "test"])),

@@ -8,7 +8,7 @@ import time
 from typing import Any, Iterable
 from agentctl.procrunner import process_runner
 from agentctl.statefile import read_text_or
-from agentctl.core import err, git, git_ok
+from agentctl.core import print_error, git, git_ok
 from agentctl.gitrepo import commit_known
 from agentctl.repos import precheck_hook
 from agentctl.land import tool_env
@@ -95,7 +95,7 @@ def hook_query(hook, tree, flag, paths):
         r = process_runner().run([hook, flag], cwd=tree, input="".join(f"{p}\n" for p in paths), capture_output=True,
                            text=True, timeout=120, env=tool_env())
     except (OSError, subprocess.TimeoutExpired) as e:
-        err(f"hook {flag}: unreadable ({str(e)[:160]})")
+        print_error(f"hook {flag}: unreadable ({str(e)[:160]})")
         return None
     return r.stdout.split() if r.returncode == 0 else None
 

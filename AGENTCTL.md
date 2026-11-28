@@ -3471,7 +3471,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `wm_max` | `AGENTCTL_WM_MAX` | `2700` | maintain's last pass (launchd every 15 min) |
 | `wp_rss_by_name` | `AGENTCTL_WP_RSS_BY_NAME` | `idea=8` | comma list of name=GB: the RSS limit of the process of that name, others WP_RSS_GB (IntelliJ's JVM sits at 4-5 GB) |
 | `wr_max` | `AGENTCTL_WR_MAX` | `2400` | a red fix still unlanded this long after it was queued ($AGENTCTL_WR_MAX; a CI-tier check ~17 min) |
-| `x` | `AGENTCTL_X` | `DEFAULT` | The knobs are what the code reads: each `env_num("AGENTCTL_X", DEFAULT)` and `os.environ.get("AGENTCTL_X", DEFAULT)` |
+| `x` | `AGENTCTL_X` | `DEFAULT` | The knobs are what the code reads: each `env_number("AGENTCTL_X", DEFAULT)` and `os.environ.get("AGENTCTL_X", DEFAULT)` |
 
 <!-- end of the generated config reference -->
 

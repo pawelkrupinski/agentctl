@@ -65,7 +65,7 @@ MONGOD_CACHE_CONF = re.compile(r"^\s*cacheSizeGB\s*:\s*([\d.]+)", re.M)
 ProcRow = tuple[int, int, int, float, str]  # (pid, ppid, rss KB, %cpu, command name)
 
 
-def proc_rows(machine: MachineProbe) -> list[ProcRow]:
+def watched_process_rows(machine: MachineProbe) -> list[ProcRow]:
     """[(pid, ppid, rss KB, %cpu, command name)] of every process of the machine."""
     found = machine.process_rows(("pid", "ppid", "rss", "pcpu", "comm"))
     return [(r.pid, r.ppid, r.rss, r.pcpu, os.path.basename(r.comm)) for r in found]
@@ -150,13 +150,13 @@ def ceiling_kind(name: str) -> Optional[Callable[[str, float, str], Optional[tup
     return next((read for kind, read in CEILINGS if kind.match(name)), None)
 
 
-def proc_ceiling(name: str, args: str, ram: float, home: str) -> Optional[tuple[int, str]]:
+def process_ceiling(name: str, args: str, ram: float, home: str) -> Optional[tuple[int, str]]:
     """(KB, what it is) of the memory ceiling a process of `name` run with `args` sets itself, or None (CEILINGS)."""
     read = ceiling_kind(name)
     return read(args, ram, home) if read else None
 
 
-def proc_args(machine: MachineProbe, pid: int) -> str:
+def process_args(machine: MachineProbe, pid: int) -> str:
     """The process's command line (ps), or ''."""
     return " ".join(r.args for r in machine.process_rows(("args",), pids=(pid,), wide=True)).strip()
 
@@ -213,7 +213,7 @@ def _growing(rss: list[list[float]]) -> bool:
     return mid[1] - rss[0][1] >= step and rss[-1][1] - mid[1] >= step
 
 
-def _proc_finding(p: dict[str, Any], now_: float, ticket: Optional[dict[str, Any]]) -> Optional[str]:
+def _process_finding(p: dict[str, Any], now_: float, ticket: Optional[dict[str, Any]]) -> Optional[str]:
     """Why kept process record `p` is a runaway now, or None."""
     rss = p["rss"]
     limit, past, _cpu = _limits(p, ticket)
@@ -235,7 +235,7 @@ def _keep_rss(kept: list[list[float]], rss: int, now_: float) -> list[list[float
     return [s for s in kept if now_ - s[0] <= WP_WINDOW_MIN * 60] + [[now_, rss]]
 
 
-def _proc_sample(state: dict[str, Any], row: ProcRow, now_: float, ticket: Optional[dict[str, Any]],
+def _process_sample(state: dict[str, Any], row: ProcRow, now_: float, ticket: Optional[dict[str, Any]],
                  ceiling_of: Callable[[int, str], Optional[tuple[int, str]]]) -> dict[str, Any]:
     """Process pid's kept record moved on by one sample (a new one when the pid now runs another command)."""
     pid, _ppid, rss, cpu, name = row
@@ -251,17 +251,17 @@ def _proc_sample(state: dict[str, Any], row: ProcRow, now_: float, ticket: Optio
     return p
 
 
-def proc_watch(rows: list[ProcRow], state: dict[str, Any], now_: float, tickets: Optional[list[dict[str, Any]]] = None,
+def process_watch(rows: list[ProcRow], state: dict[str, Any], now_: float, tickets: Optional[list[dict[str, Any]]] = None,
                ceiling_of: Optional[Callable[[int, str], Optional[tuple[int, str]]]] = None) -> list[tuple[int, str, str]]:
     """The kept samples `state` ({pid: record}) moved on by `rows`; [(pid, name, why)] of the runaways now. `tickets`:
-    the live governor tickets; `ceiling_of`: a process's own memory ceiling (proc_ceiling), by pid and name."""
+    the live governor tickets; `ceiling_of`: a process's own memory ceiling (process_ceiling), by pid and name."""
     ppids = {pid: ppid for pid, ppid, *_ in rows}
     seen, found = set(), []
     for row in rows:
         seen.add(str(row[0]))
         ticket = _ticket_of(row[0], ppids, tickets or [])
-        p = _proc_sample(state, row, now_, ticket, ceiling_of or no_ceiling)
-        why = _proc_finding(p, now_, ticket)
+        p = _process_sample(state, row, now_, ticket, ceiling_of or no_ceiling)
+        why = _process_finding(p, now_, ticket)
         if why:
             found.append((row[0], row[4], why))
     for key in set(state) - seen:  # a process gone: its episode with it
@@ -269,7 +269,7 @@ def proc_watch(rows: list[ProcRow], state: dict[str, Any], now_: float, tickets:
     return found
 
 
-def proc_cwd(pid: int) -> Optional[str]:
+def process_cwd(pid: int) -> Optional[str]:
     """The process's working directory (lsof), or None."""
     try:
         out = run_cmd(["lsof", "-a", "-p", str(pid), "-d", "cwd", "-Fn"], timeout=10).stdout
@@ -278,11 +278,11 @@ def proc_cwd(pid: int) -> Optional[str]:
     return next((l[1:] for l in out.splitlines() if l.startswith("n")), None)
 
 
-def proc_fix(pid: int, name: str, cwd_of: Optional[Callable[[int], Optional[str]]] = None) -> str:
+def process_fix(pid: int, name: str, cwd_of: Optional[Callable[[int], Optional[str]]] = None) -> str:
     """What to do about runaway `name`: a system daemon's owner fix, or one of ours named by where it runs."""
     if name in SYSTEM_FIXES:
         return SYSTEM_FIXES[name]
-    cwd = (cwd_of or proc_cwd)(pid) if OURS.match(name) else None
+    cwd = (cwd_of or process_cwd)(pid) if OURS.match(name) else None
     ours = tuple(os.path.join(HOME, d) for d in ("projects", "bitcashier", "bin")) + ("/private/tmp", "/tmp")
     if cwd and cwd.startswith(ours):
         return f"ours: it runs in {tilde(cwd)} (that worktree's session: `agentctl status`, `agentctl orphans`)"
@@ -290,9 +290,9 @@ def proc_fix(pid: int, name: str, cwd_of: Optional[Callable[[int], Optional[str]
 
 
 def ceilings_of(machine: MachineProbe, home: str) -> Callable[[int, str], Optional[tuple[int, str]]]:
-    """A process's memory ceiling by pid and name (proc_ceiling): from its command line, the machine's RAM and `home`."""
+    """A process's memory ceiling by pid and name (process_ceiling): from its command line, the machine's RAM and `home`."""
     gb = machine.ram_gb()
-    return lambda pid, name: proc_ceiling(name, proc_args(machine, pid), gb, home)
+    return lambda pid, name: process_ceiling(name, process_args(machine, pid), gb, home)
 
 
 def inv_wp(machine: MachineProbe, now_: Optional[float] = None, state_path: Optional[str] = None,
@@ -306,7 +306,7 @@ def inv_wp(machine: MachineProbe, now_: Optional[float] = None, state_path: Opti
     a VM's config)."""
     path, t = state_path or state_root("procwatch.json"), now_ if now_ is not None else epoch_now()
     state = read_record(path) or {}
-    found = proc_watch(proc_rows(machine), state, t, list(tickets),
+    found = process_watch(watched_process_rows(machine), state, t, list(tickets),
                        ceilings_of(machine, home))
     try:
         write_json(path, state)
@@ -314,7 +314,7 @@ def inv_wp(machine: MachineProbe, now_: Optional[float] = None, state_path: Opti
         note_failure("process watch state not written", e)
     if not found:
         return True, "no runaway process"
-    return False, "; ".join(f"{name} pid {pid}: {why} -- {proc_fix(pid, name, cwd_of)}" for pid, name, why in found[:5])
+    return False, "; ".join(f"{name} pid {pid}: {why} -- {process_fix(pid, name, cwd_of)}" for pid, name, why in found[:5])
 
 
 def inv_wp_live(machine: MachineProbe, now_: float) -> tuple[bool, str]:

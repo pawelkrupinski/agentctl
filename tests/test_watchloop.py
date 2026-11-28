@@ -69,7 +69,7 @@ def run_watch(module, script):
     with contextlib.ExitStack() as stack:
         for name, fake in {
             "watch_look": watch_look, "watch_verdict": watch_verdict,
-            "err": lambda text: log.append(f"err {text}"),
+            "print_error": lambda text: log.append(f"err {text}"),
             "ci_why": lambda o_r, n, repo=None, store=None, ctx=None: log.append(f"ci_why {o_r} {n}") or (0, "THE WHY"),
             "restart_if_changed": lambda owners: log.append(f"restart {owners}"),
             "iso_at": lambda t: t - 1000.0, "age_since": lambda t: f"{t:g}s after the start",

@@ -170,8 +170,8 @@ class WatchGroupTest(unittest.TestCase):
         def cpu_of(rng, pid):
             cpu[0] += rng.choice([0, 0.1, 5, 40])
             return cpu[0]
-        case.fake("env_num", lambda rng, name, default: rng.choice([0.5, 1, default]))
-        case.fake("err", lambda rng, m: None)
+        case.fake("env_number", lambda rng, name, default: rng.choice([0.5, 1, default]))
+        case.fake("print_error", lambda rng, m: None)
         case.fake("watch_lease_loss", lambda rng, step, size, cpu, polls, quiet: rng.choice([None, None, None, "lease lost"]))
         case.fake("_end_group", lambda rng, p: None)
         case.patch(os.path, "getsize", size)
@@ -330,7 +330,7 @@ class LiveStateTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
         case.fake("epoch_now", lambda rng: NOW)
-        case.fake("proc_alive", lambda rng, pid, start: raising(rng, 0.2, rng.choice([True, False, None]), rng.choice([RuntimeError, SystemExit])))
+        case.fake("process_alive", lambda rng, pid, start: raising(rng, 0.2, rng.choice([True, False, None]), rng.choice([RuntimeError, SystemExit])))
         e = {k: v for k, v in {"ended": r.choice([None, 1]), "rc": r.choice([None, 0, 1]), "verdict": r.choice([None, "v"]),
                                "pid": r.choice([None, 0, 12]), "process_start": r.choice([None, 5]), "finished": r.choice([None, True])}.items()
              if r.random() < 0.8}
@@ -357,7 +357,7 @@ class LaptopRoleTest(unittest.TestCase):
         case.fake("laptop_role_holder", lambda rng: "me")
         case.fake("role_host", lambda rng: "host")
         case.fake("machine_id", lambda rng: "mid")
-        pure(case, "env_num", lambda n, d: d)
+        pure(case, "env_number", lambda n, d: d)
         pure(case, "laptop_role_path", lambda: "/state/laptop-role.json")
         mine = r.choice([None, {}, {"epoch": 1}, {"epoch": 2, "secret": "z"}])
         pure(case, "read_record", lambda p: mine)
@@ -466,8 +466,8 @@ class SyncStepsTest(unittest.TestCase):
             fn()
             return case.rng.random() < 0.8
         unrecorded(case, "run_bounded", run_bounded)
-        case.fake("err", lambda rng, m: None)
-        case.fake("env_num", lambda rng, n, d: rng.choice([0, d]))
+        case.fake("print_error", lambda rng, m: None)
+        case.fake("env_number", lambda rng, n, d: rng.choice([0, d]))
         case.fake("reds_dir", lambda rng, *a: "/reds/" + "/".join(a))
         case.patch(os.path, "exists", lambda rng, p: rng.random() < 0.4)
         t = [100.0]
@@ -505,7 +505,7 @@ class StatusPageStartTest(unittest.TestCase):
         raw(case, os, "environ", env)
         case.fake("port_open", lambda rng, port, timeout=0.5: rng.random() < 0.4)
         case.fake("status_page_server", lambda rng, host, port: raising(rng, 0.3, Probe(case, "srv"), rng.choice([OSError, ValueError])))
-        case.fake("err", lambda rng, m: None)
+        case.fake("print_error", lambda rng, m: None)
         case.fake("write_json", lambda rng, p, d: raising(rng, 0.2, None, OSError))
         case.fake("status_page_file", lambda rng: "/state/status-page.json")
         case.patch(os, "getpid", lambda rng: 4242)
@@ -565,7 +565,7 @@ class RunLocalRecheckTest(unittest.TestCase):
         pure(case, "pid_alive", lambda pid: pid % 2 == 0)
         case.fake("mark_internal", lambda rng, t: t)
         case.fake("reds_dir", lambda rng, *a: "/reds/" + "/".join(a))
-        case.fake("err", lambda rng, m: None)
+        case.fake("print_error", lambda rng, m: None)
         case.fake("hook_checks", lambda rng, h: ["c0", "c1", "other"])
         case.fake("tool_env", lambda rng: {"E": "1"})
         case.fake("check_slot", lambda rng, repo, label, cls: Slot(case))
@@ -587,7 +587,7 @@ class BgSpentTest(unittest.TestCase):
         rows = [r.choice([{"kind": r.choice(["background", "x"]), "name": r.choice(names), "id": r.choice(["", "b1", "b2", None]),
                            "sessionId": r.choice([None, "b1xyz", "q"]), "startedAt": r.choice([None, 0, (NOW - 50) * 1000, (NOW - 9000) * 1000, (NOW - A.BG_SPENT_GRACE) * 1000])},
                           "junk", None]) for _ in range(r.randint(0, 6))]
-        case.fake("env_num", lambda rng, n, d: rng.choice([d, 0, 99999]))
+        case.fake("env_number", lambda rng, n, d: rng.choice([d, 0, 99999]))
         case.fake("bg_waiting", lambda rng, x: rng.random() < 0.6)
         return (rows, set(r.sample(["b1", "b2", "b3"], r.randint(0, 2))), NOW)
 
@@ -608,7 +608,7 @@ class RefreshPinnedTest(unittest.TestCase):
         case.fake("write_json", lambda rng, p, d: None)
         case.fake("pin_release_tag", lambda rng, repo: rng.choice([None, "tag1"]))
         case.fake("read_pins", lambda rng, o_r, tag: raising(rng, 0.2, rng.choice([None, {}, {"uk": "9"}]), rng.choice([RuntimeError, SystemExit])))
-        case.fake("err", lambda rng, m: None)
+        case.fake("print_error", lambda rng, m: None)
         case.put("_pin_tried", [r.choice([0.0, NOW - 10, NOW - 99999])])
         stored = [None, "", json.dumps({"at": 1, "repo": "o", "tag": "t", "pins": {"uk": "5"}}), json.dumps({"at": 2, "tag": "t", "pins": {"uk": "6"}, "repo": "o"}),
                   "{{", json.dumps({"pins": {}})]
@@ -661,7 +661,7 @@ class ApplyEntryTest(unittest.TestCase):
 class RegenHoldOverdueTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
-        case.fake("env_num", lambda rng, n, d: rng.choice([d, 100]))
+        case.fake("env_number", lambda rng, n, d: rng.choice([d, 100]))
         case.fake("save_entry", lambda rng, d, e: None)
         case.fake("wlog", lambda rng, d, m: None)
         case.fake("machine_state", lambda rng, k, s: NS(terminal=s in ("landed", "rejected")))

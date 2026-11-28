@@ -5,7 +5,7 @@ import re
 import time
 from typing import Any
 from agentctl.context import Context
-from agentctl.core import err, git, process_cache, remote
+from agentctl.core import print_error, git, process_cache, remote
 from agentctl.forge import RED_CONCLUSIONS
 from agentctl.repos import scan_repo_for
 from agentctl.workflows import BOUND_JOBS, GITHUB_JOB_TIMEOUT, JobBlock, scan_jobs
@@ -31,7 +31,7 @@ def stuck_history(o_r, name, *, ctx):
         # listing: samples of a workflow's run lengths (the stuck limit); fewer samples widen it, never narrow it
         return ctx.runs.main_runs(o_r, wfile, 30, status="completed", fresh_for=OUTSIDE_FLOW_RECHECK)
     except (Exception, SystemExit) as e:
-        err(f"stuck limit: could not list {wfile} ({str(e)[:120]})")
+        print_error(f"stuck limit: could not list {wfile} ({str(e)[:120]})")
         return ctx.runs.last_listed(o_r, wfile, 30, "completed") or []
 
 
@@ -95,7 +95,7 @@ def _own_runs(o_r: Any, wfile: str, *, ctx: Context) -> Any:
         # listing: the workflow's own newest 30, read because the cross-workflow 200 left it out
         return ctx.runs.main_runs(o_r, wfile, 30, fresh_for=OUTSIDE_FLOW_RECHECK)
     except Exception as e:  # this workflow unread this time: the others stand
-        err(f"outside the gate: could not list {wfile} ({str(e)[:120]})")
+        print_error(f"outside the gate: could not list {wfile} ({str(e)[:120]})")
         return ctx.runs.last_listed(o_r, wfile, 30) or []
 
 

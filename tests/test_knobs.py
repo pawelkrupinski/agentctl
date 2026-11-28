@@ -1,6 +1,6 @@
 """THE KNOBS (the `<concept>knobs` modules): each has ONE typed accessor with its default and doc beside it; the code reads the accessor,
 never the environment. Per knob: its default, the environment overriding it, a config-file value, and a malformed
-value. The lint: lib/agentctl/ reads an AGENTCTL_* name from os.environ (or through env_num / env_text) only in the knob
+value. The lint: lib/agentctl/ reads an AGENTCTL_* name from os.environ (or through env_number / env_text) only in the knob
 modules (knobread and one `<concept>knobs` module each: red, blame, fixer, gov, queue, store, watch, tick), except the sites of
 tests/knob-env-allowlist.tsv -- the process's own: its identity, secrets, test seams and the config bootstrap, each with
 its reason -- which only ever shrink (`python3 tests/test_knobs.py --write` rewrites the file from the code: a fall is
@@ -14,7 +14,7 @@ from test_agentctl import A, TOOL  # noqa: E402
 
 LIB = os.path.join(os.path.dirname(TOOL), "lib", "agentctl")
 ALLOWLIST = os.path.join(HERE, "knob-env-allowlist.tsv")
-READERS = {"env_num", "env_text"}
+READERS = {"env_number", "env_text"}
 KNOB_MODULES = ("redknobs", "blameknobs", "fixerknobs", "govknobs", "queueknobs", "storeknobs", "watchknobs", "tickknobs")
 ACCESSOR_MODULES = ("knobread",) + KNOB_MODULES  # the readers and the accessors, one module per concept: the only readers
 NEW_ROW = "a new read of the environment: say why it is the process's own, not a knob"
@@ -35,7 +35,7 @@ def _is_environ(node):
 
 
 def env_reads(src):
-    """The AGENTCTL_* names a source reads from the environment: os.environ.get / [] / `in`, os.getenv, env_num, env_text."""
+    """The AGENTCTL_* names a source reads from the environment: os.environ.get / [] / `in`, os.getenv, env_number, env_text."""
     out = set()
     for n in ast.walk(ast.parse(src)):
         name = None
@@ -107,7 +107,7 @@ def _source(module):
 
 
 KNOB_SOURCE = "\n".join(_source(m) for m in KNOB_MODULES)
-NUMERIC = re.findall(r'def (knob_\w+)\(\) -> float:\n    return env_num\("(AGENTCTL_\w+)", (\w+)\)', KNOB_SOURCE)
+NUMERIC = re.findall(r'def (knob_\w+)\(\) -> float:\n    return env_number\("(AGENTCTL_\w+)", (\w+)\)', KNOB_SOURCE)
 TEXT = re.findall(r'def (knob_\w+)\(\) -> str:\n    return env_text\("(AGENTCTL_\w+)"(?:, ([^)\n]+))?\)(?:  #.*)?\n', KNOB_SOURCE)
 SKIP_TEXT = {"AGENTCTL_STORE_TOKEN"}  # a token variable: the harness refuses any test touching one
 
@@ -122,7 +122,7 @@ class KnobTest(unittest.TestCase):
             with env(**{name: "7"}):
                 self.assertEqual(acc(), 7.0, name)
             with env(**{name: "not a number"}):
-                self.assertEqual(acc(), getattr(A, const), name)  # malformed: the default, as env_num always did
+                self.assertEqual(acc(), getattr(A, const), name)  # malformed: the default, as env_number always did
             with env(**{name: None, "AGENTCTL_CONFIG_SET": None}):
                 try:
                     A.config_apply({name: (9, "agentctl.toml")})
@@ -192,7 +192,7 @@ class KnobTest(unittest.TestCase):
 
     def test_the_lint_sees_every_way_of_reading_a_name(self):
         src = ('import os\na = os.environ.get("AGENTCTL_A")\nb = os.environ["AGENTCTL_B"]\nc = "AGENTCTL_C" in os.environ\n'
-               'd = env_num("AGENTCTL_D", 1)\ne = os.getenv("AGENTCTL_E")\nf = os.environ.get(f"AGENTCTL_{x}_F")\n'
+               'd = env_number("AGENTCTL_D", 1)\ne = os.getenv("AGENTCTL_E")\nf = os.environ.get(f"AGENTCTL_{x}_F")\n'
                'os.environ["AGENTCTL_G"] = "1"\nh = os.environ.get("HOME")\ni = env_text("AGENTCTL_I")\n')
         self.assertEqual(env_reads(src), {"AGENTCTL_A", "AGENTCTL_B", "AGENTCTL_C", "AGENTCTL_D", "AGENTCTL_E",
                                           "AGENTCTL_*", "AGENTCTL_I"})

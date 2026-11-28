@@ -64,9 +64,9 @@ class RedAuthorsTest(unittest.TestCase):
         entries = [{"at": r.choice([0, NOW - 10, NOW - 10 ** 5]), "cwd": r.choice(wts + [None])} for _ in range(r.randint(0, 3))]
         case.fake("inbox_entries", lambda rng: raising(rng, 0.1, entries, OSError))
         case.fake("agent_pids_in", lambda rng, ws: {w: rng.sample([11, 12, 13], rng.randint(0, 2)) for w in ws if rng.random() < 0.7})
-        case.fake("env_num", lambda rng, n, d: rng.choice([d, 0, 10 ** 9]))
+        case.fake("env_number", lambda rng, n, d: rng.choice([d, 0, 10 ** 9]))
         case.fake("worktree_activity", lambda rng, repo, wt, ents: rng.choice([0.0, NOW - 60, NOW - 900, NOW, NOW - 10 ** 5]))
-        case.fake("proc_alive", lambda rng, p: rng.random() < 0.6)
+        case.fake("process_alive", lambda rng, p: rng.random() < 0.6)
         case.put("wall_epoch", lambda: NOW)
         return ("/repo" if r.random() < 0.95 else "", "store", {"run": {}}, r.choice([None, NOW, NOW + 100]))
 
@@ -110,7 +110,7 @@ def an_item(r, state=None):
 class RedMainVerifyTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
-        case.fake("env_num", lambda rng, n, d: rng.choice([d, 0, 10 ** 9]))
+        case.fake("env_number", lambda rng, n, d: rng.choice([d, 0, 10 ** 9]))
         case.fake("remote", lambda rng: "origin")
         mains = ["m1", "m2", "h1", ""]
 
@@ -199,7 +199,7 @@ def an_entry(r, i=0):
 class RegenHoldOverdueTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
-        case.fake("env_num", lambda rng, n, d: rng.choice([d, d, 10 ** 9, 0]))
+        case.fake("env_number", lambda rng, n, d: rng.choice([d, d, 10 ** 9, 0]))
         case.fake("save_entry", lambda rng, d, e: None)
         case.fake("wlog", lambda rng, d, text: None)
         item = {"state": r.choice(STATES), "version": 4, "data": r.choice([None, {}, {"regen_round": 2, "regen_answered": 2}, {"regen_answered": 0}, {"regen_round": "1", "regen_answered": 5}])}
@@ -303,13 +303,13 @@ class RecoveryTickTest(unittest.TestCase):
         r = case.rng
         case.fake("host_role", lambda rng: r.choice(["server", "sync"]))
         case.put("epoch_now", lambda: NOW)
-        case.put("err", lambda line: None)
+        case.put("print_error", lambda line: None)
         case.fake("migrate_condition_files", lambda rng, st: raising(rng, 0.2, ["migrated x"], SystemExit))
         items = [an_open_condition(r, i) for i in range(r.randint(0, 4))]
         case.fake("run_probe", lambda rng, kind, args: StableResult(kind, rng.choice([True, False, None]), "d"))
         closed = case.recorded("close_condition", lambda rng, c, res, store=None: rng.choice([None, "RECOVERED " + c["key"]]))
         case.put("close_condition", lambda c, res, store, registry: closed(c, res, store=store))  # as recorded before the registry
-        case.fake("env_num", lambda rng, n, d: rng.choice([d, 7, 10 ** 9]))
+        case.fake("env_number", lambda rng, n, d: rng.choice([d, 7, 10 ** 9]))
 
         def update(rng, kind, iid, version, data):
             if rng.random() < 0.2:
@@ -331,7 +331,7 @@ class CloseConditionTest(unittest.TestCase):
         r = case.rng
         case.fake("ts", lambda rng: "T")
         case.fake("mark_gate_dirty", lambda rng: None)
-        case.fake("err", lambda rng, line: None)
+        case.fake("print_error", lambda rng, line: None)
         case.fake("inbox_write", lambda rng, *a, **k: None)
         import tempfile, shutil
         root = tempfile.mkdtemp(prefix="r14-")
@@ -450,7 +450,7 @@ class GovFitsTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
         case.put("wall_epoch", lambda: NOW)
-        case.fake("env_num", lambda rng, n, d: rng.choice([d, d, d, 0, 1, 2, 3, 6, 10 ** 9]))
+        case.fake("env_number", lambda rng, n, d: rng.choice([d, d, d, 0, 1, 2, 3, 6, 10 ** 9]))
         case.fake("checks_cap", lambda rng, ram_gb: rng.choice([0, 1, 2, 4]))
         case.fake("gov_budget", lambda rng, ram_gb: rng.choice([4.0, 10.0, 16.0, 40.0]))
         case.fake("gov_capacity", lambda rng, tickets, m: {"state": rng.choice(["starved", "ok", "ok", "spare"]), "busy": rng.choice([0, 3.5, 9.0]),
@@ -487,7 +487,7 @@ class OwnerWorkTest(unittest.TestCase):
         case.fake("record_alive", lambda rng, rec: rng.random() < 0.85)
         case.fake("mtime", lambda rng, p: rng.choice([0, NOW - 50, NOW - 10 ** 6]))
         case.put("wall_epoch", lambda: NOW)  # a file's age is read on the wall: pinned to the case's NOW, never today's date
-        case.fake("env_num", lambda rng, n, d: rng.choice([d, d, 0, 10 ** 9]))
+        case.fake("env_number", lambda rng, n, d: rng.choice([d, d, 0, 10 ** 9]))
         case.fake("claude_cli", lambda rng: "claude")
         case.fake("bg_session", lambda rng, cli, bid: rng.choice([{}, None, {"state": "idle"}, {"state": None}, {"state": "running"}]))
         case.fake("bg_turn_over", lambda rng, ent, tr: rng.random() < 0.5)

@@ -16,7 +16,7 @@ from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import wall_epoch
 from agentctl.timefmt import ts
 from agentctl.queueknobs import knob_fixer_land_watch
-from agentctl.fixerknobs import knob_claude_tmp, knob_fixer_unlanded_escalate, knob_fixer_unlanded_nudge
+from agentctl.fixerknobs import knob_claude_temp, knob_fixer_unlanded_escalate, knob_fixer_unlanded_nudge
 from agentctl.core import attempt, git, on_ci_runner, remote, spawn_detached
 from agentctl.claudefiles import claude_jobs_root
 from agentctl.allowedpaths import allowed_path
@@ -353,9 +353,9 @@ def fixer_mark(rec, wt):
 SESSION_ACTIVITY_FILES = 2000  # files looked at per session at most (a job dir full of logs stays cheap)
 
 
-def claude_tmp_root():
+def claude_temp_root():
     """claude's per-user tmp root (<root>/<project dir>/<session>/tasks/<task>.output), $AGENTCTL_CLAUDE_TMP."""
-    env = knob_claude_tmp()
+    env = knob_claude_temp()
     if env:
         return env
     for d in (f"/private/tmp/claude-{os.getuid()}", f"/tmp/claude-{os.getuid()}"):
@@ -370,7 +370,7 @@ def session_activity_dirs(transcript, bid=None):
         return []
     base = str(transcript)[:-len(".jsonl")]
     session, project = os.path.basename(base), os.path.basename(os.path.dirname(base))
-    out = [os.path.join(base, "subagents"), os.path.join(claude_tmp_root(), project, session, "tasks")]
+    out = [os.path.join(base, "subagents"), os.path.join(claude_temp_root(), project, session, "tasks")]
     jid = str(bid or session[:8])
     if re.fullmatch(r"[0-9a-f]{6,}", jid):
         out.append(os.path.join(claude_jobs_root(), jid, "tmp"))

@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
-from agentctl.knobread import env_num, env_text
+from agentctl.knobread import env_number, env_text
 
 
 # STUCK SBT SERVERS (2026-10-27): a worktree's one server ran an orphaned `--serve` (its owner's shell died) for hours,
@@ -79,59 +79,59 @@ GOV_CPU_FACTOR = 1.0    # charged cores (or the load) + a job's own may reach th
 
 
 def knob_laptop_swap_window() -> float:
-    return env_num("AGENTCTL_LAPTOP_SWAP_WINDOW", LAPTOP_SWAP_WINDOW)
+    return env_number("AGENTCTL_LAPTOP_SWAP_WINDOW", LAPTOP_SWAP_WINDOW)
 
 
 def knob_laptop_free_pct() -> float:
-    return env_num("AGENTCTL_LAPTOP_FREE_PCT", LAPTOP_FREE_PCT)
+    return env_number("AGENTCTL_LAPTOP_FREE_PCT", LAPTOP_FREE_PCT)
 
 
 def knob_laptop_pressure_level() -> float:
-    return env_num("AGENTCTL_LAPTOP_PRESSURE_LEVEL", LAPTOP_PRESSURE_LEVEL)
+    return env_number("AGENTCTL_LAPTOP_PRESSURE_LEVEL", LAPTOP_PRESSURE_LEVEL)
 
 
 def knob_laptop_swap_growth_mb() -> float:
-    return env_num("AGENTCTL_LAPTOP_SWAP_GROWTH_MB", LAPTOP_SWAP_GROWTH_MB)
+    return env_number("AGENTCTL_LAPTOP_SWAP_GROWTH_MB", LAPTOP_SWAP_GROWTH_MB)
 
 
 def knob_check_lease_ttl() -> float:
-    return env_num("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL)
+    return env_number("AGENTCTL_CHECK_LEASE_TTL", CHECK_LEASE_TTL)
 
 
 def knob_sbt_progress_cpu_per_min() -> float:
-    return env_num("AGENTCTL_SBT_PROGRESS_CPU_PER_MIN", SBT_PROGRESS_CPU_PER_MIN)
+    return env_number("AGENTCTL_SBT_PROGRESS_CPU_PER_MIN", SBT_PROGRESS_CPU_PER_MIN)
 
 
 def knob_swap_free_floor_mb() -> float:
-    return env_num("AGENTCTL_SWAP_FREE_FLOOR_MB", SWAP_FREE_FLOOR_MB)
+    return env_number("AGENTCTL_SWAP_FREE_FLOOR_MB", SWAP_FREE_FLOOR_MB)
 
 
 def knob_sbt_idle_pressure_min() -> float:
-    return env_num("AGENTCTL_SBT_IDLE_PRESSURE_MIN", SBT_IDLE_PRESSURE_MIN)
+    return env_number("AGENTCTL_SBT_IDLE_PRESSURE_MIN", SBT_IDLE_PRESSURE_MIN)
 
 
 def knob_sbt_idle_min() -> float:
-    return env_num("AGENTCTL_SBT_IDLE_MIN", SBT_IDLE_MIN)
+    return env_number("AGENTCTL_SBT_IDLE_MIN", SBT_IDLE_MIN)
 
 
 def knob_sbt_stall_min() -> float:
-    return env_num("AGENTCTL_SBT_STALL_MIN", SBT_STALL_MIN)
+    return env_number("AGENTCTL_SBT_STALL_MIN", SBT_STALL_MIN)
 
 
 def knob_sleep_min() -> float:
-    return env_num("AGENTCTL_SLEEP_MIN", SLEEP_MIN)
+    return env_number("AGENTCTL_SLEEP_MIN", SLEEP_MIN)
 
 
 def knob_clone_keepalive() -> float:
-    return env_num("AGENTCTL_CLONE_KEEPALIVE", CLONE_KEEPALIVE)
+    return env_number("AGENTCTL_CLONE_KEEPALIVE", CLONE_KEEPALIVE)
 
 
 def knob_gov_cpu_factor() -> float:
-    return env_num("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR)
+    return env_number("AGENTCTL_GOV_CPU_FACTOR", GOV_CPU_FACTOR)
 
 
 def knob_gov_poll() -> float:
-    return env_num("AGENTCTL_GOV_POLL", GOV_POLL)
+    return env_number("AGENTCTL_GOV_POLL", GOV_POLL)
 
 
 def knob_sbt_reap() -> str:
@@ -233,59 +233,59 @@ GOV_EVICT_SETTLE = 3  # s to wait after evicting a ticket for its memory to free
 
 
 def knob_check_trees() -> float:
-    return env_num("AGENTCTL_CHECK_TREES", QUEUE_POOL)
+    return env_number("AGENTCTL_CHECK_TREES", QUEUE_POOL)
 
 
 def knob_disk_min_gb() -> float:
-    return env_num("AGENTCTL_DISK_MIN_GB", DISK_MIN_GB)
+    return env_number("AGENTCTL_DISK_MIN_GB", DISK_MIN_GB)
 
 
 def knob_gov_admit_max() -> float:
-    return env_num("AGENTCTL_GOV_ADMIT_MAX", GOV_ADMIT_MAX)
+    return env_number("AGENTCTL_GOV_ADMIT_MAX", GOV_ADMIT_MAX)
 
 
 def knob_gov_evict_settle() -> float:
-    return env_num("AGENTCTL_GOV_EVICT_SETTLE", GOV_EVICT_SETTLE)
+    return env_number("AGENTCTL_GOV_EVICT_SETTLE", GOV_EVICT_SETTLE)
 
 
 def knob_gov_free_need_gb() -> float:
-    return env_num("AGENTCTL_GOV_FREE_NEED_GB", GOV_FREE_NEED_GB)
+    return env_number("AGENTCTL_GOV_FREE_NEED_GB", GOV_FREE_NEED_GB)
 
 
 def knob_gov_idle_max() -> float:
-    return env_num("AGENTCTL_GOV_IDLE_MAX", GOV_IDLE_MAX)
+    return env_number("AGENTCTL_GOV_IDLE_MAX", GOV_IDLE_MAX)
 
 
 def knob_gov_reserve_gb() -> float:
-    return env_num("AGENTCTL_GOV_RESERVE_GB", GOV_RESERVE_GB)
+    return env_number("AGENTCTL_GOV_RESERVE_GB", GOV_RESERVE_GB)
 
 
 def knob_gov_resume() -> float:
-    return env_num("AGENTCTL_GOV_RESUME", GOV_RESUME)
+    return env_number("AGENTCTL_GOV_RESUME", GOV_RESUME)
 
 
 def knob_gov_spare() -> float:
-    return env_num("AGENTCTL_GOV_SPARE", GOV_SPARE)
+    return env_number("AGENTCTL_GOV_SPARE", GOV_SPARE)
 
 
 def knob_gov_starved() -> float:
-    return env_num("AGENTCTL_GOV_STARVED", GOV_STARVED)
+    return env_number("AGENTCTL_GOV_STARVED", GOV_STARVED)
 
 
 def knob_laptop_load() -> float:
-    return env_num("AGENTCTL_LAPTOP_LOAD", LAPTOP_LOAD)
+    return env_number("AGENTCTL_LAPTOP_LOAD", LAPTOP_LOAD)
 
 
 def knob_laptop_role_ttl() -> float:
-    return env_num("AGENTCTL_LAPTOP_ROLE_TTL", LAPTOP_ROLE_TTL)
+    return env_number("AGENTCTL_LAPTOP_ROLE_TTL", LAPTOP_ROLE_TTL)
 
 
 def knob_gov_pool_share() -> float:
-    return env_num("AGENTCTL_GOV_POOL_SHARE", GOV_POOL_SHARE)
+    return env_number("AGENTCTL_GOV_POOL_SHARE", GOV_POOL_SHARE)
 
 
 def knob_suite_cap() -> float:
-    return env_num("AGENTCTL_SUITE_CAP", SUITE_CAP)
+    return env_number("AGENTCTL_SUITE_CAP", SUITE_CAP)
 
 
 def knob_checks_dir() -> str:
@@ -301,4 +301,4 @@ def knob_disk_path() -> str:
 
 
 def knob_gov_budget_gb(ram_gb: float) -> float:
-    return env_num("AGENTCTL_GOV_BUDGET_GB", round(0.6 * ram_gb, 1))  # the memory in GB the governor hands out; default 0.6 x the machine's RAM
+    return env_number("AGENTCTL_GOV_BUDGET_GB", round(0.6 * ram_gb, 1))  # the memory in GB the governor hands out; default 0.6 x the machine's RAM

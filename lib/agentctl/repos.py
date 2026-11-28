@@ -10,7 +10,7 @@ from agentctl.statefile import load_record
 from agentctl.selfcode import TOOL_PATH
 from agentctl.storeknobs import knob_bin_repo, knob_movies_repo
 from agentctl.redknobs import knob_red_repo, knob_red_repos
-from agentctl.core import HOME, REPOS, SHORT, err, git, git_ok, host_role, process_cache, remote
+from agentctl.core import HOME, REPOS, SHORT, print_error, git, git_ok, host_role, process_cache, remote
 
 
 # THE agentctl REPOSITORY (~/bin): a fixer never edits it (`agentctl issue`); watchdog WB checks its checkout stays clean.
@@ -218,7 +218,7 @@ def red_repos():
         try:
             repos = red_repos_parse(load_record(path))
         except (OSError, ValueError) as e:
-            err(f"red repos: {path} unreadable ({str(e)[:200]}): only {RED_PRIMARY} is watched")
+            print_error(f"red repos: {path} unreadable ({str(e)[:200]}): only {RED_PRIMARY} is watched")
     _red_repos_cache[path] = (m, repos)
     return repos
 
@@ -265,7 +265,7 @@ def repo_path_for(o_r):
                 if slug(p) == o_r:
                     return p
             except (SystemExit, RuntimeError) as e:
-                err(f"repo lookup: no slug for {p} ({str(e)[:160]}); skipped")
+                print_error(f"repo lookup: no slug for {p} ({str(e)[:160]}); skipped")
     return None
 
 

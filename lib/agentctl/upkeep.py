@@ -12,11 +12,11 @@ from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
 from agentctl.tickknobs import knob_upkeep_every
 from agentctl.govknobs import DISK_MIN_GB, knob_disk_min_gb, knob_disk_path
-from agentctl.core import HOME, _bounded, err, run_bounded
+from agentctl.core import HOME, _bounded, print_error, run_bounded
 from agentctl.fixerrecords import fixer_records
 from agentctl.machine import MachineProbe
 from agentctl.cleanup import close_worktree
-from agentctl.testtmp import TEST_TMP_MAX_AGE, sweep_test_tmp
+from agentctl.testtmp import TEST_TMP_MAX_AGE, sweep_test_temp
 from agentctl.conditions import open_condition, run_probe
 from agentctl.redrecord import red_active
 from agentctl.paths import state_root
@@ -77,7 +77,7 @@ def run_upkeep(store):
         lines.append(f"cleanup failed: {str(e)[:200]}")
     lines += close_finished_fixer_trees(store)
     # the logs are maintain's to rotate, every 15 min (review 2026-11-26: this pass rotated them too)
-    n = sweep_test_tmp()
+    n = sweep_test_temp()
     if n:
         lines.append(f"removed {n} test temp dir(s) older than {TEST_TMP_MAX_AGE // 60} min")
     try:
@@ -86,7 +86,7 @@ def run_upkeep(store):
             for x in lines:
                 f.write(f"{ts()} {x}\n")
     except OSError as e:
-        err(f"upkeep log not written ({str(e)[:160]})")
+        print_error(f"upkeep log not written ({str(e)[:160]})")
     return lines
 
 

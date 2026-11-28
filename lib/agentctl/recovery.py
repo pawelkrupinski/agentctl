@@ -14,7 +14,7 @@ from agentctl.statefile import read_json_file, unlink_file, write_json_file
 from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import epoch_now
 from agentctl.timefmt import iso_at, ts
-from agentctl.core import SHORT, _tokens, err, git, remote, spawn_detached
+from agentctl.core import SHORT, _tokens, print_error, git, remote, spawn_detached
 from agentctl.trailers import held_commit
 from agentctl.forge import gh_json
 from agentctl.worktrees import mark_internal
@@ -134,7 +134,7 @@ def token_unavailable_note(ns: str, why: str, store: Any) -> None:
                            run_probe(probe_token, {"ns": ns}), [], key=f"token-{ns}", command="token", exit_code=2,
                            store=store)
     except (Exception, SystemExit) as e:
-        err(f"token: could not note the missing token ({str(e)[:120]})")
+        print_error(f"token: could not note the missing token ({str(e)[:120]})")
 
 
 def note_missing_tokens(store: Any) -> None:

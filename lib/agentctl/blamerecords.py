@@ -6,7 +6,7 @@ import re
 from typing import Any
 from agentctl.statemachines import is_terminal, machine_state
 from agentctl.timefmt import ts
-from agentctl.core import HOME, PROTECTED_BRANCHES, _tokens, err, git, remote
+from agentctl.core import HOME, PROTECTED_BRANCHES, _tokens, print_error, git, remote
 from agentctl.repos import movies_repo_path
 from agentctl.trailers import fixes_red_in_message
 from agentctl.procs import process_cwds
@@ -223,7 +223,7 @@ def _cancelled(st: Any, cid: Any, why: Any) -> Any:
             cancel_submitted(st, cid)
         return True
     except (Exception, SystemExit) as e:
-        err(f"could not cancel {cid} ({why}): {str(e)[:120]}")
+        print_error(f"could not cancel {cid} ({why}): {str(e)[:120]}")
         return False
 
 

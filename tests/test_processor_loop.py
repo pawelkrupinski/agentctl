@@ -106,7 +106,7 @@ def run(module, script):
         "open_condition": rec("open_condition", script.get("stall")), "run_probe": probe_by_kind(rec("run_probe", "PROBE")),
         "write_json": rec("write_json"), "write_snapshot": rec("write_snapshot", script.get("snapshot")),
         "ChangeRecords": lambda st, d: type("R", (), {"open": lambda self: script.get("queued", []) + script.get("waiting", [])})(),
-        "err": rec("err"), "knob_tick": lambda: 5,
+        "print_error": rec("print_error"), "knob_tick": lambda: 5,
     }
     with contextlib.ExitStack() as stack:
         for name, fake in patches.items():
@@ -156,14 +156,14 @@ def generate(rng, n):
 
 class ProcessorLoopTest(unittest.TestCase):
     def test_every_loop_does_what_it_did(self):
-        module = __import__("agentctl.processor", fromlist=["x"])
+        module = __import__("agentctl.tickloop", fromlist=["x"])
         for name, script in SCENARIOS.items():
             with self.subTest(name):
                 self.assertEqual(run(module, script), EXPECTED[name], name)
 
 
 def results():
-    module = __import__("agentctl.processor", fromlist=["x"])
+    module = __import__("agentctl.tickloop", fromlist=["x"])
     return {n: run(module, s) for n, s in SCENARIOS.items()}
 
 
@@ -555,7 +555,7 @@ EXPECTED = {'not the owner': (0, False, ['own acquire']),
                                                'ticks failed 2 times in a row; see D/processor.log and service.log", '
                                                "'PROBE', []) [('command', 'waiting'), ('key', 'waiting-rounds'), "
                                                "('store', 'ST')]",
-                                               "err ('STALLED could not be noted (down); the loop goes on',) []",
+                                               "print_error ('STALLED could not be noted (down); the loop goes on',) []",
                                                "sd_notify ('WATCHDOG=1',) []",
                                                'nap 5',
                                                "write_beat ('processor',) []",
@@ -571,7 +571,7 @@ EXPECTED = {'not the owner': (0, False, ['own acquire']),
                                                'ticks failed 3 times in a row; see D/processor.log and service.log", '
                                                "'PROBE', []) [('command', 'waiting'), ('key', 'waiting-rounds'), "
                                                "('store', 'ST')]",
-                                               "err ('STALLED could not be noted (down); the loop goes on',) []",
+                                               "print_error ('STALLED could not be noted (down); the loop goes on',) []",
                                                "sd_notify ('WATCHDOG=1',) []",
                                                'nap 5',
                                                'drop close',
@@ -603,7 +603,7 @@ EXPECTED = {'not the owner': (0, False, ['own acquire']),
                        'open_condition (\'STALLED\', "STALLED: the waiting processor\'s ticks failed 2 times in a '
                        'row; see D/processor.log and service.log", \'PROBE\', []) [(\'command\', \'waiting\'), '
                        "('key', 'waiting-rounds'), ('store', 'ST')]",
-                       "err ('STALLED could not be noted (no token); the loop goes on',) []",
+                       "print_error ('STALLED could not be noted (no token); the loop goes on',) []",
                        "sd_notify ('WATCHDOG=1',) []",
                        'nap 5',
                        'drop close',
@@ -691,7 +691,7 @@ EXPECTED = {'not the owner': (0, False, ['own acquire']),
                      "sd_notify ('WATCHDOG=1',) []",
                      "write_json ('D/round-ok.json', {'at': 100.0}) []",
                      "write_snapshot ('D', 'ST') []",
-                     "err ('the snapshot could not be written: disk',) []",
+                     "print_error ('the snapshot could not be written: disk',) []",
                      "sd_notify ('WATCHDOG=1',) []",
                      'nap 5',
                      "write_beat ('processor',) []",
@@ -704,7 +704,7 @@ EXPECTED = {'not the owner': (0, False, ['own acquire']),
                      "sd_notify ('WATCHDOG=1',) []",
                      "write_json ('D/round-ok.json', {'at': 100.0}) []",
                      "write_snapshot ('D', 'ST') []",
-                     "err ('the snapshot could not be written: disk',) []",
+                     "print_error ('the snapshot could not be written: disk',) []",
                      "sd_notify ('WATCHDOG=1',) []",
                      'nap 5',
                      'drop close',

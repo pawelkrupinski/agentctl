@@ -18,7 +18,7 @@ from agentctl.queueknobs import (
     knob_land_wait_report_min, knob_push_stall_secs, knob_push_wall_min)
 from agentctl.fixerknobs import knob_stall_cpu_seconds
 from agentctl.leasetable import LeaseLost
-from agentctl.core import HOME, SHORT, err, git, process_cache, spawn_detached
+from agentctl.core import HOME, SHORT, print_error, git, process_cache, spawn_detached
 from agentctl.repos import slug
 from agentctl.procs import ps_rows
 from agentctl.forge import forge_env
@@ -182,7 +182,7 @@ def watch_lease_loss(step: Any, size: Any, cpu: Any, polls: Any, quiet_ok: Any) 
     except LeaseLost as ex:
         return f"{ex} (no progress within its TTL)"
     except StoreUnavailable as ex:
-        err(f"{step}: the store did not answer the lease renewal ({str(ex)[:120]})")
+        print_error(f"{step}: the store did not answer the lease renewal ({str(ex)[:120]})")
     return None
 
 
@@ -232,7 +232,7 @@ def _judged_end(p, why, step):
     load): its own end, None."""
     if p.poll() is not None:
         return None
-    err(f"{why}: ending {step}")
+    print_error(f"{why}: ending {step}")
     _end_group(p)
     return why
 
@@ -283,7 +283,7 @@ def tool_env():
     try:  # as the lander App on ci-runner
         env = forge_env(SHORT["movies"], env)
     except (Exception, SystemExit) as e:
-        err(f"tool env: no GitHub App token for movies ({str(e)[:120]}); the hook reads without one")
+        print_error(f"tool env: no GitHub App token for movies ({str(e)[:120]}); the hook reads without one")
     return env
 
 
@@ -349,7 +349,7 @@ def waited_for_lease(h: LeaseHold, clock: Clock) -> bool:
         meta = json.loads(r.get("meta") or "{}")
         return (f"{r['holder']} (pid {meta.get('pid')}), {meta.get('note') or 'working'}; "
                 f"expires in {int(r['expires_at'] - clock.time())} s")
-    err(f"waiting for the landing lease {h.name}, held by {said(h.held)}")
+    print_error(f"waiting for the landing lease {h.name}, held by {said(h.held)}")
     deadline = clock.monotonic() + knob_land_lock_timeout()
     every = knob_land_wait_report_min() * 60
     report_at = clock.monotonic() + every
@@ -357,10 +357,10 @@ def waited_for_lease(h: LeaseHold, clock: Clock) -> bool:
         if clock.monotonic() > deadline:
             return False
         if clock.monotonic() > report_at:
-            err(f"still waiting for the landing lease: {said(h.held)}")
+            print_error(f"still waiting for the landing lease: {said(h.held)}")
             report_at = clock.monotonic() + every
         clock.sleep(2)
-    err("got the landing lease")
+    print_error("got the landing lease")
     return True
 
 

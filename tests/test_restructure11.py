@@ -227,7 +227,7 @@ class WatchGroupTest(unittest.TestCase):
             sizes[0] += rng.choice([0, 0, 0, 1, 50])
             return sizes[0]
         case.patch(os.path, "getsize", size)
-        case.fake("env_num", lambda rng, name, default: rng.choice([1, 1, 0.5, default]))
+        case.fake("env_number", lambda rng, name, default: rng.choice([1, 1, 0.5, default]))
 
         def beat(rng, mark):
             x = rng.random()
@@ -236,7 +236,7 @@ class WatchGroupTest(unittest.TestCase):
             if x < 0.15:
                 raise A.StoreUnavailable("down")
         case.fake("lock_beat", beat)
-        case.fake("err", lambda rng, *a, **k: None)
+        case.fake("print_error", lambda rng, *a, **k: None)
         case.fake("_end_group", lambda rng, p: None)
         cpu = [0.0]
 
@@ -309,7 +309,7 @@ class ParkDutyTest(unittest.TestCase):
         case.fake("drop_orphan_records", lambda rng, wt: None)
         case.fake("inbox_write", lambda rng, *a, **k: None)
         case.fake("write_json", lambda rng, path, data: None)
-        case.fake("env_num", lambda rng, name, default: default)
+        case.fake("env_number", lambda rng, name, default: default)
         return ("/repo", "store", r.random() < 0.3, r.choice([None, 1_500_000.0, 1_500_000.0, 3_000_000.0]))
 
     def test_park_duty(self):

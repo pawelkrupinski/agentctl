@@ -7,7 +7,7 @@ import os
 from typing import Any
 import re
 from agentctl.statefile import note_failure, read_record, write_json
-from agentctl.core import attempt, err, git, remote
+from agentctl.core import attempt, print_error, git, remote
 from agentctl.trailers import trailer_format, trailer_values
 from agentctl.inboxentry import inbox_write
 from agentctl.context import Context
@@ -199,12 +199,12 @@ def fix_not_counted_tell(repo, sha, v, why):
     line = (f"FIX NOT COUNTED: {sha[:10]}'s `Fixes-Red: {v}`: {why}. The red stays where it is (its fixer keeps it); "
             f"the change lands as an ordinary one (it waits while the gate is red). Name the red only in a commit that "
             f"changes what its failing job runs or reads")
-    err(line)
+    print_error(line)
     try:
         cwd = repo if repo and os.path.isdir(repo) else None
         inbox_write("land", line, [line], [], 1, cwd=cwd)
     except Exception as e:  # the line was told on stderr above; the inbox is a second place
-        err(f"red fix check: the inbox entry was not written ({str(e)[:160]})")
+        print_error(f"red fix check: the inbox entry was not written ({str(e)[:160]})")
 
 
 # A CHANGE IS AN OUTSIDE RED'S FIX BY WHAT IT CHANGES OF THE FAILING STEP (the owner, 2026-11-22: Alert backtest #21,

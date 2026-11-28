@@ -264,7 +264,7 @@ class InboxTest(unittest.TestCase):
 
     def test_a_bare_exit_1_names_what_it_said_last(self):
         def handler(a):
-            A.err("watch: the runs could not be listed")
+            A.print_error("watch: the runs could not be listed")
             return 1
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             A.with_inbox("watch", handler, None)

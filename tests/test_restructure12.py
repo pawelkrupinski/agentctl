@@ -329,7 +329,7 @@ class ReconcileAlertsTest(unittest.TestCase):
         case.fake("alert_index_path", lambda rng, d: "/inbox/idx.json")
         case.fake("alert_lock", lambda rng, d: Quiet())
         case.fake("alert_index", lambda rng, d: idx)
-        case.fake("env_num", lambda rng, name, default: rng.choice([default, 0, 10 ** 9]))
+        case.fake("env_number", lambda rng, name, default: rng.choice([default, 0, 10 ** 9]))
 
         def read(rng, p):
             if p.endswith("idx.json"):
@@ -350,7 +350,7 @@ class ReconcileAlertsTest(unittest.TestCase):
         case.fake("write_json", lambda rng, p, e: None)
         case.fake("alert_unack", lambda rng, d, eid: None)
         case.fake("alert_index_save", lambda rng, d, ix: None)
-        case.fake("err", lambda rng, s: None)
+        case.fake("print_error", lambda rng, s: None)
         holder = {"case": case, "idx": idx}
         return (holder, Probe(case, "store"), r.choice([False, True]))
 

@@ -15,7 +15,7 @@ from agentctl.ids import stamp
 from agentctl.timefmt import ts
 from agentctl.redknobs import knob_red_fixer
 from agentctl.queueknobs import knob_lander_landed_every
-from agentctl.core import branch_of, err, git, git_ok, remote
+from agentctl.core import branch_of, print_error, git, git_ok, remote
 from agentctl.claudefiles import claude_projects_root
 from agentctl.procs import ps_rows
 from agentctl.onmain import patch_ids
@@ -227,7 +227,7 @@ def _record_items(store: Any, typ: str) -> Any:
     try:
         return store.items(typ)
     except (Exception, SystemExit) as e:
-        err(f"blame: could not read the {typ} items ({str(e)[:120]})")
+        print_error(f"blame: could not read the {typ} items ({str(e)[:120]})")
         return []
 
 
@@ -328,7 +328,7 @@ def lander_note_direct(store, repo, head, keys):
             lander_put(store, cid, lander_record(repo), keys or [], landed_sha=head)
         return cid
     except (Exception, SystemExit) as e:
-        err(f"lander: not recorded ({str(e)[:160]})")
+        print_error(f"lander: not recorded ({str(e)[:160]})")
         return None
 
 

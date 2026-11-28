@@ -8,7 +8,7 @@ from typing import Any
 from agentctl.clock import epoch_now
 from agentctl.storeauth import (
     store_secret, store_secret_path, store_token_issue, store_token_revoke, store_tokens_load)
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.jvmreap import signal
 from agentctl.store import Store
 from agentctl.context import Context
@@ -32,7 +32,7 @@ def store_token_command(a: Any) -> int:
     """`agentctl store token issue|revoke|list`: the store's tokens, the issued one printed on stdout."""
     if a.tcmd == "issue":
         tid, tok = store_token_issue(a.user, a.name)
-        err(f"store token {tid} for {a.user} issued (revoke: agentctl store token revoke {tid})")
+        print_error(f"store token {tid} for {a.user} issued (revoke: agentctl store token revoke {tid})")
         print(tok)
     elif a.tcmd == "revoke":
         rec = store_token_revoke(a.id)
@@ -60,7 +60,7 @@ def store_serve_command(a: Any, *, ctx: Context) -> int:
     st = Store(path=state_root("store.db"))
     gap = store_grace(st)
     if gap:
-        err(f"store: down {int(gap)} s; every live lease extended by that")
+        print_error(f"store: down {int(gap)} s; every live lease extended by that")
     if not store_secret():
         raise SystemExit(f"agentctl store serve: no secret at {store_secret_path()} yet "
                          "(`agentctl store token issue --user <login>` makes it)")
@@ -68,7 +68,7 @@ def store_serve_command(a: Any, *, ctx: Context) -> int:
     srv = store_server(api, host or "127.0.0.1", int(port or STORE_PORT))
     threading.Thread(target=store_alive_beat, args=(st,), daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: threading.Thread(target=srv.shutdown, daemon=True).start())
-    err(f"store: serving {state_root('store.db')} on {host}:{port}, auth {a.auth} (allow {','.join(api.allow) or '-'}; metrics "
+    print_error(f"store: serving {state_root('store.db')} on {host}:{port}, auth {a.auth} (allow {','.join(api.allow) or '-'}; metrics "
         f"{','.join(api.metrics) or '-'})")
     srv.serve_forever()
     return 0
@@ -81,4 +81,4 @@ def store_alive_beat(st: Any) -> None:
         try:
             st.meta_set("last_alive", epoch_now())
         except Exception as e:
-            err(f"store: last_alive not written ({e})")
+            print_error(f"store: last_alive not written ({e})")

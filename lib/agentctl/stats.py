@@ -8,8 +8,8 @@ import sys
 from typing import Any
 from agentctl.timefmt import iso_at
 from agentctl.statemachines import is_terminal
-from agentctl.statsrecords import _num, landing_records, state_spans, watch_record
-from agentctl.core import err, git, host_role
+from agentctl.statsrecords import _number, landing_records, state_spans, watch_record
+from agentctl.core import print_error, git, host_role
 from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.gating import gate_flows
 from agentctl.statsepisodes import condition_record, gate_run_record, owner_decision_record, red_record
@@ -97,7 +97,7 @@ def check_runs_of(url, change_id, around):
         x = runs.setdefault(str(r.get("run_id")), {"run_id": r.get("run_id"), "jobs": []})
         if r.get("kind") == "run":
             x.update({k: r.get(k) for k in ("path_queue_s", "path_work_s", "wall_s", "start", "run_conclusion")})
-            x["start"] = _num(r.get("start"))
+            x["start"] = _number(r.get("start"))
         elif r.get("kind") == "job":
             x["jobs"].append(r)
     return list(runs.values())
@@ -121,7 +121,7 @@ class StatsPass:
     def __init__(self, clock: Any, st: Any, repo: Any, d: Any, url: Any, out: Any) -> None:
         self.clock, self.st, self.repo, self.url, self.out = clock, st, repo, url, out
         self.t = clock.time()
-        self.since = _num(st.meta_get("stats_since"))
+        self.since = _number(st.meta_get("stats_since"))
         if self.since is None:
             self.since = self.t
             st.meta_set("stats_since", self.since)
@@ -174,7 +174,7 @@ class StatsPass:
         try:
             stats_post(self.url, recs)
         except Exception as ex:
-            err(f"stats: VictoriaLogs at {self.url} refused the records ({str(ex)[:160]}): the next pass sends them")
+            print_error(f"stats: VictoriaLogs at {self.url} refused the records ({str(ex)[:160]}): the next pass sends them")
             return False
         self.st.meta_set(f"stats:{name}:{iid}", self.t)
         stats_echo(recs, self.out)
@@ -183,11 +183,11 @@ class StatsPass:
     def landing(self, iid: Any, it: Any) -> Any:
         evs = item_events(self.st, "change", iid)
         e = self.entries.get(iid) or {}
-        start = _num((it["data"] or {}).get("submitted_at")) or it["entered_at"]
+        start = _number((it["data"] or {}).get("submitted_at")) or it["entered_at"]
         try:
             runs = check_runs_of(self.url, iid, (start, it["entered_at"]))
         except Exception as ex:  # the collector's rows unread: wait for the next pass, never a record without them
-            err(f"stats: the check runs of {iid} could not be read ({str(ex)[:160]})")
+            print_error(f"stats: the check runs of {iid} could not be read ({str(ex)[:160]})")
             return None
         return landing_records(it, evs, e, runs, change_paths(self.repo, e, it["data"] or {}), self.since)
 
@@ -217,7 +217,7 @@ def _change_waiting_spans(st: Any, c: Any, now: Any) -> Any:
     evs = item_events(st, "change", c["id"])
     if not any(e.get("to_state") == "waiting" for e in evs):
         return []
-    spans = state_spans(evs, _num((c["data"] or {}).get("submitted_at")) or c["entered_at"])
+    spans = state_spans(evs, _number((c["data"] or {}).get("submitted_at")) or c["entered_at"])
     return [(c["id"], a, b if b is not None else now) for s, a, b, _e in spans if s == "waiting"]
 
 
@@ -232,7 +232,7 @@ class _GatePass:
 
     def __init__(self, st: Any, url: Any, t: Any, since: Any, out: Any) -> None:
         self.st, self.url, self.t, self.since, self.out = st, url, t, since, out
-        frm = _num(st.meta_get(STATS_GATE_WALK))
+        frm = _number(st.meta_get(STATS_GATE_WALK))
         if frm is None:
             frm = t - STATS_GATE_HISTORY
         self.walking = frm < t - STATS_GATE_LOOKBACK
@@ -244,7 +244,7 @@ class _GatePass:
         try:
             gate_files = {f: w for w, f in gate_flows(STATS_GATE_REPO)}
         except (Exception, SystemExit) as ex:
-            err(f"stats: the gate's workflows could not be read ({str(ex)[:160]})")
+            print_error(f"stats: the gate's workflows could not be read ({str(ex)[:160]})")
             return None
         files = ", ".join(f'"{f}"' for f in gate_files)  # exact: a phrase filter `workflow:"Main"` also matched
         # bitcashier/core's "Main Pipeline" (2026-11-17, the first backfill)
@@ -252,11 +252,11 @@ class _GatePass:
             rows = stats_query(self.url, f'source:ci kind:run branch:="main" repo:="{STATS_GATE_REPO}" workflow_file:in({files}) '
                                          f'| fields {CI_FIELDS}, workflow_file', start=self.lo, end=self.hi)
         except Exception as ex:
-            err(f"stats: the gate runs could not be read ({str(ex)[:160]})")
+            print_error(f"stats: the gate runs could not be read ({str(ex)[:160]})")
             return None
         rows = [{**r, "run_name": r.get("workflow"), "workflow": gate_files[r["workflow_file"]]} for r in rows
                 if r.get("repo") == STATS_GATE_REPO and r.get("workflow_file") in gate_files]
-        return sorted(rows, key=lambda r: _num(r.get("end")) or 0)
+        return sorted(rows, key=lambda r: _number(r.get("end")) or 0)
 
     def record(self, run: Any, rid: str) -> bool:
         """Posts and notes the record of one run; False (said on stderr) when its jobs or the post failed."""
@@ -267,7 +267,7 @@ class _GatePass:
             rec = gate_run_record(run, jobs, self.since)
             stats_post(self.url, [rec])
         except Exception as ex:
-            err(f"stats: gate run {rid} not recorded ({str(ex)[:160]}): the next pass tries again")
+            print_error(f"stats: gate run {rid} not recorded ({str(ex)[:160]}): the next pass tries again")
             return False
         self.st.meta_set(f"stats:gate_run:{rid}", self.t)
         stats_echo([rec], self.out)

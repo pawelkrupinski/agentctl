@@ -88,7 +88,7 @@ class StatsPassTest(unittest.TestCase):
                    meta_set=lambda rng, *a: None, items=items)
         for name, gen in (
                 ("stats_url", lambda rng: maybe(rng, "http://u", 0.85)),
-                ("env_num", lambda rng, name, default: rng.choice([1, 3, 20, 900]) if "SETTLE" in name else rng.choice([2, 4, 150]) if "PER_PASS" in name else rng.choice([5, 40])),
+                ("env_number", lambda rng, name, default: rng.choice([1, 3, 20, 900]) if "SETTLE" in name else rng.choice([2, 4, 150]) if "PER_PASS" in name else rng.choice([5, 40])),
                 ("waiting_entries", lambda rng, d, open_only=True: [{"id": f"i{rng.randint(0, 3)}"} for _ in range(rng.randint(0, 2))]),
                 ("item_events", lambda rng, st, typ, iid: [{"to_state": "x"}]),
                 ("check_runs_of", lambda rng, *a: raising(rng, 0.2, [{"run_id": rng.randint(0, 2)}])),
@@ -100,7 +100,7 @@ class StatsPassTest(unittest.TestCase):
                 ("condition_record", lambda rng, *a: {"record": "cond", "backfill": False}),
                 ("stats_post", lambda rng, url, recs: raising(rng, 0.15, None)),
                 ("stats_echo", lambda rng, *a: None), ("change_waits", lambda rng, *a: [("i1", 1, 2)]),
-                ("gate_runs_pass", lambda rng, *a: rng.randint(0, 3)), ("err", lambda rng, m: None)):
+                ("gate_runs_pass", lambda rng, *a: rng.randint(0, 3)), ("print_error", lambda rng, m: None)):
             case.fake(name, gen)
         return (clock, st, "repo", maybe(r, "dir", 0.8), maybe(r, "http://given", 0.5), None)
 
@@ -174,7 +174,7 @@ class RedRetiredTest(unittest.TestCase):
                     ("retire_file", lambda rng, o_r, sha, path: maybe(rng, rng.choice(texts), 0.8)),
                     ("retire_jobs", lambda rng, o_r, rid: [{"name": rng.choice(NAMES), "conclusion": rng.choice(["failure", "success", "timed_out"]),
                                                             "steps": [{"name": "s1", "conclusion": "failure"}]} for _ in range(rng.randint(0, 3))]),
-                    ("env_num", lambda rng, name, default: rng.choice([1, 14, 100]))):
+                    ("env_number", lambda rng, name, default: rng.choice([1, 14, 100]))):
                 case.fake(name, gen)
             run = r.choice([{}, {"databaseId": 7, "headSha": "h", "number": 3}, {"id": 8}, None])
             return (r.choice(["o/r", "p/q"]), r.choice(["W", "V", "Z", None]), run,
@@ -426,7 +426,7 @@ class SmallOnesTest(unittest.TestCase):
 
         def build(case):
             r = case.rng
-            case.fake("env_num", lambda rng, name, default: rng.choice([10, 100]))
+            case.fake("env_number", lambda rng, name, default: rng.choice([10, 100]))
             ctx[:] = [context_with(types.SimpleNamespace(main_runs=case.recorded("main_runs", lambda rng, o_r, wfile: [wfile])))]
             run = lambda rng: maybe(rng, {"databaseId": rng.randint(1, 3), "status": rng.choice(["completed", "queued"]),  # noqa: E731
                                           "updatedAt": "t", "conclusion": rng.choice(["success", "failure"])}, 0.7)

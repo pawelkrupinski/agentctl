@@ -7,7 +7,7 @@ from typing import Any, Callable
 from agentctl.statefile import mtime, read_record, write_json
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
-from agentctl.core import err, git, remote
+from agentctl.core import print_error, git, remote
 from agentctl.repos import RED_PRIMARY, movies_repo_path, red_repo_of, repo_path_for, scan_repo_for, slug
 from agentctl.allowedpaths import allowed_dir
 from agentctl.procs import safe_cwd
@@ -53,7 +53,7 @@ def root_checkout(wt: Any, o_r: Any) -> Any:
         try:
             roots.add(os.path.realpath(f()))
         except (Exception, SystemExit) as e:
-            err(f"red claim: a repo root could not be found ({str(e)[:160]})")
+            print_error(f"red claim: a repo root could not be found ({str(e)[:160]})")
     return os.path.realpath(wt) in roots
 
 

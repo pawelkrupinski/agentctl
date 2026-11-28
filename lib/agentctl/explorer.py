@@ -5,7 +5,7 @@ from contextlib import suppress
 from agentctl.procrunner import process_runner
 from agentctl.statemachines import ARCHIVE, MACHINES, StateSpec
 from agentctl.clock import epoch_now
-from agentctl.core import NO_SIGN, err, git, remote
+from agentctl.core import NO_SIGN, print_error, git, remote
 from agentctl.paths import reds_dir
 from agentctl.forge import forge_release_asset
 from agentctl.worktreelife import fresh_worktree
@@ -90,7 +90,7 @@ def explorer_file(o_r, repo, rows, now_):
     worktree, or None when the script printed nothing (no commit) or the worktree/commit failed (logged)."""
     wt, why = fresh_worktree(repo, "explorer", int(now_))
     if not wt:
-        err(f"drift explorer: {why}")
+        print_error(f"drift explorer: {why}")
         return None
     asset = wt + ".new-flips.tsv"
     seeds = sorted({r["seed"] for r in rows}, key=lambda s: (len(s), s))
@@ -100,13 +100,13 @@ def explorer_file(o_r, repo, rows, now_):
                            capture_output=True, text=True, timeout=300)
         if p.returncode != 0 or not p.stdout.strip():
             if p.returncode != 0:
-                err(f"drift explorer: the filing script failed ({(p.stderr or p.stdout).strip()[:200]})")
+                print_error(f"drift explorer: the filing script failed ({(p.stderr or p.stdout).strip()[:200]})")
             git(repo, "worktree", "remove", "--force", wt, check=False)
             return None
         git(wt, "add", EXPLORER_BACKLOG, EXPLORER_SEEDS, check=False)
         extra = _stray_changes(wt)
         if extra:
-            err(f"drift explorer: the script changed more than the backlog and the seeds ({extra[:3]})")
+            print_error(f"drift explorer: the script changed more than the backlog and the seeds ({extra[:3]})")
             git(repo, "worktree", "remove", "--force", wt, check=False)
             return None
         n = len(rows)
@@ -115,7 +115,7 @@ def explorer_file(o_r, repo, rows, now_):
             + "\n\nCo-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>\n")
         c = git(wt, *NO_SIGN, "commit", "-q", "-m", msg, check=False)
         if c.returncode != 0:
-            err(f"drift explorer: commit failed ({c.stderr.strip()[:160]})")
+            print_error(f"drift explorer: commit failed ({c.stderr.strip()[:160]})")
             return None
         spawn_land(wt, fixer_env(o_r, "explorer"), reds_dir(f"explorer-{int(now_)}.log"))
         return wt

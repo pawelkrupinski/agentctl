@@ -49,7 +49,7 @@ ZERO = "0" * 40
 
 
 # ---------------------------------------------------------------- helpers
-def err(msg: object) -> None:
+def print_error(msg: object) -> None:
     print(f"agentctl: {msg}", file=sys.stderr, flush=True)
 
 
@@ -64,7 +64,7 @@ def attempt(fn: Callable[[], T], default: D, *, catch: tuple[type[BaseException]
         return fn()
     except catch as e:
         if what is not None:
-            err(f"{what} ({str(e)[:160]})")
+            print_error(f"{what} ({str(e)[:160]})")
         return default
 
 

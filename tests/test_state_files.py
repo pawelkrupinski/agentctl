@@ -99,7 +99,7 @@ class JsonStateReadersTest(unittest.TestCase):
                 self.assertIsNone(A.claude_trust_gap(self.d), text)
 
     def test_unreadable_families_apply_none_and_say_why(self):
-        with mock.patch.object(A, "err", self.said.append):
+        with mock.patch.object(A, "print_error", self.said.append):
             self.assertEqual(A.load_families(self.p), [])
             self.write("{")
             self.assertEqual(A.load_families(self.p), [])
@@ -110,7 +110,7 @@ class JsonStateReadersTest(unittest.TestCase):
         self.assertTrue(all("unreadable" in m and self.p in m for m in self.said))
 
     def test_an_unreadable_repo_list_says_why_and_watches_the_primary(self):
-        with mock.patch.object(A, "err", self.said.append), mock.patch.dict(os.environ, {"AGENTCTL_RED_REPOS": self.p}):
+        with mock.patch.object(A, "print_error", self.said.append), mock.patch.dict(os.environ, {"AGENTCTL_RED_REPOS": self.p}):
             self.write("{")
             repos = A.red_repos()
         self.assertEqual(len(self.said), 1)

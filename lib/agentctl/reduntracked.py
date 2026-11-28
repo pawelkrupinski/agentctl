@@ -6,7 +6,7 @@ from agentctl.statemachines import is_terminal
 import json
 import time
 from typing import Any
-from agentctl.core import attempt, err
+from agentctl.core import attempt, print_error
 from agentctl.redrecord import canon_job, red_obs_for
 from agentctl.gating import main_workflow_files
 from agentctl.redrepos import red_is_other
@@ -191,7 +191,7 @@ def red_split_untracked(store, o_r, obs, now_=None, *, ctx):
         try:
             why = red_never_green(store, o_r, ob, now_, ctx=ctx)
         except (Exception, SystemExit) as e:
-            err(f"red: could not tell whether {key} was ever green ({str(e)[:120]}): tracked")
+            print_error(f"red: could not tell whether {key} was ever green ({str(e)[:120]}): tracked")
             why = None
         if why:
             untracked[key] = (ob, why)

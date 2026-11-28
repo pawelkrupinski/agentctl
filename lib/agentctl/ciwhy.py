@@ -8,7 +8,7 @@ import time
 from typing import Any, Callable
 from contextlib import suppress
 from agentctl.statefile import read_record, write_json
-from agentctl.core import attempt, err, git
+from agentctl.core import attempt, print_error, git
 from agentctl.repos import gated_repo, repo_path_for
 from agentctl.workflows import STEP_TIMED_OUT
 from agentctl.classify import SETUP_STEP
@@ -90,7 +90,7 @@ def gate_report_only(o_r, name, run, *, ctx):
 def remember_report_only(name: str, rid: str, out: tuple[bool, str], said: set[str]) -> tuple[bool, str]:
     """out; a missing registry row is said once per run: every gate job should have one (`said`: the runs it said so of)."""
     if "no row in" in out[1] and rid not in said:
-        err(f"{name} run {rid}: {out[1].split('; ', 1)[-1]}")
+        print_error(f"{name} run {rid}: {out[1].split('; ', 1)[-1]}")
         said.add(rid)
     return out
 
@@ -354,5 +354,5 @@ def resolve_run(o_r, n, *, ctx):
         r = run_listed_or_viewed(o_r, n, ctx=ctx)
         return r.get("workflowName"), r
     except (Exception, SystemExit) as e:
-        err(f"red: could not look up run {n} ({str(e)[:120]}): claimed by its number only")
+        print_error(f"red: could not look up run {n} ({str(e)[:120]}): claimed by its number only")
         return None, None

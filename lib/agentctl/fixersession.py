@@ -9,7 +9,7 @@ from agentctl.fixerknobs import knob_bg_idle_grace
 from agentctl.core import HOME, SHORT, _tokens, git
 from agentctl.repos import escalation_repo_path, red_repo_clone, red_repos
 from agentctl.claudefiles import bg_transcript, claude_jobs_root, fixer_verdict
-from agentctl.procs import proc_alive
+from agentctl.procs import process_alive
 from agentctl.inboxentry import inbox_write
 from agentctl.storetoken import no_vault, token, token_ns
 from agentctl.paths import state_root, tilde
@@ -202,7 +202,7 @@ def bg_ended(ent: dict[str, Any] | None) -> bool:
     if ent.get("state") in BG_ENDED_STATES:
         return True
     pid = ent.get("pid")
-    return ent.get("state") in BG_WAITING_STATES and not proc_alive(pid)
+    return ent.get("state") in BG_WAITING_STATES and not process_alive(pid)
 
 
 # a backgrounded shell, or a backgrounded subagent (2026-11-25, Alert backtest #28: an owner waiting on its own agent)
@@ -299,7 +299,7 @@ def bg_turn(path: str | None) -> dict[str, Any]:
 def bg_waiting(ent):
     """The row is a turn over with its process alive (claude's spare keeps it): what it waits for is the transcript's."""
     pid = (ent or {}).get("pid")
-    return bool(ent) and (ent.get("state") or ent.get("status")) in BG_WAITING_STATES and proc_alive(pid)
+    return bool(ent) and (ent.get("state") or ent.get("status")) in BG_WAITING_STATES and process_alive(pid)
 
 
 # A CLOSED TURN UNDER A `working` ROW (2026-11-21 21:53Z convergence owner session 0f6f7ecd, 22:55Z outside-gate
@@ -333,7 +333,7 @@ def bg_wait_mark(ent, path, now, every):
     renewed by it (bounded by the wall time). 2026-11-03: only a `blocked` / `idle` row counted, and an owner whose row
     read `working` while its own measure ran in the background stalled at 30 min."""
     pid = (ent or {}).get("pid")
-    if not ent or bg_ended(ent) or not proc_alive(pid):
+    if not ent or bg_ended(ent) or not process_alive(pid):
         return ""
     pending = bg_turn(path)["pending"]
     return f":waiting {','.join(pending)} @{int(now // max(every, 1))}" if pending else ""

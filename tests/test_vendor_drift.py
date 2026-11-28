@@ -46,11 +46,11 @@ class VendorDriftTest(unittest.TestCase):
 
     def step(self):
         said = []
-        saved, A.err = A.err, said.append
+        saved, A.print_error = A.print_error, said.append
         try:
             A.vendor_drift_step(self.st, A.probe_vendor_drift, lambda: self.t[0], self.root, self.auto)
         finally:
-            A.err = saved
+            A.print_error = saved
         return said
 
     def loops(self):

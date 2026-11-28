@@ -12,7 +12,7 @@ from typing import Iterator
 from agentctl.procrunner import process_runner
 from agentctl.statemachines import is_terminal
 from agentctl.redknobs import knob_brief, knob_fix_replay_timeout
-from agentctl.core import err, git, remote
+from agentctl.core import print_error, git, remote
 from agentctl.repos import red_repo_conf, red_repo_of
 from agentctl.trailers import commit_trailers, trailer_values
 from agentctl.redrepos import RED_WORKFLOWS_FILE, red_workflow_policy, red_workflows_on_main
@@ -313,7 +313,7 @@ def run_fix_replays(repo, base, head, commits):
         rec = {"cmd": cmd, "base_sha": base, "head_sha": head}
         for side, sha in (("base", base), ("head", head)):
             rec[side] = fix_replay_once(repo, sha, cmd, side)
-        err(f"fix replay: `{cmd}` base={rec['base']} head={rec['head']}")
+        print_error(f"fix replay: `{cmd}` base={rec['base']} head={rec['head']}")
         out.append(rec)
     return out
 
@@ -328,7 +328,7 @@ def fix_replay_once(repo, sha, cmd, side):
     log = os.path.join(logs, f"{sha[:12]}-{side}.log")
     try:
         git(repo, "worktree", "add", "-q", "--detach", wt, sha)
-        err(f"fix replay: `{cmd}` at {side} {sha[:10]} (log: {log})")
+        print_error(f"fix replay: `{cmd}` at {side} {sha[:10]} (log: {log})")
         with open(log, "w") as f:
             try:
                 rc = process_runner().run(["bash", "-c", cmd], cwd=wt, stdin=subprocess.DEVNULL, stdout=f,

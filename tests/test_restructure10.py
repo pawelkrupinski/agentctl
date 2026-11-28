@@ -275,11 +275,11 @@ class SyncOntoMainTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
         holder = {"case": case}
-        for name, gen in (("remote", lambda rng: "origin"), ("err", lambda rng, m: None), ("branch_of", lambda rng, repo: "br"),
+        for name, gen in (("remote", lambda rng: "origin"), ("print_error", lambda rng, m: None), ("branch_of", lambda rng, repo: "br"),
                           ("waiting_commits", lambda rng, repo, base, head: ["w1", "w2"][:rng.randint(0, 2)]),
                           ("blame_records_quiet", lambda rng, st: ["rec"]),
                           ("land_before_queue", lambda rng, repo, head: rng.choice([head, head + "+"])),
-                          ("env_num", lambda rng, name, default: default),
+                          ("env_number", lambda rng, name, default: default),
                           ("landed_state", lambda rng, repo, main_ref, head: A.LandState(A.LANDED if rng.random() < 0.12 else A.NOT_LANDED)),
                           ("do_not_land", lambda rng, repo, commits, branch: maybe(rng, "marked", 0.1)),
                           ("held_commit", lambda rng, repo, commits: maybe(rng, "held", 0.1)),
@@ -314,7 +314,7 @@ class LandUntilDoneTest(unittest.TestCase):
         case.fake("git", lambda rng, repo, *a, **k: "h" + str(rng.randint(1, 3)) + "abcdefghijkl\n")
         case.fake("git_ok", lambda rng, *a, **k: rng.random() < 0.7)
         case.fake("remote", lambda rng: "origin")
-        case.fake("env_num", lambda rng, name, default: default)
+        case.fake("env_number", lambda rng, name, default: default)
         case.fake("fmt_age", lambda rng, secs: f"{int(secs)}s")
         case.fake("own_change_item", lambda rng, repo, head, store: existing)
         case.fake("verdict_still_holds", lambda rng, repo, main_ref, it: rng.random() < 0.5)

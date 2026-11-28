@@ -7,7 +7,7 @@ import os
 from agentctl.statefile import read_record
 from agentctl.timefmt import hhmmz, iso_at, parse_time
 from agentctl.redknobs import knob_red_main_verify_every, knob_red_verify_slack
-from agentctl.core import err, git, remote
+from agentctl.core import print_error, git, remote
 from agentctl.percentile import pct
 from agentctl.workflows import workflow_file_of
 from agentctl.trailers import trailer_format, trailer_values
@@ -244,7 +244,7 @@ def workflow_main_runs(o_r, wfile, *, ctx):
         # listing: a fix is verified by a run CONTAINING it, the newest 30 read; none there keeps it pending, never refuted
         return ctx.runs.main_runs(o_r, wfile, 30, fresh_for=VERIFY_RUNS_TTL)
     except (Exception, SystemExit) as e:
-        err(f"red verify: could not list {wfile} ({str(e)[:120]})")
+        print_error(f"red verify: could not list {wfile} ({str(e)[:120]})")
         return ctx.runs.last_listed(o_r, wfile, 30) or []
 
 

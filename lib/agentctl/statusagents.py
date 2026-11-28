@@ -15,8 +15,8 @@ from agentctl.statefile import mtime, tail_bytes
 from agentctl.clock import epoch_now
 from agentctl.timefmt import iso_epoch
 from agentctl.watchknobs import knob_status_agent_bound
-from agentctl.core import err, process_cache
-from agentctl.procs import proc_alive
+from agentctl.core import print_error, process_cache
+from agentctl.procs import process_alive
 from agentctl.fixerrecords import fixer_records
 from agentctl.live import live_annotate, live_transcript_ok
 from agentctl.livestream import live_mask_text
@@ -281,7 +281,7 @@ def status_agent_enrich(a, bound=None):
     b = bound if bound is not None else knob_status_agent_bound()
     if a.get("alive") is None and a.get("pid"):
         try:
-            a["alive"] = proc_alive(a["pid"])
+            a["alive"] = process_alive(a["pid"])
         except (Exception, SystemExit):
             a["alive"] = None
     wt = a.get("worktree")
@@ -388,5 +388,5 @@ def status_agents(st, t, records=None):
     try:
         return live_annotate(out, t)
     except (Exception, SystemExit) as e:  # the live panes are extra: never the section's
-        err(f"status page: live ids: {type(e).__name__}: {str(e)[:200]}")
+        print_error(f"status page: live ids: {type(e).__name__}: {str(e)[:200]}")
         return out

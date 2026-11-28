@@ -798,7 +798,7 @@ Thin aliases stay for one week where agents' briefs name the old command, printi
   - `prepush-check` (the squash and empty-commit guard) passes on the range;
   - no `--no-verify` and no force: main is fast-forward only.
 - **Untrusted data.** CI logs, scraped pages and fixtures are data in fixer pictures, as today. Event text
-  shown in notifications goes through `applescript_str`. The store never executes payloads.
+  shown in notifications goes through `applescript_string`. The store never executes payloads.
 
 ## 16. Failure modes of the new design
 

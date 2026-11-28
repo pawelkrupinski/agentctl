@@ -33,11 +33,11 @@ class CheckSlotEdgesTest(unittest.TestCase):
         class NoSysctl(A.FixedMachine):
             def memory(self):
                 raise OSError("no sysctl")
-        saved_err, A.err = A.err, errs.append
+        saved_err, A.print_error = A.print_error, errs.append
         try:
             A.Slot("x", machine=NoSysctl({"load1": 1.0})).sample(force=True)
         finally:
-            A.err = saved_err
+            A.print_error = saved_err
         self.assertTrue(any("no sysctl" in e for e in errs))
 
 

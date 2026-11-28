@@ -11,7 +11,7 @@ from agentctl.statefile import note_failure, read_record, write_json
 from agentctl.timefmt import day_hhmmz
 from agentctl.storeknobs import knob_hostname
 from agentctl.govknobs import knob_laptop_role_ttl
-from agentctl.core import err, process_cache
+from agentctl.core import print_error, process_cache
 from agentctl.procs import socket_host
 from agentctl.inboxentry import inbox_write
 from agentctl.leases import lease_meta
@@ -152,7 +152,7 @@ def laptop_role_step(store) -> bool:
     if rec.get("told") != (row or {}).get("holder"):
         line = f"LAPTOP STANDBY: {laptop_role_line(row)}"
         inbox_write("laptop", line, [line], [], 1)
-        err(line)
+        print_error(line)
         write_json(laptop_role_path(), {**rec, "told": (row or {}).get("holder")})
     return False
 

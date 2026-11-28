@@ -56,7 +56,7 @@ REJECT_CLASSES = (
 )
 
 
-def _num(v: Any) -> Optional[float]:
+def _number(v: Any) -> Optional[float]:
     try:
         return float(v)
     except (TypeError, ValueError):
@@ -132,11 +132,11 @@ def _iso(at: Optional[float]) -> Optional[str]:
 
 def _total(rows: Iterable[Rec], key: str) -> Optional[float]:
     """The rows' key summed (an unreadable value counts 0), rounded."""
-    return _r(sum(_num(r.get(key)) or 0 for r in rows))
+    return _r(sum(_number(r.get(key)) or 0 for r in rows))
 
 
 def _peak(rows: Iterable[Rec], key: str) -> Optional[float]:
-    return max((_num(r.get(key)) or 0 for r in rows), default=None)
+    return max((_number(r.get(key)) or 0 for r in rows), default=None)
 
 
 def item_span(item: Rec, events: Iterable[Rec], item_type: str, start_key: str,
@@ -145,7 +145,7 @@ def item_span(item: Rec, events: Iterable[Rec], item_type: str, start_key: str,
     at its first event; it ends at the newest event entering one of end_states, else when it entered its state."""
     d = item["data"] or {}
     evs = [e for e in events if e.get("item_type", item_type) == item_type]
-    start = _num(d.get(start_key)) or (evs[0]["at"] if evs else item["entered_at"])
+    start = _number(d.get(start_key)) or (evs[0]["at"] if evs else item["entered_at"])
     end_ev = next((e for e in reversed(evs) if e.get("to_state") in end_states), None)
     return evs, start, end_ev, end_ev["at"] if end_ev else item["entered_at"]
 
@@ -183,8 +183,8 @@ def check_rounds(spans: list[Span], evs: list[Rec], runs: Iterable[Rec]) -> list
     for run in runs:  # a run belongs to the round it started in (an adopted run: the round before it)
         rd = _round_of(rounds, run.get("start") or 0)
         if rd is not None and not rd.get("run_id"):
-            rd.update(run_id=run.get("run_id"), run_queue_s=_num(run.get("path_queue_s")),
-                      run_work_s=_num(run.get("path_work_s")), run_wall_s=_num(run.get("wall_s")))
+            rd.update(run_id=run.get("run_id"), run_queue_s=_number(run.get("path_queue_s")),
+                      run_work_s=_number(run.get("path_work_s")), run_wall_s=_number(run.get("wall_s")))
     return rounds
 
 
@@ -302,7 +302,7 @@ def _landing_checks(runs: list[Rec], jobs: list[Rec]) -> Rec:
 
 def _precheck_and_batch(d: Rec, entry: Rec) -> Rec:
     pre = d.get("precheck") or {}
-    return {"precheck_s": _num(pre.get("duration_s")), "precheck_outcome": pre.get("outcome"),
+    return {"precheck_s": _number(pre.get("duration_s")), "precheck_outcome": pre.get("outcome"),
             "precheck_step": pre.get("step"), "batch": _either(d, entry, "batch"),
             "batch_id": _either(d, entry, "batch_id"), "superseded_by": _either(d, entry, "superseded_by")}
 
@@ -333,7 +333,7 @@ def stats_common(rec: Rec, at: float, since: Optional[float]) -> Rec:
 def watch_record(item: Rec, change_id: Optional[str] = None, since: Optional[float] = None) -> Rec:
     """agentctl.landing_watch of a decided watch item (keyed by the landed sha)."""
     d = item["data"] or {}
-    pushed, at = _num(d.get("pushed_at")), item["entered_at"]
+    pushed, at = _number(d.get("pushed_at")), item["entered_at"]
     rec = {"record": "agentctl.landing_watch", "landed_sha": item["id"], "change_id": change_id,
            "repo": d.get("o_r"), "verdict": item["state"], "verdict_line": str(d.get("verdict") or "")[:300],
            "pushed_at": iso_at(pushed) if pushed else None, "watch_s": (at - pushed) if pushed else None,

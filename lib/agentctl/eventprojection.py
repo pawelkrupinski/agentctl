@@ -7,7 +7,7 @@ import json
 import os
 import re
 from typing import Any
-from agentctl.core import attempt, err
+from agentctl.core import attempt, print_error
 from agentctl.timefmt import iso_at
 from agentctl.notifyurl import notification_url
 from agentctl.procs import safe_cwd
@@ -82,7 +82,7 @@ def _write_alert(st: Any, ev: dict[str, Any], rec: dict[str, Any], d: str) -> bo
         alert_write(rec, st=st, red=red, d=d)
         return True
     except OSError as ex:  # the cursor stays before it: written at the next cycle, never lost
-        err(f"projector: could not write {rec['id']} ({ex})")
+        print_error(f"projector: could not write {rec['id']} ({ex})")
         return False
 
 

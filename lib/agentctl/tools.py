@@ -14,7 +14,7 @@ from agentctl.storeknobs import knob_store_token
 from agentctl.redknobs import knob_red_fixer
 from agentctl.queueknobs import knob_max_foreign
 from agentctl.fixerknobs import knob_allow
-from agentctl.core import HOME, ZERO, err, git, git_ok, remote
+from agentctl.core import HOME, ZERO, print_error, git, git_ok, remote
 from agentctl.paths import scratch
 from agentctl.forge import GH_CLI
 from agentctl.onmain import ALLOW_EMPTY_TRAILER, deliberate_empty, is_empty_commit
@@ -196,7 +196,7 @@ def cmd_state(a):
     if not os.path.exists(path):
         with open(path, "w") as f:
             f.write(TEMPLATE.format(topic=a.topic, ts=ts()))
-        err(f"created {path}")
+        print_error(f"created {path}")
     text = open(path).read()
     specs = [(s, False) for s in a.set or []] + [(s, True) for s in a.add or []]
     for spec, append in specs:

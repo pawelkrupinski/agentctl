@@ -16,7 +16,7 @@ from agentctl.statefile import read_record, write_json
 from agentctl.clock import epoch_now
 from agentctl.timefmt import parse_time
 from agentctl.storeknobs import knob_gh_cli, knob_runners_page_cache
-from agentctl.core import HOME, err, process_cache
+from agentctl.core import HOME, print_error, process_cache
 from agentctl.ghapp import ghapp_enabled, ghapp_token
 from agentctl.ghtally import gh_tally, gh_tally_as, gh_tally_shape
 from agentctl.netretry import net_run
@@ -211,7 +211,7 @@ def forge_workflow_names(o_r):
             flows = (api(o_r, "GET", "actions/workflows", {"per_page": 100}) or {}).get("workflows") or []
             names = _workflow_name_index(flows)
         except (Exception, SystemExit) as e:
-            err(f"forge: could not read {o_r}'s workflows ({str(e)[:120]}): runs keep their run-names")
+            print_error(f"forge: could not read {o_r}'s workflows ({str(e)[:120]}): runs keep their run-names")
             names = names or {}
         _workflow_names[o_r] = (epoch_now(), names)
     return names

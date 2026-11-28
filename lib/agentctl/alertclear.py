@@ -111,7 +111,7 @@ ALERT_RED_PROBED = {"BLOCKED", "RED_BUDGET", "DIAGNOSED", "FIXER_FAILED", "FIX_F
                     "RED_BLAME", "RED_RELAND"} | ALERT_RED_KINDS
 
 
-def alert_ctx_get(ctx, name, load):
+def alert_context_get(ctx, name, load):
     """One read per reconcile pass of what several alerts' probes ask (the open reds, conditions, batches, the gate)."""
     if name not in ctx:
         ctx[name] = load()
@@ -173,7 +173,7 @@ class AlertClearing:
         v = self.verdict
         if not (re.search(r" #\d+", v) or re.search(r"\bdecide \w+", v)):
             return None
-        reds = alert_ctx_get(self.ctx, "reds", lambda: alert_open_reds(self.st))
+        reds = alert_context_get(self.ctx, "reds", lambda: alert_open_reds(self.st))
         return None if any(alert_red_named(r["data"], v) for r in reds) else "its red is closed (no open red names it)"
 
     def applies_orphan(self) -> bool:
@@ -200,7 +200,7 @@ class AlertClearing:
         return self.verdict.startswith("WATCH UNKNOWN") or self.item.startswith("watch:")
 
     def gate_decided(self) -> str | None:
-        gate = alert_ctx_get(self.ctx, "gate", alert_gate)
+        gate = alert_context_get(self.ctx, "gate", alert_gate)
         return "a later gate run has decided (its commit is covered)" if alert_gate_decided_after(gate, self.at) else None
 
     def applies_network(self) -> bool:
@@ -209,7 +209,7 @@ class AlertClearing:
     def network_back(self) -> str | None:
         if self.t - self.at < knob_alert_network_grace():
             return None
-        conds = alert_ctx_get(self.ctx, "conditions", lambda: open_conditions(self.st))
+        conds = alert_context_get(self.ctx, "conditions", lambda: open_conditions(self.st))
         return None if any(c.get("kind") == "NETWORK" for c in conds) else "the network is back (no NETWORK condition open)"
 
     def applies_held(self) -> bool:
@@ -225,7 +225,7 @@ class AlertClearing:
         return (lambda b: b["id"] == bid) if bid else None
 
     def batch_moved(self) -> str | None:
-        held = alert_ctx_get(self.ctx, "held", lambda: self.st.items("batch", ["held"]))
+        held = alert_context_get(self.ctx, "held", lambda: self.st.items("batch", ["held"]))
         named = self._batch_named()
         if named is None:
             return None

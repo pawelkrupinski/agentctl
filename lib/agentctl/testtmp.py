@@ -11,7 +11,7 @@ from agentctl.storetoken import token_sock_path
 TEST_TMP_MAX_AGE = 3600
 
 
-def user_tmp_dir() -> str:
+def user_temp_dir() -> str:
     try:
         return os.confstr("CS_DARWIN_USER_TEMP_DIR") or tempfile_dir()
     except (ValueError, OSError, AttributeError):
@@ -51,7 +51,7 @@ def _sweepable(p: str, t: float, suite_root: bool) -> bool:
     return not (suite_root and _suite_root_in_use(p, t))
 
 
-def sweep_test_tmp(now_: Optional[float] = None, tmp_root: str = "/tmp") -> int:
+def sweep_test_temp(now_: Optional[float] = None, tmp_root: str = "/tmp") -> int:
     """The test suite's leftovers older than TEST_TMP_MAX_AGE: `agentctl-*` in the user's temp dir, `agentctl-sock-*` in
     /tmp (never the processor's own socket dir /tmp/agentctl-<uid>), and /tmp's suite roots `agentctl-t-*` (2026-11-22:
     174 of them, 197 MB, fed a runaway fseventsd) unless one is in use (_suite_root_in_use). Returns how many went."""
@@ -59,7 +59,7 @@ def sweep_test_tmp(now_: Optional[float] = None, tmp_root: str = "/tmp") -> int:
     t = now_ if now_ is not None else wall_epoch()  # against directory mtimes
     n = 0
     roots = set(glob.glob(os.path.join(tmp_root, "agentctl-t-*")))
-    for pat in (os.path.join(user_tmp_dir(), "agentctl-*"), os.path.join(tmp_root, "agentctl-sock-*"), *roots):
+    for pat in (os.path.join(user_temp_dir(), "agentctl-*"), os.path.join(tmp_root, "agentctl-sock-*"), *roots):
         for p in glob.glob(pat):
             if os.path.realpath(p) == os.path.realpath(os.path.dirname(token_sock_path("x"))):
                 continue  # the processor's own socket dir (Linux: the user temp dir IS /tmp)

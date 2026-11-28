@@ -7,7 +7,7 @@ from typing import Any
 from agentctl.timefmt import parse_time
 from agentctl.storeknobs import knob_remote_ghost
 from agentctl.leasetable import LeaseLost
-from agentctl.core import err, git, host_role, remote
+from agentctl.core import print_error, git, host_role, remote
 from agentctl.repos import slug
 from agentctl.procs import Terminated
 from agentctl.checkrows import check_run_record, with_run
@@ -223,7 +223,7 @@ def remote_mirror(eid: Any, rem: dict[str, Any], st: Any) -> None:
         if it and new:
             st.update_item("change", eid, it["version"], new)
     except Exception as e:  # the next poll mirrors it
-        err(f"the check summary of {eid} was not mirrored ({str(e)[:160]}); the next poll will")
+        print_error(f"the check summary of {eid} was not mirrored ({str(e)[:160]}); the next poll will")
 
 
 MIRRORED = ("branch", "run", "run_status", "status", "pushed_at", "progress_at", "unlisted_at", "jobs", "decided_at")
@@ -275,7 +275,7 @@ def delete_check_branch(o_r, branch):
     try:
         forge_delete_branch(o_r, branch)
     except Exception as ex:
-        err(f"could not delete {branch} ({str(ex)[:120]}): `agentctl sweep` lists it")
+        print_error(f"could not delete {branch} ({str(ex)[:120]}): `agentctl sweep` lists it")
 
 
 def remote_mode_prefix(e, base, mode):
@@ -301,7 +301,7 @@ def check_branch_push(repo, head, branch, sleep):
         r = git(repo, "push", "--quiet", "--force", remote(), f"{head}:refs/heads/{branch}", check=False)
         if r.returncode == 0 or delay is None or credential_failure(r.stderr):  # no wait brings a credential back
             return r
-        err(f"push of {branch} failed ({(r.stderr or '').strip()[:160]}): again in {delay} s")
+        print_error(f"push of {branch} failed ({(r.stderr or '').strip()[:160]}): again in {delay} s")
         sleep(delay)
 
 
@@ -371,7 +371,7 @@ def remote_check_pushed(repo: str, e: Any, base: str, head: str | None, mode: An
         record_dispatch(branch=branch, workflow=REMOTE_WORKFLOW, worktree=e.get("worktree"), sha=head,
                         agent="land queue", pid=os.getpid(), purpose=f"pre-commit check of queue entry {e['id']}")
     except (Exception, SystemExit) as ex:
-        err(f"remote check of {e['id']}: owner not recorded ({str(ex)[:120]})")
+        print_error(f"remote check of {e['id']}: owner not recorded ({str(ex)[:120]})")
     return rem, None
 
 
@@ -382,7 +382,7 @@ def remote_check_beat(e: Any, rem: Any, clock: Any) -> tuple[None, str] | None:
         lock_beat(f"remote:{rem.get('run')}:{rem.get('status') or rem.get('run_status') or 'pending'}:"
                   f"{int(clock.time() // 60)}")
     except LeaseLost as ex:
-        err(f"remote check of {e['id']}: {ex}; a new checker adopts its run")
+        print_error(f"remote check of {e['id']}: {ex}; a new checker adopts its run")
         return None, str(ex)
     return None
 
@@ -395,14 +395,14 @@ def remote_check_polled(o_r: str, e: Any, rem: Any, clock: Any, st: Any, d: str 
             try:
                 save_dispatch({"branch": rem["branch"], "run_id": new["run"]})
             except OSError as exc:
-                err(f"remote dispatch not saved ({str(exc)[:160]})")
+                print_error(f"remote dispatch not saved ({str(exc)[:160]})")
         if new != rem:
             rem = new
             save_remote(d, e, rem, st)
     except Terminated:
         raise
     except (Exception, SystemExit) as ex:  # GitHub down for a while: keep reading until the bound
-        err(f"remote check of {e['id']}: {str(ex)[:160]}")
+        print_error(f"remote check of {e['id']}: {str(ex)[:160]}")
     return rem
 
 

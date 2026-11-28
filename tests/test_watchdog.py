@@ -505,10 +505,10 @@ class RunawayProcessTest(unittest.TestCase):
         self.assertFalse(self.run_passes(self.climb(4.0, 5.0, 60), pid=77, name="other", cpu=5.0)[-1][1])
 
     def test_each_known_kind_reads_its_own_ceiling_and_an_unknown_one_has_none(self):
-        self.assertEqual(A.proc_ceiling("java", "java -Xmx512m x", 16.0, self.d), (512 * 1024, "its -Xmx 0.5 GB"))
-        self.assertEqual(A.proc_ceiling("mongod", "mongod --wiredTigerCacheSizeGB 3", 16.0, self.d)[0], 3 * 1024 ** 2)
-        self.assertIsNone(A.proc_ceiling("com.apple.Virtualization.VirtualMachine", "", 16.0, self.d), "no VM config")
-        self.assertIsNone(A.proc_ceiling("fseventsd", "", 16.0, self.d))
+        self.assertEqual(A.process_ceiling("java", "java -Xmx512m x", 16.0, self.d), (512 * 1024, "its -Xmx 0.5 GB"))
+        self.assertEqual(A.process_ceiling("mongod", "mongod --wiredTigerCacheSizeGB 3", 16.0, self.d)[0], 3 * 1024 ** 2)
+        self.assertIsNone(A.process_ceiling("com.apple.Virtualization.VirtualMachine", "", 16.0, self.d), "no VM config")
+        self.assertIsNone(A.process_ceiling("fseventsd", "", 16.0, self.d))
 
     def test_a_big_server_creeping_by_a_sliver_is_no_runaway(self):
         """300 MB over 45 min on a 9 GB process is no trend: growth must reach 5% or 500 MB over the window."""

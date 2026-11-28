@@ -11,10 +11,10 @@ import sys
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import attempt, err, pid_alive, process_cache
+from agentctl.core import attempt, print_error, pid_alive, process_cache
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json, note_failure, unlink_file
-from agentctl.procs import proc_alive, process_start
+from agentctl.procs import process_alive, process_start
 from agentctl.filelock import lock_held
 from agentctl.machine import MachineProbe
 from agentctl.filelog import file_event, note_event, note_events
@@ -96,7 +96,7 @@ def gov_waiter_alive(rec):
     at = _gov_alive.get(k)
     if at is not None and wall_epoch() - at < GOV_ALIVE_TTL:
         return True
-    ok = proc_alive(pid, start)  # a reused pid is not the waiter
+    ok = process_alive(pid, start)  # a reused pid is not the waiter
     if ok:
         _gov_alive[k] = wall_epoch()
     return ok
@@ -307,7 +307,7 @@ def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=Tr
     mem = GOV_MEM_GB.get(cls, 5.0) if mem is None else float(mem)
     cores = gov_job_cores(job, cls, kind, machine_cores=machine.cores()) if cores is None else float(cores)
     d = gov_dir()
-    waiter = GovWait(cls, mem, cores, label, kind, None, report or err, force, wait, max_wait, floor=min_cores,
+    waiter = GovWait(cls, mem, cores, label, kind, None, report or print_error, force, wait, max_wait, floor=min_cores,
                      machine=machine)
     t0 = waiter.t0
     waiter.me = me = os.path.join(d, f"w-{t0:.6f}-{os.getpid()}.json")

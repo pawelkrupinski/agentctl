@@ -6,7 +6,7 @@ from agentctl.statemachines import StaleVersion, is_terminal, open_items
 from agentctl.clock import epoch_now
 from agentctl.tickknobs import knob_step_bound
 from agentctl.redknobs import RED_TICK_INTERVAL, knob_red_others_every, knob_red_skip_say, knob_red_tick
-from agentctl.core import err, run_bounded
+from agentctl.core import print_error, run_bounded
 from agentctl.tokenerrors import NoReadAccess
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos, slug
 from agentctl.redrepos import red_gate_flows, red_is_other
@@ -50,7 +50,7 @@ def tick_stage(what: Any, stage: Any, default: Any = None, after: Any = "") -> A
     try:
         return stage()
     except (Exception, SystemExit) as e:
-        err(f"red tick: {what} ({str(e)[:160]}){after}")
+        print_error(f"red tick: {what} ({str(e)[:160]}){after}")
         return default
 
 
@@ -147,7 +147,7 @@ def step_red(store: Any, o_r: Any, repo: Any, snap: Any, facts: Any, key: Any, i
     except StaleVersion:
         return []  # another writer moved it: the next tick
     except (Exception, SystemExit) as e:
-        err(f"red tick: {key}: {type(e).__name__}: {str(e)[:200]}")
+        print_error(f"red tick: {key}: {type(e).__name__}: {str(e)[:200]}")
         return []
 
 
@@ -165,7 +165,7 @@ def red_tick_repo(repo, store, registry, snap=None, dispatch=False, *, ctx):
         recheck_local(repo, wait=False, machine=ctx.machine)
         acts = red_tick(store, o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch, registry=registry, ctx=ctx)
     for line in acts:
-        err(f"red: {line}")
+        print_error(f"red: {line}")
     return acts
 
 
@@ -239,7 +239,7 @@ def note_no_read_access(unread: list[str], store: Any) -> None:
     try:
         red_no_read_access(unread, store)
     except (Exception, SystemExit) as e:
-        err(f"red tick: could not note the missing read access ({str(e)[:120]})")
+        print_error(f"red tick: could not note the missing read access ({str(e)[:120]})")
 
 
 def red_tick_others(store, registry, now_=None, dispatch=False, force=True, *, ctx):
@@ -265,7 +265,7 @@ def red_tick_others(store, registry, now_=None, dispatch=False, force=True, *, c
     if unread:
         note_no_read_access(unread, store)
     for line in acts:
-        err(f"red: {line}")
+        print_error(f"red: {line}")
     return acts
 
 
@@ -277,7 +277,7 @@ def red_others_skipped(said, o_r, why, now_=None):
         return None
     said[o_r] = (why, t)
     line = f"red tick: {o_r}: skipped ({why})" + (" (still)" if last and last[0] == why else "")
-    err(line)
+    print_error(line)
     return line
 
 
@@ -290,13 +290,13 @@ def maybe_red_tick(repo, store, registry, *, ctx):
         try:
             red_tick_repo(repo, store, registry, ctx=ctx)
         except (Exception, SystemExit) as e:
-            err(f"red tick: skipped ({str(e).replace('agentctl: ', '')[:200]})")
+            print_error(f"red tick: skipped ({str(e).replace('agentctl: ', '')[:200]})")
             try:
                 gate_unread_spell(slug(repo), str(e)[:200], store)
             except (Exception, SystemExit) as spell_error:
-                err(f"red tick: the gate spell was not recorded ({str(spell_error)[:160]})")
+                print_error(f"red tick: the gate spell was not recorded ({str(spell_error)[:160]})")
         red_tick_others(store, registry, force=False, ctx=ctx)  # the other watched repos (red-repos.json); never fatal, never the primary's gate spell
     if not run_bounded("red-tick", work, knob_step_bound()):
-        err("red tick: still running from an earlier cycle (the loop goes on)")
+        print_error("red tick: still running from an earlier cycle (the loop goes on)")
 
 

@@ -8,7 +8,7 @@ from typing import Any
 from agentctl.statefile import read_record, write_json
 from agentctl.timefmt import ts
 from agentctl.queueknobs import knob_baseline, knob_land_stall_min
-from agentctl.core import err, git, host_role, remote
+from agentctl.core import print_error, git, host_role, remote
 from agentctl.repos import batching, precheck_hook, slug, waiting_supported
 from agentctl.networksignatures import network_failure
 from agentctl.waitingdir import ChangeRecords, waiting_state
@@ -58,7 +58,7 @@ class DryRun:
 
     def run(self) -> Any:
         repo, head, log_path = self.repo, self.head, self.log_path
-        err(f"checking {head[:10]}: {os.path.relpath(self.hook, repo)} {self.mode} {remote()}/main..HEAD (log: {log_path})")
+        print_error(f"checking {head[:10]}: {os.path.relpath(self.hook, repo)} {self.mode} {remote()}/main..HEAD (log: {log_path})")
         lock_note(f"checks of {head[:10]}")
         try:
             rc, out = self._checks()
@@ -128,7 +128,7 @@ class DryRun:
             try:
                 local_cleared(self.repo, main_)
             except (Exception, SystemExit) as e:
-                err(f"local red cleared, but releasing it failed ({str(e)[:120]})")
+                print_error(f"local red cleared, but releasing it failed ({str(e)[:120]})")
 
 
 BASELINE_RECHECKS = 3  # dry runs against a known-red baseline at most, main moving under each
@@ -200,7 +200,7 @@ def baseline_failures(repo, hook, head, log_path, *, machine):
     if git(repo, "worktree", "add", "-q", "--detach", mark_internal(tree), synth, check=False).returncode != 0:
         return None
     try:
-        err(f"the change's checks failed: running them on plain {remote()}/main {main[:10]} (the known-red baseline)")
+        print_error(f"the change's checks failed: running them on plain {remote()}/main {main[:10]} (the known-red baseline)")
         with check_slot(repo, f"baseline {main[:10]}", machine=machine) as slot:
             rc, out = run_watched([os.path.join(tree, os.path.relpath(hook, repo)), "--checks-only", f"{head}..{synth}"],
                                   tree, {**slot.env(tool_env()), "PREPUSH_BASELINE_DIR": ""}, log_path, "baseline",
@@ -211,7 +211,7 @@ def baseline_failures(repo, hook, head, log_path, *, machine):
     if rc is None:
         return None
     if rc and network_failure(out):  # the network's failure, not main's: no baseline, no cache, no reds/local.json
-        err(f"the baseline on plain {remote()}/main {main[:10]} could not reach the network ({network_failure(out)})")
+        print_error(f"the baseline on plain {remote()}/main {main[:10]} could not reach the network ({network_failure(out)})")
         return NETWORK_SHAPED
     write_baseline_out(main, out)
     fails = check_failures(out) if rc else {}

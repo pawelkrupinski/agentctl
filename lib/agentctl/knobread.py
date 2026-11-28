@@ -4,7 +4,7 @@
 import os
 
 
-def env_num(name: str, default: float) -> float:
+def env_number(name: str, default: float) -> float:
     try:
         return float(os.environ[name]) if os.environ.get(name) else default
     except ValueError:

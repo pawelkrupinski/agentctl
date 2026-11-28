@@ -18,7 +18,7 @@ from agentctl.timefmt import now, ts
 from agentctl.tickknobs import knob_cleanup_item_timeout, knob_fetch_timeout
 from agentctl.queueknobs import knob_free_wait
 from agentctl.govknobs import SBT_STALL_MIN, knob_sbt_reap
-from agentctl.core import GIT_NET_SSH, HOME, PROTECTED_BRANCHES, err, git, remote, run_cmd
+from agentctl.core import GIT_NET_SSH, HOME, PROTECTED_BRANCHES, print_error, git, remote, run_cmd
 from agentctl.repos import slug
 from agentctl.procs import PROC_ROOT, process_cwds, ps
 from agentctl.forge import forge_branches
@@ -107,7 +107,7 @@ class TreeReview:
             n = git(self.repo, "rev-list", "--count", f"{self.main}..{sha}", check=False, timeout=self.item).stdout.strip() or "?"
             return "skip", f"unmerged ({n} commit(s) not on {remote()}/main)"
         if t0.elapsed() > 30:
-            err(f"cleanup: {path} took {t0.elapsed():.0f} s to decide")
+            print_error(f"cleanup: {path} took {t0.elapsed():.0f} s to decide")
         return "delete", why
 
 

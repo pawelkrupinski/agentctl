@@ -10,7 +10,7 @@ from agentctl.procrunner import process_runner
 from agentctl.statemachines import machine_state
 from agentctl.ids import stamp
 from agentctl.queueknobs import knob_land_before_queue_seconds, knob_max_foreign, knob_until_done_deadline
-from agentctl.core import NO_SIGN, branch_of, err, git, git_ok, host_role, process_cache, remote
+from agentctl.core import NO_SIGN, branch_of, print_error, git, git_ok, host_role, process_cache, remote
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.policy import policy_blocks
 from agentctl.agewords import fmt_age
@@ -104,7 +104,7 @@ def _cancel_refused(a: Any, store: Any, lines: Any, last: Any, *, ctx: Context) 
     try:
         rc = queue_command(cancel, store, ctx=ctx)
     except (Exception, SystemExit) as e:  # the store unreachable: the change is still queued, its check judges it
-        err(f"could not cancel {a.entry}: {e}")
+        print_error(f"could not cancel {a.entry}: {e}")
         verdict = (f"PRECHECK REFUSED {a.entry} ({a.head[:10]}): {last}; it could not be cancelled ({str(e)[:120]}), so "
                    f"the landing check still judges it -- `agentctl land cancel {a.entry}` to drop it, fix it in {a.repo}")
         return _refusal_told(a, verdict, lines)
@@ -302,7 +302,7 @@ def fetch_for_land(sh: Any, clock: Any) -> Any:
     one more try after 15 s)."""
     r = sh("git", "fetch", "--quiet", remote(), "main")
     if r.returncode:
-        err(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
+        print_error(f"git fetch failed ({r.stderr.strip()[:120]}); retrying once in 15 s")
         clock.sleep(15)
         r = sh("git", "fetch", "--quiet", remote(), "main")
     if r.returncode:
@@ -397,18 +397,18 @@ def land_before_queue(repo, head):
         r = process_runner().run([tool, base, head], cwd=repo, capture_output=True, text=True, env=tool_env(),
                            timeout=knob_land_before_queue_seconds())
         for line in (r.stdout + r.stderr).strip().splitlines()[-12:]:
-            err(f"{LAND_BEFORE_QUEUE}: {line}")
+            print_error(f"{LAND_BEFORE_QUEUE}: {line}")
     except subprocess.TimeoutExpired:
-        err(f"{LAND_BEFORE_QUEUE}: timed out; the change lands as it was")
+        print_error(f"{LAND_BEFORE_QUEUE}: timed out; the change lands as it was")
     now = git(repo, "rev-parse", "HEAD").strip()
     if now != head and not is_ancestor(repo, head, now):
-        err(f"{LAND_BEFORE_QUEUE}: left HEAD off the change ({now[:10]}): put back on {head[:10]}")
+        print_error(f"{LAND_BEFORE_QUEUE}: left HEAD off the change ({now[:10]}): put back on {head[:10]}")
         if branch:
             git(repo, "checkout", "-q", "--force", branch)
         git(repo, "reset", "-q", "--hard", head)
         return head
     if now != head:
-        err(f"{LAND_BEFORE_QUEUE}: added {git(repo, 'rev-list', '--count', f'{head}..{now}').strip()} commit(s) to the change")
+        print_error(f"{LAND_BEFORE_QUEUE}: added {git(repo, 'rev-list', '--count', f'{head}..{now}').strip()} commit(s) to the change")
     return now
 
 

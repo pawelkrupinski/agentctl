@@ -5,7 +5,7 @@ import os
 import shutil
 from typing import Any, NamedTuple, Optional
 from agentctl.timefmt import ts
-from agentctl.core import PROTECTED_BRANCHES, err, git, git_ok, remote
+from agentctl.core import PROTECTED_BRANCHES, print_error, git, git_ok, remote
 from agentctl.paths import state_root
 from agentctl.deletions import log_deletion
 from agentctl.waitingdir import waiting_state
@@ -145,10 +145,10 @@ class WorktreeGuard:
                 r = git(self.repo, op, "--abort", check=False)
                 if r.returncode and op == "rebase":  # a rebase-apply left by `git am`
                     git(self.repo, "am", "--abort", check=False)
-                err(f"agentctl: aborted the {op} it left in progress in {self.repo}")
+                print_error(f"agentctl: aborted the {op} it left in progress in {self.repo}")
             now = git(self.repo, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip() or None
             if self.branch and now is None and not git_in_progress(self.repo):
                 git(self.repo, "checkout", "-q", self.branch, check=False)
         except Exception as e:  # a guard never hides the exit it guards
-            err(f"agentctl: could not put {self.repo} back ({str(e)[:160]})")
+            print_error(f"agentctl: could not put {self.repo} back ({str(e)[:160]})")
         return False

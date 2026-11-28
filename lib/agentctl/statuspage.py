@@ -15,7 +15,7 @@ from agentctl.statefile import read_json_file, write_json
 from agentctl.clock import epoch_now
 from agentctl.livepage import AGENT_PAGE_HTML, STATUS_PAGE_HTML
 from agentctl.watchknobs import knob_status_page, knob_status_port
-from agentctl.core import err, on_ci_runner, process_cache
+from agentctl.core import print_error, on_ci_runner, process_cache
 from agentctl.live import live_lookup
 from agentctl.livestream import (
     LIVE_SEND_TIMEOUT, LIVE_STREAMS, _live_streams, live_mask_text, live_peer_closed, live_stream)
@@ -111,7 +111,7 @@ PLAIN = "text/plain; charset=utf-8"
 NO_SUCH_AGENT = "no such agent: an id from the page's Agents section\n"
 
 
-class StatusHandler(http.server.BaseHTTPRequestHandler):
+class StatusPageEndpoint(http.server.BaseHTTPRequestHandler):
     """One request of the status page: read-only, GET (and HEAD) alone, each route a method."""
     server_version = "agentctl-status"
     ROUTES = {"/": "page", "/api/status": "api", "/stream": "stream", "/log": "log"}
@@ -229,7 +229,7 @@ class StatusServer(http.server.ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, address: tuple[str, int], machine: MachineProbe) -> None:
-        super().__init__(address, StatusHandler)
+        super().__init__(address, StatusPageEndpoint)
         self.machine = machine
 
 
@@ -250,7 +250,7 @@ def _write_status_page_file(url, port, why) -> None:
     try:
         write_json(status_page_file(), {"url": url, "port": port, "pid": os.getpid(), "at": epoch_now(), "fallback": why})
     except OSError as e:
-        err(f"status page: {status_page_file()} not written: {e}")
+        print_error(f"status page: {status_page_file()} not written: {e}")
 
 
 def _bind_status_page(port, why, machine):
@@ -285,11 +285,11 @@ def status_page_start(machine: MachineProbe) -> Any:
         url = f"http://{STATUS_PAGE_HOST}/" if p == 80 else f"http://{STATUS_PAGE_HOST}:{p}/"
         _status_page.update(url=url, server=srv)
         if why:
-            err(f"status page: {'; '.join(why)}: serving {url} instead")
-        err(f"status page: {url} (127.0.0.1:{p})")
+            print_error(f"status page: {'; '.join(why)}: serving {url} instead")
+        print_error(f"status page: {url} (127.0.0.1:{p})")
         _write_status_page_file(url, p, why)
         return url
-    err(f"status page: not served ({'; '.join(why)})")
+    print_error(f"status page: not served ({'; '.join(why)})")
     return None
 
 
@@ -297,7 +297,7 @@ def status_warm(machine: MachineProbe) -> None:
     try:
         status_cached(machine)
     except (Exception, SystemExit) as e:
-        err(f"status page: the first read failed: {str(e)[:200]}")
+        print_error(f"status page: the first read failed: {str(e)[:200]}")
 
 
 def status_page_url():

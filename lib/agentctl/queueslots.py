@@ -8,7 +8,7 @@ from agentctl.procrunner import process_runner
 from agentctl.statemachines import StaleVersion, change_event, change_state_of, machine_state
 from agentctl.timefmt import ts
 from agentctl.govknobs import QUEUE_POOL, knob_check_lease_ttl, knob_check_trees
-from agentctl.core import err, git
+from agentctl.core import print_error, git
 from agentctl.causes import checked_cause, reject_cause, reject_class
 from agentctl.waitingdir import RECORD_KEY, ChangeRecords, entry_record, waiting_state, wlog
 from agentctl.worktrees import mark_internal
@@ -75,7 +75,7 @@ def check_tree(repo, i, sha):
             try:
                 process_runner().run([seed, "--seed"], cwd=tree, capture_output=True, text=True, timeout=600, env=tool_env())
             except subprocess.TimeoutExpired:
-                err(f"sbt-warm --seed in {tree} took over 10 min")
+                print_error(f"sbt-warm --seed in {tree} took over 10 min")
     else:
         git(tree, "reset", "-q", "--hard", check=False)
         git(tree, "clean", "-qfd", "-e", "target/", check=False)

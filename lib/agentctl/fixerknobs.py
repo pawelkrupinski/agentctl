@@ -1,7 +1,7 @@
 # agentctl, part `fixerknobs`: the fixer knobs: the background sessions, owners and orphans; the claude CLI and its settings
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.knobread import env_num, env_text
+from agentctl.knobread import env_number, env_text
 
 
 # A FIXER IS A BACKGROUND CLAUDE SESSION (the owner, 2026-10-29: "I want fixers to be visible in ui"): `claude --bg -n
@@ -26,15 +26,15 @@ ORPHAN_IDLE = 2 * 3600
 
 
 def knob_orphan_idle() -> float:
-    return env_num("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE)
+    return env_number("AGENTCTL_ORPHAN_IDLE", ORPHAN_IDLE)
 
 
 def knob_bg_poll() -> float:
-    return env_num("AGENTCTL_BG_POLL", BG_POLL)
+    return env_number("AGENTCTL_BG_POLL", BG_POLL)
 
 
 def knob_stall_cpu_seconds() -> float:
-    return env_num("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
+    return env_number("AGENTCTL_STALL_CPU_SECONDS", STALL_CPU_SECONDS)
 
 
 def knob_detached() -> bool:
@@ -119,39 +119,39 @@ CONTEXT_FRESH = 300000       # tokens: a session whose last turn's context is pa
 
 
 def knob_bg_idle_grace() -> float:
-    return env_num("AGENTCTL_BG_IDLE_GRACE", BG_IDLE_GRACE)
+    return env_number("AGENTCTL_BG_IDLE_GRACE", BG_IDLE_GRACE)
 
 
 def knob_bg_spent_grace() -> float:
-    return env_num("AGENTCTL_BG_SPENT_GRACE", BG_SPENT_GRACE)
+    return env_number("AGENTCTL_BG_SPENT_GRACE", BG_SPENT_GRACE)
 
 
 def knob_context_fresh() -> float:
-    return env_num("AGENTCTL_CONTEXT_FRESH", CONTEXT_FRESH)
+    return env_number("AGENTCTL_CONTEXT_FRESH", CONTEXT_FRESH)
 
 
 def knob_fixer_claim_within() -> float:
-    return env_num("AGENTCTL_FIXER_CLAIM_WITHIN", FIXER_CLAIM_WITHIN)
+    return env_number("AGENTCTL_FIXER_CLAIM_WITHIN", FIXER_CLAIM_WITHIN)
 
 
 def knob_fixer_unlanded_escalate() -> float:
-    return env_num("AGENTCTL_FIXER_UNLANDED_ESCALATE", FIXER_UNLANDED_ESCALATE)
+    return env_number("AGENTCTL_FIXER_UNLANDED_ESCALATE", FIXER_UNLANDED_ESCALATE)
 
 
 def knob_fixer_unlanded_nudge() -> float:
-    return env_num("AGENTCTL_FIXER_UNLANDED_NUDGE", FIXER_UNLANDED_NUDGE)
+    return env_number("AGENTCTL_FIXER_UNLANDED_NUDGE", FIXER_UNLANDED_NUDGE)
 
 
 def knob_orphan_fixers() -> float:
-    return env_num("AGENTCTL_ORPHAN_FIXERS", ORPHAN_FIXERS_MAX)
+    return env_number("AGENTCTL_ORPHAN_FIXERS", ORPHAN_FIXERS_MAX)
 
 
 def knob_owner_active() -> float:
-    return env_num("AGENTCTL_OWNER_ACTIVE", OWNER_ACTIVE)
+    return env_number("AGENTCTL_OWNER_ACTIVE", OWNER_ACTIVE)
 
 
 def knob_owner_idle() -> float:
-    return env_num("AGENTCTL_OWNER_IDLE", OWNER_IDLE)
+    return env_number("AGENTCTL_OWNER_IDLE", OWNER_IDLE)
 
 
 def knob_allowed_roots() -> str:
@@ -166,7 +166,7 @@ def knob_claude_jobs() -> str:
     return env_text("AGENTCTL_CLAUDE_JOBS")  # the Claude jobs directory (default ~/.claude/jobs)
 
 
-def knob_claude_tmp() -> str:
+def knob_claude_temp() -> str:
     return env_text("AGENTCTL_CLAUDE_TMP")  # the Claude session's scratch directory
 
 

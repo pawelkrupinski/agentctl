@@ -7,7 +7,7 @@ from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import epoch_now
 from agentctl.timefmt import parse_time
 from agentctl.storeknobs import knob_github_api, knob_github_app, knob_github_lander_repos, knob_identity
-from agentctl.core import err, process_cache
+from agentctl.core import print_error, process_cache
 from agentctl.tokenerrors import NoReadAccess
 from agentctl.paths import state_root
 import json
@@ -137,7 +137,7 @@ def ghapp_token(o_r, role=None, now_=None):
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
         write_json(path, hit, indent=None, mode=0o600)
     except OSError as e:
-        err(f"github-app: token cache not written ({e})")
+        print_error(f"github-app: token cache not written ({e})")
     return hit["token"]
 
 

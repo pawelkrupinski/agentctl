@@ -8,7 +8,7 @@ from agentctl.statemachines import StaleVersion
 from agentctl.timefmt import iso_at, parse_time, ts
 from agentctl.redknobs import knob_red_join_idle
 from agentctl.blameknobs import BLAME_MAX, knob_blame_max
-from agentctl.core import SHORT, attempt, err, git, remote
+from agentctl.core import SHORT, attempt, print_error, git, remote
 from agentctl.repos import RED_PRIMARY
 from agentctl.allowedpaths import allowed_path
 from agentctl.redrepos import red_gate_flows, red_identity, red_is_other
@@ -133,7 +133,7 @@ def red_open(store, ob, repo, t, o_r=None):
         try:
             data["author"] = red_author(repo, store, ob, t)
         except (Exception, SystemExit) as e:
-            err(f"red: no author for {key} ({str(e)[:120]})")
+            print_error(f"red: no author for {key} ({str(e)[:120]})")
     data.update(red_culprit_search(store, ob, repo, t, o_r))
     return store.put_item("red", iid, "red", data)
 
@@ -149,7 +149,7 @@ def red_culprit_search(store, ob, repo, t, o_r):
         if ob["kind"] == "test" and ob["red_kind"] in ("gate", "outside"):
             out["culprit"] = culprit_of(repo, {"runs": ob["runs_list"]})
     except (Exception, SystemExit) as e:
-        err(f"red open: no culprit named ({str(e)[:160]})")
+        print_error(f"red open: no culprit named ({str(e)[:160]})")
     try:
         out["blame"] = blame_open(store, repo, o_r or RED_PRIMARY, ob, t)
     except (Exception, SystemExit) as e:

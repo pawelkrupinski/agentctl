@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
-from agentctl.knobread import env_num, env_text
+from agentctl.knobread import env_number, env_text
 
 
 WATCH_TIMEOUT = 3 * 3600          # either run undecided by then: exit 2, could not tell
@@ -34,23 +34,23 @@ W5_MAX = 300            # the processor's duties beat (its bounded steps take up
 
 
 def knob_watch_conv_start() -> float:
-    return env_num("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START)
+    return env_number("AGENTCTL_WATCH_CONV_START", WATCH_CONV_START)
 
 
 def knob_watch_timeout() -> float:
-    return env_num("AGENTCTL_WATCH_TIMEOUT", WATCH_TIMEOUT)
+    return env_number("AGENTCTL_WATCH_TIMEOUT", WATCH_TIMEOUT)
 
 
 def knob_watch_poll() -> float:
-    return env_num("AGENTCTL_WATCH_POLL", WATCH_EVERY)
+    return env_number("AGENTCTL_WATCH_POLL", WATCH_EVERY)
 
 
 def knob_w5_max() -> float:
-    return env_num("AGENTCTL_W5_MAX", W5_MAX)
+    return env_number("AGENTCTL_W5_MAX", W5_MAX)
 
 
 def knob_status_agent_bound() -> float:
-    return env_num("AGENTCTL_STATUS_AGENT_BOUND", STATUS_AGENT_BOUND)
+    return env_number("AGENTCTL_STATUS_AGENT_BOUND", STATUS_AGENT_BOUND)
 
 
 def knob_inbox_dir() -> str:
@@ -180,127 +180,127 @@ WATCH_ERROR_POLL = 30  # s of the first retry delay after the watch could not re
 
 
 def knob_alert_network_grace() -> float:
-    return env_num("AGENTCTL_ALERT_NETWORK_GRACE", ALERT_NETWORK_GRACE)
+    return env_number("AGENTCTL_ALERT_NETWORK_GRACE", ALERT_NETWORK_GRACE)
 
 
 def knob_alert_orphan_probe() -> float:
-    return env_num("AGENTCTL_ALERT_ORPHAN_PROBE", ALERT_ORPHAN_PROBE_EVERY)
+    return env_number("AGENTCTL_ALERT_ORPHAN_PROBE", ALERT_ORPHAN_PROBE_EVERY)
 
 
 def knob_alert_reconcile() -> float:
-    return env_num("AGENTCTL_ALERT_RECONCILE", ALERT_RECONCILE_EVERY)
+    return env_number("AGENTCTL_ALERT_RECONCILE", ALERT_RECONCILE_EVERY)
 
 
 def knob_alert_red_owner_level() -> float:
-    return env_num("AGENTCTL_ALERT_RED_OWNER_LEVEL", ALERT_RED_OWNER_LEVEL)
+    return env_number("AGENTCTL_ALERT_RED_OWNER_LEVEL", ALERT_RED_OWNER_LEVEL)
 
 
 def knob_inbox_poll() -> float:
-    return env_num("AGENTCTL_INBOX_POLL", INBOX_WAIT_POLL)
+    return env_number("AGENTCTL_INBOX_POLL", INBOX_WAIT_POLL)
 
 
 def knob_kick_handoff_wait() -> float:
-    return env_num("AGENTCTL_KICK_HANDOFF_WAIT", KICK_HANDOFF_WAIT)
+    return env_number("AGENTCTL_KICK_HANDOFF_WAIT", KICK_HANDOFF_WAIT)
 
 
 def knob_live_poll() -> float:
-    return env_num("AGENTCTL_LIVE_POLL", LIVE_POLL)
+    return env_number("AGENTCTL_LIVE_POLL", LIVE_POLL)
 
 
 def knob_notify_timeout() -> float:
-    return env_num("AGENTCTL_NOTIFY_TIMEOUT", NOTIFY_TIMEOUT)
+    return env_number("AGENTCTL_NOTIFY_TIMEOUT", NOTIFY_TIMEOUT)
 
 
 def knob_stats_every() -> float:
-    return env_num("AGENTCTL_STATS_EVERY", STATS_EVERY)
+    return env_number("AGENTCTL_STATS_EVERY", STATS_EVERY)
 
 
 def knob_stats_pass_bound() -> float:
-    return env_num("AGENTCTL_STATS_PASS_BOUND", STATS_PASS_BOUND)
+    return env_number("AGENTCTL_STATS_PASS_BOUND", STATS_PASS_BOUND)
 
 
 def knob_stats_per_pass() -> float:
-    return env_num("AGENTCTL_STATS_PER_PASS", STATS_PER_PASS)
+    return env_number("AGENTCTL_STATS_PER_PASS", STATS_PER_PASS)
 
 
 def knob_stats_settle() -> float:
-    return env_num("AGENTCTL_STATS_SETTLE", STATS_SETTLE)
+    return env_number("AGENTCTL_STATS_SETTLE", STATS_SETTLE)
 
 
 def knob_status_bound() -> float:
-    return env_num("AGENTCTL_STATUS_BOUND", STATUS_SOURCE_BOUND)
+    return env_number("AGENTCTL_STATUS_BOUND", STATUS_SOURCE_BOUND)
 
 
 def knob_w1_max() -> float:
-    return env_num("AGENTCTL_W1_MAX", W1_MAX)
+    return env_number("AGENTCTL_W1_MAX", W1_MAX)
 
 
 def knob_w2_max() -> float:
-    return env_num("AGENTCTL_W2_MAX", W2_MAX)
+    return env_number("AGENTCTL_W2_MAX", W2_MAX)
 
 
 def knob_w6_max() -> float:
-    return env_num("AGENTCTL_W6_MAX", W6_MAX)
+    return env_number("AGENTCTL_W6_MAX", W6_MAX)
 
 
 def knob_w7_max() -> float:
-    return env_num("AGENTCTL_W7_MAX", W7_MAX)
+    return env_number("AGENTCTL_W7_MAX", W7_MAX)
 
 
 def knob_w8_window() -> float:
-    return env_num("AGENTCTL_W8_WINDOW", W8_WINDOW)
+    return env_number("AGENTCTL_W8_WINDOW", W8_WINDOW)
 
 
 def knob_watchdog_misses() -> float:
-    return env_num("AGENTCTL_WATCHDOG_MISSES", WATCHDOG_MISSES)
+    return env_number("AGENTCTL_WATCHDOG_MISSES", WATCHDOG_MISSES)
 
 
 def knob_watchdog_retell() -> float:
-    return env_num("AGENTCTL_WATCHDOG_RETELL", WATCHDOG_RETELL)
+    return env_number("AGENTCTL_WATCHDOG_RETELL", WATCHDOG_RETELL)
 
 
 def knob_watchdog_sleep_gap() -> float:
-    return env_num("AGENTCTL_WATCHDOG_SLEEP_GAP", WATCHDOG_SLEEP_GAP)
+    return env_number("AGENTCTL_WATCHDOG_SLEEP_GAP", WATCHDOG_SLEEP_GAP)
 
 
 def knob_watch_error_poll() -> float:
-    return env_num("AGENTCTL_WATCH_ERROR_POLL", WATCH_ERROR_POLL)
+    return env_number("AGENTCTL_WATCH_ERROR_POLL", WATCH_ERROR_POLL)
 
 
 def knob_watch_follow_lease() -> float:
-    return env_num("AGENTCTL_WATCH_FOLLOW_LEASE", WATCH_FOLLOW_LEASE)
+    return env_number("AGENTCTL_WATCH_FOLLOW_LEASE", WATCH_FOLLOW_LEASE)
 
 
 def knob_watch_stall_min() -> float:
-    return env_num("AGENTCTL_WATCH_STALL_MIN", WATCH_STALL_MIN)
+    return env_number("AGENTCTL_WATCH_STALL_MIN", WATCH_STALL_MIN)
 
 
 def knob_wa_read_every() -> float:
-    return env_num("AGENTCTL_WA_READ_EVERY", WA_READ_EVERY)
+    return env_number("AGENTCTL_WA_READ_EVERY", WA_READ_EVERY)
 
 
 def knob_wa_undecided_max() -> float:
-    return env_num("AGENTCTL_WA_UNDECIDED_MAX", WA_UNDECIDED_MAX)
+    return env_number("AGENTCTL_WA_UNDECIDED_MAX", WA_UNDECIDED_MAX)
 
 
 def knob_wa_unpinned_max() -> float:
-    return env_num("AGENTCTL_WA_UNPINNED_MAX", WA_UNPINNED_MAX)
+    return env_number("AGENTCTL_WA_UNPINNED_MAX", WA_UNPINNED_MAX)
 
 
 def knob_wb_max() -> float:
-    return env_num("AGENTCTL_WB_MAX", WB_MAX)
+    return env_number("AGENTCTL_WB_MAX", WB_MAX)
 
 
 def knob_wf_pct() -> float:
-    return env_num("AGENTCTL_WF_PCT", WF_PCT)
+    return env_number("AGENTCTL_WF_PCT", WF_PCT)
 
 
 def knob_wm_max() -> float:
-    return env_num("AGENTCTL_WM_MAX", WM_MAX)
+    return env_number("AGENTCTL_WM_MAX", WM_MAX)
 
 
 def knob_wr_max() -> float:
-    return env_num("AGENTCTL_WR_MAX", WR_MAX)
+    return env_number("AGENTCTL_WR_MAX", WR_MAX)
 
 
 def knob_live_globs() -> str:
@@ -325,7 +325,7 @@ def knob_status_port() -> str:
 
 def knob_alert_after(kind: str, default: float) -> float:
     """The seconds a red of this kind (a name of the alert routes) may wait before it goes to the owner: $AGENTCTL_ALERT_<KIND>_AFTER."""
-    return env_num(f"AGENTCTL_ALERT_{kind}_AFTER", default)
+    return env_number(f"AGENTCTL_ALERT_{kind}_AFTER", default)
 
 
 ALERT_QUIET_MAX = 24 * 3600  # s a READ alert stays its item's live one after its last event ($AGENTCTL_ALERT_QUIET_MAX)
@@ -335,11 +335,11 @@ WA_RED_MAX = 30 * 60       # s agentctl's tests.yml may stay red on main ($AGENT
 
 
 def knob_alert_quiet_max() -> float:
-    return env_num("AGENTCTL_ALERT_QUIET_MAX", ALERT_QUIET_MAX)
+    return env_number("AGENTCTL_ALERT_QUIET_MAX", ALERT_QUIET_MAX)
 
 
 def knob_wa_red_max() -> float:
-    return env_num("AGENTCTL_WA_RED_MAX", WA_RED_MAX)
+    return env_number("AGENTCTL_WA_RED_MAX", WA_RED_MAX)
 
 
 WP_RSS_BY_NAME = "idea=8"  # comma list of name=GB: the RSS limit of the process of that name, others WP_RSS_GB (IntelliJ's JVM sits at 4-5 GB)

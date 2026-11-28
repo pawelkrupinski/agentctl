@@ -11,7 +11,7 @@ import threading
 from collections.abc import Iterator
 from types import FrameType
 from typing import Any
-from agentctl.core import err
+from agentctl.core import print_error
 
 
 # THE QUOTA TALLY (2026-11-10): the kinowo-lander installation's 5,000 requests an hour ran out on 11-09 23:00-23:50Z, and
@@ -48,7 +48,7 @@ def _print_tally(calls: Any, freed: Any, span: Any) -> None:
     per_repo: dict[str, int] = {}
     for k, n in top:
         per_repo[k.split(" ", 1)[0]] = per_repo.get(k.split(" ", 1)[0], 0) + n
-    err(f"github calls (pid {os.getpid()}, {span:.0f} s): {sum(calls.values())} gh processes "
+    print_error(f"github calls (pid {os.getpid()}, {span:.0f} s): {sum(calls.values())} gh processes "
         f"({', '.join(f'{r} {n}' for r, n in sorted(per_repo.items(), key=lambda kv: -kv[1]))}), {freed} of them 304 "
         f"(free): " + "; ".join(f"{n} {k}" for k, n in top))
 

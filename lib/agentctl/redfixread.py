@@ -11,7 +11,7 @@ from agentctl.procrunner import process_runner
 from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import open_states
 from agentctl.clock import epoch_now
-from agentctl.core import err, git, git_ok, remote
+from agentctl.core import print_error, git, git_ok, remote
 from agentctl.workflows import fix_workflow_jobs
 from agentctl.trailers import commit_trailer_values
 from agentctl.gitrepo import commit_known
@@ -58,7 +58,7 @@ def red_main_current(repo, snap, main_fetched):
     main_fetched[(repo, missing)] = epoch_now()
     ok, why = fetch_main(repo)
     if not ok:
-        err(f"red tick: main moved past the clone and could not be fetched ({why[-160:]}): fixes read from the old main")
+        print_error(f"red tick: main moved past the clone and could not be fetched ({why[-160:]}): fixes read from the old main")
     return True
 
 

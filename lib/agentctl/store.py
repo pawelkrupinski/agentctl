@@ -15,7 +15,7 @@ from agentctl.statemachines import (
 from agentctl.clock import epoch_now, stopwatch
 from agentctl.leasetable import LeaseLost
 from agentctl.offers import OfferTable
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.eventtrace import EventQuery, query_rows
 from agentctl.eventrows import insert_event, migrate_events, move_event, opened_event, record_rows
 from agentctl.backfill import (
@@ -198,7 +198,7 @@ class Store(OfferTable):
                              "text": f"REFUSED {typ} {iid}: {frm} -> {to} is no move of its machine{said}",
                              "dedupe": f"{typ}:{iid}:illegal:{frm}:{to}"})
         except Exception as e:  # the refusal stands whether or not it is recorded
-            err(f"the refusal of {typ} {iid} was not recorded ({str(e)[:160]})")
+            print_error(f"the refusal of {typ} {iid} was not recorded ({str(e)[:160]})")
         finally:
             c.close()
 

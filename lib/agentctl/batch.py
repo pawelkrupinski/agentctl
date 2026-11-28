@@ -12,7 +12,7 @@ from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.timefmt import ts
 from agentctl.queueknobs import BACKLOG_BATCH_MAX, knob_backlog_batch_max
 from agentctl.govknobs import CHECK_LEASE_TTL
-from agentctl.core import err, git, remote, spawn_detached
+from agentctl.core import print_error, git, remote, spawn_detached
 from agentctl.repos import precheck_hook
 from agentctl.generated import without_generated
 from agentctl.waitingdir import ChangeRecords, entry_final, wlog
@@ -153,7 +153,7 @@ def say_batch(d, lines):
     for x in lines:
         wlog(d, f"tick: {x}")
     if lines and lines != _batch_said[0]:
-        err("batch: " + "; ".join(lines))
+        print_error("batch: " + "; ".join(lines))
     _batch_said[0] = lines or _batch_said[0]
     return lines
 

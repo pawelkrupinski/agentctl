@@ -8,7 +8,7 @@ from typing import Any, Iterable, Optional, cast
 from agentctl.timefmt import iso_at
 from agentctl.statemachines import terminal_states
 from agentctl.statsrecords import (
-    Rec, Span, Wait, _iso, _num, _peak, _repo, _sum, _text, _total, item_span, mins_of, state_spans, stats_common)
+    Rec, Span, Wait, _iso, _number, _peak, _repo, _sum, _text, _total, item_span, mins_of, state_spans, stats_common)
 
 
 RED_VERDICT_CLASS = {"test": "test-failure", "infra": "infra-shaped", "stuck-run": "infra-shaped",
@@ -70,7 +70,7 @@ def _holders(leased: list[Rec]) -> list[str]:
 
 def _red_fix(d: Rec, spans: list[Span], opened: float, closed: float, outcome: str) -> Rec:
     fix = d.get("fix") or {}
-    fix_at = _num(fix.get("at")) if fix.get("status") in ("landed", "verified") or fix.get("sha") else None
+    fix_at = _number(fix.get("at")) if fix.get("status") in ("landed", "verified") or fix.get("sha") else None
     return {"fix_pending_s": _sum(spans, "fix-pending", closed),
             "fix_sha": fix.get("sha"), "fix_entry": fix.get("entry"), "fix_status": fix.get("status"),
             "fix_landed_at": _iso(fix_at), "red_to_fix_landed_s": (fix_at - opened) if fix_at and fix_at >= opened else None,
@@ -88,7 +88,7 @@ def _red_owner(d: Rec, evs: list[Rec], spans: list[Span], closed: float) -> Rec:
     dec = d.get("decision") or {}
     first_block = next((e["at"] for e in evs if e.get("to_state") == "blocked-external"), None)
     return {"owner_blocked": bool(first_block or dec), "blocked_s": _sum(spans, "blocked-external", closed),
-            "decision_wait_s": (_num(dec.get("at")) - first_block) if dec.get("at") and first_block else None}
+            "decision_wait_s": (_number(dec.get("at")) - first_block) if dec.get("at") and first_block else None}
 
 
 def _escalated(evs: list[Rec]) -> list[Rec]:
@@ -108,7 +108,7 @@ def owner_decision_record(item: Rec, events: Iterable[Rec], since: Optional[floa
     blocks, asked = owner_asked(evs, ask)
     if not asked:
         return None
-    answered = _num(dec.get("at"))
+    answered = _number(dec.get("at"))
     end = answered or closed
     rec = {"record": "agentctl.owner_decision", "red_id": item["id"], "belongs_to": f"red:{item['id']}",
            "workflow": (d.get("workflow")), "gate": bool(d.get("gate")), "repo": _repo(d),
@@ -125,7 +125,7 @@ def owner_decision_record(item: Rec, events: Iterable[Rec], since: Optional[floa
 def owner_asked(evs: list[Rec], ask: Rec) -> tuple[list[float], Optional[float]]:
     """(the times the red was blocked on the owner, when it first asked), the ask's own record when no block shows."""
     blocks = [e["at"] for e in evs if e.get("to_state") == "blocked-external" and e.get("from_state") != "blocked-external"]
-    return blocks, (blocks[0] if blocks else None) or _num(ask.get("first_at")) or _num(ask.get("since"))
+    return blocks, (blocks[0] if blocks else None) or _number(ask.get("first_at")) or _number(ask.get("since"))
 
 
 def answer_path(asked: float, answered: Optional[float], closed: float) -> str:
@@ -164,13 +164,13 @@ GATE_RUN_FIELDS = ("workflow", "repo", "run_id", "run_number", "run_attempt", "s
 
 def gate_run_record(run: Rec, jobs: Iterable[Rec], since: Optional[float] = None) -> Rec:
     """agentctl.gate_run of a completed gate run, from the collector's source:ci kind:run row and its kind:job rows."""
-    jobs = [j for j in jobs if _num(j.get("duration_s")) is not None]
-    end = _num(run.get("end")) or 0
+    jobs = [j for j in jobs if _number(j.get("duration_s")) is not None]
+    end = _number(run.get("end")) or 0
     rec = {"record": "agentctl.gate_run", **{k: run.get(k) for k in GATE_RUN_FIELDS},
-           "conclusion": run.get("run_conclusion"), "started_at": _iso(_num(run.get("start"))), "ended_at": _iso(end),
-           "duration_s": _num(run.get("wall_s")), "path_queue_s": _num(run.get("path_queue_s")),
-           "path_work_s": _num(run.get("path_work_s")), "critical_path": _text(run.get("critical_path"), 600),
-           **_critical_job(run, jobs), **_slowest_job(jobs), "jobs_n": len(jobs), "runner_min": _num(run.get("runner_min")),
+           "conclusion": run.get("run_conclusion"), "started_at": _iso(_number(run.get("start"))), "ended_at": _iso(end),
+           "duration_s": _number(run.get("wall_s")), "path_queue_s": _number(run.get("path_queue_s")),
+           "path_work_s": _number(run.get("path_work_s")), "critical_path": _text(run.get("critical_path"), 600),
+           **_critical_job(run, jobs), **_slowest_job(jobs), "jobs_n": len(jobs), "runner_min": _number(run.get("runner_min")),
            "runner_wait_s": _total(jobs, "queue_s"), "run_s": _total(jobs, "duration_s"),
            "job_queue_max_s": _peak(jobs, "queue_s"),
            "failed_jobs": ",".join(sorted(cast(str, j.get("job")) for j in jobs if j.get("conclusion") == "failure"))[:600],
@@ -184,12 +184,12 @@ def _critical_job(run: Rec, jobs: list[Rec]) -> Rec:
     """The critical path's last job (the collector's), else the job that ended last."""
     hops = [h.strip() for h in str(run.get("critical_path") or "").split("→") if h.strip()]
     crit = next((j for j in jobs if hops and j.get("job") == hops[-1]), None) or \
-        max(jobs, key=lambda j: _num(j.get("end")) or 0, default=None)
+        max(jobs, key=lambda j: _number(j.get("end")) or 0, default=None)
     crit = crit or {}
-    return {"critical_job": crit.get("job"), "critical_job_s": _num(crit.get("duration_s")),
-            "critical_job_queue_s": _num(crit.get("queue_s"))}
+    return {"critical_job": crit.get("job"), "critical_job_s": _number(crit.get("duration_s")),
+            "critical_job_queue_s": _number(crit.get("queue_s"))}
 
 
 def _slowest_job(jobs: list[Rec]) -> Rec:
-    slow = max(jobs, key=lambda j: _num(j.get("duration_s")) or 0, default=None) or {}
-    return {"slowest_job": slow.get("job"), "slowest_job_s": _num(slow.get("duration_s"))}
+    slow = max(jobs, key=lambda j: _number(j.get("duration_s")) or 0, default=None) or {}
+    return {"slowest_job": slow.get("job"), "slowest_job_s": _number(slow.get("duration_s"))}

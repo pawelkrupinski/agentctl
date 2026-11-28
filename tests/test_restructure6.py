@@ -52,9 +52,9 @@ class CleanupTest(unittest.TestCase):
                         w[key] = True
                 wts.append(w)
             case.fake("worktrees", lambda rng, repo: wts)
-            case.fake("env_num", lambda rng, name, default: rng.choice([3, 120]))
+            case.fake("env_number", lambda rng, name, default: rng.choice([3, 120]))
             case.fake("remote", lambda rng: "origin")
-            case.fake("err", lambda rng, m: None)
+            case.fake("print_error", lambda rng, m: None)
             case.fake("gitdir_activity", lambda rng, repo, path: maybe(rng, 1_795_000_000 - rng.choice([60, 7200, 400000]), 0.6))
             case.fake("merged_reason", lambda rng, repo, sha, main: maybe(rng, "ancestor", 0.5))
             case.fake("git", lambda rng, *a, **k: proc(rng, rng.choice([0, 0, 0, 1, 124]), rng.choice(["", "", " M a\n?? b\n"])) if "status" in a
@@ -167,7 +167,7 @@ class JvmReapTest(unittest.TestCase):
         def build(case):
             r = case.rng
             case.fake("pid_alive", lambda rng, pid: rng.random() < 0.5)
-            case.fake("env_num", lambda rng, name, default: rng.choice([default, 1, 5, 30]))
+            case.fake("env_number", lambda rng, name, default: rng.choice([default, 1, 5, 30]))
             now = r.choice([0, 600, 5000, 90000])
             state = {}
             for pid in ("7", "8"):
@@ -362,7 +362,7 @@ class RedOpenTest(unittest.TestCase):
             case.fake("red_offer_class", lambda rng, d: rng.choice(["code", "infra"]))
             case.fake("red_decision", lambda rng, d: rng.random() < 0.3)
             case.fake("red_what", lambda rng, d: f"red-{d.get('key')}")
-            case.fake("env_num", lambda rng, name, default: rng.choice([default, 5, 100]))
+            case.fake("env_number", lambda rng, name, default: rng.choice([default, 5, 100]))
             case.fake("red_move", lambda rng, store, it, state, text, **kw: {**it, "moved": [state, text]})
             case.fake("red_put_offer", lambda rng, store, it: None)
             case.put("RED_OFFER", {"author": 600, "code": 1800, "infra": 3600})
@@ -418,7 +418,7 @@ class RedHoldTest(unittest.TestCase):
             case.fake("red_change_read", lambda rng, store, entry: (maybe(rng, {"state": rng.choice(["cancelled", "queued", "landed", "checking", "rejected"]), "entered_at": rng.choice([None, 100, 990])}, 0.7),
                                                                     rng.choice([None, None, None, "store down " * 12])))
             case.fake("red_fix_of", lambda rng, it, facts: maybe(rng, {"status": rng.choice(["queued", "landed", "verify"]), "entry": "fe"}, 0.6))
-            case.fake("env_num", lambda rng, name, default: rng.choice([default, 5, 50]))
+            case.fake("env_number", lambda rng, name, default: rng.choice([default, 5, 50]))
             case.fake("red_fix_since", lambda rng, it: rng.choice([0, 500, 990]))
             case.fake("red_fix_giveup", lambda rng, d: rng.choice([10, 600, 5000]))
             fix = {}

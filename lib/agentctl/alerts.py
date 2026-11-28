@@ -5,7 +5,7 @@ from agentctl.statefile import read_record, unlink_file, write_json
 from agentctl.clock import epoch_now
 from agentctl.filelock import FileLock
 from agentctl.watchknobs import knob_alert_quiet_max, knob_alert_reconcile
-from agentctl.core import attempt, err
+from agentctl.core import attempt, print_error
 from agentctl.inboxentry import inbox_dir, inbox_entries
 from agentctl.alertroute import ALERT_AUTHOR_VERDICT_KINDS, alert_kind_of, alert_norm, alert_route, alert_tier
 from agentctl.alertclear import alert_probe
@@ -355,7 +355,7 @@ class AlertReconcile:
         try:
             why, aud = alert_probe(self.store, item, e, self.t, self.ctx)
         except Exception as ex:  # cannot tell now: it stays as it is
-            err(f"alerts: {item}: {str(ex)[:120]}")
+            print_error(f"alerts: {item}: {str(ex)[:120]}")
             return None
         if why:
             alert_close(self.d, self.idx, item, why)

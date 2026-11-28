@@ -178,7 +178,7 @@ def run_sigs(o_r: str, run: dict[str, Any], workflow: str, now_: float | None = 
     unread = read_record(unread_path)
     if _unread_not_due(unread, t):
         return list(unread["sigs"])
-    lines, _num, per_job = explain_run_jobs(o_r, run, 6)
+    lines, _number, per_job = explain_run_jobs(o_r, run, 6)
     if any("LOG UNREADABLE" in l for l in lines):  # a log not read is no verdict: read again when due, never cached
         return list(_save_unread_sigs(unread_path, unread, rid, workflow, per_job, t))
     if unread:

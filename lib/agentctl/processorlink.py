@@ -12,7 +12,7 @@ from agentctl.selfcode import TOOL_PATH
 from agentctl.statemachines import machine_state
 from agentctl.clock import Clock
 from agentctl.queueknobs import knob_waiting_timeout
-from agentctl.core import err, spawn_detached
+from agentctl.core import print_error, spawn_detached
 from agentctl.repos import slug
 from agentctl.waitingdir import WAITING_BRANCH, waiting_state
 from agentctl.owned import Owned, backoff, restart_if_changed
@@ -68,7 +68,7 @@ class TokenDrop:
             self.thread = threading.Thread(target=self.serve, name="token-socket", daemon=True)
             self.thread.start()
         except OSError as e:
-            err(f"no token hand-off socket ({e}): the processor reads the vault itself")
+            print_error(f"no token hand-off socket ({e}): the processor reads the vault itself")
         return self
 
     def held(self):
@@ -112,7 +112,7 @@ class TokenDrop:
             key = token_env_name(self.o_r)
             if TOKEN_SHAPE.fullmatch(tok) and os.environ.get(key) != tok:  # said once per real change, never per offer
                 os.environ[key] = tok
-                err("the store token was handed over: the gate is read again")
+                print_error("the store token was handed over: the gate is read again")
                 token_back(token_ns(self.o_r))
 
     def close(self):
@@ -212,7 +212,7 @@ def _await_entry(repo: str, eid: str, own: Owned, clock: Clock, store: Any) -> t
         if outcome:
             return outcome
         if state != said:  # what it waits on, said once each time it changes (a store outage is never silent)
-            err(f"awaiting {eid}: it is {state}")
+            print_error(f"awaiting {eid}: it is {state}")
             said = state
         if clock.time() - t0 > timeout:
             print(f"NOT LANDED (still waiting): entry {eid} is {state} after {int(timeout // 3600)} h; "

@@ -1,7 +1,7 @@
 # agentctl, part `blameknobs`: the blame and ask knobs: whom a condition or a red is told to, how often and when it is given up; the recovery notes
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.knobread import env_num, env_text
+from agentctl.knobread import env_number, env_text
 
 
 ASK_REMIND_MAX = 4 * 3600     # ...then doubling up to this ($AGENTCTL_ASK_REMIND_MAX)
@@ -14,15 +14,15 @@ BLAME_PROBE_WALL = 2 * 3600      # s one probe may run before it is no verdict (
 
 
 def knob_blame_probe_wall() -> float:
-    return env_num("AGENTCTL_BLAME_PROBE_WALL", BLAME_PROBE_WALL)
+    return env_number("AGENTCTL_BLAME_PROBE_WALL", BLAME_PROBE_WALL)
 
 
 def knob_ask_remind_max() -> float:
-    return env_num("AGENTCTL_ASK_REMIND_MAX", ASK_REMIND_MAX)
+    return env_number("AGENTCTL_ASK_REMIND_MAX", ASK_REMIND_MAX)
 
 
 def knob_blame_max() -> float:
-    return env_num("AGENTCTL_BLAME_MAX", BLAME_MAX)
+    return env_number("AGENTCTL_BLAME_MAX", BLAME_MAX)
 
 
 def knob_no_secrets() -> bool:
@@ -104,32 +104,32 @@ AUTHOR_ACTIVE_MIN = 15   # live = a pid alive and activity within this ($AGENTCT
 
 
 def knob_ask_hold() -> float:
-    return env_num("AGENTCTL_ASK_HOLD", ASK_HOLD)
+    return env_number("AGENTCTL_ASK_HOLD", ASK_HOLD)
 
 
 def knob_ask_remind_first() -> float:
-    return env_num("AGENTCTL_ASK_REMIND_FIRST", ASK_REMIND_FIRST)
+    return env_number("AGENTCTL_ASK_REMIND_FIRST", ASK_REMIND_FIRST)
 
 
 def knob_author_active_min() -> float:
-    return env_num("AGENTCTL_AUTHOR_ACTIVE_MIN", AUTHOR_ACTIVE_MIN)
+    return env_number("AGENTCTL_AUTHOR_ACTIVE_MIN", AUTHOR_ACTIVE_MIN)
 
 
 def knob_blame_probes() -> float:
-    return env_num("AGENTCTL_BLAME_PROBES", BLAME_PROBES)
+    return env_number("AGENTCTL_BLAME_PROBES", BLAME_PROBES)
 
 
 def knob_condition_pending_lapse() -> float:
-    return env_num("AGENTCTL_CONDITION_PENDING_LAPSE", CONDITION_PENDING_LAPSE)
+    return env_number("AGENTCTL_CONDITION_PENDING_LAPSE", CONDITION_PENDING_LAPSE)
 
 
 def knob_issue_escalate_gap() -> float:
-    return env_num("AGENTCTL_ISSUE_ESCALATE_GAP", ISSUE_ESCALATE_GAP)
+    return env_number("AGENTCTL_ISSUE_ESCALATE_GAP", ISSUE_ESCALATE_GAP)
 
 
 def knob_recover_max() -> float:
-    return env_num("AGENTCTL_RECOVER_MAX", RECOVER_BACKOFF_MAX)
+    return env_number("AGENTCTL_RECOVER_MAX", RECOVER_BACKOFF_MAX)
 
 
 def knob_unknown_grace() -> float:
-    return env_num("AGENTCTL_UNKNOWN_GRACE", UNKNOWN_GRACE)
+    return env_number("AGENTCTL_UNKNOWN_GRACE", UNKNOWN_GRACE)

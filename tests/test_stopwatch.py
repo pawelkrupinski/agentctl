@@ -93,7 +93,7 @@ class MonotonicSitesTest(unittest.TestCase):
             clock.t += 31
             return "merged"
         with mock.patch("time.monotonic", clock), mock.patch.object(A, "merged_reason", merged), \
-                mock.patch.object(A, "err", said.append), mock.patch.object(review, "unclean", lambda p: None):
+                mock.patch.object(A, "print_error", said.append), mock.patch.object(review, "unclean", lambda p: None):
             self.assertEqual(review.by_git("/p", "sha"), ("delete", "merged"))
         self.assertEqual(said, ["cleanup: /p took 31 s to decide"])
 

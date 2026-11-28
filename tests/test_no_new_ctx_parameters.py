@@ -37,7 +37,7 @@ CEILINGS = {
     "notifyurl": 4,
     "outsideflows": 4,
     "overlapcheck": 4,
-    "processor": 3,
+    "tickloop": 3,
     "eventprojection": 2,
     "queuecheck": 1,
     "queuediff": 3,

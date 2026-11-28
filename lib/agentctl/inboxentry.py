@@ -15,7 +15,7 @@ from agentctl.ids import stamp
 from agentctl.timefmt import iso_at
 from agentctl.watchknobs import knob_inbox_dir
 from agentctl.fixerknobs import knob_owners_dir
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.procs import safe_cwd
 from agentctl.fixerrecords import agent_name
 from agentctl.filelog import note_event
@@ -126,7 +126,7 @@ class InboxWriter:
         try:
             return self.deliver(rec)
         except OSError as e:
-            err(f"could not write the inbox entry ({e})")
+            print_error(f"could not write the inbox entry ({e})")
             return None
 
 

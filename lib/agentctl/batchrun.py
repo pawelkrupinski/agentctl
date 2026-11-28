@@ -9,7 +9,7 @@ from agentctl.procrunner import process_runner
 from agentctl.statefile import read_text_or
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
-from agentctl.core import err, git, host_role, remote
+from agentctl.core import print_error, git, host_role, remote
 from agentctl.repos import precheck_hook
 from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.conditions import condition_item_of, open_condition, probe_gate_read, run_probe
@@ -78,7 +78,7 @@ def sbt_stop(tree) -> None:
         try:
             process_runner().run([script, "--stop"], cwd=tree, capture_output=True, text=True, timeout=180, env=tool_env())
         except subprocess.TimeoutExpired:
-            err(f"sbt-warm --stop in {tree} took over 3 min")
+            print_error(f"sbt-warm --stop in {tree} took over 3 min")
 
 
 STALL_SIGNAL = re.compile(r"(^|\s)(pre-push |sbt-warm )?STALLED:", re.M)

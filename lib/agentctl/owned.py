@@ -18,7 +18,7 @@ from agentctl.filelock import FileLock, lock_held
 from agentctl.timefmt import ts
 from agentctl.tickknobs import knob_attach_poll, knob_min_interval, knob_restart_check
 from agentctl.fixerknobs import knob_owners_dir
-from agentctl.core import SHORT, err, git, process_cache, run_cmd
+from agentctl.core import SHORT, print_error, git, process_cache, run_cmd
 from agentctl.repos import slug
 from agentctl.procs import Terminated, process_start, safe_cwd
 from agentctl.forge import forge_argv, forge_env
@@ -69,10 +69,10 @@ def cancel_run(o_r, rid, why):
     try:
         r = process_runner().run(forge_argv(o_r, "run", "cancel", str(rid)), capture_output=True, text=True,
                            env=forge_env(o_r), timeout=120)
-        err(f"cancelled {o_r} run {rid} ({why})" if r.returncode == 0 else
+        print_error(f"cancelled {o_r} run {rid} ({why})" if r.returncode == 0 else
             f"could not cancel {o_r} run {rid} ({why}): {r.stderr.strip()[:160]}")
     except (Exception, SystemExit) as e:
-        err(f"could not cancel {o_r} run {rid} ({why}): {e}")
+        print_error(f"could not cancel {o_r} run {rid} ({why}): {e}")
 
 
 class Held(Exception):
@@ -230,7 +230,7 @@ def _note_restart_refused(why: Any) -> None:
     """Say once per reason why the new code is not picked up."""
     if why and why != _restart_refused[0]:
         _restart_refused[0] = why
-        err(f"agentctl changed on disk but not restarted: {why}")
+        print_error(f"agentctl changed on disk but not restarted: {why}")
 
 
 def restart_if_changed(owned: Sequence["Owned"] = (), argv: list[str] | None = None) -> None:
@@ -248,7 +248,7 @@ def restart_if_changed(owned: Sequence["Owned"] = (), argv: list[str] | None = N
     if not ok:  # a dirty edit, or a commit that fails the smoke check: the old code keeps running
         _note_restart_refused(why)
         return
-    err(f"agentctl changed on disk ({START_CODE[:8]} -> {now_code[:8]}): restarting on the new code, pid {os.getpid()}")
+    print_error(f"agentctl changed on disk ({START_CODE[:8]} -> {now_code[:8]}): restarting on the new code, pid {os.getpid()}")
     for o in owned:
         o.release(keep_record=True)
     sys.stdout.flush()
@@ -323,7 +323,7 @@ class Waiter:
             v = load_record(self.verdict)
             self.result = (v["ok"], v["line"])
         except (OSError, ValueError, KeyError):
-            err(f"{self.key}: waiter pid {(self.holder or {}).get('pid')} ended without a verdict; taking over")
+            print_error(f"{self.key}: waiter pid {(self.holder or {}).get('pid')} ended without a verdict; taking over")
             self.holder = None
             self.acquire()
 
@@ -358,7 +358,7 @@ class WaitLoop:
         """Take each target, or attach to the live waiter that holds it (said once, so nobody polls GitHub twice)."""
         for w in self.waiters:
             if not w.acquire():
-                err(f"{w.key}: attached to existing waiter pid {w.holder.get('pid')} (since {w.holder.get('started')}); not polling GitHub")
+                print_error(f"{w.key}: attached to existing waiter pid {w.holder.get('pid')} (since {w.holder.get('started')}); not polling GitHub")
 
     def poll_owned(self, pending: list[Any]) -> None:
         """The checks of the waiters this process owns, when the backoff's next one is due."""
@@ -437,7 +437,7 @@ def wait_run(a: Any, floor: float, cap: float) -> Any:
     for i in dict.fromkeys(ids):
         others = foreign_loops_on(i)
         if others:
-            err(f"note: other loops already poll run {i}: pids {others} (see `agentctl orphans`)")
+            print_error(f"note: other loops already poll run {i}: pids {others} (see `agentctl orphans`)")
         key = f"run-{o_r.replace('/', '_')}-{i}" + ("-landable" if a.until == "landable" else "")
         waiters.append(Waiter(key, (lambda i=i: run_verdict(o_r, int(i), a.until, a.tail))))
     return wait_all(waiters, a.timeout, floor, cap)

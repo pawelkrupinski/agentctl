@@ -61,7 +61,7 @@ def status_run_url(repo, number, run=None):
     return forge_run_url(repo or SHORT["movies"], number, run)
 
 
-def status_err(e):
+def status_error(e):
     return {"error": f"{type(e).__name__}: {str(e).replace('agentctl: ', '')[:300]}"}
 
 
@@ -96,7 +96,7 @@ def status_read(name: Any, fn: Any, out: Any, keep: Any) -> Any:
     try:
         v = fn()
     except (Exception, SystemExit) as e:
-        v = status_err(e)
+        v = status_error(e)
     out[name] = (epoch_now(), v, round(time.monotonic() - t0, 2))  # wall: as above
     if keep:
         _status_last[name] = out[name]
@@ -378,7 +378,7 @@ def open_status_store(store: Any, only: Any) -> tuple[Any, Any]:
     try:
         return (store if store is not None else status_store()), None
     except (Exception, SystemExit) as e:
-        return None, status_err(e)
+        return None, status_error(e)
 
 
 def status_section_sources(t: float, repo: str, need: Any, machine: MachineProbe) -> tuple[Any, ...]:

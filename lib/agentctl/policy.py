@@ -16,7 +16,7 @@
 
 from typing import Any
 from contextlib import suppress
-from agentctl.core import err, process_cache
+from agentctl.core import print_error, process_cache
 from agentctl.statemachines import machine_state
 
 
@@ -124,7 +124,7 @@ def policy_blocks(pid, st, subject=None, what=None):
         line = (f"POLICY UNAPPROVED {pid}: would {p.effect} {subject or 'a change'}"
                 + (f" ({what})" if what else "") + f" -- {p.rule}; agent-proposed, never decided by the owner, so it "
                 "only warns (policy.py POLICIES)")
-        err(line)
+        print_error(line)
         with suppress(Exception):  # a warning, never a failure
             it = st.item("change", subject) if subject else None
             if it and not machine_state("change", it["state"]).terminal:

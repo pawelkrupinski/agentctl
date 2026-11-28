@@ -14,12 +14,12 @@ from fake_runner import FakeRunner  # noqa: E402
 
 class UpkeepTest(unittest.TestCase):
     def setUp(self):
-        self.saved = (A.fixer_records, A.close_worktree, A.red_active, A.user_tmp_dir)
+        self.saved = (A.fixer_records, A.close_worktree, A.red_active, A.user_temp_dir)
         self.tmp = tempfile.mkdtemp()
         self.calls, self.closed = [], []
 
     def tearDown(self):
-        A.fixer_records, A.close_worktree, A.red_active, A.user_tmp_dir = self.saved
+        A.fixer_records, A.close_worktree, A.red_active, A.user_temp_dir = self.saved
 
     def test_an_upkeep_runs_the_standing_ok_cleanup_closes_closed_reds_fixer_trees_and_old_test_dirs(self):
         real_run = A.ProcessRunner().run
@@ -42,7 +42,7 @@ class UpkeepTest(unittest.TestCase):
         A.close_worktree = lambda wt: self.closed.append(wt) or f"closed worktree {wt}"
         utmp = os.path.join(self.tmp, "T")
         os.makedirs(utmp)
-        A.user_tmp_dir = lambda: utmp
+        A.user_temp_dir = lambda: utmp
         old, new, foreign = (os.path.join(utmp, n) for n in ("agentctl-state-test-old", "agentctl-t-new", "tmpkeep"))
         for p in (old, new, foreign):
             os.makedirs(p)

@@ -13,7 +13,7 @@ from agentctl.statefile import read_record, write_json
 from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import Clock
 from agentctl.tickknobs import knob_step_bound, knob_sync_mirror
-from agentctl.core import err, git, reap_children, remote, run_bounded, spawn_detached
+from agentctl.core import print_error, git, reap_children, remote, run_bounded, spawn_detached
 from agentctl.tokenerrors import NoToken
 from agentctl.procs import safe_cwd
 from agentctl.filelog import drain_event_log
@@ -103,12 +103,12 @@ class _SyncDuties:
         reconciler on ci-runner reads them from there (ci-lander may not read releases). Bounded: a network read."""
         if not run_bounded("pins", lambda: refresh_pinned_recording(self.o_r, self.repo, self.store, role="sync"),
                            knob_step_bound()):
-            err("pinned recording: still reading from an earlier cycle")
+            print_error("pinned recording: still reading from an earlier cycle")
 
     def explorer(self) -> None:
-        if not run_bounded("drift explorer", lambda: [err(x) for x in explorer_tick(self.o_r, self.repo, self.store)],
+        if not run_bounded("drift explorer", lambda: [print_error(x) for x in explorer_tick(self.o_r, self.repo, self.store)],
                            knob_step_bound()):
-            err("drift explorer: still running from an earlier cycle")
+            print_error("drift explorer: still running from an earlier cycle")
 
     def dispatch(self):
         if os.path.exists(reds_dir("DISPATCH_OFF")):
@@ -117,7 +117,7 @@ class _SyncDuties:
 
     def escalations(self) -> None:
         for x in escalation_step(self.store, self.clock.time()):
-            err(f"escalation: {x}")
+            print_error(f"escalation: {x}")
 
     def claim_role(self) -> None:
         self.role = laptop_role_step(self.store)
@@ -132,7 +132,7 @@ def file_events_refused(e: BaseException) -> None:
     recheck (remotestore.py LACKING_RECHECK: the call is not sent again until then, nor said; the lines stay in the
     log for a store that has it); a store that is down is said by the tunnel's and the state's own lines."""
     if isinstance(e, StoreLacksCall) and not e.remembered:
-        err(f"file events: {e}")
+        print_error(f"file events: {e}")
 
 
 def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
@@ -146,22 +146,22 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
             ("outbox", lambda: flush_outbox(store)), ("file events", lambda: drain_event_log(store, refused=file_events_refused)), ("state mirror", s.mirror), ("children", lambda: reap_children(ctx.caches.zombies_seen)),
             ("events", lambda: project_events(store)), ("notifier", duty(lambda: notify_escalations(store, ctx=ctx))),
             ("alerts", duty(lambda: reconcile_alerts(store))),
-            ("workspace trust", lambda: [err(x) for x in trust_asks()]),
-            ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees(store)]),
-            ("local queue", lambda: [err(f"land: {x}") for x in migrate_local_queue(repo, store)]),
-            ("landed changes", lambda: [err(f"land: {x}") for x in close_landed_changes(repo, clock, store=store)]),
-            ("regen holds", duty(lambda: [err(f"land: {x}") for x in answer_regen_holds(d, store, ctx.caches.regen_answered)])),
+            ("workspace trust", lambda: [print_error(x) for x in trust_asks()]),
+            ("landed worktrees", lambda: [print_error(x) for x in close_landed_worktrees(store)]),
+            ("local queue", lambda: [print_error(f"land: {x}") for x in migrate_local_queue(repo, store)]),
+            ("landed changes", lambda: [print_error(f"land: {x}") for x in close_landed_changes(repo, clock, store=store)]),
+            ("regen holds", duty(lambda: [print_error(f"land: {x}") for x in answer_regen_holds(d, store, ctx.caches.regen_answered)])),
             ("claims", duty(s.sync_claims)),
             ("dispatcher", duty(s.dispatch)),
             ("escalation dispatcher", duty(s.escalations)),
             ("pins", duty(s.pins)), ("drift explorer", duty(s.explorer)),
-            ("revert notes", duty(lambda: [err(x) for x in revert_notes(store)])),
-            ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch(pace=land_pace)]),
+            ("revert notes", duty(lambda: [print_error(x) for x in revert_notes(store)])),
+            ("fixer landing", lambda: [print_error(f"red: {x}") for x in fixers_land_watch(pace=land_pace)]),
             ("vendor drift", duty(partial(vendor_drift_step, store, registry.check("vendor_drift"), clock.time, os.path.dirname(TOOL_PATH), vendor_drift_auto(os.path.dirname(TOOL_PATH), state_root("vendor-autosync.json"), clock.time)))),  # vendordrift.py
             ("network watch", lambda: network_watch(store)), ("tunnel probe", lambda: tunnel_watch(store)),
             ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store, ctx=ctx), 1)),
-            ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep(store, machine=ctx.machine)]),
-            ("root checkout", lambda: [err(x) for x in root_checkout_ff(repo)]),
+            ("upkeep", lambda: [print_error(f"upkeep: {x}") for x in maybe_upkeep(store, machine=ctx.machine)]),
+            ("root checkout", lambda: [print_error(x) for x in root_checkout_ff(repo)]),
             ("recovery", lambda: maybe_recovery_tick(store, registry, clock.time())))
 
 

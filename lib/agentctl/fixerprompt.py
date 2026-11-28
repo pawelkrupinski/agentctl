@@ -7,7 +7,7 @@ from typing import Any
 from agentctl.selfcode import TOOL_PATH
 from agentctl.redknobs import knob_brief_src
 from agentctl.fixerknobs import FIXER_UNLANDED_NUDGE
-from agentctl.core import err, remote
+from agentctl.core import print_error, remote
 from agentctl.repos import RED_PRIMARY, red_repo_clone, red_repo_of
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.classify import is_regression
@@ -54,7 +54,7 @@ def fixer_brief(o_r=None):
                 with open(p) as f:
                     return p, fixer_brief_for(f.read().strip(), o_r or RED_PRIMARY)
             except OSError as e:
-                err(f"fixer brief unreadable ({str(e)[:160]})")
+                print_error(f"fixer brief unreadable ({str(e)[:160]})")
     return FIXER_BRIEF, (f"(THE FIXER BRIEF IS MISSING at {FIXER_BRIEF}: file it with `~/bin/agentctl issue`, then go on "
                          "under ~/bin/AGENTCTL.md's rules.)")
 

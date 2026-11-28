@@ -14,7 +14,7 @@ from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
 from agentctl.redknobs import knob_drift_ci
 from agentctl.blameknobs import knob_blame_probe_wall
-from agentctl.core import attempt, err, git, remote
+from agentctl.core import attempt, print_error, git, remote
 from agentctl.repos import RED_PRIMARY, red_repo_short, scan_repo_for, slug
 from agentctl.fixerrecords import agent_name, own_fixer_record_path
 from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
@@ -264,7 +264,7 @@ def _poll_probe_run(o_r: Any, rem: Any, branch: Any, wall: Any, clock: Any) -> A
             try:
                 rem = remote_poll(o_r, rem, clock.time())
             except (Exception, SystemExit) as e:
-                err(f"blame probe {branch}: {str(e)[:160]}")
+                print_error(f"blame probe {branch}: {str(e)[:160]}")
             if rem.get("status") or clock.time() - t0 > wall:
                 break
             clock.sleep(delay)

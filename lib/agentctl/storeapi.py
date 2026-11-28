@@ -163,7 +163,7 @@ class UnknownCall(KeyError):
     """A store call this server does not serve (storecalls.served_calls): a newer client's (404 `UnknownCall`)."""
 
 
-class StoreRequestHandler(BaseHTTPRequestHandler):
+class StoreApiEndpoint(BaseHTTPRequestHandler):
     """One HTTP request of the store's API; `api` (a StoreAPI) is set on the subclass store_server makes."""
     protocol_version = "HTTP/1.1"
     api: Any = None
@@ -205,7 +205,7 @@ class StoreRequestHandler(BaseHTTPRequestHandler):
 
 def store_server(api, host, port):
     """A ThreadingHTTPServer serving api (returns it; serve_forever() is the caller's)."""
-    srv = ThreadingHTTPServer((host, port), type("Handler", (StoreRequestHandler,), {"api": api}))
+    srv = ThreadingHTTPServer((host, port), type("Handler", (StoreApiEndpoint,), {"api": api}))
     srv.daemon_threads = True
     return srv
 

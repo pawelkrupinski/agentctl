@@ -15,7 +15,7 @@ from agentctl.paths import tilde
 
 
 # ---------------------------------------------------------------- config: every knob, generated from the code
-# The knobs are what the code reads: each `env_num("AGENTCTL_X", DEFAULT)` and `os.environ.get("AGENTCTL_X", DEFAULT)`
+# The knobs are what the code reads: each `env_number("AGENTCTL_X", DEFAULT)` and `os.environ.get("AGENTCTL_X", DEFAULT)`
 # (config_knobs scans the code, so a new knob is listed the moment it is read). Its default is the code's (a constant
 # evaluated from the source: config_constants), its doc the comment on that constant's line, else on the line that
 # reads it. Names in CONFIG_INTERNAL are not knobs: a process's identity, secrets, and test hooks -- never set in a config file. The
@@ -138,7 +138,7 @@ def config_default(expr: str | None, constants: dict[str, Any]) -> Any:
     return constants.get(e, e) if re.fullmatch(r"[A-Z_][A-Z0-9_]*", e) else e
 
 
-KNOB_READ = re.compile(r'(?:env_num|env_text|os\.environ\.get)\(\s*"AGENTCTL_([A-Z0-9_]+)"\s*(?:,\s*([^)\n]+?))?\s*\)')
+KNOB_READ = re.compile(r'(?:env_number|env_text|os\.environ\.get)\(\s*"AGENTCTL_([A-Z0-9_]+)"\s*(?:,\s*([^)\n]+?))?\s*\)')
 CONSTANT_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
 
 

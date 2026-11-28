@@ -74,13 +74,13 @@ class HostDifferencesTest(unittest.TestCase):
             old = A.epoch_now() - 10 * 86400
             for p in (sock, other):
                 os.utime(p, (old, old))
-            saved = (A.user_tmp_dir, os.environ.get("AGENTCTL_SOCK_DIR"))
-            A.user_tmp_dir = lambda: tmp  # Linux: the user temp dir is /tmp, where the socket dir lives
+            saved = (A.user_temp_dir, os.environ.get("AGENTCTL_SOCK_DIR"))
+            A.user_temp_dir = lambda: tmp  # Linux: the user temp dir is /tmp, where the socket dir lives
             os.environ["AGENTCTL_SOCK_DIR"] = sock
             try:
-                A.sweep_test_tmp()
+                A.sweep_test_temp()
             finally:
-                A.user_tmp_dir = saved[0]
+                A.user_temp_dir = saved[0]
                 if saved[1] is None:
                     os.environ.pop("AGENTCTL_SOCK_DIR")
                 else:
@@ -104,19 +104,19 @@ class HostDifferencesTest(unittest.TestCase):
                       os.path.join(live, "owner.pid")):
                 os.utime(p, (old, old))
             os.utime(busy, (old, old))  # its own mtime old, an entry of it written now: in use
-            saved = A.user_tmp_dir
-            A.user_tmp_dir = lambda: os.path.join(tmp, "user")
+            saved = A.user_temp_dir
+            A.user_temp_dir = lambda: os.path.join(tmp, "user")
             try:
-                n = A.sweep_test_tmp(tmp_root=tmp)
+                n = A.sweep_test_temp(tmp_root=tmp)
             finally:
-                A.user_tmp_dir = saved
+                A.user_temp_dir = saved
             self.assertEqual((os.path.isdir(dead), os.path.isdir(live), os.path.isdir(busy)), (False, True, True))
             self.assertEqual(n, 1)
 
     def test_a_garbled_knob_falls_back_to_its_default(self):
         os.environ["AGENTCTL_WATCH_POLL"] = "sixty"
         try:
-            self.assertEqual(A.env_num("AGENTCTL_WATCH_POLL", 60), 60)
+            self.assertEqual(A.env_number("AGENTCTL_WATCH_POLL", 60), 60)
         finally:
             os.environ.pop("AGENTCTL_WATCH_POLL")
         self.assertTrue(A.TOOL_PATH.endswith("agentctl") and os.path.isfile(A.TOOL_PATH))

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from agentctl.statefile import read_record
 from agentctl.statemachines import is_terminal, machine_state, open_items
 from agentctl.redknobs import knob_streak_rereads
-from agentctl.core import SHORT, err, process_cache
+from agentctl.core import SHORT, print_error, process_cache
 from agentctl.repos import RED_PRIMARY, red_job_names, red_repo_of, red_repo_short
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.classify import norm_line
@@ -181,7 +181,7 @@ class RedEpisode:
         try:
             return run_sigs(self.o_r, r, self.workflow)
         except (Exception, SystemExit) as e:  # SystemExit: NoToken
-            err(f"red: could not read the failed jobs of run {r.get('databaseId')} ({str(e)[:120]})")
+            print_error(f"red: could not read the failed jobs of run {r.get('databaseId')} ({str(e)[:120]})")
             return None
 
     def failing(self, job: str, line: str, reference: Run | None = None) -> set[str]:
@@ -204,7 +204,7 @@ class RedEpisode:
             sigs = (read_record(reds_dir("runsig", f"{decided.get('databaseId')}.json")) or {}).get("sigs") or []
             if not sigs:
                 why = f"{self.workflow} #{decided.get('number')}'s failures could not be read ({str(e)[:120]})"
-                err(f"red: {why}: only that run counts as its red")
+                print_error(f"red: {why}: only that run counts as its red")
                 episode_unread[self.workflow] = why
                 return [], why
         episode_unread.pop(self.workflow, None)

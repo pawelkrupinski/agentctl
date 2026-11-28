@@ -2,7 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
-from agentctl.core import HOME, err, process_cache
+from agentctl.core import HOME, print_error, process_cache
 from agentctl.fixerknobs import knob_allowed_roots
 
 
@@ -43,5 +43,5 @@ def allowed_path(path: str | None) -> bool:
     ok = not protected and (under_bin(n) or any(n == r or n.startswith(r.rstrip("/") + "/") for r in allowed_roots()))
     if not ok and n not in _skipped_paths:
         _skipped_paths.add(n)
-        err(f"skipped {n}: outside the roots background code may touch")
+        print_error(f"skipped {n}: outside the roots background code may touch")
     return ok

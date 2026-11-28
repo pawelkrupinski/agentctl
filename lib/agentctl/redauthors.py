@@ -6,9 +6,9 @@ import re
 from typing import Any
 from agentctl.clock import wall_epoch
 from agentctl.blameknobs import knob_author_active_min
-from agentctl.core import attempt, err, git
+from agentctl.core import attempt, print_error, git
 from agentctl.allowedpaths import allowed_path
-from agentctl.procs import lsof_cwds, proc_alive, ps
+from agentctl.procs import lsof_cwds, process_alive, ps
 from agentctl.jvmreap import AGENT_WORK
 from agentctl.inboxentry import inbox_entries
 from agentctl.worktrees import gitdir_activity
@@ -52,7 +52,7 @@ def landed_heads(store: Any) -> dict[str, dict[str, Any]]:
             if data.get("landed_sha"):
                 out[data["landed_sha"]] = {"worktree": data.get("worktree"), "session": data.get("session")}
     except (Exception, SystemExit) as e:
-        err(f"red authors: the change items could not be read ({str(e)[:160]}); no authors named")
+        print_error(f"red authors: the change items could not be read ({str(e)[:160]}); no authors named")
     return out
 
 
@@ -135,7 +135,7 @@ def _author_liveness(repo: Any, by_wt: Any, t: Any) -> Any:
     for k, a in by_wt.items():
         a["pids"] = sorted(set(a["pids"]) | set(running.get(k, [])))
         a["activity"] = worktree_activity(repo, a["worktree"], entries)
-        alive = [p for p in a["pids"] if proc_alive(p)]
+        alive = [p for p in a["pids"] if process_alive(p)]
         a["live_pid"] = alive[0] if alive else None
         a["live"] = bool(alive) and t - a["activity"] <= active
         out.append(a)

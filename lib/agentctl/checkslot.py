@@ -6,7 +6,7 @@ from agentctl.statefile import write_json
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
 from agentctl.govknobs import knob_gov_admit_max, knob_max_checks
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.inboxentry import inbox_write
 from agentctl.govbudget import (
     CHECKS_DEFAULT_CAP, GOV_MEM_GB, cap_state, check_runs, checks_cap, checks_dir, gov_max_checks, slot_holders)
@@ -33,7 +33,7 @@ class Slot:
             try:
                 self.samples.append(self.machine.sample())
             except (OSError, ValueError) as e:  # a reading the machine would not give: the check goes on without it
-                err(f"could not sample the machine for a check: {e}")
+                print_error(f"could not sample the machine for a check: {e}")
 
     def done(self, rc, out):
         self.rc, self.out = rc, out
@@ -67,7 +67,7 @@ def check_slot(repo, label, cls="check", *, machine):
         try:
             maybe_adjust_cap(machine.ram_gb())
         except (OSError, ValueError, KeyError) as e:  # the cap's files unreadable: kept as it was
-            err(f"could not adjust the check cap: {e}")
+            print_error(f"could not adjust the check cap: {e}")
 
 
 def record_check(slot, duration):

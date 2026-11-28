@@ -1,7 +1,7 @@
 # agentctl, part `redknobs`: the red knobs: the red tick, its fixers, asks, blame and decisions; the reds', dispatches' and recovery directories
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
-from agentctl.knobread import env_num, env_text
+from agentctl.knobread import env_number, env_text
 
 
 RED_STALL = 30 * 60   # a turn with no progress (transcript, worktree) this long is stalled: stopped ($AGENTCTL_RED_STALL)
@@ -59,43 +59,43 @@ RED_ORPHAN_GRACE = 5 * 60    # an ended session's turn still held this long is o
 
 
 def knob_red_crash_loop() -> float:
-    return env_num("AGENTCTL_RED_CRASH_LOOP", RED_CRASH_LOOP)
+    return env_number("AGENTCTL_RED_CRASH_LOOP", RED_CRASH_LOOP)
 
 
 def knob_crash_loop_launches() -> int:
-    return int(env_num("AGENTCTL_CRASH_LOOP_LAUNCHES", CRASH_LOOP_LAUNCHES))
+    return int(env_number("AGENTCTL_CRASH_LOOP_LAUNCHES", CRASH_LOOP_LAUNCHES))
 
 
 def knob_crash_loop_quick() -> float:
-    return env_num("AGENTCTL_CRASH_LOOP_QUICK", CRASH_LOOP_QUICK)
+    return env_number("AGENTCTL_CRASH_LOOP_QUICK", CRASH_LOOP_QUICK)
 
 
 def knob_red_orphan_grace() -> float:
-    return env_num("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE)
+    return env_number("AGENTCTL_RED_ORPHAN_GRACE", RED_ORPHAN_GRACE)
 
 
 def knob_red_stall() -> float:
-    return env_num("AGENTCTL_RED_STALL", RED_STALL)
+    return env_number("AGENTCTL_RED_STALL", RED_STALL)
 
 
 def knob_red_renew() -> float:
-    return env_num("AGENTCTL_RED_RENEW", RED_RENEW_EVERY)
+    return env_number("AGENTCTL_RED_RENEW", RED_RENEW_EVERY)
 
 
 def knob_red_fixer_wall() -> float:
-    return env_num("AGENTCTL_RED_FIXER_WALL", RED_FIXER_WALL)
+    return env_number("AGENTCTL_RED_FIXER_WALL", RED_FIXER_WALL)
 
 
 def knob_red_crash_block_max() -> float:
-    return env_num("AGENTCTL_RED_CRASH_BLOCK_MAX", RED_CRASH_BLOCK_MAX)
+    return env_number("AGENTCTL_RED_CRASH_BLOCK_MAX", RED_CRASH_BLOCK_MAX)
 
 
 def knob_red_decision_block_max() -> float:
-    return env_num("AGENTCTL_RED_DECISION_BLOCK_MAX", RED_DECISION_BLOCK_MAX)
+    return env_number("AGENTCTL_RED_DECISION_BLOCK_MAX", RED_DECISION_BLOCK_MAX)
 
 
 def knob_red_old_run() -> float:
-    return env_num("AGENTCTL_RED_OLD_RUN", RED_OLD_RUN)
+    return env_number("AGENTCTL_RED_OLD_RUN", RED_OLD_RUN)
 
 
 STREAK_REREADS = 3  # stale or missing streak run signatures read again per tick ($AGENTCTL_STREAK_REREADS)
@@ -103,7 +103,7 @@ STREAK_REREADS = 3  # stale or missing streak run signatures read again per tick
 
 def knob_streak_rereads() -> int:
     """The tick's re-reads of stale streak run signatures (redepisode.streak_budget)."""
-    return int(env_num("AGENTCTL_STREAK_REREADS", STREAK_REREADS))
+    return int(env_number("AGENTCTL_STREAK_REREADS", STREAK_REREADS))
 
 
 def knob_reds_dir() -> str:
@@ -260,83 +260,83 @@ RED_MAIN_VERIFY_EVERY = 3 * 3600
 
 
 def knob_early_max_runs() -> float:
-    return env_num("AGENTCTL_EARLY_MAX_RUNS", EARLY_MAX_RUNS)
+    return env_number("AGENTCTL_EARLY_MAX_RUNS", EARLY_MAX_RUNS)
 
 
 def knob_ever_green_recheck() -> float:
-    return env_num("AGENTCTL_EVER_GREEN_RECHECK", EVER_GREEN_RECHECK)
+    return env_number("AGENTCTL_EVER_GREEN_RECHECK", EVER_GREEN_RECHECK)
 
 
 def knob_fix_replay_timeout() -> float:
-    return env_num("AGENTCTL_FIX_REPLAY_TIMEOUT", FIX_REPLAY_TIMEOUT)
+    return env_number("AGENTCTL_FIX_REPLAY_TIMEOUT", FIX_REPLAY_TIMEOUT)
 
 
 def knob_red_decided_revert_max() -> float:
-    return env_num("AGENTCTL_RED_DECIDED_REVERT_MAX", RED_DECIDED_REVERT_MAX)
+    return env_number("AGENTCTL_RED_DECIDED_REVERT_MAX", RED_DECIDED_REVERT_MAX)
 
 
 def knob_red_fixers() -> float:
-    return env_num("AGENTCTL_RED_FIXERS", RED_FIXERS)
+    return env_number("AGENTCTL_RED_FIXERS", RED_FIXERS)
 
 
 def knob_red_fix_decide() -> float:
-    return env_num("AGENTCTL_RED_FIX_DECIDE", RED_FIX_DECIDE)
+    return env_number("AGENTCTL_RED_FIX_DECIDE", RED_FIX_DECIDE)
 
 
 def knob_red_fix_giveup() -> float:
-    return env_num("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP)
+    return env_number("AGENTCTL_RED_FIX_GIVEUP", RED_FIX_GIVEUP)
 
 
 def knob_red_fix_next_run() -> float:
-    return env_num("AGENTCTL_RED_FIX_NEXT_RUN", RED_FIX_NEXT_RUN)
+    return env_number("AGENTCTL_RED_FIX_NEXT_RUN", RED_FIX_NEXT_RUN)
 
 
 def knob_red_fix_requeue_grace() -> float:
-    return env_num("AGENTCTL_RED_FIX_REQUEUE_GRACE", RED_FIX_REQUEUE_GRACE)
+    return env_number("AGENTCTL_RED_FIX_REQUEUE_GRACE", RED_FIX_REQUEUE_GRACE)
 
 
 def knob_red_held_idle() -> float:
-    return env_num("AGENTCTL_RED_HELD_IDLE", RED_HELD_IDLE)
+    return env_number("AGENTCTL_RED_HELD_IDLE", RED_HELD_IDLE)
 
 
 def knob_red_join_idle() -> float:
-    return env_num("AGENTCTL_RED_JOIN_IDLE", RED_JOIN_IDLE)
+    return env_number("AGENTCTL_RED_JOIN_IDLE", RED_JOIN_IDLE)
 
 
 def knob_red_liveness_max() -> float:
-    return env_num("AGENTCTL_RED_LIVENESS_MAX", RED_LIVENESS_MAX)
+    return env_number("AGENTCTL_RED_LIVENESS_MAX", RED_LIVENESS_MAX)
 
 
 def knob_red_main_verify_every() -> float:
-    return env_num("AGENTCTL_RED_MAIN_VERIFY_EVERY", RED_MAIN_VERIFY_EVERY)
+    return env_number("AGENTCTL_RED_MAIN_VERIFY_EVERY", RED_MAIN_VERIFY_EVERY)
 
 
 def knob_red_others_every() -> float:
-    return env_num("AGENTCTL_RED_OTHERS_EVERY", RED_OTHERS_EVERY)
+    return env_number("AGENTCTL_RED_OTHERS_EVERY", RED_OTHERS_EVERY)
 
 
 def knob_red_skip_say() -> float:
-    return env_num("AGENTCTL_RED_SKIP_SAY", RED_SKIP_SAY)
+    return env_number("AGENTCTL_RED_SKIP_SAY", RED_SKIP_SAY)
 
 
 def knob_red_stale_days() -> float:
-    return env_num("AGENTCTL_RED_STALE_DAYS", RED_STALE_DAYS)
+    return env_number("AGENTCTL_RED_STALE_DAYS", RED_STALE_DAYS)
 
 
 def knob_red_starve() -> float:
-    return env_num("AGENTCTL_RED_STARVE", RED_STARVE)
+    return env_number("AGENTCTL_RED_STARVE", RED_STARVE)
 
 
 def knob_red_tick() -> float:
-    return env_num("AGENTCTL_RED_TICK", RED_TICK_INTERVAL)
+    return env_number("AGENTCTL_RED_TICK", RED_TICK_INTERVAL)
 
 
 def knob_red_verify_slack() -> float:
-    return env_num("AGENTCTL_RED_VERIFY_SLACK", RED_VERIFY_SLACK)
+    return env_number("AGENTCTL_RED_VERIFY_SLACK", RED_VERIFY_SLACK)
 
 
 def knob_unkicked_after() -> float:
-    return env_num("AGENTCTL_UNKICKED_AFTER", UNKICKED_AFTER)
+    return env_number("AGENTCTL_UNKICKED_AFTER", UNKICKED_AFTER)
 
 
 def knob_brief_src() -> str:

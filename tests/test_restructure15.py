@@ -102,7 +102,7 @@ class SweepLandRefsTest(unittest.TestCase):
         refs = [f"abc\trefs/heads/land/{r.choice(ids)}" for _ in range(r.randint(0, 5))]
         case.fake("epoch_now", lambda rng: NOW)
         case.fake("remote", lambda rng: "origin")
-        case.fake("env_num", lambda rng, name, default: rng.choice([default, 5, 100000]))
+        case.fake("env_number", lambda rng, name, default: rng.choice([default, 5, 100000]))
         case.fake("entry_id_age", lambda rng, eid, t: rng.choice([None, 10, 10 ** 6]))
         case.fake("waiting_entries", lambda rng, d, open_only=True: [{"id": r.choice(ids), "status": r.choice(["queued", "final", "landed"])}
                                                                       for _ in range(r.randint(0, 3))])
@@ -110,7 +110,7 @@ class SweepLandRefsTest(unittest.TestCase):
         case.fake("machine_state", lambda rng, m, s: NS(terminal=s in ("landed", "dead")))
         case.fake("git", lambda rng, repo, *a, **k: proc(rng, "\n".join(refs), rng.choice([0, 0, 0, 1])) if a[0] == "ls-remote"
                   else proc(rng, "", rng.choice([0, 1])))
-        case.fake("err", lambda rng, m: None)
+        case.fake("print_error", lambda rng, m: None)
         case.put("_last_ref_sweep", [r.choice([0.0, NOW - 5, NOW - 9999])])
         items = [{"id": r.choice(ids), "state": r.choice(["landed", "queued", "dead"])} for _ in range(r.randint(0, 3))]
         st = Probe(case, "store", items=lambda rng, typ: raising(rng, 0.1, items))
@@ -224,7 +224,7 @@ class RedOfferTest(unittest.TestCase):
         case.put("RED_OFFER", {"author": 600, "fast": 300, "slow": 1200})
         case.fake("red_decision", lambda rng, d: rng.choice([None, "decided"]))
         case.fake("red_what", lambda rng, d: "WHAT")
-        case.fake("env_num", lambda rng, name, default: default)
+        case.fake("env_number", lambda rng, name, default: default)
         case.fake("red_move", lambda rng, store, it, state, text, **kw: dict(it, moved=1))
         case.fake("red_put_offer", lambda rng, store, it: None)
         d = {"key": "k", "workflow": "wf", "attempts": r.choice([0, 1, 2, None]), "deep_told": r.choice([None, 0, 1, 2]), "line": r.choice(["", "ln"]),

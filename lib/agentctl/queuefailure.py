@@ -6,7 +6,7 @@ import re
 from typing import Any, Optional
 from agentctl.statefile import read_record, write_json
 from agentctl.timefmt import ts
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.repos import gated_repo, slug
 from agentctl.waitingdir import ChangeRecords
 from agentctl.joblog import fetch_failed_log
@@ -37,7 +37,7 @@ def head_failure_jobs(repo: str, e: Entry, out: Optional[str]) -> dict[str, list
         try:
             return log_jobs(fetch_failed_log(slug(repo), run))
         except (Exception, SystemExit) as ex:
-            err(f"failed log of run {run} unread ({str(ex)[:120]}): judged from the verdict's lines")
+            print_error(f"failed log of run {run} unread ({str(ex)[:120]}): judged from the verdict's lines")
     return jobs_of_out(out)
 
 
@@ -80,9 +80,9 @@ def gate_failure_keys(repo: str, *, ctx: Context) -> dict[str, str]:
                 for k in run_failure_keys(o_r, decided["databaseId"]):
                     out.setdefault(k, f"{name} #{decided.get('number') or decided['databaseId']}{GATE_RUN_WHERE}")
             except (Exception, SystemExit) as ex:
-                err(f"{name} run {decided['databaseId']}: failed log unread ({str(ex)[:120]})")
+                print_error(f"{name} run {decided['databaseId']}: failed log unread ({str(ex)[:120]})")
     except (Exception, SystemExit) as ex:
-        err(f"the gate's runs unread ({str(ex)[:120]}): judged against the queue's own record only")
+        print_error(f"the gate's runs unread ({str(ex)[:120]}): judged against the queue's own record only")
     return out
 
 

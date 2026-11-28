@@ -7,7 +7,7 @@ from agentctl.clock import epoch_now
 from agentctl.ids import entry_id_age
 from agentctl.queueknobs import (
     knob_fixer_land_wait, knob_land_ref_sweep, knob_land_ref_unknown_age, knob_note_precheck_wait)
-from agentctl.core import err, git, git_ok, remote, spawn_detached
+from agentctl.core import print_error, git, git_ok, remote, spawn_detached
 from agentctl.networksignatures import credential_failure, is_transient_network, redact_credentials
 from agentctl.netretry import TransientNetwork, net_retry
 from agentctl.agewords import fmt_age
@@ -85,7 +85,7 @@ def _change_items(store: Any) -> Any:
     try:
         return {it["id"]: it for it in store.items("change")}
     except Exception as ex:
-        err(f"land refs: store unreadable ({ex}); no ref deleted")
+        print_error(f"land refs: store unreadable ({ex}); no ref deleted")
         return None
 
 
@@ -160,7 +160,7 @@ def start_fast_precheck(repo, main_ref, head, eid, a):
                                  "--head", head], cwd=repo, stdin=subprocess.DEVNULL, stdout=logf,
                                 stderr=subprocess.STDOUT, start_new_session=True)
     except OSError as e:
-        err(f"fast precheck not started ({e}); the landing check judges the change")
+        print_error(f"fast precheck not started ({e}); the landing check judges the change")
         return
     print(f"fast precheck of {eid} running alongside the queue ({FAST_PRECHECK}; log {log}): a refusal cancels it "
           "with NOT LANDED in `agentctl inbox`", flush=True)
@@ -215,7 +215,7 @@ def note_precheck(eid, secs, rc, out, store, sleep=time.sleep):  # wall: waits o
             break
         sleep(delay)
     if why != "its item does not exist":  # no item: a change the store never held (a fixer's own land) -- nothing to say
-        err(f"the precheck of {eid} could not be noted on its item ({why})")
+        print_error(f"the precheck of {eid} could not be noted on its item ({why})")
     return False
 
 
@@ -320,7 +320,7 @@ def submit_ref(repo, d, e):
         e["ref"] = ref
         return ref
     e["push_error"] = tail_of(out or "", 2).strip()[:300]
-    err(f"submit: could not push {ref} ({e['push_error'][:160]}); the change is queued all the same")
+    print_error(f"submit: could not push {ref} ({e['push_error'][:160]}); the change is queued all the same")
     return None
 
 

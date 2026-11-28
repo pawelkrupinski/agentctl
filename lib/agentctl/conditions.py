@@ -8,7 +8,7 @@ from agentctl.statemachines import StaleVersion, TerminalState
 from agentctl.clock import epoch_now
 from agentctl.timefmt import iso_at, ts
 from agentctl.blameknobs import knob_condition_pending_lapse, knob_recover_max, knob_unknown_grace
-from agentctl.core import SHORT, attempt, err, git, host_role, remote
+from agentctl.core import SHORT, attempt, print_error, git, host_role, remote
 from agentctl.repos import movies_repo_path
 from agentctl.gating import mark_gate_dirty
 from agentctl.inboxentry import inbox_dir, inbox_write
@@ -176,7 +176,7 @@ def condition_pending(st: Any, key: Any, grace: Any, t: Any) -> Any:
             return True
         st.meta_set(mk, "")
     except (Exception, SystemExit) as e:
-        err(f"condition {key}: its pending mark could not be kept ({str(e)[:120]}): opened at once")
+        print_error(f"condition {key}: its pending mark could not be kept ({str(e)[:120]}): opened at once")
     return False
 
 
@@ -318,7 +318,7 @@ def close_condition(cond: Any, result: Any, store: Any, registry: ConditionRegis
     did = _recovery_done(cond, it, st, registry)
     mark_gate_dirty()
     line = _closed_line(cond, result, reason, manual, did)
-    err(line)
+    print_error(line)
     inbox_write("recover", line, [line], [], 0)
     return line
 
@@ -443,7 +443,7 @@ def recovery_recheck(kind: str, store: Any, registry: ConditionRegistry) -> None
                 if r.ok:
                     close_condition(c, r, store, registry)
     except (Exception, SystemExit) as e:
-        err(f"recover: recheck of {kind} failed ({str(e)[:120]})")
+        print_error(f"recover: recheck of {kind} failed ({str(e)[:120]})")
 
 
 # ---------------------------------------------------------------- recovery: every non-green condition clears itself

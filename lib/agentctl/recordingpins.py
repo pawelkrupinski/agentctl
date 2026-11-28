@@ -4,7 +4,7 @@
 from agentctl.statefile import read_record, write_json
 from agentctl.clock import epoch_now
 from agentctl.redknobs import knob_pinned_recording
-from agentctl.core import err, git, host_role, remote
+from agentctl.core import print_error, git, host_role, remote
 from agentctl.forge import api, forge_release_asset
 from agentctl.agewords import fmt_age
 from agentctl.paths import reds_dir
@@ -71,7 +71,7 @@ def stored_pins(st):
         v = st.meta_get(PIN_META)
         rec = json.loads(v) if v else None
     except (Exception, SystemExit) as e:
-        err(f"pinned recording: the store's copy not read ({str(e).replace('agentctl: ', '')[:160]})")
+        print_error(f"pinned recording: the store's copy not read ({str(e).replace('agentctl: ', '')[:160]})")
         return None
     return rec if isinstance(rec, dict) and rec.get("pins") else None
 
@@ -81,7 +81,7 @@ def store_pins(rec, st):
     try:
         st.meta_set(PIN_META, json.dumps({k: rec[k] for k in ("at", "repo", "tag", "pins")}))
     except (Exception, SystemExit) as e:
-        err(f"pinned recording: not stored ({str(e).replace('agentctl: ', '')[:160]})")
+        print_error(f"pinned recording: not stored ({str(e).replace('agentctl: ', '')[:160]})")
         return rec
     rec = {**rec, "stored": True}
     write_json(pinned_path(), rec)
@@ -105,7 +105,7 @@ def refresh_pinned_recording(o_r, repo, st, now_ = None, force: bool = False, ro
     try:
         return _reread_pins(o_r, repo, st, rec, t)
     except (Exception, SystemExit) as e:
-        err(f"pinned recording: not re-read ({str(e)[:160]})")
+        print_error(f"pinned recording: not re-read ({str(e)[:160]})")
     return rec
 
 

@@ -43,5 +43,5 @@ MODULES = ("caches", "procrunner", "conditionregistry", "escalationtable", "pspa
            "landedchange", "superseded", "park", "orphans", "orphanpass", "maintain", "status", "statuspage",
            "redcli", "changerows", "changelap", "overlapcheck", "entrychecks", "queuediff", "batchselect", "batch",
            "syncsteps", "invariants", "watchdog", "queueinfra", "queuecheck", "checkround", "queuepush", "batchpush",
-           "batchcheck", "batchtick", "serversteps", "landqueue", "processor", "queueenter", "landdryrun", "slots",
+           "batchcheck", "batchtick", "serversteps", "landqueue", "tickloop", "queueenter", "landdryrun", "slots",
            "cliparser", "cli")

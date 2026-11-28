@@ -6,7 +6,7 @@ import sys
 from typing import Any
 from agentctl.clock import stopwatch
 from agentctl.tickknobs import knob_cleanup_remove_reserve
-from agentctl.core import PROTECTED_BRANCHES, REPOS, err, git, remote
+from agentctl.core import PROTECTED_BRANCHES, REPOS, print_error, git, remote
 from agentctl.repos import slug
 from agentctl.procs import process_cwds
 from agentctl.forge import forge_branch_sha, forge_delete_branch, gh_json
@@ -55,7 +55,7 @@ class CleanupPass:
             self.stopped.append(f"repo {name}")
             return
         if self.net_down:
-            err(f"{name}: not fetched -- {self.net_down}; skipping repo")
+            print_error(f"{name}: not fetched -- {self.net_down}; skipping repo")
             self.rc = 1
             return
         t_repo = stopwatch()
@@ -80,7 +80,7 @@ class CleanupPass:
                     raise RuntimeError(f"fetch: {f}")
             return git(repo, "rev-parse", f"refs/remotes/{remote()}/main").strip()
         except RuntimeError as e:
-            err(f"{name}: {e}; skipping repo")
+            print_error(f"{name}: {e}; skipping repo")
             self.rc = 1
             return None
 
@@ -146,7 +146,7 @@ class CleanupPass:
             mplan = plan_measure(o_r, lambda b: gh_json(o_r, "run", "list", "--branch", b, "--limit", "20", "--json",
                                                         "databaseId,status"))
         except Exception as e:
-            err(f"{name}: measure branches not checked: {e}")
+            print_error(f"{name}: measure branches not checked: {e}")
             self.rc = 1
             return
         for action, bname, sha, why in mplan:

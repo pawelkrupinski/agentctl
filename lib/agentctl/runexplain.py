@@ -6,7 +6,7 @@ import json
 import urllib.request
 from typing import Any, Optional
 from agentctl.storeknobs import knob_githubstatus_url
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.workflows import STEP_TIMED_OUT, workflow_jobs
 from agentctl.classify import SETUP_STEP, classify_job, job_log_verdict
 from agentctl.forge import GH_CLI, RED_CONCLUSIONS, gh_json, runner_queue
@@ -43,7 +43,7 @@ def run_failed_attempt(o_r: str, rid: Any, d: GhJson) -> tuple[GhJson, Optional[
         try:
             dn = gh_json(o_r, "run", "view", str(rid), "--attempt", str(n), "--json", RUN_VIEW_FIELDS)
         except (Exception, SystemExit) as e:
-            err(f"could not read run {rid}'s attempt {n}: {str(e)[:160]}")
+            print_error(f"could not read run {rid}'s attempt {n}: {str(e)[:160]}")
             return d, None
         if run_failed_jobs(dn) or dn.get("conclusion") in RED_CONCLUSIONS:
             return dn, n
@@ -121,7 +121,7 @@ def never_created_lines(o_r: str, d: GhJson) -> tuple[str, str]:
         txt = base64.b64decode((body or {}).get("content") or "").decode(errors="replace")
         missing = jobs_never_created(workflow_jobs(txt), d.get("jobs") or [])
     except (Exception, SystemExit) as e:
-        err(f"could not read run's workflow file ({str(e)[:120]})")
+        print_error(f"could not read run's workflow file ({str(e)[:120]})")
     incidents = github_incidents(d.get("createdAt"), d.get("updatedAt"))
     why = ("GitHub-side: every job the run created passed, yet the run failed"
            + (f"; never created: {', '.join(missing)}" if missing else "; a job GitHub never created?")
@@ -199,7 +199,7 @@ class RunExplanation:
                 if logged and not self.no_verdict else ""
         except Exception as e:
             self.unread.append(str(e))
-            err(f"could not read run {self.rid}'s failed log: {e}")
+            print_error(f"could not read run {self.rid}'s failed log: {e}")
             return ""
         return log
 

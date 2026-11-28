@@ -14,7 +14,7 @@ from agentctl.statefile import read_record, unlink_file, write_json
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
 from agentctl.tickknobs import knob_dispatch_find, knob_dispatch_find_poll
-from agentctl.core import err, remote
+from agentctl.core import print_error, remote
 from agentctl.repos import slug
 from agentctl.forge import RED_CONCLUSIONS, RUN_FIELDS, api, forge_argv, forge_env, gh_json
 from agentctl.inboxentry import inbox_write
@@ -290,7 +290,7 @@ def route_branch_red(o_r: Any, e: Any) -> Any:
     """Write the inbox entry of one failed branch run, ci-why's first error lines under it, its signatures saved."""
     r = e["run"]
     try:
-        lines, _num, per_job = explain_run_jobs(o_r, dict(r, workflowName=e["workflow"]), 4)
+        lines, _number, per_job = explain_run_jobs(o_r, dict(r, workflowName=e["workflow"]), 4)
         save_run_sigs(o_r, r, e["workflow"], per_job)
     except (Exception, SystemExit) as ex:
         lines, per_job = [f"  (could not read the run: {str(ex)[:160]})"], []
@@ -423,7 +423,7 @@ def dispatched_run_id(o_r: str, a: Any, t0: Any) -> Any:
             if fresh:
                 return max(x["databaseId"] for x in fresh)
         except (Exception, SystemExit) as e:  # not listed yet is retried: say why the listing failed
-            err(f"dispatch find: the run list failed ({str(e)[:160]}); retried")
+            print_error(f"dispatch find: the run list failed ({str(e)[:160]}); retried")
         # wall: waits on and times real processes and threads
         time.sleep(knob_dispatch_find_poll())
     return None

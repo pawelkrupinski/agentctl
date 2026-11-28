@@ -147,7 +147,7 @@ class OutsideGateTest(unittest.TestCase):
             return top
         case.fake("gh_json", gh)
         case.fake("main_workflow_files", lambda rng, o_r: {n: n.lower() + ".yml" for n in r.sample(flows, r.randint(0, 6))})
-        case.fake("err", lambda rng, m: None)
+        case.fake("print_error", lambda rng, m: None)
         mem = {}
         for n in r.sample(flows, r.randint(0, 3)):
             mem[n.lower() + ".yml"] = (NOW - r.choice([10, 5000]), r.choice([None, [run(n)], []]))
@@ -275,14 +275,14 @@ class RedFamilyTest(unittest.TestCase):
 
 # ------------------------------------------------------------------------------------------------ config
 KNOB_TEXTS = [
-    'X = 5  # five things\nY = X * 2\nA = env_num("AGENTCTL_ONE", X)\n',
-    'B = os.environ.get("AGENTCTL_TWO", "dflt")  # the two\nC = env_num( "AGENTCTL_THREE" , 3 )\n',
-    'env_num("AGENTCTL_ONE", 9)  # later doc ($AGENTCTL_ONE); more ;\n',
+    'X = 5  # five things\nY = X * 2\nA = env_number("AGENTCTL_ONE", X)\n',
+    'B = os.environ.get("AGENTCTL_TWO", "dflt")  # the two\nC = env_number( "AGENTCTL_THREE" , 3 )\n',
+    'env_number("AGENTCTL_ONE", 9)  # later doc ($AGENTCTL_ONE); more ;\n',
     'os.environ.get("AGENTCTL_NODEF")\nenv_num("AGENTCTL_AGENT_NAME", 1)\nos.environ.get("AGENTCTL_ROLE")\n',
-    'Z = 2 << 3  # shifts\nq = env_num("AGENTCTL_Z", Z)  # reads\nr = env_num("AGENTCTL_UNKNOWN", SOMETHING)\n',
-    'K = "text"  # a K\ns = os.environ.get("AGENTCTL_KEY", K)\nt = env_num("AGENTCTL_TWO", 4)\n',
+    'Z = 2 << 3  # shifts\nq = env_number("AGENTCTL_Z", Z)  # reads\nr = env_number("AGENTCTL_UNKNOWN", SOMETHING)\n',
+    'K = "text"  # a K\ns = os.environ.get("AGENTCTL_KEY", K)\nt = env_number("AGENTCTL_TWO", 4)\n',
     "nothing here\n",
-    'env_num("AGENTCTL_PIPE", 1)  # a | b\nenv_num("AGENTCTL_NEG", -1)\nenv_num("AGENTCTL_LONG", 1.5)  # c ; \n',
+    'env_number("AGENTCTL_PIPE", 1)  # a | b\nenv_num("AGENTCTL_NEG", -1)\nenv_num("AGENTCTL_LONG", 1.5)  # c ; \n',
 ]
 
 
@@ -349,7 +349,7 @@ class GateRunsPassTest(unittest.TestCase):
         case.fake("stats_post", lambda rng, url, recs: raise_if(rng, 0.12))
         case.fake("stats_sent", lambda rng, st, kind, rid: rng.random() < 0.3)
         case.fake("stats_echo", lambda rng, recs, out=None: None)
-        case.fake("err", lambda rng, m: None)
+        case.fake("print_error", lambda rng, m: None)
         st = Probe(case, "st", meta_get=lambda rng, k: meta.get(k))
         return (holder, st, "http://u", NOW, r.choice([None, 12.0]), r.choice([0, 1, 3, 99]), r.choice([None, "out"]))
 

@@ -5,7 +5,7 @@ from typing import Any
 from agentctl.context import Context
 from agentctl.statemachines import MACHINES, machine_state, open_items
 from agentctl.tickknobs import knob_tick
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.cistate import state_read
 from agentctl.redrecord import red_lease
 from agentctl.redhold import red_unheld
@@ -49,7 +49,7 @@ def longest_unleased_red(st: Any, t: float, *, ctx: Context) -> float:
         for it in red_unheld(st, ctx=ctx):
             unleased = max(unleased, t - float(it.get("entered_at") or t))
     except Exception as e:
-        err(f"the unleased red age could not be read ({str(e)[:160]}); 0")
+        print_error(f"the unleased red age could not be read ({str(e)[:160]}); 0")
     return unleased
 
 

@@ -122,7 +122,7 @@ class RedDispatchTest(unittest.TestCase):
                 ("spawn_fixer", lambda rng, *a: types.SimpleNamespace(pid=rng.randint(100, 999))),
                 ("socket_host", lambda rng: "host1"),
                 ("inbox_write", lambda rng, *a, **k: None),
-                ("fixer_label", lambda rng, rec: f"label-{rec.get('run')}"), ("err", lambda rng, m: None)):
+                ("fixer_label", lambda rng, rec: f"label-{rec.get('run')}"), ("print_error", lambda rng, m: None)):
             case.fake(name, gen)
         resume = maybe(r, {"worktree": r.choice(TREES), "session": r.choice([None, "s0"]), "note": r.choice([None, "n"]),
                            "launch_cwd": r.choice([None, "/l"])}, 0.35)
@@ -164,7 +164,7 @@ class FixersLandWatchTest(unittest.TestCase):
                 for i in range(r.randint(0, 3))]
         times = [NOW - 60 * m for m in (0, 10, 44, 45, 46, 89, 90, 91, 300)]
         case.fake("fixer_records", lambda rng: recs)
-        case.fake("env_num", lambda rng, name, default: rng.choice([default, default, 60, 600, 5400]))
+        case.fake("env_number", lambda rng, name, default: rng.choice([default, default, 60, 600, 5400]))
         case.fake("red_owner_only", lambda rng, repo: rng.random() < 0.15)
         case.fake("red_repo_of", lambda rng, rec: "o/r")
         case.fake("read_record", lambda rng, p: maybe(rng, rng.choice([{}, {"nudged_at": NOW - 3000}, {"nudged_at": NOW - 100, "escalated_at": NOW - 50},
@@ -402,7 +402,7 @@ class LiveStreamTest(unittest.TestCase):
         r = case.rng
         clock = fixed_time(case)
         ents = [None, {"type": "user"}, {"type": "assistant", "x": 1}, {"type": "raw", "text": "t"}]
-        case.fake("env_num", lambda rng, name, default: rng.choice([0.5, 1.0]))
+        case.fake("env_number", lambda rng, name, default: rng.choice([0.5, 1.0]))
         case.fake("live_entry", lambda rng, line: rng.choice(ents))
         case.fake("live_tail_info", lambda rng, path: {"stop": rng.choice([None, "end_turn"]), "last_ts": "t0", "api_error": rng.random() < 0.2,
                                                        "size": 5, "mtime": 3})
@@ -514,7 +514,7 @@ class DryRunTest(unittest.TestCase):
         holder = {"case": case, "baseline": r.choice([None, "0", "1", "1"])}
         case.patch(os.path, "exists", lambda rng, p: rng.random() < 0.4)
         case.fake("remote", lambda rng: "origin")
-        case.fake("err", lambda rng, m: None)
+        case.fake("print_error", lambda rng, m: None)
         case.fake("lock_note", lambda rng, m: None)
         case.fake("tool_env", lambda rng: {"T": "1"})
         case.fake("ts", lambda rng: "T")

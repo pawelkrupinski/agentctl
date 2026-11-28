@@ -10,7 +10,7 @@ from agentctl.clock import Clock
 from agentctl.timefmt import ts
 from agentctl.queueknobs import knob_drift_stall
 from agentctl.govknobs import knob_check_lease_ttl
-from agentctl.core import err, git, git_ok
+from agentctl.core import print_error, git, git_ok
 from agentctl.classify import INFRA_LOG, names_failing_test
 from agentctl.repos import slug
 from agentctl.paths import state_root
@@ -61,7 +61,7 @@ def drift_env(repo, env=None):
         env = forge_env(slug(repo), env)  # forge-gh is the real gh (KINOWO_FORGE), with the repo's App token on ci-runner
         env["KINOWO_FORGE"] = "github"
     except (Exception, SystemExit) as ex:  # no token: the script says so itself (NO VERDICT)
-        err(f"drift check: no forge token for the script ({str(ex)[:120]})")
+        print_error(f"drift check: no forge token for the script ({str(ex)[:120]})")
     parts = [p for p in env.get("PATH", "").split(":") if p]
     if not any(os.access(os.path.join(p, "python3"), os.X_OK) for p in parts):
         shim = state_root("tool-bin")
@@ -74,7 +74,7 @@ def drift_env(repo, env=None):
                 os.symlink(sys.executable, link)
             env["PATH"] = ":".join(parts + [shim])
         except OSError as ex:
-            err(f"drift check: no python3 for the script ({ex})")
+            print_error(f"drift check: no python3 for the script ({ex})")
     return env
 
 

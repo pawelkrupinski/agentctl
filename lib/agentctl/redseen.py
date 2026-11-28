@@ -8,7 +8,7 @@ from agentctl.statemachines import is_terminal
 from agentctl.clock import wall_epoch
 from agentctl.timefmt import parse_time
 from agentctl.redknobs import knob_unkicked_after
-from agentctl.core import attempt, err, git, remote
+from agentctl.core import attempt, print_error, git, remote
 from agentctl.repos import gated_repo, slug
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.classify import norm_line
@@ -367,7 +367,7 @@ def gate_reds(repo: str, *, ctx: Context) -> set[str]:
         return reds
     except (Exception, SystemExit) as e:  # SystemExit: NoToken
         why = str(e).replace("agentctl: ", "")[:200]
-        err(f"could not read the gate ({why}): taken as RED until it is read")
+        print_error(f"could not read the gate ({why}): taken as RED until it is read")
         return UnreadGate(why)
 
 
@@ -412,7 +412,7 @@ def red_observe(o_r, repo, snap, *, ctx):
     try:
         obs.update(unkicked_obs(o_r, repo, snap))
     except (Exception, SystemExit) as e:
-        err(f"red: could not tell whether the convergence was kicked ({str(e)[:120]})")
+        print_error(f"red: could not tell whether the convergence was kicked ({str(e)[:120]})")
     return obs
 
 

@@ -7,7 +7,7 @@ from typing import Any, Callable
 from agentctl.statefile import note_failure, read_json_file, write_json_file
 from agentctl.timefmt import ts
 from agentctl.redknobs import knob_early_max_runs
-from agentctl.core import err
+from agentctl.core import print_error
 from agentctl.allowedpaths import allowed_path
 from agentctl.forge import RED_CONCLUSIONS, api
 from agentctl.inboxentry import inbox_write
@@ -129,12 +129,12 @@ class EarlyReader:
         """A read that failed: a rate limit or a 5xx pauses every early read (EarlyBackoff)."""
         if EARLY_LIMITED.search(why):
             why = f"{why[:120]}: early reads paused {fmt_age(self.backoff.hit(t, why))}"
-        err(f"red early: {name} #{run.get('number')}: jobs unread ({why[:200]})")
+        print_error(f"red early: {name} #{run.get('number')}: jobs unread ({why[:200]})")
 
     def classify(self, o_r: str, name: str, run: Run, gate: bool, runs: list[Run], t: float) -> list[dict[str, Any]]:
         """The run's failed jobs so far as red units, by THE classifier: only the test-shaped ones (infra and unclear
         wait for the run's verdict; a `verdict complete` report is none)."""
-        lines, _num, per_job = self.explain(o_r, run, 6)
+        lines, _number, per_job = self.explain(o_r, run, 6)
         sigs = [{"job": j, "kind": k, "line": l or ""} for j, k, l in per_job if k == "test"]
         if not sigs:
             return []
@@ -179,7 +179,7 @@ def early_observed(store: Any, o_r: str, snap: dict[str, Any] | None, t: float, 
         seen = red_obs_for(o_r, (early or EarlyReader()).observe(o_r, snap, t))
         active = red_active_of(store, o_r)
     except (Exception, SystemExit) as e:
-        err(f"red tick: could not read the in-progress runs ({str(e)[:160]}): no early red this tick")
+        print_error(f"red tick: could not read the in-progress runs ({str(e)[:160]}): no early red this tick")
         return obs
     return {**{k: ob for k, ob in seen.items() if k not in active or active[k]["data"].get("early")}, **obs}
 

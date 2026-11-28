@@ -17,7 +17,7 @@ from agentctl.clock import epoch_now, stopwatch
 from agentctl.ids import stamp
 from agentctl.storeknobs import knob_clone_lock_wait, knob_clone_repair_retry, knob_clone_timeout, knob_movies_remote
 from agentctl.govknobs import knob_clone_keepalive
-from agentctl.core import err, git, git_ok, pid_alive, process_cache, remote
+from agentctl.core import print_error, git, git_ok, pid_alive, process_cache, remote
 from agentctl.sdnotify import SD_READY, sd_notify
 from agentctl.repos import server_repo
 from agentctl.clones import CORRUPT_GIT, clone_gated, clone_shared, clone_side, heal_enabled
@@ -32,7 +32,7 @@ from agentctl.conditions import open_condition, recovery_recheck, run_probe
 CLONE_TMP = ".clone-tmp-"
 
 
-def clone_tmp_dirs(repo):
+def clone_temp_dirs(repo):
     """The temp clones beside repo: [(path, pid of their cloner)]."""
     parent, base = os.path.split(os.path.abspath(repo))
     out = []
@@ -46,7 +46,7 @@ def clean_clone_tmps(repo):
     """Remove the temp clones an interrupted clone left (their cloner is gone). Returns what it removed."""
     import shutil
     gone = []
-    for p, pid in clone_tmp_dirs(repo):
+    for p, pid in clone_temp_dirs(repo):
         if pid and pid != os.getpid() and pid_alive(pid):
             continue
         shutil.rmtree(p, ignore_errors=True)
@@ -102,7 +102,7 @@ def run_clone(cmd, what):
     return got["r"]
 
 
-def clone_into_tmp(repo, url):
+def clone_into_temp(repo, url):
     """A fresh, verified clone of url in a temp directory beside repo (never repo itself). Returns its path; raises
     SystemExit (the temp directory removed) when the clone or its verification fails."""
     import shutil
@@ -129,7 +129,7 @@ def _clone_server_repo(repo: str) -> None:
     url = knob_movies_remote()
     if not url:
         raise SystemExit(f"agentctl tick: no clone at {repo} and no $AGENTCTL_MOVIES_REMOTE to clone it from")
-    tmp = clone_into_tmp(repo, url)
+    tmp = clone_into_temp(repo, url)
     if os.path.isdir(repo) and not os.listdir(repo):
         os.rmdir(repo)
     elif os.path.lexists(repo):  # something that is no clone: kept aside, never overwritten
@@ -290,14 +290,14 @@ def repair_clone(repo, why, store, registry: ConditionRegistry):
             clone_condition(repo, f"CLONE BROKEN: {repo}: {why.splitlines()[0][:300]}; re-cloning it from {url}",
                             run_probe(probe_clone_health, {"repo": repo}), store, tail=why.splitlines()[-15:])
         except (Exception, SystemExit) as e:
-            err(f"clone repair: the CLONE condition could not be opened ({str(e)[:160]})")
-        err(f"clone repair: {repo} is broken ({why.splitlines()[0][:200]}): cloning {url} afresh")
-        tmp = clone_into_tmp(repo, url)
+            print_error(f"clone repair: the CLONE condition could not be opened ({str(e)[:160]})")
+        print_error(f"clone repair: {repo} is broken ({why.splitlines()[0][:200]}): cloning {url} afresh")
+        tmp = clone_into_temp(repo, url)
         broken = f"{repo}.broken-{stamp('entry')}"
         with clone_exclusive(repo) as held:
             if not held:
                 shutil.rmtree(tmp, ignore_errors=True)
-                err(f"clone repair: {repo} stayed in use for "
+                print_error(f"clone repair: {repo} stayed in use for "
                     f"{knob_clone_lock_wait():.0f} s; tried again next tick")
                 _clone_repair_at.pop(os.path.realpath(repo), None)
                 return None
@@ -307,13 +307,13 @@ def repair_clone(repo, why, store, registry: ConditionRegistry):
                 trees = relink_worktrees(repo, broken)
             except (Exception, SystemExit) as e:
                 trees = []
-                err(f"clone repair: re-linking the worktrees failed ({str(e)[:160]}); check_tree makes them again")
+                print_error(f"clone repair: re-linking the worktrees failed ({str(e)[:160]}); check_tree makes them again")
         gone = prune_broken(repo, broken)
         unlink_file(clone_side(repo, "suspect.json"))
         line = (f"clone repair: {repo} re-cloned and swapped in; the broken copy is {broken}"
                 + (f"; {len(trees)} worktree(s) re-linked" if trees else "")
                 + (f"; removed {', '.join(os.path.basename(g) for g in gone)}" if gone else ""))
-        err(line)
+        print_error(line)
         recovery_recheck("clone_health", store, registry)
         return line
     finally:

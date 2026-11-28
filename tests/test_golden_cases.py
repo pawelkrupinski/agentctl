@@ -9,14 +9,14 @@ from golden_cases import digest  # noqa: E402
 
 class ForeignThreadTest(unittest.TestCase):
     """#289 / #285 (2026-11-26): park_duty's and refresh_pinned_recording's digests moved in one suite run and held in
-    the next. A golden records EVERY call to the names it fakes (epoch_now, env_num, write_json, err, ...), from any
+    the next. A golden records EVERY call to the names it fakes (epoch_now, env_number, write_json, err, ...), from any
     thread, and each call draws from the case's random stream: a thread an earlier test left running in the worker
     (status.py's and core.py's bounded reads outlive their join on purpose) that read a knob or the clock mid-digest
     was recorded into the case, and shifted every value drawn after it. Only the case's own thread is the case."""
 
     @staticmethod
     def build(case):
-        case.fake("env_num", lambda rng, name, default: rng.random())
+        case.fake("env_number", lambda rng, name, default: rng.random())
         return ()
 
     def test_a_call_from_another_thread_is_not_the_cases(self):

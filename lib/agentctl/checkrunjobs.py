@@ -10,7 +10,7 @@ from agentctl.timefmt import parse_time
 from agentctl.forge import api
 from agentctl.workflows import workflow_job_names, workflow_job_timeouts
 from agentctl.stats import stats_query, stats_url
-from agentctl.statsrecords import _num
+from agentctl.statsrecords import _number
 
 
 # ---------------------------------------------------------------- remote checks: ci-runner's check tier
@@ -151,7 +151,7 @@ def remote_job_p90s(since):
     except Exception:  # the store down: the timeouts and the cap still bound
         return {}
     return {r["job"]: float(r["p90"]) for r in rows
-            if r.get("job") and _num(r.get("p90")) and int(_num(r.get("n")) or 0) >= REMOTE_P90_MIN}
+            if r.get("job") and _number(r.get("p90")) and int(_number(r.get("n")) or 0) >= REMOTE_P90_MIN}
 
 
 def remote_read_bounds(o_r, sha):
