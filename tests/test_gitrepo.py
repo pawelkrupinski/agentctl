@@ -106,6 +106,8 @@ class SubprocessGitRepoTest(Contract, unittest.TestCase):
         for args in (("add", "x.txt"), ("commit", "-q", "-m", "adds x")):
             subprocess.run(["git", "-C", path, "-c", "commit.gpgsign=false", *args], check=True, capture_output=True)
         self.assertEqual(gitrepo.commit_files(path, "HEAD"), ["x.txt"])
+        self.assertGreater(gitrepo.commit_time(path, "HEAD") or 0, 1e9)
+        self.assertIsNone(gitrepo.commit_time(path, UNKNOWN), "a commit this clone lacks has no time")
         self.assertTrue(gitrepo.is_ancestor(path, c, m))
         self.assertFalse(gitrepo.is_ancestor(path, m, c))
         self.assertFalse(gitrepo.is_ancestor(path, None, m))

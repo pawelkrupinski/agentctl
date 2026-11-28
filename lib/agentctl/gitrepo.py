@@ -36,6 +36,12 @@ def commit_message(repo: str, sha: str) -> str:
     return str(git(repo, "log", "-1", "--format=%B", sha, check=False).stdout)
 
 
+def commit_time(repo: str, rev: str = "HEAD") -> float | None:
+    """When commit `rev` was committed (epoch seconds), None when this clone cannot read it: ONE reader of a commit's time."""
+    out = str(git(repo, "log", "-1", "--format=%ct", rev, check=False).stdout).strip()
+    return float(out) if out.isdigit() else None
+
+
 class GitRepo(Protocol):
     """The commit-graph questions a decision asks of a clone (movies' tool_git.GitRepo, its subset)."""
 

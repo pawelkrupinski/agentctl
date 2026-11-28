@@ -21,7 +21,7 @@ from agentctl.redrecord import RedEpisode, red_key, red_what, streak_budget
 from agentctl.red import STUCK_FACTOR, red_close
 from agentctl.waiting import UnreadGate
 from agentctl.branches import branch_reds, entry_predicts
-from agentctl.gitrepo import commit_known
+from agentctl.gitrepo import commit_known, commit_time
 from agentctl.paths import reds_dir
 import os
 import subprocess
@@ -170,8 +170,8 @@ def unkicked_obs(o_r, repo, snap, now_=None):
 def unkicked_push(repo: Any) -> tuple[str, float] | None:
     """(origin/main's head, its commit time) in this clone, or None when either cannot be read."""
     head = git(repo, "rev-parse", f"refs/remotes/{remote()}/main", check=False).stdout.strip()
-    ct = git(repo, "log", "-1", "--format=%ct", head, check=False).stdout.strip() if head else ""
-    return (head, float(ct)) if head and ct.isdigit() else None
+    ct = commit_time(repo, head) if head else None
+    return (head, ct) if head and ct is not None else None
 
 
 def touches_suite_paths(repo: Any, base: Any, head: str, paths_file: str, matcher: str) -> bool:

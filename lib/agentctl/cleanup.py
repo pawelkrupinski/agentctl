@@ -27,7 +27,7 @@ from agentctl.maint import cmd_orphans
 from agentctl.onmain import landed_state
 from agentctl.worktrees import CACHE_TREES, gitdir_activity, merged_reason, worktrees
 from agentctl.runowners import orphan_branches
-from agentctl.gitrepo import commit_known
+from agentctl.gitrepo import commit_known, commit_time
 from agentctl.paths import claude_session_id, state_root
 
 
@@ -343,7 +343,7 @@ class RepoSweep:
         self.checked_out.add(branch)
         if not os.path.isdir(path) or path.startswith(CACHE_TREES) or merged_reason(self.repo, sha, self.main):
             return None
-        tip = int(git(self.repo, "log", "-1", "--format=%ct", sha, check=False).stdout.strip() or 0)
+        tip = int(commit_time(self.repo, sha) or 0)
         days = (self.now_ - max(gitdir_activity(self.repo, path) or 0, tip)) / 86400
         if days <= self.idle_days:
             return None
@@ -374,7 +374,7 @@ class RepoSweep:
             git(repo, "fetch", "--quiet", remote(), b, check=False)
         why = commit_known(repo, sha) and merged_reason(repo, sha, self.main)
         if not why:
-            t = int(git(repo, "log", "-1", "--format=%ct", sha, check=False).stdout.strip() or self.now_)
+            t = int(commit_time(repo, sha) or self.now_)
             out.append(f"  unmerged remote branch {b}: tip {sha[:10]}, {int((self.now_ - t) / 86400)} d old (listed, kept)")
         elif self.dry:
             out.append(f"  would delete remote branch {b} {sha[:10]}: {why}")

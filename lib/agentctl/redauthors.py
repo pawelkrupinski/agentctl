@@ -13,7 +13,7 @@ from agentctl.jvmreap import AGENT_WORK
 from agentctl.inboxentry import inbox_entries
 from agentctl.worktrees import gitdir_activity
 from agentctl.runowners import worktree_holding
-from agentctl.gitrepo import commit_known
+from agentctl.gitrepo import commit_known, commit_time
 
 
 def _green_older_than(runs: Any, rid: Any) -> Any:
@@ -80,9 +80,9 @@ def agent_pids_in(wts):
 def worktree_activity(repo, wt, entries=()):
     """The worktree's last sign of work: git (index, HEAD log, last commit) or an inbox entry from it."""
     beats = [gitdir_activity(repo, wt) or 0.0]
-    r = git(wt, "log", "-1", "--format=%ct", check=False)
-    if r.returncode == 0 and r.stdout.strip().isdigit():
-        beats.append(float(r.stdout.strip()))
+    tip = commit_time(wt)
+    if tip is not None:
+        beats.append(tip)
     beats += [float(e.get("at") or 0) for e in entries if os.path.realpath(e.get("cwd") or "/") == os.path.realpath(wt)]
     return max(beats)
 
