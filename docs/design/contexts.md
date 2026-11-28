@@ -46,6 +46,31 @@ leaf that reads it (`identity_change(repo, e, known)`, `red_others_skipped(said,
 trailer_fixes, link_reads, never_green_at, others_said; every other `process_cache(...)` of core.py's registry waits for
 its call tree to reach a boundary that holds a context.
 
+### Where the rest of the process's state goes (2026-11-28)
+
+The last lane left 67 `state` names in 46 modules (`quality/design-baseline.tsv`): 42 `process_cache`s, 3 locators and
+22 other cells a function writes. Mapped by their readers (each one's callers, up to a function holding `ctx`), they
+fall into six families, each with ONE way out, not a thread per global:
+
+1. **A memo or throttle a call tree keeps** (a `(key) -> answer` dict, a "last ran at", a "said once"): a field of
+   `Caches`. The nearest function holding `ctx` unpacks the field and passes it down as one parameter; the leaf takes
+   the dict itself. The tick's steps (`server_steps`, `sync_steps`, `ProcessorLoop`), the status server and the
+   commands hold `ctx` already, so most chains are 1-3 functions. The throttles share one field, `ran_at` (step ->
+   when it last ran).
+2. **The invariants** keep a FIXED signature, now `fn(inputs)`: `invariants.InvariantInputs` (clock, store, machine,
+   caches, and the context for the three that read CI), built once by `probe_invariant`; READS_CI and READS_MACHINE
+   go. One commit changes every invariant.
+3. **A resource a collaborator started belongs to that collaborator**: the detached children (`core._DETACHED`) and
+   the watched process groups (`land.WATCHED_GROUPS`) are the `ProcessRunner`'s that started them; the leases a
+   process holds are kept by whoever holds them (`Caches.held_leases`, handed to `LeaseHold` at construction).
+4. **A memo with no need to exist** goes: the GitHub App tokens' in-memory layer (their on-disk record is the cache),
+   the gh tally's thread-local kind (passed as the argument it is), the config files' mtime memos (`red_repos`,
+   `red_families`: a re-read costs under 0.2 ms).
+5. **A guard flag** belongs to the object it guards: the condition rule's "opening" depth is the guarded inbox writer's.
+6. **The three locators** (`clock._PROCESS_CLOCK`, `procrunner._runner`, `inboxentry._process_inbox`) stay until
+   their readers take the collaborator as a parameter (`tests/test_no_service_locators.py`'s ceilings, falling on
+   visit): over 900 functions each, never a sweep.
+
 The store, the condition registry and an explicit `clock` stay their own parameters where they are already passed
 (830 functions take a store). Folding them into the context is a later cleanup, made where a function is changed
 anyway, never in a sweep.
