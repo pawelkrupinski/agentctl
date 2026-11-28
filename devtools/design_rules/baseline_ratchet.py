@@ -298,14 +298,21 @@ def refused_falls(title: str, baseline: str, update_command: str, down: List[str
     return True
 
 
-def read_baseline(spec: Spec) -> Optional[Rows]:
-    """The checked-in baseline's rows; None, said, when there is none (a checkout that never recorded one)."""
+def baseline_rows(spec: Spec) -> Optional[Rows]:
+    """The checked-in baseline's rows; None when there is none."""
     try:
         with open(spec.baseline) as f:
             return parse(f.read())
     except FileNotFoundError:
-        print(f"{spec.tool}: no baseline {spec.baseline} -- record the measure first: {spec.update_command}", file=sys.stderr)
         return None
+
+
+def read_baseline(spec: Spec) -> Optional[Rows]:
+    """The checked-in baseline's rows; None, said, when there is none (a checkout that never recorded one)."""
+    rows = baseline_rows(spec)
+    if rows is None:
+        print(f"{spec.tool}: no baseline {spec.baseline} -- record the measure first: {spec.update_command}", file=sys.stderr)
+    return rows
 
 
 def check(spec: Spec, current: Rows, ranges: List[str]) -> bool:
@@ -345,14 +352,32 @@ def update(spec: Spec, current: Rows) -> None:
     print(f"{spec.tool}: wrote {spec.baseline} -- a rise is committed with its kind's trailer")
 
 
+def say_rises(tool: str, baseline: str, rises: List[str]) -> bool:
+    """Whether `rises` holds any (each said: row, old value, new value). `update` records a rise like a fall, which lands
+    only in a commit carrying its kind's trailer, so it exits non-zero on one: the agent sees it now, not at the push."""
+    if not rises:
+        return False
+    print(f"{tool}: RISES RECORDED IN {baseline} ({len(rises)}) -- each needs its kind's trailer in the commit's final"
+          " block, or cut the code back and run update again:", file=sys.stderr)
+    print("\n".join(f"  - {r}" for r in rises), file=sys.stderr)
+    return True
+
+
+def update_saying_rises(spec: Spec, current: Rows) -> bool:
+    """`update`, then whether the baseline it replaced took no rise (False: each said, see say_rises)."""
+    old = baseline_rows(spec)
+    rises = growth(spec, spec.kinds, old, current, Renames()) if old else []
+    update(spec, current)
+    return not say_rises(spec.tool, spec.baseline, rises)
+
+
 def run(spec: Spec, command: str, current_file: str, ranges: List[str]) -> int:
     """`check` (exit 1 on a violation) or `update`; 2 on an error."""
     try:
         with open(current_file) as f:
             current = parse(f.read())
         if command == "update":
-            update(spec, current)
-            return 0
+            return int(not update_saying_rises(spec, current))
         return 0 if check(spec, current, ranges) else 1
     except (OSError, ValueError, subprocess.CalledProcessError) as e:
         print(f"{spec.tool}: {e}", file=sys.stderr)
