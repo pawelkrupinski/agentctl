@@ -42,9 +42,24 @@ except Exception: print(0)' 2>/dev/null)
       echo "pre-push: REFUSED -- $3" >&2
     fi
   }
+  # A PUSH OF VENDORED COPIES ALONE IS SCOPED (devtools/vendorscope.py, 2026-11-28: a full suite at load 25-45 timed out twice on a
+  # correct, mechanical 5-file sync): test_vendored and the tests importing a changed copy, the simulator gate only when the
+  # simulator imports one, no stress lane or e2e (the push touches no test). Every other push runs everything.
+  scope=full
+  if [ "$_rsha" != "$z" ] && git cat-file -e "$_rsha^{commit}" 2>/dev/null && [ -f "$tmp/tree/devtools/vendorscope.py" ]; then
+    scope=$(cd "$tmp/tree" && python3 devtools/vendorscope.py "$_rsha..$lsha" 2>/dev/null | head -1)
+    [ -n "$scope" ] || scope=full
+  fi
+  patterns=""; sim=1
+  case "$scope" in
+    scoped*) echo "pre-push: vendored copies only: the scoped suite ($scope)" >&2
+             sim=0; case "$scope" in *"sim=1"*) sim=1 ;; esac
+             patterns=${scope#scoped sim=? } ;;
+    *) scope=full ;;
+  esac
   per_test=$(awk -v b="$bound" 'BEGIN { printf "%d", 60 * b / 280 }')
   [ -f "$tmp/tree/devtools/govstep.py" ] || gstep=""  # a pushed tree older than the tool
-  (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-suite --cores $jobs --run $((bound + 120)) --} python3 tests/run.py -j "$jobs" --suite-timeout "$bound" --timeout "$per_test" >"$tmp/out" 2>&1); st=$?
+  (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-suite --cores $jobs --run $((bound + 120)) --} python3 tests/run.py -j "$jobs" --suite-timeout "$bound" --timeout "$per_test" $patterns >"$tmp/out" 2>&1); st=$?
   if [ $st -ne 0 ]; then
     tail -40 "$tmp/out" >&2
     refuse $st "the suite" "the suite fails on $lsha (fix forward; never --no-verify)"
@@ -53,7 +68,7 @@ except Exception: print(0)' 2>/dev/null)
     tail -2 "$tmp/out" >&2
     # THE STRESS LANE (tests/stress.py, 2026-11-25): the tests this push touches, 5 more times each, shuffled, under a
     # raised test-clock lag, at most ~45 s: a newly flaky test fails the push (its seed and REPLAY line are printed).
-    if [ $rc -eq 0 ] && [ "$_rsha" != "$z" ] && git cat-file -e "$_rsha^{commit}" 2>/dev/null && [ -f "$tmp/tree/tests/stress.py" ]; then
+    if [ $rc -eq 0 ] && [ "$scope" = full ] && [ "$_rsha" != "$z" ] && git cat-file -e "$_rsha^{commit}" 2>/dev/null && [ -f "$tmp/tree/tests/stress.py" ]; then
       (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-stress --cores 8 --run 300 --} python3 tests/stress.py --range "$_rsha..$lsha" >"$tmp/stress" 2>&1); st=$?
       if [ $st -ne 0 ]; then
         tail -30 "$tmp/stress" >&2
@@ -66,7 +81,7 @@ except Exception: print(0)' 2>/dev/null)
     # THE END-TO-END LAYER (tests/e2e/run.py, the owner 2026-11-27): the real store server, reconciler tick, sync and
     # laptop CLI against a real git remote and a stub GitHub, one temp root per scenario, ~2 min; the scenarios run
     # under the step's ticket.
-    if [ $rc -eq 0 ] && [ -f "$tmp/tree/tests/e2e/run.py" ]; then
+    if [ $rc -eq 0 ] && [ "$scope" = full ] && [ -f "$tmp/tree/tests/e2e/run.py" ]; then
       (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-e2e --cores 4 --run 420 --} python3 tests/e2e/run.py >"$tmp/e2e" 2>&1); st=$?
       if [ $st -ne 0 ]; then
         tail -60 "$tmp/e2e" >&2
@@ -83,7 +98,7 @@ except Exception: print(0)' 2>/dev/null)
     [ "$_rsha" != "$z" ] && git cat-file -e "$_rsha^{commit}" 2>/dev/null && base="--base $_rsha"
     # shellcheck disable=SC2086
     st=0
-    [ -f "$tmp/tree/tests/sim_gate.py" ] && { (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-gate --cores 8 --run 1220 --} python3 tests/sim_gate.py $base >"$tmp/gate" 2>&1); st=$?; }
+    [ "$sim" = 1 ] && [ -f "$tmp/tree/tests/sim_gate.py" ] && { (cd "$tmp/tree" && $gstep${gstep:+ --job prepush-gate --cores 8 --run 1220 --} python3 tests/sim_gate.py $base >"$tmp/gate" 2>&1); st=$?; }
     if [ $st -ne 0 ]; then
       tail -20 "$tmp/gate" >&2
       refuse $st "the simulator gate" "the simulator gate fails on $lsha (tests/sim_gate.py; fix forward)"

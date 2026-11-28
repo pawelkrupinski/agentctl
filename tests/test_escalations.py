@@ -126,6 +126,12 @@ class DispatchTableTest(unittest.TestCase):
                 self.assertEqual(r.mode, A.TO_OWNER, kind)
                 self.assertRegex(r.why, r"^\[[a-z-]+\] ", kind)
 
+    def test_every_fixer_brief_says_to_do_only_the_conditions_job_and_file_side_findings(self):
+        """2026-11-27: two vendor-drift fixers drifted into side fixes and ran out their wall time with the right sync unpushed."""
+        self.assertIn("DO ONLY THIS CONDITION'S JOB", A.RULES)
+        self.assertIn("agentctl issue", A.RULES)
+        self.assertIn("NOT fixed in this session", A.RULES)
+
     def test_an_unknown_kind_is_the_owners(self):
         self.assertEqual(A.escalation_route({"kind": "SOMETHING-NEW", "text": "x"}).mode, A.TO_OWNER)
 
@@ -374,6 +380,29 @@ class OwnerEscalationTest(EscalationBase):
                          (True, "no agent took it: capacity 2/2 escalation fixers"))
         owner = {"id": "c2", "data": {"kind": "NETWORK", "text": "NETWORK: offline", "opened_at": t - 3600}}
         self.assertEqual(A.owner_escalation(owner, None, t), (True, ""))
+
+
+class FailedLaunchWorktreeTest(unittest.TestCase):
+    """THE GIVE-UP PATH LEAKED A WORKTREE (2026-11-28: 5dce981 retires the worktree of every ended try, but a launch that
+    failed after `fresh_worktree` returned no session, so end_try saw no worktree and the tree stayed behind, once per
+    failed try up to the give-up): the launcher retires the tree it just made when `claude --bg` does not start."""
+
+    def test_a_launch_that_fails_retires_its_fresh_worktree(self):
+        names = ("claude_cli", "fresh_worktree", "bg_start", "retire_worktree")
+        saved = {n: getattr(A, n) for n in names}
+        retired = []
+        A.claude_cli = lambda: "claude"
+        A.fresh_worktree = lambda repo, kind, num: ("/wt/escalation-x", None)
+        A.bg_start = lambda argv, wt, env: (None, "exit 1: this workspace is not trusted")
+        A.retire_worktree = lambda wt, why: retired.append((wt, why)) or "removed"
+        try:
+            session, why = A.SessionLauncher().start(A.escalation_route({"kind": "VENDOR_DRIFT"}), "VENDOR_DRIFT", {}, "brief", "/repo")
+        finally:
+            for n, v in saved.items():
+                setattr(A, n, v)
+        self.assertIsNone(session)
+        self.assertIn("not trusted", why)
+        self.assertEqual([wt for wt, _ in retired], ["/wt/escalation-x"])
 
 
 class TrustAskTest(unittest.TestCase):

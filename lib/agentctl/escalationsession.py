@@ -50,6 +50,7 @@ class SessionLauncher:
         env = {k: v for k, v in fixer_env(SHORT["movies"], f"escalation-{slug}").items() if k not in FIXER_IDENTITY_ENV}
         bid, why = bg_start(argv, wt, env)
         if not bid:
+            retire_worktree(wt, f"NOT STARTED: {why}")  # no session, so end_try never sees this tree: it goes here
             return None, f"`claude --bg` {why}"
         return {"session": bid, "worktree": wt, "label": label}, f"session '{label}' in {wt}"
 

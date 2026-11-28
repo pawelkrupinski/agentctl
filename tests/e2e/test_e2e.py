@@ -286,7 +286,11 @@ class Throttle:
             t.join(5)
 
 
-class EscalationTest(E2ETest):
+def vendor_table():
+    return os.path.join("devtools", "design_rules", "VENDORED.tsv")
+
+
+class VendorDriftWorld(E2ETest):
     """AN AGENT-ROUTED CONDITION GOES TO AN AGENT, NOT THE OWNER (2026-11-27, condition vendor-drift: the laptop's
     dispatcher started its agent at 20:08:28Z and the server's escalation told the owner "ESCALATED: VENDOR_DRIFT open
     for 10 min" five seconds later). The laptop's sync opens a VENDOR_DRIFT condition (a movies checkout -- here a temp
@@ -301,7 +305,7 @@ class EscalationTest(E2ETest):
         H.sh(w.root, "git", "init", "-q", "--bare", "-b", "main", bare)
         H.sh(w.root, "git", "init", "-q", "-b", "main", self.bin)
         H.sh(self.bin, "git", "remote", "add", "origin", bare)
-        w.write("README.md", "toy agentctl\n", at=self.bin)
+        self.toy_agentctl()
         w.commit("init", at=self.bin)
         H.sh(self.bin, "git", "push", "-q", "origin", "HEAD:main")
         with open(os.path.join(H.BIN, "devtools", "design_rules", "VENDORED.tsv")) as f:
@@ -316,6 +320,42 @@ class EscalationTest(E2ETest):
         w.extra_env.update(AGENTCTL_CLAUDE=os.path.join(H.HERE, "claude_stub.py"), E2E_CLAUDE_DIR=self.claude,
                            AGENTCTL_BIN_REPO=self.bin, MOVIES_ROOT=movies,
                            E2E_CLAUDE_FIX_FROM=os.path.join(H.BIN, copy), E2E_CLAUDE_FIX_TO=theirs)
+
+    def toy_agentctl(self):
+        """The toy agentctl clone: the real sync tools (devtools/vendor*.py, selfpush and the lib they import), ONE vendored
+        copy and its table, and a test suite and ratchet that are stubs -- the toy suite FAILS (a breaking drift, the
+        agent's) until `toy_suite(True)`."""
+        w = self.w
+        for rel in ("devtools/vendor.py", "devtools/vendorscope.py", "devtools/vendorsync.py", "devtools/selfpush.py",
+                    "devtools/lib/tool_git.py", "devtools/lib/tool_process.py"):
+            os.makedirs(os.path.dirname(os.path.join(self.bin, rel)), exist_ok=True)
+            shutil.copyfile(os.path.join(H.BIN, rel), os.path.join(self.bin, rel))
+        shutil.copytree(os.path.join(H.BIN, "lib"), os.path.join(self.bin, "lib"), ignore=shutil.ignore_patterns("__pycache__"))
+        with open(os.path.join(H.BIN, "devtools", "design_rules", "VENDORED.tsv")) as f:
+            copy, source, digest = next(x for x in f if x.strip() and not x.startswith("#")).rstrip("\n").split("\t")
+        os.makedirs(os.path.join(self.bin, "devtools", "design_rules"))
+        shutil.copyfile(os.path.join(H.BIN, copy), os.path.join(self.bin, copy))
+        w.write(vendor_table(), f"# copies\n{copy}\t{source}\t{digest}\n", at=self.bin)
+        w.write("quality/tools.py", "print('python3')\n", at=self.bin)
+        w.write("quality/ratchet.py", "", at=self.bin)
+        w.write("tests/test_vendored.py", "", at=self.bin)
+        self.toy_suite(False, commit=False)
+
+    def toy_suite(self, ok, commit=True):
+        self.w.write("tests/run.py", "import sys\n" + ("" if ok else "print('FAIL test_vendored: the new API'); sys.exit(1)\n"), at=self.bin)
+        if commit:
+            self.w.commit("the toy suite " + ("passes" if ok else "fails"), at=self.bin)
+            H.sh(self.bin, "git", "push", "-q", "origin", "HEAD:main")
+
+    def autosync_verdict(self):
+        path = os.path.join(self.w.root, "laptop", "state", "vendor-autosync.json")
+        if not os.path.exists(path):
+            return None
+        with open(path) as f:
+            return json.load(f)
+
+    def until_autosync(self, state):
+        return self.w.until(lambda: (self.autosync_verdict() or {}).get("state") == state, f"the automatic sync {state}")
 
     def sync(self):
         r = self.w.sync()
@@ -338,10 +378,15 @@ class EscalationTest(E2ETest):
         return [str(e.get("verdict")) for e in self.w.inbox() if "ESCALAT" in str(e.get("verdict"))]
 
     def open_past_its_bound(self):
+        self.sync()  # the first look starts the automatic sync, and no condition yet
+        self.assertIsNone(self.condition())
+        self.until_autosync("failed")  # the toy suite fails: a breaking drift, an agent's
+        self.w.forget_meta("vendor_drift:checked")
         self.sync()
         self.assertEqual((self.condition() or {}).get("state"), "open", self.w.diagnosis())
         self.w.backdate("condition", "vendor-drift", 11 * 60, ("opened_at",))  # 11 min open: past the dispatch bound
 
+class EscalationTest(VendorDriftWorld):
     def test_an_agent_routed_condition_is_dispatched_and_clears_with_no_owner_escalation(self):
         self.open_past_its_bound()
         self.sync()  # the escalation dispatcher: the offer, its lease, the launch
@@ -390,6 +435,26 @@ class EscalationTest(E2ETest):
         self.assertIn("WAITING ON YOU", gave_up[0])
         self.sync()
         self.assertEqual(len(self.claude_calls("--bg")), 3, "never past its tries")
+
+
+class VendorAutoSyncTest(VendorDriftWorld):
+    def test_a_drift_is_synced_with_no_agent_while_a_breaking_one_dispatches_one(self):
+        """2026-11-27, condition vendor-drift: open ~3 h, two agents each committed the correct sync and ran out of wall
+        time. A drift whose scoped tests pass is copied, committed and pushed by the laptop's own script (no condition, no
+        agent); one whose tests fail -- the other tests of this class -- is the agent's, with the failure in its text."""
+        self.toy_suite(True)
+        self.sync()
+        self.until_autosync("done")
+        self.assertIsNone(self.condition(), "no condition opens for a mechanical sync")
+        self.assertEqual(self.claude_calls("--bg"), [], "and no agent is dispatched")
+        with open(os.path.join(self.bin, vendor_table())) as f:
+            copy = next(x for x in f if x.strip() and not x.startswith("#")).split("\t")[0]
+        pushed = H.sh(self.w.root, "git", "--git-dir", os.path.join(self.w.root, "github", "bin.git"), "show", f"main:{copy}")
+        self.assertTrue(pushed.endswith("# movies moved ahead"), "the movies file's bytes reached origin/main")
+        self.assertIn("Vendor sync", H.sh(self.w.root, "git", "--git-dir", os.path.join(self.w.root, "github", "bin.git"),
+                                          "log", "-1", "--format=%s", "main"))
+        self.assertEqual(self.w.tick().returncode, 0)
+        self.assertEqual(self.owner_escalations(), [])
 
 
 class SlowLinkTest(E2ETest):

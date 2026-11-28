@@ -2,7 +2,7 @@
 agentctl push). While the movies checkout is ahead of agentctl's vendored copies one VENDOR_DRIFT condition is open,
 routed by the escalation table to a Sonnet agent in ~/bin whose task is `vendor.py sync` and a push; its probe, the
 same drift check, closes it. The test side of the fix (drift blocks only a push touching a copy) is test_vendored."""
-import os, shutil, sys, tempfile, unittest
+import json, os, shutil, sys, tempfile, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -30,6 +30,15 @@ class VendorDriftTest(unittest.TestCase):
         self.addCleanup(lambda: os.environ.__setitem__("MOVIES_ROOT", self.saved) if self.saved else os.environ.pop("MOVIES_ROOT", None))
         self.st = A.Store(path=os.path.join(self.tmp.name, "store.db"), clock=lambda: self.t[0])
         self.source = vendor.read_table(ROOT)[0][1]
+        self.spawned = []
+        self.result = os.path.join(self.tmp.name, "state", "vendor-autosync.json")
+        self.running = True
+        self.auto = A.AutoSync(self.root, self.result, lambda: self.t[0], spawn=self.spawned.append, alive=lambda pid: self.running)
+
+    def finish(self, state, why=""):
+        """What the detached devtools/vendorsync.py writes last (its verdict file)."""
+        with open(self.result, "w") as f:
+            json.dump({"state": state, "why": why, "at": self.t[0]}, f)
 
     def drift(self):
         with open(os.path.join(self.movies, self.source), "a") as f:
@@ -39,7 +48,7 @@ class VendorDriftTest(unittest.TestCase):
         said = []
         saved, A.err = A.err, said.append
         try:
-            A.vendor_drift_step(self.st, A.probe_vendor_drift, lambda: self.t[0], self.root)
+            A.vendor_drift_step(self.st, A.probe_vendor_drift, lambda: self.t[0], self.root, self.auto)
         finally:
             A.err = saved
         return said
@@ -51,9 +60,62 @@ class VendorDriftTest(unittest.TestCase):
         self.assertEqual(self.step(), [])
         self.assertEqual(self.loops(), [])
 
+    def test_a_drift_is_synced_by_a_detached_script_with_no_condition_and_no_agent(self):
+        """2026-11-27: the condition stayed open ~3 h, two fixers hitting their wall time on a correct mechanical sync."""
+        self.drift()
+        self.assertEqual(self.step(), [])
+        self.assertEqual(self.loops(), [], "no condition opens while the automatic sync runs")
+        self.assertEqual(self.spawned, [["python3", os.path.join(self.root, "devtools", "vendorsync.py"), "--result", self.result]])
+        self.t[0] += A.CHECK_EVERY
+        self.assertEqual(self.step(), [])
+        self.assertEqual((len(self.spawned), self.loops()), (1, []), "one run per drift, still no condition")
+
+    def test_a_pushed_sync_waits_for_the_checkout_then_a_persisting_drift_is_the_agents(self):
+        self.drift()
+        self.step()
+        self.finish("done", "synced: x")
+        self.t[0] += A.CHECK_EVERY
+        self.assertEqual((self.step(), self.loops()), ([], []))  # ~/bin's checkout has not taken the push yet
+        self.t[0] += A.DONE_GRACE
+        self.assertEqual(len(self.step()), 1)
+        self.assertIn("pushed (synced: x) but the drift persists", self.loops()[0]["data"]["text"])
+
+    def test_a_sync_process_that_died_without_a_verdict_fails_at_once(self):
+        self.drift()
+        self.step()
+        self.running = False
+        self.t[0] += A.CHECK_EVERY
+        self.assertEqual(len(self.step()), 1)
+        self.assertIn("ended without a verdict", self.loops()[0]["data"]["text"])
+
+    def test_a_run_that_never_finishes_fails_after_its_bound(self):
+        self.drift()
+        self.step()
+        self.t[0] += A.AUTO_BOUND + 1
+        self.assertEqual(len(self.step()), 1)
+        self.assertIn("did not finish", self.loops()[0]["data"]["text"])
+
+    def test_the_end_of_a_drift_clears_the_verdict_so_the_next_drift_is_synced_too(self):
+        self.drift()
+        self.step()
+        self.finish("done", "synced")
+        vendor.sync(self.root, self.movies)  # the push reached the checkout
+        self.t[0] += A.CHECK_EVERY
+        self.step()
+        self.assertFalse(os.path.exists(self.result))
+        self.drift()
+        self.t[0] += A.CHECK_EVERY
+        self.step()
+        self.assertEqual(len(self.spawned), 2)
+
     def test_drift_opens_one_condition_routed_to_a_sonnet_agent_in_bin_with_the_sync_brief(self):
         self.drift()
+        self.step()  # the automatic sync starts
+        self.finish("failed", "the scoped tests (exit 1): FAIL test_x")
+        self.t[0] += A.CHECK_EVERY
         self.assertEqual(len(self.step()), 1)
+        self.assertIn("automatic sync (devtools/vendorsync.py) failed", self.loops()[0]["data"]["text"])
+        self.assertIn("FAIL test_x", self.loops()[0]["data"]["text"])
         [c] = self.loops()
         self.assertEqual(c["data"]["key"], "vendor-drift")
         self.assertIn(self.source, c["data"]["text"])
@@ -66,6 +128,9 @@ class VendorDriftTest(unittest.TestCase):
     def test_it_is_looked_at_every_few_minutes_and_stays_one_condition(self):
         self.drift()
         self.step()
+        self.finish("failed", "x")
+        self.t[0] += A.CHECK_EVERY
+        self.step()
         self.t[0] += 60
         self.assertEqual(self.step(), [])  # not looked at again yet
         self.t[0] += A.CHECK_EVERY
@@ -74,6 +139,9 @@ class VendorDriftTest(unittest.TestCase):
 
     def test_its_probe_closes_it_once_the_sync_is_in(self):
         self.drift()
+        self.step()
+        self.finish("failed", "x")
+        self.t[0] += A.CHECK_EVERY
         self.step()
         [c] = self.loops()
         a = c["data"]["probe"]["args"]

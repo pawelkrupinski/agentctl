@@ -35,7 +35,7 @@ from agentctl.orphanreap import red_reap_orphans
 from agentctl.escalationsession import escalation_step
 from agentctl.upkeep import maybe_upkeep
 from agentctl.reddispatch import red_renew_holders
-from agentctl.vendordrift import vendor_drift_step
+from agentctl.vendordrift import vendor_drift_auto, vendor_drift_step
 from agentctl.offerdispatch import red_dispatcher
 from agentctl.recovery import maybe_recovery_tick
 from agentctl.netwatch import network_watch, tunnel_watch
@@ -157,7 +157,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
             ("pins", duty(s.pins)), ("drift explorer", duty(s.explorer)),
             ("revert notes", duty(lambda: [err(x) for x in revert_notes(store)])),
             ("fixer landing", lambda: [err(f"red: {x}") for x in fixers_land_watch(pace=land_pace)]),
-            ("vendor drift", duty(partial(vendor_drift_step, store, registry.check("vendor_drift"), clock.time, os.path.dirname(TOOL_PATH)))),  # vendordrift.py
+            ("vendor drift", duty(partial(vendor_drift_step, store, registry.check("vendor_drift"), clock.time, os.path.dirname(TOOL_PATH), vendor_drift_auto(os.path.dirname(TOOL_PATH), state_root("vendor-autosync.json"), clock.time)))),  # vendordrift.py
             ("network watch", lambda: network_watch(store)), ("tunnel probe", lambda: tunnel_watch(store)),
             ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store, ctx=ctx), 1)),
             ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep(store)]),

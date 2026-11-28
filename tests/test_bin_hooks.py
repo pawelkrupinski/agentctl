@@ -128,6 +128,39 @@ class BinPrePushHookTest(unittest.TestCase):
                 self.assertEqual(open(mark).read(), f"-j 8 --suite-timeout {want} --timeout {per_test}", load)
 
     @unittest.skipUnless(TIMEOUT, "no GNU timeout on this machine: the hook cannot run here")
+    def test_a_vendored_only_push_runs_the_scoped_suite_and_skips_the_e2e_layer(self):
+        """2026-11-27: VENDOR_DRIFT stayed open ~3 h: two fixers' correct 5-file sync hit its wall time, the full pre-push
+        suite timing out at load 25-45. devtools/vendorscope.py reads the push's diff: `scoped sim=0 <tests>` runs only
+        those tests (no stress lane, e2e or simulator gate), `full` everything."""
+        for verdict, want_args, e2e_runs in (("scoped sim=0 test_vendored test_x", "test_vendored test_x", False), ("full", "", True)):
+            with tempfile.TemporaryDirectory() as tmp:
+                repo, marks = os.path.join(tmp, "repo"), os.path.join(tmp, "marks")
+                os.makedirs(os.path.join(repo, "tests", "e2e"))
+                os.makedirs(os.path.join(repo, "devtools"))
+                os.makedirs(marks)
+                with open(os.path.join(repo, "tests", "run.py"), "w") as f:
+                    f.write(f"import sys\nopen({marks!r} + '/argv', 'w').write(' '.join(sys.argv[1:]))\n")
+                with open(os.path.join(repo, "tests", "e2e", "run.py"), "w") as f:
+                    f.write(f"open({marks!r} + '/e2e', 'w').write('ran')\n")
+                with open(os.path.join(repo, "devtools", "vendorscope.py"), "w") as f:
+                    f.write(f"print({verdict!r})\n")
+                git(tmp, "init", "-q", repo)
+                git(repo, "add", "-A")
+                git(repo, "commit", "-qm", "base")
+                base = git(repo, "rev-parse", "HEAD")
+                with open(os.path.join(repo, "change.txt"), "w") as f:
+                    f.write("x\n")
+                git(repo, "add", "-A")
+                git(repo, "commit", "-qm", "change")
+                head = git(repo, "rev-parse", "HEAD")
+                p = subprocess.run(["sh", HOOK, "origin", "x"], cwd=repo, input=f"refs/heads/main {head} refs/heads/main {base}\n",
+                                   capture_output=True, text=True, env=dict(ENV, HOME=tmp), timeout=60)
+                self.assertEqual(p.returncode, 0, p.stderr)
+                args = open(os.path.join(marks, "argv")).read()
+                self.assertTrue(args.endswith(want_args), (verdict, args))
+                self.assertEqual(os.path.exists(os.path.join(marks, "e2e")), e2e_runs, verdict)
+
+    @unittest.skipUnless(TIMEOUT, "no GNU timeout on this machine: the hook cannot run here")
     def test_the_ratchets_refuse_and_a_missing_tool_blocks(self):
         """The ratchets (quality/ratchet.py) run after the suite: a refusal refuses the push, and so does a tool that
         cannot be installed -- never a skip."""

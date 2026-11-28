@@ -106,13 +106,15 @@ DISPATCH_TABLE: dict[str, EscalationRoute] = {
                               "`claude --bg`, its environment, the worktree -- and fix that harness code (an owner-only "
                               "cause, the vault or a credential, is never yours: say BLOCKED ON OWNER)", "opus"),
     "VENDOR_DRIFT": agent_route("the movies checkout changed a file agentctl vendors (devtools/design_rules/*, "
-                                "devtools/lib/*): in your worktree run `python3 devtools/vendor.py sync` (it copies "
-                                "the files and records their digests in VENDORED.tsv), then the full suite; if the new "
-                                "design rules or ratchet code put rows past a limit, freeze them (`\"$(python3 "
-                                "quality/tools.py)\" quality/ratchet.py update`) and give the commit's final trailer "
-                                "block the kind's trailer (Complexity:, Length:, Duplication:, Coupling:, Typing:, "
-                                "Naming: or Design:); push with `python3 devtools/selfpush.py`. The condition closes "
-                                "when `python3 devtools/vendor.py drift` exits 0 in ~/bin."),
+                                "devtools/lib/*) and the AUTOMATIC sync (devtools/vendorsync.py: copy, the scoped tests, "
+                                "the ratchets, selfpush) FAILED -- its why is in the condition text above, so a real API "
+                                "change must be adapted: run `python3 devtools/vendor.py sync` in your worktree, adapt "
+                                "agentctl's own code to what the failure says (never edit a copy), freeze any new ratchet "
+                                "rows (`\"$(python3 quality/tools.py)\" quality/ratchet.py update`) with the kind's "
+                                "trailer (Complexity:, Length:, Duplication:, Coupling:, Typing:, Naming: or Design:) in "
+                                "the commit's final trailer block, run the full suite once, and push with `python3 "
+                                "devtools/selfpush.py`. The condition closes when `python3 devtools/vendor.py drift` "
+                                "exits 0 in ~/bin."),
     "NETWORK": owner_route("irreversible", "the laptop's network or the tunnel is out: an outage no agent can "
                                            "reach past"),
     "UNLANDED_ORPHAN": owner_route("policy-no-rule", "an orphaned worktree whose own orphan fixer already ran: "

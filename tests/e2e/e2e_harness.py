@@ -329,6 +329,17 @@ class World:
         finally:
             c.close()
 
+    def forget_meta(self, key):
+        """The sync loop's pacing mark `key` (meta) forgotten, so its next pass looks again at once: the wall clock the real
+        processes read is not the scenario's to turn."""
+        import sqlite3
+        c = sqlite3.connect(os.path.join(self.root, "server", "state", "store.db"), timeout=30)
+        try:
+            c.execute("DELETE FROM meta WHERE k=?", (key,))
+            c.commit()
+        finally:
+            c.close()
+
     def changes(self):
         rows = self.db("SELECT id, state, data FROM items WHERE type='change'")
         return {r["id"]: dict(r, data=json.loads(r["data"] or "{}")) for r in rows}

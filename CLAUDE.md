@@ -96,9 +96,12 @@ repository: the general rule core (`scripts/design-rules/`, its engine, trailer 
 BYTE-EQUAL into `devtools/design_rules/` (`python3 devtools/vendor.py sync` copies it and records the digests in
 `VENDORED.tsv`; `check` and `tests/test_vendored.py` fail on an edited copy, and on a drifted one (the movies checkout
 ahead) only for a push that itself touches a copy or `VENDORED.tsv`: other pushes report drift and pass). A movies change
-to a vendored file is followed by agentctl's automatic sync: the laptop's sync loop opens a `VENDOR_DRIFT` condition
-(`lib/agentctl/vendordrift.py`), the escalation table routes it to a Sonnet agent that runs `vendor.py sync`, freezes any new
-ratchet rows with the right trailer and pushes. Never edit a copy: change it in movies, then sync; an improvement made here is written down
+to a vendored file is followed by agentctl's automatic sync, WITH NO AGENT (2026-11-28): the laptop's sync loop
+(`lib/agentctl/vendordrift.py`) runs `devtools/vendorsync.py` detached -- copy, the scoped tests (`devtools/vendorscope.py`:
+`test_vendored` and the tests importing a changed copy, the simulator gate only when it imports one), the ratchets, a commit,
+`selfpush`; the pre-push hook runs the same scoped suite for a push of vendored copies alone. Only when that FAILS (a real API
+change to adapt) does the sync open a `VENDOR_DRIFT` condition, which the escalation table routes to a Sonnet agent that adapts
+agentctl's code, freezes any new ratchet rows with the right trailer and pushes. Never edit a copy: change it in movies, then sync; an improvement made here is written down
 for a movies lane. `quality/design.py` is agentctl's extractor over the core (the Python modules, `agentctl.<part>` imports),
 `quality/design-rules.tsv` its table (the limits, suffixes, abbreviations and idioms equal movies' own; the adapters,
 distance and layers agentctl's), `quality/design-baseline.tsv` what is past a rule today, frozen (rows only fall;

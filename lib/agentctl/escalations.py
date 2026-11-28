@@ -369,7 +369,11 @@ REPO_RULES = {
     "movies": ("Read ~/projects/movies/CLAUDE.md and ~/bin/briefs/movies-agent-preamble.md first. Work ONLY in your "
                "worktree; land with `~/bin/agentctl land` (run_in_background), never `git push`."),
 }
-RULES = ("THE RULES: the commit gate (a test that fails before your change and passes after it, written first); no "
+RULES = ("DO ONLY THIS CONDITION'S JOB (2026-11-28: two vendor-drift fixers drifted into side fixes and ran out their wall "
+         "time with the right sync committed and unpushed): a side finding -- a flaky test, a smell, a bug elsewhere, a "
+         "cleanup -- is FILED as a note (`~/bin/agentctl issue \"<finding>\"`) and NOT fixed in this session; push the "
+         "fix for the condition first, and push as soon as it is green. "
+         "THE RULES: the commit gate (a test that fails before your change and passes after it, written first); no "
          "bypass of any check (no --no-verify, no PREPUSH_SKIP, no trailer you cannot justify); never pkill / "
          "killall (`scripts/agent-procs kill --mine`); never rerun a red to green; never touch the vault, Touch ID, "
          "signing, security settings, the repository's visibility or a force push -- that is the owner's (say "

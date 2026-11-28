@@ -9,17 +9,27 @@
 # condition (key `vendor-drift`). The escalation table (escalationtable.py) routes it to a Sonnet agent in ~/bin whose
 # task is the sync; its probe -- the same drift check -- closes it once the synced copies are on ~/bin's checkout.
 # Opened and closed by the existing condition, offer and lease machinery; it writes no inbox entry (the agent is the answer).
+#
+# 2026-11-28: NO AGENT FOR A MECHANICAL SYNC. The condition stayed open ~3 h: two fixers each committed the right 5-file
+# sync and hit their wall time without pushing (the full pre-push suite timed out at load 25-45). Now the step first runs
+# devtools/vendorsync.py, detached (copy, scoped tests, selfpush: a vendored-only push runs a scoped suite), and opens the
+# condition only when that FAILED -- a real API change to adapt -- so the agent's brief carries why it failed.
 
 import os
+import subprocess
 from typing import Any, Callable
 
-from agentctl.core import err, run_cmd
+from agentctl.core import err, pid_alive, run_cmd, spawn_detached
+from agentctl.repos import bin_repo
+from agentctl.statefile import read_json_file, unlink_file, write_json
 from agentctl.conditions import open_condition, run_probe
 from agentctl.escalationtable import VENDOR_DRIFT_KIND
 
 CHECK_EVERY = 300        # s between the opening look's runs of the drift check (the probe closing it runs on PROBE_EVERY)
 VENDOR_DRIFT_KEY = "vendor-drift"
 MARK = "vendor_drift:checked"
+AUTO_BOUND = 45 * 60     # s the detached sync may take (copy, scoped tests, the push lock) before it counts as failed
+DONE_GRACE = 15 * 60     # s after a pushed sync for ~/bin's checkout to take it before "drift persists" is a failure
 
 
 def probe_vendor_drift(a: dict[str, Any]) -> tuple[bool | None, str]:
@@ -32,18 +42,75 @@ def probe_vendor_drift(a: dict[str, Any]) -> tuple[bool | None, str]:
     return r.returncode == 0, "; ".join(x.strip() for x in r.stdout.splitlines() if x.strip())[:280]
 
 
-def vendor_drift_step(store: Any, check: Callable[[dict[str, Any]], tuple[bool | None, str]], clock: Callable[[], float], root: str) -> None:
-    """The sync loop's look, at most every CHECK_EVERY s: while a vendored copy trails the movies checkout the VENDOR_DRIFT
-    condition is open (once; refreshed while it stays so), its line said. check: the registry's vendor_drift probe; root: agentctl's checkout."""
+class AutoSync:
+    """The deterministic sync's detached process: `<path>.started` ({at, pid}) says one was launched, `<path>` is the verdict
+    it writes last ({state: done|failed, why, at}). spawn(argv) returns the process (its pid is kept to tell a dead one)."""
+
+    def __init__(self, root: str, result_path: str, clock: Callable[[], float],
+                 spawn: Callable[[list[str]], Any] = lambda argv: spawn_detached(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True),
+                 alive: Callable[[int], bool] = lambda pid: pid_alive(pid)) -> None:
+        self.root, self.path, self.clock, self.spawn, self.alive = root, result_path, clock, spawn, alive
+
+    def state(self) -> tuple[str, str]:
+        """idle (none run since the last drift ended), running, done or failed, with its why."""
+        started, verdict = read_json_file(self.path + ".started"), read_json_file(self.path)
+        if not started:
+            return "idle", ""
+        if verdict.get("state") and verdict.get("at", 0) >= started.get("at", 0):
+            return self.judged(verdict)
+        return self.running(started)
+
+    def judged(self, verdict: dict[str, Any]) -> tuple[str, str]:
+        """The script's verdict; a pushed one whose drift still shows after DONE_GRACE is a failure (the push did not close it)."""
+        state, why = str(verdict["state"]), str(verdict.get("why") or "")
+        if state == "done" and self.clock() - float(verdict.get("at") or 0) > DONE_GRACE:
+            return "failed", f"the automatic sync pushed ({why}) but the drift persists"
+        return state, why
+
+    def running(self, started: dict[str, Any]) -> tuple[str, str]:
+        """Still running; failed past AUTO_BOUND or when its process died with no verdict."""
+        if self.clock() - float(started.get("at") or 0) > AUTO_BOUND:
+            return "failed", f"the automatic sync did not finish within {AUTO_BOUND // 60} min"
+        if not self.alive(int(started.get("pid") or 0)):
+            return "failed", "the automatic sync process ended without a verdict (devtools/vendorsync.py missing or crashed)"
+        return "running", ""
+
+    def start(self) -> None:
+        proc = self.spawn(["python3", os.path.join(self.root, "devtools", "vendorsync.py"), "--result", self.path])
+        write_json(self.path + ".started", {"at": self.clock(), "pid": getattr(proc, "pid", 0)})
+
+    def reset(self) -> None:
+        for path in (self.path, self.path + ".started"):
+            unlink_file(path)
+
+
+def vendor_drift_auto(root: str, result_path: str, clock: Callable[[], float]) -> AutoSync:
+    """The sync loop's AutoSync: it runs devtools/vendorsync.py of the agentctl checkout ($AGENTCTL_BIN_REPO's, else `root`)."""
+    return AutoSync(bin_repo() or root, result_path, clock)
+
+
+def vendor_drift_step(store: Any, check: Callable[[dict[str, Any]], tuple[bool | None, str]], clock: Callable[[], float], root: str,
+                      auto: AutoSync) -> None:
+    """The sync loop's look, at most every CHECK_EVERY s: while a vendored copy trails the movies checkout it first runs the
+    mechanical sync (`auto`, once per drift), and only when that FAILED is the VENDOR_DRIFT condition open (once; refreshed
+    while it stays so), its line saying why. check: the registry's vendor_drift probe; root: agentctl's checkout; auto: the mechanical sync."""
     now = clock()
     if now - float(store.meta_get(MARK) or 0) < CHECK_EVERY:
         return
     store.meta_set(MARK, str(now))
     probe = run_probe(check, {"root": root})
     if probe.ok is not False:
+        if probe.ok:
+            auto.reset()  # no drift: the next one gets its own automatic sync
+        return
+    state, why = auto.state()
+    if state == "idle":
+        auto.start()
+    if state != "failed":
         return
     text = (f"VENDOR DRIFT: the movies checkout changed a file agentctl vendors, so tests/test_vendored.py fails for the next "
-            f"push that touches one: {probe.detail}")
+            f"push that touches one: {probe.detail}. The automatic sync (devtools/vendorsync.py) failed, which is a real "
+            f"change to adapt: {why}")
     c = open_condition(VENDOR_DRIFT_KIND, text, probe, [], key=VENDOR_DRIFT_KEY, inbox=False, store=store, grace=0)
     if c:
         err(text)

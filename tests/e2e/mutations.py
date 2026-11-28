@@ -49,6 +49,11 @@ MUTATIONS = {
         "        if due:\n            _escalate_overdue(st, it, t, why)",
         "        if True:\n            _escalate_overdue(st, it, t, why)",
         "the server escalates an agent-routed condition to the owner while its agent works"),
+    "VendorAutoSyncTest": (
+        "lib/agentctl/vendordrift.py",
+        '    if state == "idle":\n        auto.start()\n',
+        '    if state == "idle":\n        pass\n',
+        "a mechanical vendor drift is no longer synced by the script: it waits for an agent (or nobody)"),
     "SlowLinkTest": (
         "lib/agentctl/remotestore.py",
         'return json.loads(open_within(req, timeout or self.timeout) or b"null")',
