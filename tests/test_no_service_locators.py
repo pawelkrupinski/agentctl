@@ -34,7 +34,7 @@ GETTERS = {
 # docs/design/contexts.md -- every reader holding a `ctx` reads its field instead)
 READER_CEILINGS = {
     "clock.wire_clock": (88, 127),
-    "procrunner.wire_runner": (40, 55),
+    "procrunner.wire_runner": (39, 54),
     "inboxentry.wire_inbox_writer": (31, 39),
 }
 
