@@ -65,7 +65,6 @@ class GhAppTest(unittest.TestCase):
         self.srv = ThreadingHTTPServer(("127.0.0.1", 0), FakeGitHub)
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
         FakeGitHub.calls = []
-        A._ghapp_tokens.clear()
         for k in ENV_KEYS:
             os.environ.pop(k, None)
         self.state = tempfile.TemporaryDirectory()  # each test its own token cache files
@@ -78,7 +77,6 @@ class GhAppTest(unittest.TestCase):
     def tearDown(self):
         self.srv.shutdown()
         self.srv.server_close()
-        A._ghapp_tokens.clear()
         self.state.cleanup()
         for k, v in self.saved.items():
             if v is None:
@@ -106,9 +104,7 @@ class GhAppTest(unittest.TestCase):
         self.assertEqual(json.loads(b64d(get[2].split()[1].split(".")[1]))["iss"], "101")  # the lander's App
         self.assertEqual(post[1], "/app/installations/11/access_tokens")
         self.assertEqual(post[3], {"repositories": ["movies"]})
-        self.assertEqual(A.ghapp_token("pawelkrupinski/movies"), t1)  # from memory
-        A._ghapp_tokens.clear()
-        self.assertEqual(A.ghapp_token("pawelkrupinski/movies"), t1)  # from the 0600 cache file
+        self.assertEqual(A.ghapp_token("pawelkrupinski/movies"), t1)  # from the 0600 cache file: the one cache
         self.assertEqual(len(FakeGitHub.calls), 2)
         cache = A._ghapp_cache_path("lander", "pawelkrupinski/movies")
         self.assertEqual(os.stat(cache).st_mode & 0o777, 0o600)
@@ -117,9 +113,19 @@ class GhAppTest(unittest.TestCase):
         self.assertEqual(json.loads(b64d(FakeGitHub.calls[2][2].split()[1].split(".")[1]))["iss"], "202")
 
     def test_a_token_near_its_expiry_is_replaced(self):
-        A._ghapp_tokens[("lander", "pawelkrupinski/movies")] = {"token": "old", "expires": 1000.0}
+        cache = A._ghapp_cache_path("lander", "pawelkrupinski/movies")
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        A.write_json(cache, {"token": "old", "expires": 1000.0})
         self.assertEqual(A.ghapp_token("pawelkrupinski/movies", now_=1000 - A.GHAPP_REFRESH - 1), "old")
         self.assertNotEqual(A.ghapp_token("pawelkrupinski/movies", now_=1000 - A.GHAPP_REFRESH + 1), "old")
+
+    def test_the_tokens_record_is_the_one_cache(self):
+        # no copy in the process: a record replaced (another process minted) is what the next call reads
+        t1 = A.ghapp_token("pawelkrupinski/movies")
+        cache = A._ghapp_cache_path("lander", "pawelkrupinski/movies")
+        A.write_json(cache, {"token": "minted elsewhere", "expires": A.epoch_now() + 3600})
+        self.assertNotEqual(t1, "minted elsewhere")
+        self.assertEqual(A.ghapp_token("pawelkrupinski/movies"), "minted elsewhere")
 
     def test_an_unconfigured_app_is_no_read_access(self):
         os.environ.pop("AGENTCTL_GITHUB_READER_APP_ID")

@@ -58,7 +58,7 @@ DRIFT_CI = "scripts/identity-drift-ci"
 def drift_env(repo, env=None):
     env = tool_env() if env is None else dict(env)
     try:
-        env = forge_env(slug(repo), env)  # forge-gh is the real gh (KINOWO_FORGE), with the repo's App token on ci-runner
+        env = forge_env(slug(repo), env, kind="token handoff")  # forge-gh is the real gh (KINOWO_FORGE), with the repo's App token on ci-runner
         env["KINOWO_FORGE"] = "github"
     except (Exception, SystemExit) as ex:  # no token: the script says so itself (NO VERDICT)
         print_error(f"drift check: no forge token for the script ({str(ex)[:120]})")

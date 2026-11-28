@@ -18,7 +18,7 @@ from agentctl.timefmt import parse_time
 from agentctl.storeknobs import knob_gh_cli, knob_runners_page_cache
 from agentctl.core import HOME, print_error, process_cache
 from agentctl.ghapp import ghapp_enabled, ghapp_token
-from agentctl.ghtally import gh_tally, gh_tally_as, gh_tally_shape
+from agentctl.ghtally import gh_tally, gh_tally_shape
 from agentctl.netretry import net_run
 from agentctl.paths import state_root
 
@@ -36,11 +36,11 @@ GH_CLI = knob_gh_cli()  # the GitHub CLI
 GITHUB_WEB = "https://github.com"
 
 
-def forge_env(o_r: Any, env: Any = None) -> dict[str, str]:
+def forge_env(o_r: Any, env: Any = None, kind: str | None = None) -> dict[str, str]:
     """The CLI's environment: gh's own auth ($GH_TOKEN as set, else `gh auth login`'s; on ci-runner the repo's App
     installation token), and never a prompt or an update check. Every call is one gh process (or, with `env`, a token
-    handed to a child process), tallied against its caller (gh_tally)."""
-    gh_tally("token handoff" if env is not None else None, o_r=o_r)
+    handed to a child process: kind "token handoff"), tallied against its caller (gh_tally) as `kind` (what it runs)."""
+    gh_tally(kind, o_r=o_r)
     env = dict(os.environ if env is None else env)
     env.update(GH_PROMPT_DISABLED="1", GH_NO_UPDATE_NOTIFIER="1", NO_COLOR="1")
     if ghapp_enabled():  # ci-runner: the repo's App installation token (ghapp.py), never a person's
@@ -124,8 +124,7 @@ def _gh_api_once(o_r, method, path, params=None, body=None):
     url = f"repos/{o_r}/{path}" + ("?" + urllib.parse.urlencode(params) if params else "")
     cached = read_record(etag_path(url)) if method == "GET" else None
     argv = _gh_api_argv(method, url, cached, body)
-    with gh_tally_as(f"api {method} {gh_tally_shape(path)}"):
-        env = forge_env(o_r)
+    env = forge_env(o_r, kind=f"api {method} {gh_tally_shape(path)}")
     r = _gh_api_run(method, path, argv, env, body)
     if method == "GET":
         return _gh_api_read(url, r, cached)
@@ -381,8 +380,7 @@ def gh_json(o_r: str, *args: str) -> Any:
     # (2026-11-10's tally: branch_exists, the retire reads and ci-why's commit reads sent no If-None-Match)
     if len(args) == 2 and args[0] == "api" and args[1].startswith(f"repos/{o_r}/"):
         return _gh_api_once(o_r, "GET", args[1][len(f"repos/{o_r}/"):])
-    with gh_tally_as("gh " + " ".join(gh_tally_shape(a) for a in args[:3])):
-        env = forge_env(o_r)
+    env = forge_env(o_r, kind="gh " + " ".join(gh_tally_shape(a) for a in args[:3]))
     r = net_run(f"gh {' '.join(args[:3])}", forge_argv(o_r, *args), capture_output=True, text=True, env=env,
                 timeout=GH_JSON_TIMEOUT)
     if r.returncode != 0:

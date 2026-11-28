@@ -3,12 +3,10 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from agentctl.clock import epoch_now
-import contextlib
 import os
 import re
 import sys
 import threading
-from collections.abc import Iterator
 from types import FrameType
 from typing import Any
 from agentctl.core import print_error
@@ -28,7 +26,6 @@ GH_TALLY_PLUMBING = {"forge_env", "gh_tally", "gh_json", "api", "_gh_api_once", 
                      "<lambda>", "<listcomp>", "<dictcomp>", "<genexpr>", "wrapper", "inner"}
 _gh_tally_lock = threading.Lock()
 _gh_tally_state: dict[str, Any] = {"since": epoch_now(), "calls": {}, "free": 0}
-_gh_tally_kind = threading.local()
 
 
 def gh_tally_site() -> str:
@@ -55,8 +52,8 @@ def _print_tally(calls: Any, freed: Any, span: Any) -> None:
 
 def gh_tally(kind: str | None = None, free: bool = False, now_: float | None = None, o_r: str | None = None) -> None:
     """Count one gh process (or, `free`, mark the last one a 304) against its caller, and print the tally once
-    GH_TALLY_SECONDS have passed since the last. `kind` names what ran; None: what gh_json/_gh_api_once said."""
-    kind = kind or getattr(_gh_tally_kind, "what", None) or "gh"
+    GH_TALLY_SECONDS have passed since the last. `kind` names what ran (gh_json's subcommand, a REST path's shape)."""
+    kind = kind or "gh"
     t = epoch_now() if now_ is None else now_
     with _gh_tally_lock:
         st = _gh_tally_state
@@ -71,16 +68,6 @@ def gh_tally(kind: str | None = None, free: bool = False, now_: float | None = N
         st.update(since=t, calls={}, free=0)
     if calls:
         _print_tally(calls, freed, span)
-
-
-@contextlib.contextmanager
-def gh_tally_as(what: str) -> Iterator[None]:
-    """What the gh process forge_env is about to count runs (gh_json's subcommand, a REST path's shape)."""
-    before, _gh_tally_kind.what = getattr(_gh_tally_kind, "what", None), what
-    try:
-        yield
-    finally:
-        _gh_tally_kind.what = before
 
 
 def gh_tally_shape(path: str) -> str:

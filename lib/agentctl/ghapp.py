@@ -7,7 +7,7 @@ from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import epoch_now
 from agentctl.timefmt import parse_time
 from agentctl.storeknobs import knob_github_api, knob_github_app, knob_github_lander_repos, knob_identity
-from agentctl.core import print_error, process_cache
+from agentctl.core import print_error
 from agentctl.tokenerrors import NoReadAccess
 from agentctl.paths import state_root
 import json
@@ -96,7 +96,6 @@ def _ghapp_http(method, path, bearer, body=None):
             from None
 
 
-_ghapp_tokens = process_cache({})  # (role, o_r) -> {"token", "expires"}
 
 
 def _ghapp_cache_path(role, o_r):
@@ -104,11 +103,10 @@ def _ghapp_cache_path(role, o_r):
 
 
 def _ghapp_cached(role, o_r, now_):
-    hit = _ghapp_tokens.get((role, o_r))
-    if not hit:
-        hit = read_record(_ghapp_cache_path(role, o_r))
+    """The App's installation token for o_r from its 0600 record (written when minted), while it is not near its
+    expiry; else None. The record IS the cache: no copy of it is kept in the process."""
+    hit = read_record(_ghapp_cache_path(role, o_r))
     if hit and hit.get("token") and float(hit.get("expires") or 0) - GHAPP_REFRESH > now_:
-        _ghapp_tokens[(role, o_r)] = hit
         return hit["token"]
     return None
 
@@ -131,7 +129,6 @@ def ghapp_token(o_r, role=None, now_=None):
                       {"repositories": [o_r.split("/", 1)[1]]})
     expires = parse_time(got.get("expires_at")).timestamp() if got.get("expires_at") else t + 3600
     hit = {"token": got["token"], "expires": expires}
-    _ghapp_tokens[(role, o_r)] = hit
     path = _ghapp_cache_path(role, o_r)
     try:
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)

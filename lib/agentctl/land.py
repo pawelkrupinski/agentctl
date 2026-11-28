@@ -281,7 +281,7 @@ def tool_env():
     env.setdefault("PREPUSH_BASELINE_DIR", reds_dir("baseline-out"))
     env["KINOWO_FORGE"] = "github"  # the movies hook's gate and tools read GitHub (scripts/forge-gh)
     try:  # as the lander App on ci-runner
-        env = forge_env(SHORT["movies"], env)
+        env = forge_env(SHORT["movies"], env, kind="token handoff")
     except (Exception, SystemExit) as e:
         print_error(f"tool env: no GitHub App token for movies ({str(e)[:120]}); the hook reads without one")
     return env

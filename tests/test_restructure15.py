@@ -1,7 +1,7 @@
 """RESTRUCTURE ROUND 15: each function split into named stages keeps its behaviour. The digests (fixtures/
 restructure15-digests.json, recorded from the code BEFORE the split with `R4_RECORD=1`) cover thousands of seeded cases
 each, collaborators faked (golden_cases.py): every call, its order and the result. Every case is bounded."""
-import contextlib, io, json, os, sys, types, unittest
+import io, json, os, sys, types, unittest
 from functools import partial
 from types import SimpleNamespace as NS
 
@@ -22,14 +22,6 @@ def check(test, name, build, fn_of, n=3000):
 
 def proc(rng, out="", rc=0, err=""):
     return NS(returncode=rc, stdout=out, stderr=err)
-
-
-class Scope(contextlib.AbstractContextManager):
-    def __exit__(self, *exc):
-        return None
-
-    def __repr__(self):
-        return "<scope>"
 
 
 def raising(rng, p, value, exc=RuntimeError):
@@ -154,9 +146,8 @@ class GhApiOnceTest(unittest.TestCase):
         etag_rec = maybe(r, {"etag": r.choice(["W/1", None, ""]), "body": r.choice([{"cached": 1}, None, [1]])}, 0.5)
         case.fake("etag_path", lambda rng, url: "/etag/" + url[-6:])
         case.fake("read_record", lambda rng, p: etag_rec)
-        case.fake("forge_env", lambda rng, o_r: {"E": "1"})
+        case.fake("forge_env", lambda rng, o_r, kind=None: {"E": "1"})
         case.fake("gh_tally_shape", lambda rng, path: path.split("/")[0])
-        case.fake("gh_tally_as", lambda rng, label: Scope())
         case.fake("gh_tally", lambda rng, **k: None)
         case.fake("write_json", lambda rng, p, d: raising(rng, 0.2, None, OSError))
         body = r.choice(['{"a": 1}', "", "  ", "null", "[1, 2]", "not json"])

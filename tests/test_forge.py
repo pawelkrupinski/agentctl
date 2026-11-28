@@ -485,6 +485,15 @@ class ConditionalGetTest(GithubForgeTest):
         self.assertIn("read_the_run: api GET actions/runs/N", line)
         self.assertEqual(A._gh_tally_state["calls"], {}, "a printed tally starts again")
 
+    def test_a_gh_process_is_tallied_as_the_kind_its_caller_passes(self):
+        # the kind is an argument of forge_env (no thread-local scope around it): what the caller says it runs
+        A._gh_tally_state.update(since=A.epoch_now(), calls={}, free=0)
+        saved, A.GH_TALLY_SECONDS = A.GH_TALLY_SECONDS, 10 ** 9
+        self.addCleanup(setattr, A, "GH_TALLY_SECONDS", saved)
+        A.forge_env(O_R, kind="gh run view N")
+        A.forge_env(O_R)
+        self.assertEqual(sorted(k.split(": ", 1)[1] for k in A._gh_tally_state["calls"]), ["gh", "gh run view N"])
+
     def test_a_bare_gh_api_read_is_a_conditional_get(self):
         # 2026-11-10's tally: branch_exists, the retire reads and ci-why's commit reads went through `gh api` with no
         # If-None-Match, charged every time though the answer had not changed

@@ -268,8 +268,6 @@ state	lib/agentctl/fixersession.py	1
 state	lib/agentctl/forge.py	1
 state	lib/agentctl/gating.py	3
 state	lib/agentctl/generated.py	1
-state	lib/agentctl/ghapp.py	1
-state	lib/agentctl/ghtally.py	1
 state	lib/agentctl/gov.py	1
 state	lib/agentctl/hostsleep.py	1
 state	lib/agentctl/inboxentry.py	1
@@ -434,7 +432,7 @@ mixed	lib/agentctl/fixersession.py:claude_trust_gap	8
 mixed	lib/agentctl/fixersession.py:store_reauth	5
 mixed	lib/agentctl/fixersession.py:trust_asks	7
 mixed	lib/agentctl/forge.py:_gh_api_run	3
-mixed	lib/agentctl/forge.py:forge_env	4
+mixed	lib/agentctl/forge.py:forge_env	3
 mixed	lib/agentctl/forge.py:forge_workflow_names	7
 mixed	lib/agentctl/forge.py:runner_queue	5
 mixed	lib/agentctl/gatepublish.py:maybe_publish_gate	4
@@ -449,7 +447,7 @@ mixed	lib/agentctl/ghapp.py:_ghapp_http	5
 mixed	lib/agentctl/ghapp.py:ghapp_git_env	6
 mixed	lib/agentctl/ghapp.py:ghapp_jwt	4
 mixed	lib/agentctl/ghapp.py:ghapp_token	7
-mixed	lib/agentctl/ghtally.py:gh_tally	8
+mixed	lib/agentctl/ghtally.py:gh_tally	7
 mixed	lib/agentctl/gov.py:GovTicket.release	6
 mixed	lib/agentctl/gov.py:GovWait.check_timeout	3
 mixed	lib/agentctl/gov.py:GovWait.evicted	5
