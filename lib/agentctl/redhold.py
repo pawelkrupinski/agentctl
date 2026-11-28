@@ -77,7 +77,7 @@ def snap_reds(snap):
     return out - {"None"}
 
 
-def inv_wr(clock: Any, st: Any, reds: Any = None, *, ctx: Context) -> Any:
+def inv_wr(clock, st, reds = None, *, ctx):
     """WR: A RED FIX NEVER WAITS FOR GREEN (the owner, 2026-11-16). No open change whose KIND (changekind.py: its
     `Fixes-Red:` against the gate's reds and every red the store has open) is a gate red's fix is on `waiting`, and no
     fix of any open red -- the gate's or one outside it (08010c, 2026-11-19) -- is still unlanded WR_MAX after it was

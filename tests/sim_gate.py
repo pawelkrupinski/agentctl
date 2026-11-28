@@ -169,8 +169,9 @@ def counts(results):
 # ---------------------------------------------------------------- the fingerprints
 # THE CONTEXT IS NO DEFINITION: a call passing the case's Context on (`ctx=case_context()`, docs/design/contexts.md) or a
 # fake taking it (`ctx=None`) asks and decides what it did before the context was passed; it is read out of a
-# definition before it is fingerprinted. So is the machine probe a fake takes (`machine=None`: lib/agentctl/machine.py).
-CONTEXT_ARGUMENT = re.compile(r", (?:ctx|machine)=(?:case_context\(\)|None)")
+# definition before it is fingerprinted. So is the machine probe a fake takes (`machine=None`: lib/agentctl/machine.py),
+# and a memo the case's context owns, handed down (`looked=case_context().caches.landed_looked`: lib/agentctl/caches.py).
+CONTEXT_ARGUMENT = re.compile(r", (?:ctx|machine)=(?:case_context\(\)|None)|, \w+=case_context\(\)\.caches\.\w+")
 
 
 def fingerprints(src=None, gate_src=None, profiles_src=None):
