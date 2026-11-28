@@ -11,7 +11,7 @@ from agentctl.allowedpaths import allowed_path
 from agentctl.store import StoreUnavailable
 from agentctl.worktrees import claimant, worktree_exclude
 from agentctl.agewords import fmt_age
-from agentctl.lander import lander_index, lander_name, lander_of_commit, lander_records, patch_ids
+from agentctl.lander import commit_key, lander_index, lander_name, lander_of_commit, lander_records
 from agentctl.gitrepo import is_ancestor
 from agentctl.paths import tilde
 import os
@@ -94,9 +94,7 @@ def revert_landings(repo, c, idx):
         full, body = revert_resolve(repo, ref)
         if not full or REVERT_LINE.search(body or ""):
             continue
-        at, _, subject = git(repo, "log", "-1", "--format=%at%x1f%s", full, check=False).stdout.strip().partition("\x1f")
-        key = {"sha": full, "patch_id": patch_ids(repo, [full]).get(full), "subject": subject[:200],
-               "at": int(at) if at.isdigit() else None}
+        key = commit_key(repo, full)
         rec = lander_of_commit(idx, key)
         g = groups.setdefault((rec or {}).get("change"), [rec, []])
         g[1].append({"sha": full, "subject": key.get("subject") or ""})

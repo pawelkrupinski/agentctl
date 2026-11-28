@@ -8,7 +8,6 @@ import re
 import time
 from typing import Any
 from contextlib import suppress
-from agentctl.procrunner import process_runner
 from agentctl.statefile import mtime, note_failure
 from agentctl.statemachines import ARCHIVE, MACHINES, StaleVersion, StateSpec
 from agentctl.clock import epoch_now
@@ -19,6 +18,7 @@ from agentctl.queueknobs import knob_lander_landed_every
 from agentctl.core import branch_of, err, git, git_ok, process_cache, remote
 from agentctl.claudefiles import claude_projects_root
 from agentctl.procs import ps_rows
+from agentctl.onmain import patch_ids
 from agentctl.repos import RED_PRIMARY, slug
 from agentctl.paths import claude_session_id, tilde
 from agentctl.storetoken import no_vault
@@ -196,23 +196,6 @@ def lander_record(repo):
     return rec
 
 
-def patch_ids(repo, shas):
-    """{commit sha: stable patch-id} of the given commits (a merge or an empty commit has none)."""
-    if not shas:
-        return {}
-    show = process_runner().run(["git", "-C", repo, "show", "--no-color", "--format=commit %H", "-p"] + list(shas),
-                          capture_output=True, text=True, errors="replace")
-    if show.returncode != 0:
-        return {}
-    r = process_runner().run(["git", "-C", repo, "patch-id", "--stable"], input=show.stdout, capture_output=True, text=True)
-    out = {}
-    for line in r.stdout.splitlines():
-        p = line.split()
-        if len(p) == 2:
-            out[p[1]] = p[0]
-    return out
-
-
 def commit_keys(repo, base, head):
     """[{sha, patch_id, subject, at}] of base..head, oldest first: what finds each commit again on main after a rebase."""
     rng = [f"{base}..{head}"] if base else ["--max-count=200", head]  # no base: main's newest
@@ -221,6 +204,13 @@ def commit_keys(repo, base, head):
     pids = patch_ids(repo, [x[0] for x in rows])
     return [{"sha": s, "patch_id": pids.get(s), "subject": subj[:200], "at": int(at) if at.isdigit() else None}
             for s, at, subj in rows]
+
+
+def commit_key(repo, sha):
+    """{sha, patch_id, subject, at} of one commit: its key in a lander's record (commit_keys' row)."""
+    at, _, subject = git(repo, "log", "-1", "--format=%at%x1f%s", sha, check=False).stdout.strip().partition("\x1f")
+    return {"sha": sha, "patch_id": patch_ids(repo, [sha]).get(sha), "subject": subject[:200],
+            "at": int(at) if at.isdigit() else None}
 
 
 def lander_put(store, change_id, lander, keys, landed_sha=None):

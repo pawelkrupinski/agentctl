@@ -87,13 +87,24 @@ def is_empty_commit(repo: str, c: str) -> bool:
     return bool(git(repo, "rev-parse", f"{c}^{{tree}}").strip() == git(repo, "rev-parse", f"{parents[0]}^{{tree}}").strip())
 
 
+def patch_ids(repo: str, shas: list[str]) -> dict[str, str]:
+    """{commit sha: stable patch-id} of the given commits, in one `git patch-id` (a merge or an empty commit has none, a
+    commit git cannot show is left out): the ONE read of a commit's patch."""
+    if not shas:
+        return {}
+    show = git(repo, "show", "--no-color", "--no-ext-diff", "--format=commit %H", "-p", *shas, check=False)
+    if show.returncode != 0:  # one unreadable sha spoils the batch: each alone
+        return {k: v for sha in shas for k, v in patch_ids(repo, [sha]).items()} if len(shas) > 1 else {}
+    return patch_id_pairs(run_cmd(["git", "patch-id", "--stable"], cwd=repo, input=show.stdout).stdout) if show.stdout.strip() else {}
+
+
+def patch_id_pairs(output: str) -> dict[str, str]:
+    """{commit: patch-id} of `git patch-id`'s lines (`<patch-id> <commit>`)."""
+    return {words[1]: words[0] for words in (line.split() for line in output.splitlines()) if len(words) == 2}
+
+
 def patch_id(repo: str, c: str) -> Optional[str]:
-    diff = git(repo, "show", "--format=", "--no-color", "--no-ext-diff", c, check=False).stdout
-    if not diff.strip():
-        return None
-    r = run_cmd(["git", "patch-id", "--stable"], cwd=repo, input=diff)
-    words = r.stdout.split()
-    return str(words[0]) if words else None
+    return patch_ids(repo, [c]).get(c)
 
 
 def equivalent_on(repo: str, c: str, upstream: str, limit: int = 400) -> Optional[str]:
@@ -104,8 +115,10 @@ def equivalent_on(repo: str, c: str, upstream: str, limit: int = 400) -> Optiona
         return None
     mb = git(repo, "merge-base", c, upstream, check=False).stdout.strip()
     rng = f"{mb}..{upstream}" if mb else upstream
-    for u in git(repo, "rev-list", "--no-merges", "-n", str(limit), rng, check=False).stdout.split():
-        if patch_id(repo, u) == pid:
+    walked = git(repo, "rev-list", "--no-merges", "-n", str(limit), rng, check=False).stdout.split()
+    ids = patch_ids(repo, walked)
+    for u in walked:
+        if ids.get(u) == pid:
             return str(u)
     twin: Optional[str] = content_twin(repo, c, upstream)
     return twin
