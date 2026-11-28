@@ -10,8 +10,9 @@ ONLY THE CASE'S OWN THREAD IS THE CASE (2026-11-26, tests #289 / #285): a call t
 earlier test left running in the worker, reading a knob or the clock -- is not recorded and draws nothing; it reaches
 the real collaborator (a Probe's: None). Recorded, it moved park_duty's and refresh_pinned_recording's digests in one
 suite run in many."""
-import contextlib, hashlib, json, os, random, threading, time
+import contextlib, hashlib, json, os, random, sys, threading, time
 from unittest import mock
+from harness import WiredMachine  # noqa: E402
 
 DIGESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "restructure4-digests.json")
 
@@ -57,8 +58,13 @@ class Case:
                 return real(*a, **k) if real is not None else None
             # THE CONTEXT IS NO CALL DATA: `ctx` (lib/agentctl/context.py), the collaborators a call tree passes down, is
             # neither recorded nor handed to the fake -- a digest records what was asked, and it reads the same as
-            # before the context was passed (docs/design/contexts.md)
+            # before the context was passed (docs/design/contexts.md); nor is the machine probe a call reads
+            # (lib/agentctl/machine.py), by keyword or by position
             k.pop("ctx", None)
+            probe = (sys.modules["agentctl.machine"].MachineProbe, WiredMachine)
+            if issubclass(type(k.get("machine")), probe):
+                del k["machine"]
+            a = tuple(x for x in a if not issubclass(type(x), probe))
             try:
                 value = gen(self.rng, *a, **k)
             except Exception as e:

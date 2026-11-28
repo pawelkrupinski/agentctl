@@ -3308,14 +3308,12 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `github_lander_repos` | `AGENTCTL_GITHUB_LANDER_REPOS` | `pawelkrupinski/movies` | the repos the lander App writes to, comma-separated |
 | `gov_admit_max` | `AGENTCTL_GOV_ADMIT_MAX` | `7200` | a check waits this long for the governor at most |
 | `gov_budget_gb` | `AGENTCTL_GOV_BUDGET_GB` | `round(0.6 * ram_gb, 1` | the memory in GB the governor hands out; default 0.6 x the machine's RA |
-| `gov_busy_probe` | `AGENTCTL_GOV_BUSY_PROBE` | - | a command printing the busy cores (tests) |
 | `gov_cpu_factor` | `AGENTCTL_GOV_CPU_FACTOR` | `1.0` | charged cores (or the load) + a job's own may reach this x the cores |
 | `gov_evict_settle` | `AGENTCTL_GOV_EVICT_SETTLE` | `3` | s to wait after evicting a ticket for its memory to free |
 | `gov_free_need_gb` | `AGENTCTL_GOV_FREE_NEED_GB` | `2.5` | free memory a new JVM needs NOW (beyond the reserve); its heap grows into the budget's share later |
 | `gov_idle_max` | `AGENTCTL_GOV_IDLE_MAX` | `30.0` | s a waiter behind the head waits at most between two reads of the queue |
 | `gov_poll` | `AGENTCTL_GOV_POLL` | `2.0` | - |
 | `gov_pool_share` | `AGENTCTL_GOV_POOL_SHARE` | `0.5` | of the machine's cores, the widest one pool is granted |
-| `gov_ps_probe` | `AGENTCTL_GOV_PS_PROBE` | - | a file of ps `pcpu args` rows (tests) |
 | `gov_reserve_gb` | `AGENTCTL_GOV_RESERVE_GB` | `1.0` | - |
 | `gov_resume` | `AGENTCTL_GOV_RESUME` | `0.8` | x the cores: under it, admitting again |
 | `gov_spare` | `AGENTCTL_GOV_SPARE` | `0.5` | x the cores: under it, spare |
@@ -3350,7 +3348,7 @@ store token, the role (`ROLE`, `HOST`), and the tests' hooks.
 | `live_poll` | `AGENTCTL_LIVE_POLL` | `1.0` | s between looks at a quiet file |
 | `log_rotate_keep` | `AGENTCTL_LOG_ROTATE_KEEP` | `3` | rotated parts kept per log (<log>.1 newest .. <log>.N oldest) |
 | `log_rotate_max` | `AGENTCTL_LOG_ROTATE_MAX` | `10485760` | bytes over which an agentctl log is rotated (copy-truncate; its newest part kept as .1) |
-| `machine` | `AGENTCTL_MACHINE` | - | - |
+| `machine` | `AGENTCTL_MACHINE` | - | the tests' fixed machine: its JSON, or `@<file>` of it (machine.machine_probe) |
 | `machine_id` | `AGENTCTL_MACHINE_ID` | - | - |
 | `max_checks` | `AGENTCTL_MAX_CHECKS` | - | the check slots' cap, overriding the budget's |
 | `max_foreign` | `AGENTCTL_MAX_FOREIGN` | `2` | files a push may revert to an older main before prepush-check refuses |

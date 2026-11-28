@@ -35,8 +35,8 @@ class MonotonicSitesTest(unittest.TestCase):
         said = []
         clock = Ticking()
         with mock.patch("time.monotonic", clock), mock.patch.object(A, "gov_committed", lambda t: 0), \
-                mock.patch.object(A, "gov_budget", lambda: 1), mock.patch.object(A, "gov_charged", lambda t: 0):
-            w = A.GovWait("check", 1, 1, "lbl", "k", {}, said.append)
+                mock.patch.object(A, "gov_budget", lambda ram_gb: 1), mock.patch.object(A, "gov_charged", lambda t: 0):
+            w = A.GovWait("check", 1, 1, "lbl", "k", {}, said.append, machine=A.FixedMachine())
             w.maybe_report("why", [])
             w.maybe_report("why", [])
             clock.t += A.GOV_REPORT - 1

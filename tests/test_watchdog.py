@@ -6,7 +6,7 @@ import contextlib, io, json, os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
-from harness import case_context  # noqa: E402
+from harness import case_context, fixed_machine  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import FakeClock  # noqa: E402
 
@@ -294,30 +294,30 @@ class FileTableTest(unittest.TestCase):
     LSOF = "p1\ncshell\nfcwd\nf1\np39093\nccom.apple.Virtualization.VirtualMachine\n" + "f7\n" * 5 + "p7\ncjava\nf1\nf2\n"
 
     def test_under_the_bound_it_holds_and_says_how_full(self):
-        ok, detail = A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), reading=(217_000, 491_520), lsof_out="")
+        ok, detail = A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), machine=fixed_machine(file_table=list((217_000, 491_520)), open_files=""))
         self.assertTrue(ok)
         self.assertIn("217000 of 491520 open (44%)", detail)
 
     def test_past_the_bound_it_names_the_top_holders(self):
-        ok, detail = A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), reading=(400_000, 491_520), lsof_out=self.LSOF)
+        ok, detail = A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), machine=fixed_machine(file_table=list((400_000, 491_520)), open_files=self.LSOF))
         self.assertFalse(ok)
         self.assertIn("400000 of 491520 open (81%", detail)
         self.assertIn("top: pid 39093 com.apple.Virtualization.VirtualMachine (5)", detail)
         self.assertLess(detail.index("39093"), detail.index("pid 7 java"))
 
     def test_the_vm_on_top_says_how_to_release_its_cache(self):
-        _ok, detail = A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), reading=(400_000, 491_520), lsof_out=self.LSOF)
+        _ok, detail = A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), machine=fixed_machine(file_table=list((400_000, 491_520)), open_files=self.LSOF))
         self.assertIn("rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'", detail)
-        _ok, other = A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), reading=(400_000, 491_520), lsof_out="p7\ncjava\nf1\n")
+        _ok, other = A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), machine=fixed_machine(file_table=list((400_000, 491_520)), open_files="p7\ncjava\nf1\n"))
         self.assertNotIn("drop_caches", other)
 
     def test_the_bound_is_configurable_and_no_reading_is_no_violation(self):
         os.environ["AGENTCTL_WF_PCT"] = "40"
         try:
-            self.assertFalse(A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), reading=(217_000, 491_520), lsof_out="")[0])
+            self.assertFalse(A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), machine=fixed_machine(file_table=list((217_000, 491_520)), open_files=""))[0])
         finally:
             del os.environ["AGENTCTL_WF_PCT"]
-        self.assertEqual((True, "no kern.num_files here"), A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), reading=None))
+        self.assertEqual((True, "no kern.num_files here"), A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), machine=fixed_machine(file_table=None)))
 
     def test_it_is_a_watchdog_invariant(self):
         self.assertIn("WF", A.INVARIANTS)
@@ -394,16 +394,20 @@ class RunawayProcessTest(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.state = os.path.join(self.d, "procwatch.json")
 
-    def ps(self, *rows):
-        """ps's lines of (pid, ppid, rss KB, %cpu, command) rows."""
-        return "\n".join(f"{pid} {ppid} {rss_kb} {cpu} {name}" for pid, ppid, rss_kb, cpu, name in rows)
+    def ps(self, *rows, args_of=None, ram=None):
+        """The machine whose processes are (pid, ppid, rss KB, %cpu, command) rows, each with the command line
+        `args_of(pid)` gives (its name by default), and `ram` GB of RAM (the harness's 36 by default)."""
+        text = "\n".join(f"{pid} {ppid} {rss_kb} {cpu} {name} {args_of(pid) if args_of else name}"
+                         for pid, ppid, rss_kb, cpu, name in rows)
+        return fixed_machine(ps=text, ps_cols=["pid", "ppid", "rss", "pcpu", "comm", "args"],
+                             **({"ram_gb": ram} if ram is not None else {}))
 
-    def run_passes(self, samples, pid=322, name="/usr/sbin/fseventsd", ppid=1, cpu=40.0, **kw):
+    def run_passes(self, samples, pid=322, name="/usr/sbin/fseventsd", ppid=1, cpu=40.0, args_of=None, ram=None, **kw):
         """One watchdog pass a minute over `samples` [(t, rss GB)]: [(t, ok, detail)]."""
         out = []
         for t, gb in samples:
-            ok, detail = A.inv_wp(self.ps((pid, ppid, int(gb * 1024 * 1024), cpu, name)), now_=float(t),
-                                  state_path=self.state, **kw)
+            ok, detail = A.inv_wp(self.ps((pid, ppid, int(gb * 1024 * 1024), cpu, name), args_of=args_of, ram=ram),
+                                  now_=float(t), state_path=self.state, **kw)
             out.append((t, ok, detail))
         return out
 
@@ -540,9 +544,8 @@ class RunawayProcessTest(unittest.TestCase):
 
     def test_one_of_ours_is_named_by_the_worktree_it_runs_in(self):
         for t in (0.0, 1300.0):
-            ok, detail = A.inv_wp(self.ps((501, 1, 90_000, 99.0, "java")), now_=t, state_path=self.state,
-                                  cwd_of=lambda pid: os.path.join(A.HOME, "projects", "movies-wt-x"),
-                                  args_of=lambda pid: "java -cp x Main")
+            ok, detail = A.inv_wp(self.ps((501, 1, 90_000, 99.0, "java"), args_of=lambda pid: "java -cp x Main"), now_=t,
+                                  state_path=self.state, cwd_of=lambda pid: os.path.join(A.HOME, "projects", "movies-wt-x"))
         self.assertFalse(ok)
         self.assertIn("ours: it runs in ~/projects/movies-wt-x", detail)
         self.assertNotIn("killall", detail)
@@ -557,7 +560,7 @@ class RunawayProcessTest(unittest.TestCase):
             os.utime(p, (old, old))
         os.makedirs(os.path.join(projects, "movies-wt-a", "target"))
         os.makedirs(os.path.join(projects, "movies-wt-b"))
-        ok, detail = A.inv_wt(tmp_root=tmp, projects=projects)
+        ok, detail = A.inv_wt(fixed_machine(), tmp_root=tmp, projects=projects)
         self.assertFalse(ok)
         self.assertIn(f"{A.WT_STALE_MAX + 1} test roots", detail)
         self.assertIn("1 worktrees hold build output", detail)
@@ -578,7 +581,7 @@ class RunawayProcessTest(unittest.TestCase):
         saved = clock_module._PROCESS_CLOCK[0]
         self.addCleanup(clock_module.wire_clock, saved)
         clock_module.wire_clock(FakeClock(1.0))
-        ok, detail = A.inv_wt(tmp_root=tmp, projects=tempfile.mkdtemp())
+        ok, detail = A.inv_wt(fixed_machine(), tmp_root=tmp, projects=tempfile.mkdtemp())
         self.assertFalse(ok, detail)
         self.assertIn(f"{A.WT_STALE_MAX + 1} test roots", detail)
 

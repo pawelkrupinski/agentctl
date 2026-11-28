@@ -1,13 +1,113 @@
-# agentctl, part `machine`: the machine agentctl runs on: its memory, load, cores and free disk (or the fixed machine a test pins)
+# agentctl, part `machine`: THE MACHINE PROBE: every read of the machine agentctl runs on (its load, cores, memory, busy
+# cores, process table, open files, file table and free disk) through one seam, MachineProbe: HostMachine reads this
+# host, FixedMachine is the fixed machine a test pins. The composition root (cli.main) picks one (machine_probe) and
+# passes it down as a parameter; nothing below it asks "am I in a test?".
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import json
 import os
 import re
-from typing import Any, Optional
+import shutil
+import sys
+from abc import ABC, abstractmethod
+from typing import Any, Mapping, Optional, Sequence
 from agentctl.statefile import read_text_or
-from agentctl.core import HOME, probe_output, run_cmd
-from agentctl.govknobs import knob_disk_path
+from agentctl.psparse import PsRow, parse_ps
+from agentctl.cpu import machine_busy_cores
+from agentctl.core import HOME, run_cmd
+from agentctl.govknobs import knob_disk_path, knob_machine
+from agentctl.procs import process_cwds, ps_rows
+
+MEMORY_FIELDS = ("ram_gb", "free_gb", "pressure", "swap_used_mb", "swap_total_mb")
+
+
+class MachineProbe(ABC):
+    """The machine: its RAW READS (abstract, one per source: the only place the two implementations differ) and what
+    the readers derive from them (concrete, shared by both: a test's machine answers through the same rules)."""
+
+    @abstractmethod
+    def load_averages(self) -> Optional[tuple[float, float]]:
+        """The 1- and 5-min load averages (the run queue), or None where unreadable."""
+
+    @abstractmethod
+    def cores(self) -> int:
+        """The CPU count."""
+
+    @abstractmethod
+    def memory(self) -> dict[str, Any]:
+        """{ram_gb, free_gb, pressure (% of RAM not available), swap_used_mb, swap_total_mb}, each None when unreadable."""
+
+    @abstractmethod
+    def pressure_memory(self) -> dict[str, Any]:
+        """The kernel's own memory reading: {free_pct, level, swap_mb}, those it has (one cheap read: laptop_pressure's)."""
+
+    @abstractmethod
+    def physical_ram_gb(self) -> float:
+        """GB of RAM by the C library's page count: ram_gb's fallback when memory() cannot say."""
+
+    @abstractmethod
+    def tick_busy_cores(self) -> Optional[float]:
+        """The cores the whole machine is busy on by its own CPU ticks (cpu.py), or None where unreadable."""
+
+    @abstractmethod
+    def process_rows(self, cols: tuple[str, ...], pids: tuple[int, ...] = (), wide: bool = False) -> list[PsRow]:
+        """THE PROCESS TABLE: every process (or the `pids` asked for) with the ps `cols`; no rows when unreadable."""
+
+    @abstractmethod
+    def process_cwds(self) -> dict[int, str]:
+        """{pid: cwd} of the processes worth asking (procs.cwd_candidates), allowed paths only."""
+
+    @abstractmethod
+    def file_table(self) -> Optional[tuple[int, int]]:
+        """(open files, the most the kernel allows) system-wide, or None where it cannot say."""
+
+    @abstractmethod
+    def open_files(self) -> str:
+        """`lsof -n -F pc`: every open descriptor with its process ("" when unreadable)."""
+
+    @abstractmethod
+    def disk_free_gb(self, path: Optional[str] = None) -> float:
+        """GB free on `path` ($AGENTCTL_DISK_PATH, else HOME)."""
+
+    @abstractmethod
+    def scratch_roots(self) -> tuple[str, str]:
+        """(the temp root, the projects directory) the watchdog's WT counts in."""
+
+    # ------------------------------------------------------------------ derived: the same rules for both
+    def load1(self) -> float:
+        """The 1-min load average; OSError where unreadable."""
+        queues = self.load_averages()
+        if queues is None:
+            raise OSError("the load average is unreadable")
+        return queues[0]
+
+    def run_queue(self) -> Optional[float]:
+        """The 1-min load average: the run queue, beside the busy cores (a saturated CPU is pressure only when it is
+        oversubscribed too). None where unreadable."""
+        queues = self.load_averages()
+        return queues[0] if queues else None
+
+    def ram_gb(self) -> float:
+        """GB of RAM: memory()'s, else the C library's page count (review 2026-11-26: a hard-coded 36 GB, a silently
+        wrong budget on any other machine)."""
+        return float(self.memory()["ram_gb"] or self.physical_ram_gb())
+
+    def free_gb(self) -> Optional[float]:
+        """GB of RAM a new heap can have now (free + inactive + speculative pages); None when unreadable."""
+        free = self.memory()["free_gb"]
+        return None if free is None else float(free)
+
+    def sample(self) -> tuple[float, float, Any, Any]:
+        """(load1, cpu %, memory pressure %, swap used MB), cheaply; None where unreadable."""
+        load1 = self.load1()
+        cpu = min(100.0, 100.0 * load1 / self.cores())
+        m = self.memory()
+        return load1, cpu, m["pressure"], m["swap_used_mb"]
+
+
+def disk_path(path: Optional[str]) -> str:
+    """The path a free-disk reading is of: the one named, else $AGENTCTL_DISK_PATH, else HOME."""
+    return path or knob_disk_path() or HOME
 
 
 def read_meminfo(path: str = "/proc/meminfo") -> dict[str, int]:
@@ -15,130 +115,219 @@ def read_meminfo(path: str = "/proc/meminfo") -> dict[str, int]:
     return {m.group(1): int(m.group(2)) for m in re.finditer(r"^(\w+):\s+(\d+)", read_text_or(path, ""), re.M)}
 
 
-# A FIXED MACHINE ($AGENTCTL_MACHINE, JSON): ram_gb, free_gb, pressure, swap_used_mb, swap_total_mb, load1, cores,
-# free_pct, level -- read in place of this host's (sysctl, vm_stat, /proc/meminfo, the load, the CPU count). The tests'
-# one seam: tests/harness.py pins an idle 12-core 36 GB machine, so no test depends on the runner it runs on
-# (2026-10-31: GitHub's 4-core hosted runner, with its own load and RAM, failed a dozen governor, check-cap and land
-# tests that pass on the laptop and on ci-runner). A test of a reader passes its own input or sets its own probe.
-def machine_fixed() -> Optional[dict[str, Any]]:
-    raw = os.environ.get("AGENTCTL_MACHINE")
-    if not raw:
-        return None
-    try:
-        fixed: dict[str, Any] = json.loads(raw)
-        return fixed
-    except ValueError:
-        return None
-
-
-def machine_load1() -> float:
-    m = machine_fixed()
-    return float(m["load1"]) if m and m.get("load1") is not None else os.getloadavg()[0]
-
-
-def run_queues() -> Optional[tuple[float, float]]:
-    """The 1- and 5-min load averages (the run queue, sustained), or the fixed machine's `load1` / `load5` (default:
-    its load1). None where unreadable."""
-    m = machine_fixed()
-    if m and m.get("load1") is not None:
-        return float(m["load1"]), float(m.get("load5", m["load1"]))
-    try:
-        la = os.getloadavg()
-    except OSError:
-        return None
-    return la[0], la[1]
-
-
-def run_queue(passed: Optional[float] = None) -> Optional[float]:
-    """The 1-min load average: the run queue, beside the busy cores (a saturated CPU is pressure only when it is
-    oversubscribed too). None where unreadable, or when a caller passed its own load (pressure_reading's seam)."""
-    if passed is not None:
-        return None
-    try:
-        return machine_load1()
-    except OSError:
-        return None
-
-
-def machine_cores() -> int:
-    m = machine_fixed()
-    return int(m["cores"]) if m and m.get("cores") else (os.cpu_count() or 1)
-
-
-def _read_macos_memory(out: dict[str, Any]) -> None:
-    """Fill `out` from macOS's sysctl and vm_stat, each key left None when unreadable."""
-    r = run_cmd(["sysctl", "-n", "hw.memsize"], timeout=10)
-    if r.stdout.strip().isdigit():
-        out["ram_gb"] = int(r.stdout.strip()) / 2 ** 30
-    vm = run_cmd(["vm_stat"], timeout=10).stdout
-    page = re.search(r"page size of (\d+) bytes", vm)
-    if page:
-        pages = sum(int(m.group(2)) for m in re.finditer(r"Pages (free|inactive|speculative):\s+(\d+)", vm))
-        out["free_gb"] = pages * int(page.group(1)) / 2 ** 30
-    lvl = run_cmd(["sysctl", "-n", "kern.memorystatus_level"], timeout=10).stdout.strip()  # memory_pressure's free %
-    if lvl.isdigit():
-        out["pressure"] = 100 - int(lvl)
-    sw = run_cmd(["sysctl", "-n", "vm.swapusage"], timeout=10).stdout
-    tot, used = re.search(r"total = ([\d.]+)M", sw), re.search(r"used = ([\d.]+)M", sw)
-    if tot and used:
-        out["swap_total_mb"], out["swap_used_mb"] = float(tot.group(1)), float(used.group(1))
-
-
-def mem_stats() -> dict[str, Any]:
-    """THE machine's memory, macOS or Linux alike: {ram_gb, free_gb, pressure (% of RAM not available), swap_used_mb,
-    swap_total_mb}, each None when unreadable. macOS: sysctl, vm_stat, memory_pressure; Linux (ci-runner, where a check
-    may fall back to running locally): /proc/meminfo (MemAvailable). Before, Linux read none of it: the budget assumed
-    36 GB and free memory, pressure and swap were unknown, so the governor admitted blind."""
-    out = dict.fromkeys(("ram_gb", "free_gb", "pressure", "swap_used_mb", "swap_total_mb"))
-    fixed = machine_fixed()
-    if fixed is not None:
-        return {k: fixed.get(k) for k in out}
-    mi = read_meminfo()
-    if mi.get("MemTotal"):
-        out["ram_gb"] = mi["MemTotal"] / 2 ** 20
-        if "MemAvailable" in mi:
-            out["free_gb"] = mi["MemAvailable"] / 2 ** 20
-            out["pressure"] = round(100 * (1 - mi["MemAvailable"] / mi["MemTotal"]))
-        if "SwapTotal" in mi and "SwapFree" in mi:
-            out["swap_total_mb"] = mi["SwapTotal"] / 1024
-            out["swap_used_mb"] = (mi["SwapTotal"] - mi["SwapFree"]) / 1024
-        return out
-    _read_macos_memory(out)
+def meminfo_memory(mi: Mapping[str, int]) -> dict[str, Any]:
+    """memory()'s fields from a Linux /proc/meminfo dict (MemAvailable), those it has."""
+    out: dict[str, Any] = dict.fromkeys(MEMORY_FIELDS)
+    out["ram_gb"] = mi["MemTotal"] / 2 ** 20
+    if "MemAvailable" in mi:
+        out["free_gb"] = mi["MemAvailable"] / 2 ** 20
+        out["pressure"] = round(100 * (1 - mi["MemAvailable"] / mi["MemTotal"]))
+    if "SwapTotal" in mi and "SwapFree" in mi:
+        out["swap_total_mb"] = mi["SwapTotal"] / 1024
+        out["swap_used_mb"] = (mi["SwapTotal"] - mi["SwapFree"]) / 1024
     return out
 
 
-def ram_gb() -> float:
-    """GB of RAM: mem_stats', else the C library's page count (review 2026-11-26: a hard-coded 36 GB, a silently wrong
-    budget on any other machine)."""
-    return mem_stats()["ram_gb"] or os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 2 ** 30
+def macos_memory(memsize: str, vm_stat: str, level: str, swapusage: str) -> dict[str, Any]:
+    """memory()'s fields from macOS's sysctl hw.memsize, vm_stat, kern.memorystatus_level (memory_pressure's free %)
+    and vm.swapusage, each None when unreadable."""
+    out: dict[str, Any] = dict.fromkeys(MEMORY_FIELDS)
+    if memsize.strip().isdigit():
+        out["ram_gb"] = int(memsize.strip()) / 2 ** 30
+    page = re.search(r"page size of (\d+) bytes", vm_stat)
+    if page:
+        pages = sum(int(m.group(2)) for m in re.finditer(r"Pages (free|inactive|speculative):\s+(\d+)", vm_stat))
+        out["free_gb"] = pages * int(page.group(1)) / 2 ** 30
+    if level.strip().isdigit():
+        out["pressure"] = 100 - int(level.strip())
+    tot, used = re.search(r"total = ([\d.]+)M", swapusage), re.search(r"used = ([\d.]+)M", swapusage)
+    if tot and used:
+        out["swap_total_mb"], out["swap_used_mb"] = float(tot.group(1)), float(used.group(1))
+    return out
 
 
-def free_gb() -> Optional[float]:
-    """GB of RAM a new heap can have now (free + inactive + speculative pages); $AGENTCTL_GOV_FREE_PROBE's output when
-    set (the tests' seam); None when unreadable."""
-    probe = os.environ.get("AGENTCTL_GOV_FREE_PROBE")
-    if probe:
+def meminfo_pressure(mi: Mapping[str, int]) -> dict[str, Any]:
+    """pressure_memory()'s fields (free_pct, swap_mb) a Linux /proc/meminfo dict gives, those it has."""
+    got: dict[str, Any] = {}
+    if "MemAvailable" in mi:
+        got["free_pct"] = round(100 * mi["MemAvailable"] / mi["MemTotal"])
+    if "SwapTotal" in mi and "SwapFree" in mi:
+        got["swap_mb"] = (mi["SwapTotal"] - mi["SwapFree"]) / 1024
+    return got
+
+
+def sysctl_pressure(text: str) -> dict[str, Any]:
+    """pressure_memory()'s fields (free_pct, level, swap_mb) macOS's one sysctl call gives (kern.memorystatus_level,
+    kern.memorystatus_vm_pressure_level, vm.swapusage), those it has."""
+    lines = text.splitlines()
+    got: dict[str, Any] = {}
+    if len(lines) >= 2 and lines[0].strip().isdigit() and lines[1].strip().isdigit():
+        got["free_pct"], got["level"] = int(lines[0]), int(lines[1])
+    used = re.search(r"used = ([\d.]+)M", "\n".join(lines))
+    if used:
+        got["swap_mb"] = float(used.group(1))
+    return got
+
+
+class HostMachine(MachineProbe):
+    """This host: macOS's sysctl and vm_stat, Linux's /proc (ci-runner, where a check may fall back to running locally),
+    ps and lsof. `meminfo` is the /proc/meminfo path (another file stands for it in a test of the Linux reading)."""
+
+    def __init__(self, meminfo: str = "/proc/meminfo") -> None:
+        self.meminfo = meminfo
+
+    def load_averages(self) -> Optional[tuple[float, float]]:
         try:
-            return float(probe_output(probe).strip())
-        except ValueError:
+            la = os.getloadavg()
+        except OSError:
             return None
-    free: Optional[float] = mem_stats()["free_gb"]
-    return free
+        return la[0], la[1]
+
+    def cores(self) -> int:
+        return os.cpu_count() or 1
+
+    def memory(self) -> dict[str, Any]:
+        mi = read_meminfo(self.meminfo)
+        if mi.get("MemTotal"):
+            return meminfo_memory(mi)
+        return macos_memory(self.sysctl("hw.memsize"), str(run_cmd(["vm_stat"], timeout=10).stdout),
+                            self.sysctl("kern.memorystatus_level"), self.sysctl("vm.swapusage"))
+
+    @staticmethod
+    def sysctl(key: str) -> str:
+        return str(run_cmd(["sysctl", "-n", key], timeout=10).stdout)
+
+    def pressure_memory(self) -> dict[str, Any]:
+        mi = read_meminfo(self.meminfo)
+        if mi.get("MemTotal"):
+            return meminfo_pressure(mi)
+        if sys.platform != "darwin":
+            return {}
+        return sysctl_pressure(str(run_cmd(["sysctl", "-n", "kern.memorystatus_level",
+                                            "kern.memorystatus_vm_pressure_level", "vm.swapusage"], timeout=10).stdout))
+
+    def physical_ram_gb(self) -> float:
+        return float(os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 2 ** 30)
+
+    def tick_busy_cores(self) -> Optional[float]:
+        return machine_busy_cores(self.cores())
+
+    def process_rows(self, cols: tuple[str, ...], pids: tuple[int, ...] = (), wide: bool = False) -> list[PsRow]:
+        return ps_rows(cols, pids, wide)
+
+    def process_cwds(self) -> dict[int, str]:
+        return process_cwds()
+
+    def file_table(self) -> Optional[tuple[int, int]]:
+        try:
+            r = run_cmd(["sysctl", "-n", "kern.num_files", "kern.maxfiles"], timeout=10)
+            num, most = (int(x) for x in r.stdout.split())
+        except (OSError, ValueError):
+            return None
+        return (num, most) if r.returncode == 0 and most > 0 else None
+
+    def open_files(self) -> str:
+        try:
+            return str(run_cmd(["lsof", "-n", "-F", "pc"], timeout=60).stdout)
+        except OSError:
+            return ""
+
+    def disk_free_gb(self, path: Optional[str] = None) -> float:
+        return shutil.disk_usage(disk_path(path)).free / 1e9
+
+    def scratch_roots(self) -> tuple[str, str]:
+        return "/tmp", os.path.join(HOME, "projects")
 
 
-def disk_free_gb(path: Optional[str] = None) -> float:
-    """GB free on path ($AGENTCTL_DISK_PATH, else HOME); the fixed machine's disk_free_gb for the default path."""
-    import shutil
-    fixed = machine_fixed()
-    if path in (None, "", HOME) and not knob_disk_path() and fixed and \
-            fixed.get("disk_free_gb") is not None:  # the default path (maybe_upkeep names HOME itself)
-        return float(fixed["disk_free_gb"])
-    return shutil.disk_usage(path or knob_disk_path() or HOME).free / 1e9
+class FixedMachine(MachineProbe):
+    """A FIXED MACHINE: the tests' one seam (tests/harness.py pins an idle 12-core 36 GB machine, so no test depends on
+    the runner it runs on -- 2026-10-31: GitHub's 4-core hosted runner, with its own load and RAM, failed a dozen
+    governor, check-cap and land tests that pass on the laptop and on ci-runner). Its fields: ram_gb, free_gb, pressure,
+    swap_used_mb, swap_total_mb, load1, load5 (default load1), cores (default 12), busy (default load1; null with
+    no load1: unreadable, read from its ps rows), free_pct, level, disk_free_gb (default 500, whatever the path), physical_ram_gb (default 36), ps (rows
+    of the columns ps_cols names), cwds ({pid: cwd}), file_table ([open, most]), open_files (lsof's text), tmp_root,
+    projects. `path`: a JSON file of them, read again at every reading (a test's other process changes it)."""
+
+    PS_COLS = ("pid", "ppid", "rss", "pcpu", "comm")
+
+    def __init__(self, fields: Optional[dict[str, Any]] = None, path: Optional[str] = None) -> None:
+        self._fields, self.path = dict(fields or {}), path
+
+    def fields(self) -> dict[str, Any]:
+        if self.path is None:
+            return self._fields
+        try:
+            got = json.loads(read_text_or(self.path, "{}"))
+        except ValueError:
+            return {}
+        return got if isinstance(got, dict) else {}
+
+    def update(self, **fields: Any) -> "FixedMachine":
+        """The fields changed in place (a test's machine as it changes); returns itself."""
+        self._fields.update(fields)
+        return self
+
+    def load_averages(self) -> Optional[tuple[float, float]]:
+        f = self.fields()
+        if f.get("load1") is None:
+            return None
+        return float(f["load1"]), float(f.get("load5", f["load1"]))
+
+    def cores(self) -> int:
+        return int(self.fields().get("cores") or 12)
+
+    def memory(self) -> dict[str, Any]:
+        f = self.fields()
+        return {k: f.get(k) for k in MEMORY_FIELDS}
+
+    def pressure_memory(self) -> dict[str, Any]:
+        f = self.fields()
+        return {"free_pct": f.get("free_pct"), "level": f.get("level"), "swap_mb": f.get("swap_used_mb")}
+
+    def physical_ram_gb(self) -> float:
+        return float(self.fields().get("physical_ram_gb") or 36)
+
+    def tick_busy_cores(self) -> Optional[float]:
+        f = self.fields()
+        busy = f.get("busy", f.get("load1"))
+        return None if busy is None else float(busy)
+
+    def process_rows(self, cols: tuple[str, ...], pids: tuple[int, ...] = (), wide: bool = False) -> list[PsRow]:
+        f = self.fields()
+        rows = parse_ps(str(f.get("ps") or ""), tuple(f.get("ps_cols") or self.PS_COLS))
+        return [r for r in rows if r.pid in pids] if pids else rows
+
+    def process_cwds(self) -> dict[int, str]:
+        return {int(pid): str(cwd) for pid, cwd in (self.fields().get("cwds") or {}).items()}
+
+    def file_table(self) -> Optional[tuple[int, int]]:
+        table: Sequence[int] = self.fields().get("file_table") or ()
+        return (int(table[0]), int(table[1])) if len(table) == 2 else None
+
+    def open_files(self) -> str:
+        return str(self.fields().get("open_files") or "")
+
+    def disk_free_gb(self, path: Optional[str] = None) -> float:
+        """Its disk_free_gb (default 500) on whatever path."""
+        return float(self.fields().get("disk_free_gb", 500))
+
+    def scratch_roots(self) -> tuple[str, str]:
+        f = self.fields()
+        return f.get("tmp_root") or os.path.join(HOME, ".no-tmp"), f.get("projects") or os.path.join(HOME, ".no-projects")
 
 
-def machine_sample() -> tuple[float, float, Any, Any]:
-    """(load1, cpu %, memory pressure %, swap used MB) of this machine, cheaply; None where unreadable."""
-    load1 = machine_load1()
-    cpu = min(100.0, 100.0 * load1 / machine_cores())
-    m = mem_stats()
-    return load1, cpu, m["pressure"], m["swap_used_mb"]
+def process_machine() -> MachineProbe:
+    """The process's machine: machine_probe of $AGENTCTL_MACHINE (govknobs.knob_machine)."""
+    return machine_probe(knob_machine())
+
+
+def machine_probe(raw: str) -> MachineProbe:
+    """THE PROCESS'S MACHINE (cli.main's, from $AGENTCTL_MACHINE: govknobs.knob_machine): a fixed machine -- its JSON,
+    or `@<file>` of it, read at every reading -- else this host. A malformed value is this host."""
+    if raw.startswith("@"):
+        return FixedMachine(path=raw[1:])
+    try:
+        fields = json.loads(raw) if raw else None
+    except ValueError:
+        fields = None
+    return FixedMachine(fields) if isinstance(fields, dict) else HostMachine()

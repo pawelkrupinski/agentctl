@@ -34,15 +34,10 @@ class BinWorktreeTest(unittest.TestCase):
                        check=True)
         with open(f, "w") as fh:
             fh.write("edited\n")
-        self.assertTrue(A.inv_wb(A.Clock(), A.CurrentStore(A.process_store))[0], "edited just now: somebody is at it")
+        self.assertTrue(A.inv_wb(A.Clock(), A.CurrentStore(A.process_store), machine=A.FixedMachine())[0], "edited just now: somebody is at it")
         old = A.epoch_now() - 3600
         os.utime(f, (old, old))
-        saved = A.process_cwds
-        A.process_cwds = lambda: {}
-        try:
-            ok, detail = A.inv_wb(A.Clock(), A.CurrentStore(A.process_store))
-        finally:
-            A.process_cwds = saved
+        ok, detail = A.inv_wb(A.Clock(), A.CurrentStore(A.process_store), machine=A.FixedMachine())  # nobody works there
         self.assertFalse(ok)
         self.assertIn("uncommitted edits (agentctl)", detail)
 

@@ -21,7 +21,7 @@ No test depends on the machine it runs on (docs/simplification-2026-10.md, Agent
 - NO THREAD OUTLIVES ITS TEST: a test that leaves a thread it started running (past THREAD_GRACE s after it ends)
   fails, naming it. 2026-11-26 (tests #289 / #285): status reads left sleeping by test_real_elapsed called epoch_now()
   seconds later inside the next test in the worker, a golden faking it, and its digest moved."""
-import os, shutil, signal, subprocess, sys, tempfile, threading, time, types, unittest
+import json, os, shutil, signal, subprocess, sys, tempfile, threading, time, types, unittest
 
 REAL_HOME = os.path.expanduser("~")
 # python3 is the interpreter running the tests (agentctl's `#!/usr/bin/env python3` children run on it too); node: the
@@ -37,6 +37,39 @@ _DROP = {"JAVA_HOME", "GH_TOKEN", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA
 
 class TestTimeout(Exception):
     pass
+
+
+# THE TESTS' MACHINE (machine.FixedMachine's fields): an idle 12-core 36 GB machine, 64 GB of it free, with 500 GB of disk.
+HARNESS_MACHINE = {"ram_gb": 36, "free_gb": 64, "pressure": 10, "swap_used_mb": 0, "swap_total_mb": 0, "load1": 1.0,
+                   "cores": 12, "free_pct": 60, "level": 1, "disk_free_gb": 500}
+
+
+def fixed_machine(**fields):
+    """The tests' machine (HARNESS_MACHINE) with `fields` changed: a FixedMachine a test hands to a reader."""
+    return sys.modules["agentctl.machine"].FixedMachine({**HARNESS_MACHINE, **fields})
+
+
+class MachineFile:
+    """The tests' machine (HARNESS_MACHINE, `fields` changed) in a JSON file: `probe` reads it again at every reading,
+    and so does every process the test starts once its environment names it (env_value: $AGENTCTL_MACHINE)."""
+
+    def __init__(self, path, **fields):
+        self.path, self.fields = path, {**HARNESS_MACHINE, **fields}
+        self.write()
+        self.probe = sys.modules["agentctl.machine"].FixedMachine(path=path)
+
+    def update(self, **fields):
+        self.fields.update(fields)
+        self.write()
+        return self
+
+    def write(self):
+        with open(self.path + ".tmp", "w") as f:
+            json.dump(self.fields, f)
+        os.replace(self.path + ".tmp", self.path)
+
+    def env_value(self):
+        return "@" + self.path
 
 
 def _hermetic_environment():
@@ -66,13 +99,10 @@ def _hermetic_environment():
             # AGENTCTL_GOV_WIDTH: a worker's one core of the suite's ticket (govpool.py), which a pool in a test rides
     # AGENTCTL_LAPTOP_PRESSURE "-": the machine running the tests is never the one under test (2026-10-30: ci-runner
     # at load 95 on 32 cores held every fixer and owner dispatch back -- the owner-restart test failed 3 runs in a row)
-    # AGENTCTL_MACHINE: an idle 12-core 36 GB machine with 500 GB of disk in place of the runner's own (lib/agentctl/gov.py machine_fixed):
+    # AGENTCTL_MACHINE: an idle 12-core 36 GB machine with 500 GB of disk in place of the runner's own (machine.FixedMachine):
     # a 4-core GitHub runner or a loaded laptop must not change what the governor, the check cap or land decide.
     os.environ.update(HOME=home, PATH=f"{hbin}:{SYSTEM_PATH}", GIT_CONFIG_GLOBAL=gitconfig, GIT_CONFIG_NOSYSTEM="1",
-                      AGENTCTL_TEST_HOME=home, AGENTCTL_LAPTOP_PRESSURE="-",
-                      AGENTCTL_MACHINE='{"ram_gb": 36, "free_gb": 20, "pressure": 40, "swap_used_mb": 0, '
-                                       '"swap_total_mb": 0, "load1": 1.0, "cores": 12, "free_pct": 60, "level": 1, '
-                                       '"disk_free_gb": 500}')
+                      AGENTCTL_TEST_HOME=home, AGENTCTL_LAPTOP_PRESSURE="-", AGENTCTL_MACHINE=json.dumps(HARNESS_MACHINE))
 
 
 _hermetic_environment()
@@ -211,10 +241,19 @@ class WiredInbox:
         return sys.modules["agentctl.inboxentry"].inbox_write(*args, **kw)
 
 
+class WiredMachine:
+    """The case's machine: the fixed machine $AGENTCTL_MACHINE names (machine.machine_probe), read at each call, so a
+    test that pins its own machine in the environment reaches a context's readers too."""
+
+    def __getattr__(self, name):
+        machine = sys.modules["agentctl.machine"]
+        return getattr(machine.machine_probe(os.environ.get("AGENTCTL_MACHINE", "")), name)
+
+
 def context_with(runs):
     """A Context over `runs` (a test's own CI reader, or a fake of it) and the case's wired collaborators."""
     return sys.modules["agentctl.context"].Context(runs=runs, clock=WiredClock(), runner=WiredRunner(),
-                                                   inbox=WiredInbox())
+                                                   inbox=WiredInbox(), machine=WiredMachine())
 
 
 def case_context():

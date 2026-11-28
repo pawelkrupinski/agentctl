@@ -343,12 +343,12 @@ class QueueTest(WaitingTest):
         eid, _ = self.queued(wt)
         real, n = A.run_entry_checks, []
 
-        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
+        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None, machine=None):
             n.append(1)
             if len(n) <= 2:  # the same sbt module (web): an overlap, so each move means a new round
                 other, _ = self.agent(f"m{len(n)}", f"web/src/main/M{len(n)}.scala", "m\n", msg=f"main moves {len(n)}")
                 sh(other, "git", "push", "-q", "origin", "HEAD:main")
-            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own, machine=machine)
         A.run_entry_checks = moving
         self.addCleanup(setattr, A, "run_entry_checks", real)
         self.assertEqual(self.check(eid), 0)
@@ -361,13 +361,13 @@ class QueueTest(WaitingTest):
         """Main moves during the first round's checks: one commit per (path, text) landed by another agent."""
         real, n = A.run_entry_checks, []
 
-        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
+        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None, machine=None):
             n.append(1)
             if len(n) == 1:
                 for i, (path, text) in enumerate(moves):
                     other, _ = self.agent(f"m{i}", path, text, msg=f"main moves {i}")
                     sh(other, "git", "push", "-q", "origin", "HEAD:main")
-            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own, machine=machine)
         A.run_entry_checks = moving
         self.addCleanup(setattr, A, "run_entry_checks", real)
         return n
@@ -473,14 +473,14 @@ class QueueTest(WaitingTest):
         eid, _ = self.queued(wt)
         real, n = A.run_entry_checks, []
 
-        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
+        def moving(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None, machine=None):
             n.append(1)
             if len(n) == 1:
                 other = self.r.worktree("wt-del", branch="del")
                 sh(other, "git", "rm", "-q", "scripts/data/venues.tsv")
                 sh(other, "git", "commit", "-q", "-m", "venues gone")
                 sh(other, "git", "push", "-q", "origin", "HEAD:main")
-            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own, machine=machine)
         A.run_entry_checks = moving
         self.addCleanup(setattr, A, "run_entry_checks", real)
         self.assertEqual(self.check(eid), 0)
@@ -760,9 +760,9 @@ class QueueTest(WaitingTest):
         seen = []
         real = A.run_entry_checks
 
-        def recording(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
+        def recording(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None, *, machine):
             seen.append((mode, e.get("verify_areas")))
-            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own, machine=machine)
         A.run_entry_checks = recording
         self.addCleanup(setattr, A, "run_entry_checks", real)
         self.moves_once(("worker/src/test/scala/BSpec.scala", "b\n"), ("docs/n.md", "n\n"))
@@ -778,9 +778,9 @@ class QueueTest(WaitingTest):
         seen = []
         real = A.run_entry_checks
 
-        def recording(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
+        def recording(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None, *, machine):
             seen.append((mode, e.get("verify_areas")))
-            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
+            return real(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own, machine=machine)
         A.run_entry_checks = recording
         self.addCleanup(setattr, A, "run_entry_checks", real)
         self.moves_once(("worker/src/main/W.scala", "w\n"))
@@ -1050,7 +1050,7 @@ class QueueTest(WaitingTest):
         A.precheck_hook = lambda tree: "/hook"
         A.batch_mode = lambda hook: "--fast-only"
         try:  # the server role (the harness's): its batch check goes to the CI tier
-            self.assertEqual(A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "c" * 40, self.clock, A.CurrentStore(A.process_store)), (True, "ok", False))
+            self.assertEqual(A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "c" * 40, self.clock, A.CurrentStore(A.process_store), machine=A.FixedMachine()), (True, "ok", False))
         finally:
             A.remote_check, A.remote_checks_supported, A.precheck_hook, A.batch_mode = saved
         self.assertEqual(seen, [("batch-cccccccccc", "--fast-only")])
@@ -1066,14 +1066,16 @@ class QueueTest(WaitingTest):
         A.remote_checks_supported = lambda tree: True
         A.precheck_hook = lambda tree: "/hook"
         A.batch_mode = lambda hook: "--fast-only"
-        A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "c" * 40, self.clock, A.CurrentStore(A.process_store), cls="red")
-        A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "d" * 40, self.clock, A.CurrentStore(A.process_store))
+        A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "c" * 40, self.clock, A.CurrentStore(A.process_store), cls="red",
+                      machine=A.FixedMachine())
+        A.batch_check(self.r.path, self.r.path, self.r.path, "b" * 40, "d" * 40, self.clock, A.CurrentStore(A.process_store),
+                      machine=A.FixedMachine())
         self.assertEqual(seen, [("batch-cccccccccc", True), ("batch-dddddddddd", False)])
         lanes, real = [], A.batch_check
         self.addCleanup(setattr, A, "batch_check", real)
         A.batch_check = lambda *a, cls="check", **k: lanes.append(cls) or (False, "boom", False)
         A.bisect(self.r.path, self.r.path, [{"id": "a", "tip": "a" * 40}, {"id": "b", "tip": "b" * 40}], "c" * 40,
-                 self.r.path, self.clock, A.CurrentStore(A.process_store), cls="red")
+                 self.r.path, self.clock, A.CurrentStore(A.process_store), cls="red", machine=A.FixedMachine())
         self.assertEqual(set(lanes), {"red"}, "and so is each check of its bisect")
 
     def test_a_check_the_laptop_failed_is_queued_again_not_rejected(self):

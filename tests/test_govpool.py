@@ -2,12 +2,13 @@
 `agentctl gov status` said 0 admitted -- agentctl's pre-push suite and simulator gate, movies' mutation tests, 43 test
 processes, none holding a ticket. Every parallel runner takes its width from one place: a ticket of its own charged its
 workers, or, under a ticket already, none and at most that ticket's width. A guard fails any fan-out outside it."""
-import glob, os, re, subprocess, sys, tempfile, threading, time, unittest
+import glob, json, os, re, subprocess, sys, tempfile, threading, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "lib"))
+from harness import HARNESS_MACHINE  # noqa: E402
 from test_agentctl import TOOL  # noqa: E402  (the hermetic harness: HOME, PATH, the fixed 12-core machine)
 from agentctl.govpool import WIDTH_ENV, GovernorBusy, governed  # noqa: E402
 
@@ -106,8 +107,8 @@ class RealGovernorTest(unittest.TestCase):
         self.d = os.path.join(self.tmp.name, "gov")
         # the suite cap out of the way: the CORES decide (8 + 8 over 12)
         self.base = {**os.environ, "AGENTCTL_SUITE_GOVERNOR": TOOL, "AGENTCTL_GOV_DIR": self.d,
-                     "AGENTCTL_SUITE_CAP": "5", "AGENTCTL_GOV_POLL": "0.1", "AGENTCTL_GOV_LOAD_PROBE": "echo 0",
-                     "AGENTCTL_GOV_PRESSURE_PROBE": "echo 10", "AGENTCTL_GOV_FREE_PROBE": "echo 40"}
+                     "AGENTCTL_SUITE_CAP": "5", "AGENTCTL_GOV_POLL": "0.1",
+                     "AGENTCTL_MACHINE": json.dumps({**HARNESS_MACHINE, "load1": 0.0, "pressure": 10, "free_gb": 40})}
         self.base.pop(WIDTH_ENV, None)
 
     def tearDown(self):

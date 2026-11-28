@@ -226,7 +226,7 @@ class ContactOverTheApiTest(Phase2Base):
         self.assertIsNotNone(self.st.meta_get("contact:laptop"))
 
     def test_the_tests_fixed_machine_is_never_a_machine_the_calls_speak_for(self):
-        """$AGENTCTL_MACHINE is ONE thing, the tests' fixed machine (JSON, machine.machine_fixed): the harness sets it in
+        """$AGENTCTL_MACHINE is ONE thing, the tests' fixed machine (JSON, machine.machine_probe): the harness sets it in
         every test, and a store call spoke for a machine named by that JSON."""
         self.assertTrue(os.environ.get("AGENTCTL_MACHINE", "").startswith("{"), "the harness's fixed machine")
         self.assertNotIn("{", A.contact_machine() or "")

@@ -27,14 +27,9 @@ class GovDirTest(unittest.TestCase):
 
 class LoadSeamTest(unittest.TestCase):
     def test_the_run_queue_reads_the_pinned_machine_like_every_other_load(self):
-        old = os.environ.get("AGENTCTL_MACHINE")
-        os.environ["AGENTCTL_MACHINE"] = '{"load1": 7.5, "cores": 4}'
-        try:
-            self.assertEqual(A.machine_load1(), 7.5)
-            self.assertEqual(A.run_queue(), 7.5)  # was os.getloadavg(): the host's, whatever the test pinned
-            self.assertIsNone(A.run_queue(passed=1.0))
-        finally:
-            os.environ.pop("AGENTCTL_MACHINE") if old is None else os.environ.__setitem__("AGENTCTL_MACHINE", old)
+        m = A.machine_probe('{"load1": 7.5, "cores": 4}')
+        self.assertEqual(m.load1(), 7.5)
+        self.assertEqual(m.run_queue(), 7.5)  # was os.getloadavg(): the host's, whatever the test pinned
 
 
 if __name__ == "__main__":

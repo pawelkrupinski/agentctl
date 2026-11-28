@@ -6,7 +6,6 @@ import json
 from agentctl.statefile import note_failure, read_record
 from agentctl.clock import epoch_now
 from agentctl.govknobs import knob_checks_dir, knob_gov_budget_gb, knob_max_checks
-from agentctl.machine import ram_gb
 from agentctl.govtickets import gov_tickets
 from agentctl.paths import state_root
 
@@ -14,8 +13,9 @@ from agentctl.paths import state_root
 GOV_MEM_GB = {"red": 5.0, "check": 5.0, "agent": 5.0, "measure": 6.0, "hook": 1.0, "suite": 1.0}
 
 
-def gov_budget():
-    return knob_gov_budget_gb(ram_gb())
+def gov_budget(ram_gb: float) -> float:
+    """The memory in GB the governor hands out on a machine of `ram_gb` (MachineProbe.ram_gb)."""
+    return knob_gov_budget_gb(ram_gb)
 
 
 # ---------------------------------------------------------------- check slots
@@ -38,19 +38,20 @@ def checks_dir():
     return d
 
 
-def gov_max_checks():
+def gov_max_checks(ram_gb: float) -> int:
     """The most checks the budget holds: one sbt server's worth of memory each."""
-    return max(1, int(gov_budget() // GOV_MEM_GB["check"]))
+    return max(1, int(gov_budget(ram_gb) // GOV_MEM_GB["check"]))
 
 
 def cap_state():
     return read_record(os.path.join(checks_dir(), "cap.json"), {"cap": CHECKS_DEFAULT_CAP})
 
 
-def checks_cap():
+def checks_cap(ram_gb: float) -> int:
+    """The most checks at once: $AGENTCTL_MAX_CHECKS, else the automatic cap, at most the budget's worth."""
     if knob_max_checks():
         return max(1, int(knob_max_checks()))
-    return max(1, min(gov_max_checks(), int(cap_state().get("cap", CHECKS_DEFAULT_CAP))))
+    return max(1, min(gov_max_checks(ram_gb), int(cap_state().get("cap", CHECKS_DEFAULT_CAP))))
 
 
 def slot_holders(cap=None):

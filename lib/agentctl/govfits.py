@@ -7,10 +7,8 @@ from typing import Any
 from agentctl.statefile import read_record, write_json
 from agentctl.clock import wall_epoch
 from agentctl.cpu import GOV_SATURATED, RUNQ_STARVED, runq_oversubscribed
-from agentctl.machine import machine_cores
-from agentctl.govtickets import gov_dir, gov_log, gov_tickets
+from agentctl.govtickets import gov_dir, gov_log
 from agentctl.govbudget import checks_cap, gov_budget
-from agentctl.pressure import gov_busy_cores
 from agentctl.govknobs import RED_STARVED_CAP, knob_gov_cpu_factor, knob_laptop_load
 from agentctl.govknobs import (
     knob_gov_pool_share, knob_gov_free_need_gb, knob_gov_reserve_gb, knob_gov_resume, knob_gov_spare, knob_gov_starved, knob_suite_cap)
@@ -59,16 +57,15 @@ def _capacity_state(busy: Any, measured: Any, n: Any, prev: Any, queues: Any = N
     return "starved" if prev == "starved" else "ok"
 
 
-def gov_capacity(tickets: list[dict[str, Any]] | None = None, m: dict[str, Any] | None = None) -> dict[str, Any]:
-    """{state: starved | ok | spare, busy, charged, measured, cores, load1}: the laptop's CPU now, with hysteresis (the
-    last state kept in <gov>/capacity.json between GOV_RESUME and GOV_STARVED)."""
-    tickets = gov_tickets() if tickets is None else tickets
-    n = (m or {}).get("cores") or machine_cores()
-    charged, measured = gov_charged(tickets), gov_busy_cores()
+def gov_capacity(tickets: list[dict[str, Any]], m: dict[str, Any]) -> dict[str, Any]:
+    """{state: starved | ok | spare, busy, charged, measured, cores, load1}: the laptop's CPU now (m: gov_machine's
+    reading), with hysteresis (the last state kept in <gov>/capacity.json between GOV_RESUME and GOV_STARVED)."""
+    n = m["cores"]
+    charged, measured = gov_charged(tickets), float(m["busy"])
     busy = max(charged, measured)
     path = os.path.join(gov_dir(), "capacity.json")
     prev = (read_record(path) or {}).get("state", "ok")
-    queues = (m or {}).get("queues")  # the run queue the caller read (gov_machine): no ambient read here
+    queues = m.get("queues")  # the run queue the caller read (gov_machine): no ambient read here
     state = _capacity_state(busy, measured, n, prev, queues)
     if state != prev:
         with suppress(OSError):
@@ -76,7 +73,7 @@ def gov_capacity(tickets: list[dict[str, Any]] | None = None, m: dict[str, Any] 
             gov_log(f"capacity {prev} -> {state}: {busy:.1f} of {n} cores busy ({charged:g} charged, {measured:.1f} "
                     "measured)")
     return {"state": state, "busy": busy, "charged": charged, "measured": measured, "cores": n,
-            "queues": queues, "load1": (m or {}).get("load1")}
+            "queues": queues, "load1": m.get("load1")}
 
 
 def _suite_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: Any) -> Any:
@@ -90,18 +87,19 @@ def _suite_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: A
 
 
 def _check_cap_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: Any) -> Any:
-    """Checks (kind check): at most checks_cap() at once."""
+    """Checks (kind check): at most checks_cap at once."""
     if kind != "check":
         return None
     checks = sum(1 for t in tickets if t.get("kind") == "check")
-    if checks >= checks_cap():
-        return False, f"{checks}/{checks_cap()} checks running (the check cap)", False
+    cap = checks_cap(m["ram_gb"])
+    if checks >= cap:
+        return False, f"{checks}/{cap} checks running (the check cap)", False
     return None
 
 
 def _budget_refusal(cls: Any, mem: Any, tickets: Any, m: Any, kind: Any, cores: Any) -> Any:
     """The tickets' memory plus this work's over the budget."""
-    budget = gov_budget()
+    budget = gov_budget(m["ram_gb"])
     committed = gov_committed(tickets)
     if committed + mem > budget:
         return False, f"{committed:.0f}+{mem:.0f} GB over the {budget:.0f} GB budget", True

@@ -162,7 +162,7 @@ def red_tick_repo(repo, store, registry, snap=None, dispatch=False, *, ctx):
         return []
     with _red_lock:
         _last_red_tick[0] = ctx.clock.time()
-        recheck_local(repo, wait=False)
+        recheck_local(repo, wait=False, machine=ctx.machine)
         acts = red_tick(store, o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch, registry=registry, ctx=ctx)
     for line in acts:
         err(f"red: {line}")

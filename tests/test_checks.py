@@ -5,6 +5,7 @@ import contextlib, io, json, os, subprocess, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+from harness import fixed_machine  # noqa: E402
 from test_agentctl import A, StallSamples, TOOL  # noqa: E402
 
 DAY = 86400
@@ -56,14 +57,14 @@ class AdjustCapTest(unittest.TestCase):
                 with open(os.path.join(A.checks_dir(), "runs.jsonl"), "w") as f:
                     for r in runs(6, 3, 300, pressure=85):
                         f.write(json.dumps(r) + "\n")
-                line = A.maybe_adjust_cap()
+                line = A.maybe_adjust_cap(36.0)
                 self.assertIn("CHECK CAP 3 -> 2", line)
-                self.assertEqual(A.checks_cap(), 2)
+                self.assertEqual(A.checks_cap(36.0), 2)
                 self.assertIn("CHECK CAP 3 -> 2", open(os.path.join(A.checks_dir(), "adjust.log")).read())
                 self.assertEqual([e["command"] for e in A.inbox_entries()], ["checks"])
-                self.assertIsNone(A.maybe_adjust_cap(), "at most once a day")
+                self.assertIsNone(A.maybe_adjust_cap(36.0), "at most once a day")
                 os.environ["AGENTCTL_MAX_CHECKS"] = "4"
-                self.assertEqual(A.checks_cap(), 4)
+                self.assertEqual(A.checks_cap(36.0), 4)
             finally:
                 for k, v in saved.items():
                     os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
@@ -74,12 +75,12 @@ class SlotTest(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        keys = ("AGENTCTL_CHECKS_DIR", "AGENTCTL_MAX_CHECKS", "AGENTCTL_GOV_DIR", "AGENTCTL_GOV_FREE_PROBE",
-                "AGENTCTL_GOV_PRESSURE_PROBE", "AGENTCTL_GOV_LOAD_PROBE", "AGENTCTL_GOV_POLL", "KINOWO_SBT_WARM_STATE")
+        keys = ("AGENTCTL_CHECKS_DIR", "AGENTCTL_MAX_CHECKS", "AGENTCTL_GOV_DIR", "AGENTCTL_MACHINE", "AGENTCTL_GOV_POLL",
+                "KINOWO_SBT_WARM_STATE")
         self.saved = {k: os.environ.get(k) for k in keys}
+        self.m = fixed_machine(free_gb=30, pressure=20, load1=1.0)
         os.environ.update(AGENTCTL_CHECKS_DIR=os.path.join(self.tmp.name, "checks"), AGENTCTL_MAX_CHECKS="1",
-                          AGENTCTL_GOV_DIR=os.path.join(self.tmp.name, "gov"), AGENTCTL_GOV_FREE_PROBE="echo 30",
-                          AGENTCTL_GOV_PRESSURE_PROBE="echo 20", AGENTCTL_GOV_LOAD_PROBE="echo 1",
+                          AGENTCTL_GOV_DIR=os.path.join(self.tmp.name, "gov"), AGENTCTL_MACHINE=json.dumps(self.m.fields()),
                           AGENTCTL_GOV_POLL="0.2", KINOWO_SBT_WARM_STATE=os.path.join(self.tmp.name, "sbt-warm"))
         self.procs = []
 
@@ -96,7 +97,7 @@ class SlotTest(unittest.TestCase):
         """Another process holding a check ticket for `seconds`."""
         ready = os.path.join(self.tmp.name, "ready")
         code = (f"import sys, time; sys.path.insert(0, {HERE!r}); from agentctl_view import load; A = load(sys.argv[1])\n"
-                "t = A.gov_admit('check', 1.0, 'land movies-wt-x abc', kind='check')\n"
+                "t = A.gov_admit('check', 1.0, 'land movies-wt-x abc', kind='check', machine=A.machine_probe(A.knob_machine()))\n"
                 "open(sys.argv[2], 'w').close(); time.sleep(float(sys.argv[3]))")
         p = subprocess.Popen([sys.executable, "-c", code, TOOL, ready, str(seconds)])
         self.procs.append(p)
@@ -107,7 +108,7 @@ class SlotTest(unittest.TestCase):
     def take(self):
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            with A.check_slot("/repo", "land test") as slot:
+            with A.check_slot("/repo", "land test", machine=self.m) as slot:
                 slot.done(0, "")
         return err.getvalue()
 
@@ -134,13 +135,13 @@ class SlotTest(unittest.TestCase):
     def test_a_red_fix_skips_the_check_cap(self):
         self.holder(30)
         t0 = time.time()
-        with A.check_slot("/repo", "land fix", "red") as slot:
+        with A.check_slot("/repo", "land fix", "red", machine=self.m) as slot:
             self.assertEqual(slot.env({})["KINOWO_GOV_CLASS"], "red")
         self.assertLess(time.time() - t0, 5)
 
     def test_a_checks_ticket_carries_its_hooks_cores(self):
         """The hook's sbt-warm calls take no cores ticket of their own: the check's is charged them (2026-11-18)."""
-        with A.check_slot("/repo", "land x") as slot:
+        with A.check_slot("/repo", "land x", machine=self.m) as slot:
             self.assertEqual(slot.env({})["KINOWO_GOV_CPU_HELD"], "1")
             self.assertEqual(slot.ticket.rec["cores"], A.GOV_JOB_CORES["check"])
 

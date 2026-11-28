@@ -162,16 +162,8 @@ def knob_sleep_log() -> str:
     return env_text("AGENTCTL_SLEEP_LOG")  # a file standing for `pmset -g log` (tests)
 
 
-def knob_gov_busy_probe() -> str:
-    return env_text("AGENTCTL_GOV_BUSY_PROBE")  # a command printing the busy cores (tests)
-
-
-def knob_gov_load_probe() -> str:
-    return env_text("AGENTCTL_GOV_LOAD_PROBE")  # a command printing the load, read as the busy cores (tests)
-
-
-def knob_gov_ps_probe() -> str:
-    return env_text("AGENTCTL_GOV_PS_PROBE")  # a file of ps `pcpu args` rows (tests)
+def knob_machine() -> str:
+    return env_text("AGENTCTL_MACHINE")  # the tests' fixed machine: its JSON, or `@<file>` of it (machine.machine_probe)
 
 
 def knob_laptop_pressure() -> str | None:

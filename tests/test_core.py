@@ -19,21 +19,6 @@ class RunCmdTest(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout), (0, "out\n"))
         self.assertEqual(A.run_cmd(["cat"], input="x").stdout, "x")
 
-    def test_a_hung_gov_probe_never_holds_the_dispatch_gate(self):
-        saved = os.environ.get("AGENTCTL_GOV_FREE_PROBE")
-        os.environ["AGENTCTL_GOV_FREE_PROBE"] = "sleep 120"
-        saved_run = A.run_cmd
-        A.run_cmd = lambda a, timeout=60, **kw: saved_run(a, timeout=0.5, **kw)
-        try:
-            self.assertIsNone(A.free_gb())
-        finally:
-            A.run_cmd = saved_run
-            if saved is None:
-                os.environ.pop("AGENTCTL_GOV_FREE_PROBE")
-            else:
-                os.environ["AGENTCTL_GOV_FREE_PROBE"] = saved
-
-
 
 class AttemptTest(unittest.TestCase):
     """THE TRY-DEFAULT SHAPE (2026-11-25): a call's result, or a default on exactly the exceptions the call site names."""
@@ -152,27 +137,6 @@ class PsTimeTest(unittest.TestCase):
         finally:
             A.run_cmd = saved
 
-
-
-class MemStatsTest(unittest.TestCase):
-    def test_linux_reads_proc_meminfo(self):
-        import tempfile
-        with tempfile.NamedTemporaryFile("w", suffix="meminfo", delete=False) as f:
-            f.write("MemTotal:       33554432 kB\nMemFree:  1000 kB\nMemAvailable:    8388608 kB\n"
-                    "SwapTotal:       2097152 kB\nSwapFree:        1048576 kB\n")
-        real = A.read_meminfo
-        A.read_meminfo = lambda path="/proc/meminfo": real(f.name)
-        fixed = os.environ.pop("AGENTCTL_MACHINE", None)  # this test reads the reader itself, not the harness's machine
-        try:
-            m = A.mem_stats()
-            self.assertEqual((m["ram_gb"], m["free_gb"], m["pressure"]), (32.0, 8.0, 75))
-            self.assertEqual((m["swap_used_mb"], m["swap_total_mb"]), (1024.0, 2048.0))
-            self.assertEqual(A.ram_gb(), 32.0)
-        finally:
-            A.read_meminfo = real
-            if fixed is not None:
-                os.environ["AGENTCTL_MACHINE"] = fixed
-            os.unlink(f.name)
 
 
 if __name__ == "__main__":

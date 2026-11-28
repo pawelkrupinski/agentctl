@@ -7,7 +7,6 @@ from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
 from agentctl.govknobs import knob_gov_admit_max, knob_max_checks
 from agentctl.core import err
-from agentctl.machine import machine_sample
 from agentctl.inboxentry import inbox_write
 from agentctl.govbudget import (
     CHECKS_DEFAULT_CAP, GOV_MEM_GB, cap_state, check_runs, checks_cap, checks_dir, gov_max_checks, slot_holders)
@@ -22,7 +21,8 @@ from typing import Any
 
 
 class Slot:
-    def __init__(self, label, cls="check"):
+    def __init__(self, label, cls="check", *, machine):
+        self.machine = machine
         self.label, self.cls, self.ticket, self.waited, self.t0 = label, cls, None, 0.0, None
         self.samples, self.running, self.cap, self._last_sample = [], 0, 0, 0.0
         self.rc, self.out = None, ""  # the check's result: set by done(); None while it runs
@@ -31,7 +31,7 @@ class Slot:
         if force or time.monotonic() - self._last_sample >= 30:  # wall: waits on and times real processes and threads
             self._last_sample = time.monotonic()  # wall: waits on and times real processes and threads
             try:
-                self.samples.append(machine_sample())
+                self.samples.append(self.machine.sample())
             except (OSError, ValueError) as e:  # a reading the machine would not give: the check goes on without it
                 err(f"could not sample the machine for a check: {e}")
 
@@ -48,13 +48,13 @@ class Slot:
 
 
 @contextlib.contextmanager
-def check_slot(repo, label, cls="check"):
+def check_slot(repo, label, cls="check", *, machine):
     """Hold a check ticket of the governor for a pre-commit check run (waiting, with a line saying why, until it is
     admitted). Records the run in runs.jsonl and adjusts the cap afterwards."""
-    slot = Slot(label, cls)
+    slot = Slot(label, cls, machine=machine)
     slot.ticket = gov_admit(cls, GOV_MEM_GB["check"], label, kind="check",
-                            max_wait=knob_gov_admit_max())
-    slot.waited, slot.cap = slot.ticket.waited, checks_cap()
+                            max_wait=knob_gov_admit_max(), machine=machine)
+    slot.waited, slot.cap = slot.ticket.waited, checks_cap(machine.ram_gb())
     slot.running = len(slot_holders())
     slot.t0, slot.rc = time.monotonic(), None  # wall: waits on and times real processes and threads
     slot.sample(force=True)
@@ -65,7 +65,7 @@ def check_slot(repo, label, cls="check"):
         record_check(slot, time.monotonic() - slot.t0)  # wall: waits on and times real processes and threads
         slot.ticket.release()
         try:
-            maybe_adjust_cap()
+            maybe_adjust_cap(machine.ram_gb())
         except (OSError, ValueError, KeyError) as e:  # the cap's files unreadable: kept as it was
             err(f"could not adjust the check cap: {e}")
 
@@ -151,13 +151,13 @@ class CapReview:
         return None
 
 
-def maybe_adjust_cap(now=None):
+def maybe_adjust_cap(ram_gb: float, now=None):
     if knob_max_checks():
         return None
     now = epoch_now() if now is None else now
     st = cap_state()
     cap = int(st.get("cap", CHECKS_DEFAULT_CAP))
-    new, why = adjust_cap(check_runs(7, now), cap, gov_max_checks(), st.get("changed_at"), now)
+    new, why = adjust_cap(check_runs(7, now), cap, gov_max_checks(ram_gb), st.get("changed_at"), now)
     if why is None or new == cap:
         return None
     st = {"cap": new, "changed_at": now, "reason": why, "previous": cap}

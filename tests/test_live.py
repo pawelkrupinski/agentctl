@@ -283,8 +283,8 @@ class StreamServerTest(LiveBase):
         super().setUp()
         os.environ["AGENTCTL_LIVE_POLL"] = "0.05"
         self.saved_cached = A.status_cached
-        A.status_cached = lambda: {"at": 0, "agents": []}
-        self.srv = A.status_page_server("127.0.0.1", 0)
+        A.status_cached = lambda machine: {"at": 0, "agents": []}
+        self.srv = A.status_page_server("127.0.0.1", 0, A.machine_probe(A.knob_machine()))
         self.port = self.srv.server_address[1]
         import threading
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()

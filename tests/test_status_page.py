@@ -164,7 +164,7 @@ class DataTest(Base):
 
     def test_every_section_from_the_store_and_the_filesystem(self):
         st, wt = self.world()
-        d = A.status_data(store=st, now_=T)
+        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T)
         self.assertNotIn("SECRET", json.dumps(d, default=str), "a lease's secret never leaves the process")
         h = d["header"]
         self.assertTrue(h["gate_red"])
@@ -204,7 +204,7 @@ class DataTest(Base):
     def test_a_failing_source_is_an_error_in_its_own_section_only(self):
         st, _wt = self.world()
         st.fail = {"items"}
-        d = A.status_data(store=st, now_=T)
+        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T)
         for k in ("reds", "landing", "conditions"):
             self.assertIn("tunnel is down", d[k]["error"])
         self.assertIsInstance(d["agents"], list)
@@ -218,14 +218,14 @@ class DataTest(Base):
         self.addCleanup(hang.set)
         st.events = lambda after=0, limit=500: hang.wait(3) or orig(after, limit)
         t0 = time.time()
-        d = A.status_data(store=st, now_=T, bound=0.5)
+        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=0.5)
         self.assertLess(time.time() - t0, 2.5)
         self.assertIn("no answer within", d["events"]["error"])
         self.assertIsInstance(d["reds"], list)
 
     def test_the_servers_reads_show_a_slow_source_from_its_last_read(self):
         st, _wt = self.world()
-        d = A.status_data(store=st, now_=T, bound=2, keep=True)
+        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=2, keep=True)
         self.assertEqual(len(d["events"]), A.STATUS_EVENTS)
         self.assertEqual(d["stale"], {})
         self.assertIn("events", d["took"])
@@ -233,15 +233,15 @@ class DataTest(Base):
         orig = st.events
         st.events = lambda after=0, limit=500: gate.wait(10) and orig(after, limit)
         t0 = time.time()
-        d = A.status_data(store=st, now_=T, bound=0.5, keep=True)
+        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=0.5, keep=True)
         self.assertLess(time.time() - t0, 2.5)
         self.assertEqual(len(d["events"]), A.STATUS_EVENTS, "the last finished read, not an error")
         self.assertIn("still reading", d["stale"]["events"])
-        d = A.status_data(store=st, now_=T, bound=0.5, keep=True)
+        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=0.5, keep=True)
         self.assertIn("events", d["stale"], "the read still going is not started twice")
         gate.set()
         A._status_reading["events"].join(10)
-        d = A.status_data(store=st, now_=T, bound=2, keep=True)
+        d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=T, bound=2, keep=True)
         self.assertNotIn("events", d["stale"])
 
     def test_old_fixer_records_are_not_opened(self):
@@ -257,7 +257,7 @@ class DataTest(Base):
     def test_an_unreachable_remote_store(self):
         os.environ["AGENTCTL_STORE_URL"] = "http://127.0.0.1:9"
         try:
-            d = A.status_data(store=A.RemoteStore("http://127.0.0.1:9", tok="x", timeout=1), now_=T)
+            d = A.status_data(machine=A.machine_probe(A.knob_machine()), store=A.RemoteStore("http://127.0.0.1:9", tok="x", timeout=1), now_=T)
         finally:
             os.environ.pop("AGENTCTL_STORE_URL", None)
         self.assertFalse(d["store"]["reachable"])
@@ -382,8 +382,8 @@ class ServerTest(Base):
     def setUp(self):
         super().setUp()
         self.saved_cached = A.status_cached
-        A.status_cached = lambda: {"at": T, "reds": []}
-        self.srv = A.status_page_server("127.0.0.1", 0)
+        A.status_cached = lambda machine: {"at": T, "reds": []}
+        self.srv = A.status_page_server("127.0.0.1", 0, A.machine_probe(A.knob_machine()))
         self.port = self.srv.server_address[1]
         import threading
         threading.Thread(target=self.srv.serve_forever, daemon=True).start()
@@ -445,7 +445,7 @@ class ServerTest(Base):
 
     def test_a_failing_route_is_that_requests_500_alone(self):
         saved = A.status_cached
-        A.status_cached = lambda: 1 / 0
+        A.status_cached = lambda machine: 1 / 0
         try:
             self.assertEqual(self.get("/api/status")[0:2], (500, "error: ZeroDivisionError: division by zero\n"))
         finally:
@@ -505,7 +505,7 @@ class StartTest(Base):
         A._status_page.clear()
         A.port_open = self.patched["port_open"]
         self.saved_warm = A.status_warm
-        A.status_warm = lambda: None
+        A.status_warm = lambda machine: None
 
     def tearDown(self):
         srv = A._status_page.get("server")
@@ -530,12 +530,12 @@ class StartTest(Base):
         A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK = taken.getsockname()[1], self.free_port()
         try:
             with contextlib.redirect_stderr(io.StringIO()) as e:
-                url = A.status_page_start()
+                url = A.status_page_start(A.machine_probe(A.knob_machine()))
         finally:
             taken.close()
         self.assertEqual(url, f"http://agentctl.localhost:{A.STATUS_PAGE_FALLBACK}/")
         self.assertIn("already listens", e.getvalue())
-        self.assertEqual(A.status_page_start(), url, "once per process")
+        self.assertEqual(A.status_page_start(A.machine_probe(A.knob_machine())), url, "once per process")
         self.assertEqual(A.status_page_url(), url)
         opened = os.path.join(self.root, "opened")
         os.environ["AGENTCTL_OPEN"] = os.path.join(self.root, "fake-open")
@@ -551,7 +551,7 @@ class StartTest(Base):
     def test_switched_off(self):
         os.environ["AGENTCTL_STATUS_PAGE"] = "off"
         try:
-            self.assertIsNone(A.status_page_start())
+            self.assertIsNone(A.status_page_start(A.machine_probe(A.knob_machine())))
         finally:
             os.environ.pop("AGENTCTL_STATUS_PAGE")
 

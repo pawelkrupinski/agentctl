@@ -13,7 +13,8 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-from test_agentctl import A  # noqa: E402,F401 (puts lib on the path)
+from test_agentctl import A  # noqa: E402
+from harness import fixed_machine  # noqa: E402,F401 (puts lib on the path)
 
 NOW = 1_000_000.0
 
@@ -33,8 +34,8 @@ def run_gov(module, script):
     log, out = [], io.StringIO()
 
     def record(name, ret):
-        def fake(*a, **k):
-            log.append(f"{name} {a} {sorted(k.items())}")
+        def fake(*a, **k):  # the machine a call reads is the scenario's: what it asked is the rest
+            log.append(f"{name} {a} {sorted((n, v) for n, v in k.items() if n not in ('machine', 'machine_cores'))}")
             return ret(*a, **k) if callable(ret) else ret
         return fake
 
@@ -50,24 +51,23 @@ def run_gov(module, script):
             "gov_route": record("route", script.get("route", ("ci", "free"))),
             "admit_rows": lambda: script.get("rows", []),
             "gov_replay": record("replay", script.get("replayed")),
-            "machine_cores": lambda: 8,
             "idle_servers": lambda: script.get("idle", []),
             "gov_evict": record("evict", script.get("evicted")),
-            "gov_capacity": lambda *a: {"state": "busy", "busy": 6.25, "cores": 8, "charged": 5, "measured": 6.0},
+            "gov_capacity": lambda *a: {"state": "busy", "busy": 6.25, "cores": 8, "charged": 5, "measured": 6.0,
+                                        "load1": 2.5},
             "gov_tickets": lambda: [1, 2, 3],
             "gov_waiters": lambda: [1],
-            "machine_load1": lambda: 2.5,
-            "gov_status": lambda: print("STATUS") or 0,
-            "cmd_checks": lambda ns: print(f"checks {ns.ccmd} {ns.days}") or script.get("checks_rc", 0),
+            "gov_status": lambda machine: print("STATUS") or 0,
+            "cmd_checks": lambda ns, machine: print(f"checks {ns.ccmd} {ns.days}") or script.get("checks_rc", 0),
             "gov_usage": lambda days: usage,
-            "gov_measured_cores": lambda job, rows: None if job == "unmeasured" else 2.0,
+            "gov_measured_cores": lambda job, rows, machine_cores: None if job == "unmeasured" else 2.0,
             "gov_dir": lambda: gdir,
             "time": FakeTime, "epoch_now": FakeTime.time,
         }
         for name, fake in patches.items():
             stack.enter_context(mock.patch.object(module, name, fake))
         stack.enter_context(contextlib.redirect_stdout(out))
-        rc = module.cmd_gov(argparse.Namespace(**script["args"]))
+        rc = module.cmd_gov(argparse.Namespace(**script["args"]), fixed_machine(cores=8, load1=2.5))
     return rc, log, out.getvalue()
 
 

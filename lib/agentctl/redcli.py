@@ -429,7 +429,7 @@ def red_status_text(store: Any, verbose: bool = False, *, ctx: Context) -> str:
     except (Exception, SystemExit):
         stalled = None
     return (f"{stalled}\n" if stalled else "") + render_red_status(status_data(store=store, now_=t, only=("reds", "families", "owners", "dispatcher",
-                                                                    "untracked", "reverts")), verbose)
+                                                                    "untracked", "reverts"), machine=ctx.machine), verbose)
 
 
 def write_red_status_snapshot(store: Any, *, ctx: Context) -> None:

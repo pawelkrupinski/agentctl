@@ -39,7 +39,7 @@ class IssueTest(NoFixerBase):
         [it] = A.process_store().items("issue")
         self.assertEqual((it["state"], it["data"]["text"]), ("open", "land drops the --stash flag"))
         self.assertEqual(os.path.realpath(it["data"]["cwd"]), os.path.realpath(self.r.path))
-        data = A.status_data(store=A.process_store(), bound=10)
+        data = A.status_data(machine=A.machine_probe(A.knob_machine()), store=A.process_store(), bound=10)
         self.assertEqual([i["text"] for i in data["issues"]], ["land drops the --stash flag"])
         self.assertIn('sec("agentctl issues"', A.STATUS_PAGE_HTML)
         rc, out = self.run_tool("issue", "--list")
@@ -47,7 +47,7 @@ class IssueTest(NoFixerBase):
         rc, out = self.run_tool("issue", "--close", it["id"], "--note", "fixed in abc")
         self.assertEqual(rc, 0, out)
         self.assertEqual(A.process_store().item("issue", it["id"])["state"], "closed")
-        self.assertEqual(A.status_data(store=A.process_store(), bound=10)["issues"], [])
+        self.assertEqual(A.status_data(machine=A.machine_probe(A.knob_machine()), store=A.process_store(), bound=10)["issues"], [])
         rc, out = self.run_tool("issue", "--list")
         self.assertIn("no open agentctl issues", out)
 

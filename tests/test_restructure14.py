@@ -451,13 +451,13 @@ class GovFitsTest(unittest.TestCase):
         r = case.rng
         case.put("wall_epoch", lambda: NOW)
         case.fake("env_num", lambda rng, n, d: rng.choice([d, d, d, 0, 1, 2, 3, 6, 10 ** 9]))
-        case.fake("checks_cap", lambda rng: rng.choice([0, 1, 2, 4]))
-        case.fake("gov_budget", lambda rng: rng.choice([4.0, 10.0, 16.0, 40.0]))
+        case.fake("checks_cap", lambda rng, ram_gb: rng.choice([0, 1, 2, 4]))
+        case.fake("gov_budget", lambda rng, ram_gb: rng.choice([4.0, 10.0, 16.0, 40.0]))
         case.fake("gov_capacity", lambda rng, tickets, m: {"state": rng.choice(["starved", "ok", "ok", "spare"]), "busy": rng.choice([0, 3.5, 9.0]),
                                                            "cores": rng.choice([4, 8, 16]), "charged": rng.choice([0, 0, 2.0, 6.5]), "measured": rng.choice([0.5, 7.25])})
         tickets = [{"class": r.choice(["suite", "agent", "red", "check"]), "kind": r.choice(["job", "check", "check"]), "mem": r.choice([0, 1, 2.5, 4, None, "3"]),
                     "at": r.choice([NOW - 10, NOW - 119, NOW - 120, NOW - 500])} for _ in range(r.randint(0, 5))]
-        m = {}
+        m = {"ram_gb": 36.0}  # re-recorded 2026-11-28 (R5): the budget and the check cap read the reading's RAM
         for k, gen in (("free", lambda: r.choice([0.5, 2.0, 3.0, 8.0, 40.0])), ("pressure", lambda: r.choice([10, 74, 75, 76, 90.0])),
                        ("laptop", lambda: r.choice(["", "swapping", None]))):
             if r.random() < 0.7:

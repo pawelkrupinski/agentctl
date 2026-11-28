@@ -27,14 +27,12 @@ import glob
 import os
 import re
 import time
-from typing import Any, Callable, Optional
-from agentctl.psparse import parse_ps
+from typing import Any, Callable, Optional, Sequence
 from agentctl.statefile import note_failure, read_record, read_text_or, write_json
 from agentctl.clock import epoch_now, wall_epoch
 from agentctl.watchknobs import knob_wp_rss_by_name
 from agentctl.core import HOME, run_cmd
-from agentctl.procs import ps_rows
-from agentctl.machine import machine_fixed, ram_gb
+from agentctl.machine import MachineProbe
 from agentctl.govtickets import gov_tickets
 from agentctl.testtmp import TEST_TMP_MAX_AGE
 from agentctl.paths import state_root, tilde
@@ -67,14 +65,9 @@ MONGOD_CACHE_CONF = re.compile(r"^\s*cacheSizeGB\s*:\s*([\d.]+)", re.M)
 ProcRow = tuple[int, int, int, float, str]  # (pid, ppid, rss KB, %cpu, command name)
 
 
-def proc_rows(ps_out: Optional[str] = None) -> list[ProcRow]:
-    """[(pid, ppid, rss KB, %cpu, command name)] of every process (ps), or of `ps_out` (the tests')."""
-    fixed = machine_fixed() if ps_out is None else None  # the tests' fixed machine: its own processes, else none
-    cols = ("pid", "ppid", "rss", "pcpu", "comm")
-    if ps_out is None and fixed is None:
-        found = ps_rows(cols)
-    else:
-        found = parse_ps(ps_out if ps_out is not None else str((fixed or {}).get("ps") or ""), cols)
+def proc_rows(machine: MachineProbe) -> list[ProcRow]:
+    """[(pid, ppid, rss KB, %cpu, command name)] of every process of the machine."""
+    found = machine.process_rows(("pid", "ppid", "rss", "pcpu", "comm"))
     return [(r.pid, r.ppid, r.rss, r.pcpu, os.path.basename(r.comm)) for r in found]
 
 
@@ -163,17 +156,9 @@ def proc_ceiling(name: str, args: str, ram: float, home: str) -> Optional[tuple[
     return read(args, ram, home) if read else None
 
 
-def proc_args(pid: int) -> str:
+def proc_args(machine: MachineProbe, pid: int) -> str:
     """The process's command line (ps), or ''."""
-    try:
-        return str(run_cmd(["ps", "-ww", "-o", "args=", "-p", str(pid)], timeout=10).stdout).strip()
-    except OSError:
-        return ""
-
-
-def no_args(pid: int) -> str:
-    """No command line: the tests' processes, unless they give one."""
-    return ""
+    return " ".join(r.args for r in machine.process_rows(("args",), pids=(pid,), wide=True)).strip()
 
 
 def no_ceiling(pid: int, name: str) -> Optional[tuple[int, str]]:
@@ -304,30 +289,25 @@ def proc_fix(pid: int, name: str, cwd_of: Optional[Callable[[int], Optional[str]
     return "the owner's to look at (agentctl never stops a process it did not start)"
 
 
-def _wp_machine(ps_out: Optional[str], tickets: Optional[list[dict[str, Any]]], args_of: Optional[Callable[[int], str]],
-                ram: Optional[float], home: Optional[str]
-                ) -> tuple[list[dict[str, Any]], Callable[[int, str], Optional[tuple[int, str]]]]:
-    """(the live governor tickets, a process's memory ceiling by pid and name): from the given tickets, command lines,
-    RAM GB and HOME (a VM's config), else the real machine's -- no tickets nor command lines when the processes are the tests' (`ps_out`, or
-    a fixed machine)."""
-    real = ps_out is None and machine_fixed() is None
-    args, gb = args_of or (proc_args if real else no_args), ram if ram is not None else ram_gb()
-    return (tickets if tickets is not None else gov_tickets() if real else []), \
-        lambda pid, name: proc_ceiling(name, args(pid), gb, home or HOME)
+def ceilings_of(machine: MachineProbe, home: str) -> Callable[[int, str], Optional[tuple[int, str]]]:
+    """A process's memory ceiling by pid and name (proc_ceiling): from its command line, the machine's RAM and `home`."""
+    gb = machine.ram_gb()
+    return lambda pid, name: proc_ceiling(name, proc_args(machine, pid), gb, home)
 
 
-def inv_wp(ps_out: Optional[str] = None, now_: Optional[float] = None, state_path: Optional[str] = None,
-           cwd_of: Optional[Callable[[int], Optional[str]]] = None, args_of: Optional[Callable[[int], str]] = None,
-           tickets: Optional[list[dict[str, Any]]] = None, ram: Optional[float] = None,
-           home: Optional[str] = None) -> tuple[bool, str]:
+def inv_wp(machine: MachineProbe, now_: Optional[float] = None, state_path: Optional[str] = None,
+           cwd_of: Optional[Callable[[int], Optional[str]]] = None, tickets: Sequence[dict[str, Any]] = (),
+           home: str = HOME) -> tuple[bool, str]:
     """WP: no process past its own RSS limit (WP_RSS_GB; a ceiling it sets itself plus headroom: a JVM's -Xmx, a mongod's
     WiredTiger cache, a VM's guest memory; a governor ticket's charge) and
     growing for WP_PERSIST_MIN minutes, or over WP_CPU_PCT (a ticket's charged cores) for WP_CPU_MIN minutes (any
-    process: a system daemon too). Its samples are kept in procwatch.json between passes. The tests give `ps_out`
-    (or a fixed machine), and with it `args_of`, `tickets`, `ram` and `home`: none read from the real machine but its RAM and HOME."""
+    process: a system daemon too). Its samples are kept in procwatch.json between passes. The machine's processes, their
+    command lines and its RAM; the live governor tickets (`tickets`: the watchdog passes gov_tickets) and HOME (`home`,
+    a VM's config)."""
     path, t = state_path or state_root("procwatch.json"), now_ if now_ is not None else epoch_now()
     state = read_record(path) or {}
-    found = proc_watch(proc_rows(ps_out), state, t, *_wp_machine(ps_out, tickets, args_of, ram, home))
+    found = proc_watch(proc_rows(machine), state, t, list(tickets),
+                       ceilings_of(machine, home))
     try:
         write_json(path, state)
     except OSError as e:
@@ -337,14 +317,15 @@ def inv_wp(ps_out: Optional[str] = None, now_: Optional[float] = None, state_pat
     return False, "; ".join(f"{name} pid {pid}: {why} -- {proc_fix(pid, name, cwd_of)}" for pid, name, why in found[:5])
 
 
-def _wt_places(tmp_root: Optional[str], projects: Optional[str]) -> tuple[str, str]:
-    """(the temp root, the projects dir) WT reads: the given ones, the tests' fixed machine's (none unless it names
-    them), else /tmp and ~/projects."""
-    fixed = machine_fixed() if tmp_root is None else None
-    if fixed is not None:
-        return (fixed.get("tmp_root") or os.path.join(HOME, ".no-tmp"),
-                projects or fixed.get("projects") or os.path.join(HOME, ".no-projects"))
-    return tmp_root or "/tmp", projects or os.path.join(HOME, "projects")
+def inv_wp_live(machine: MachineProbe, now_: float) -> tuple[bool, str]:
+    """WP as the watchdog checks it: against the governor's live tickets."""
+    return inv_wp(machine, now_=now_, tickets=gov_tickets())
+
+
+def _wt_places(machine: MachineProbe, tmp_root: Optional[str], projects: Optional[str]) -> tuple[str, str]:
+    """(the temp root, the projects dir) WT reads: the given ones, else the machine's (machine.scratch_roots)."""
+    roots = machine.scratch_roots()
+    return tmp_root or roots[0], projects or roots[1]
 
 
 def _older_than(p: str, t: float, secs: float) -> bool:
@@ -354,12 +335,12 @@ def _older_than(p: str, t: float, secs: float) -> bool:
         return False
 
 
-def inv_wt(tmp_root: Optional[str] = None, now_: Optional[float] = None,
+def inv_wt(machine: MachineProbe, tmp_root: Optional[str] = None, now_: Optional[float] = None,
            projects: Optional[str] = None) -> tuple[bool, str]:
     """WT: the test suite's roots past twice the sweep's bound stay under WT_STALE_MAX (upkeep removes the ones no
     runner holds); said with them, how many worktrees hold build output (target/, node_modules)."""
     t = now_ if now_ is not None else wall_epoch()  # against directory mtimes
-    tmp_root, projects = _wt_places(tmp_root, projects)
+    tmp_root, projects = _wt_places(machine, tmp_root, projects)
     stale = [p for p in glob.glob(os.path.join(tmp_root, "agentctl-t-*")) if _older_than(p, t, 2 * TEST_TMP_MAX_AGE)]
     trees = glob.glob(os.path.join(projects, "movies-*"))
     built = sum(1 for w in trees if any(os.path.isdir(os.path.join(w, d)) for d in ("target", "node_modules")))

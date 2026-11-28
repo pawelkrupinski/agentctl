@@ -12,6 +12,7 @@ from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+from harness import WiredMachine  # noqa: E402
 from test_agentctl import A  # noqa: E402,F401 (puts lib on the path)
 from harness import case_context  # noqa: E402
 
@@ -36,7 +37,8 @@ def run(module, script):
 
     def rec(name, ret=None):
         def fake(*a, **k):
-            k.pop("ctx", None)  # the Context is no call data (tests/golden_cases.py)
+            k.pop("ctx", None)  # the Context is no call data (tests/golden_cases.py), nor the machine a call reads
+            a = tuple(x for x in a if not issubclass(type(x), (A.MachineProbe, WiredMachine)))
             log.append(f"{name} {a} {sorted(k.items())}")
             if isinstance(ret, BaseException):
                 raise ret

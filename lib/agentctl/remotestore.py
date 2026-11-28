@@ -24,7 +24,7 @@ from agentctl.paths import state_root
 def contact_machine() -> str | None:
     """The machine this process's store calls speak for (A SILENT MACHINE'S LEASE CLOCKS PAUSE): `laptop` for the
     laptop's agentctl (the sync role on macOS: its holders are `laptop:...`), else None. ($AGENTCTL_MACHINE is the
-    tests' fixed machine, JSON: machine.machine_fixed; it once named this too, so every test's store call spoke for a
+    tests' fixed machine, JSON: machine.machine_probe; it once named this too, so every test's store call spoke for a
     machine named by that JSON.)"""
     return "laptop" if host_role() == "sync" and sys.platform == "darwin" else None
 

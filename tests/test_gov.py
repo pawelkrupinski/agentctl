@@ -6,9 +6,10 @@ import contextlib, io, json, os, subprocess, sys, tempfile, threading, time, uni
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, TOOL  # noqa: E402
+from harness import MachineFile, fixed_machine  # noqa: E402
 
-KEYS = ("AGENTCTL_GOV_CPU_FACTOR", "AGENTCTL_RUNNERS_PAGE_CACHE", "AGENTCTL_GOV_DIR", "AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_PRESSURE_PROBE", "AGENTCTL_GOV_LOAD_PROBE",
-        "AGENTCTL_GOV_POLL", "AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_PS_PROBE", "AGENTCTL_GOV_BUDGET_GB", "AGENTCTL_GOV_RESERVE_GB", "AGENTCTL_GOV_EVICT_SETTLE",
+KEYS = ("AGENTCTL_GOV_CPU_FACTOR", "AGENTCTL_RUNNERS_PAGE_CACHE", "AGENTCTL_GOV_DIR",
+        "AGENTCTL_GOV_POLL", "AGENTCTL_GOV_BUDGET_GB", "AGENTCTL_GOV_RESERVE_GB", "AGENTCTL_GOV_EVICT_SETTLE",
         "KINOWO_SBT_WARM_STATE", "AGENTCTL_CHECKS_DIR", "AGENTCTL_MAX_CHECKS", "AGENTCTL_MACHINE")
 
 
@@ -17,10 +18,11 @@ class GovernorTest(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.d = self.tmp.name
         self.saved = {k: os.environ.get(k) for k in KEYS}
-        self.free = os.path.join(self.d, "free")
-        self.set_free(30)
-        os.environ.update(AGENTCTL_GOV_DIR=os.path.join(self.d, "gov"), AGENTCTL_GOV_FREE_PROBE=f"cat {self.free}",
-                          AGENTCTL_GOV_PRESSURE_PROBE="echo 20", AGENTCTL_GOV_LOAD_PROBE="echo 1", AGENTCTL_GOV_POLL="0.1",
+        # the governor's machine: 30 GB free, pressure 20, load 1 on 12 cores; a file, so `gov admit` processes read it too
+        self.machine_file = MachineFile(os.path.join(self.d, "machine.json"), free_gb=30, pressure=20, load1=1.0)
+        self.m = self.machine_file.probe
+        os.environ.update(AGENTCTL_GOV_DIR=os.path.join(self.d, "gov"), AGENTCTL_MACHINE=self.machine_file.env_value(),
+                          AGENTCTL_GOV_POLL="0.1",
                           AGENTCTL_GOV_BUDGET_GB="20", AGENTCTL_GOV_RESERVE_GB="3", AGENTCTL_GOV_EVICT_SETTLE="0",
                           KINOWO_SBT_WARM_STATE=os.path.join(self.d, "sbt-warm"),
                           AGENTCTL_CHECKS_DIR=os.path.join(self.d, "checks"), AGENTCTL_MAX_CHECKS="2")
@@ -38,12 +40,18 @@ class GovernorTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def set_free(self, gb):
-        with open(self.free, "w") as f:
-            f.write(f"{gb}\n")
+        self.machine_file.update(free_gb=gb)
+
+    def set_load(self, load1):
+        """The load, which is also the busy cores while none is set (FixedMachine)."""
+        self.machine_file.update(load1=float(load1))
+
+    def capacity(self):
+        return A.gov_capacity(A.gov_tickets(), A.gov_machine(self.m))
 
     def admit(self, cls, mem=None, **kw):
         with contextlib.redirect_stderr(io.StringIO()):
-            t = A.gov_admit(cls, mem, f"test {cls}", wait=kw.pop("wait", False), **kw)
+            t = A.gov_admit(cls, mem, f"test {cls}", wait=kw.pop("wait", False), machine=self.m, **kw)
         if t:
             self.tickets.append(t)
         return t
@@ -86,14 +94,15 @@ class GovernorTest(unittest.TestCase):
         self.assertIsNotNone(self.admit("agent", 5))
 
     def test_memory_pressure_stops_all_but_red_until_90(self):
-        os.environ["AGENTCTL_GOV_PRESSURE_PROBE"] = "echo 80"
+        self.machine_file.update(pressure=80)
         self.assertIsNone(self.admit("agent"))
         self.assertIsNone(self.admit("check"))
         self.assertIsNotNone(self.admit("red"))
 
     def test_a_red_fix_is_admitted_whatever_the_memory_budget_or_pressure(self):
         """Nothing stops a gate fix, ever (the owner, 2026-10-31): no budget, free memory or pressure wait for red."""
-        os.environ.update(AGENTCTL_GOV_PRESSURE_PROBE="echo 99", AGENTCTL_GOV_BUDGET_GB="1")
+        self.machine_file.update(pressure=99)
+        os.environ.update(AGENTCTL_GOV_BUDGET_GB="1")
         self.set_free(0)
         self.assertIsNone(self.admit("check"))
         self.assertIsNotNone(self.admit("red", 5))
@@ -101,21 +110,20 @@ class GovernorTest(unittest.TestCase):
     def test_laptop_pressure_holds_other_work_with_its_reason(self):
         os.environ["AGENTCTL_LAPTOP_PRESSURE"] = "kernel memory pressure warn (level 2)"
         try:
-            ok, why, _ = A.gov_fits("agent", 1, [], A.gov_machine())
+            ok, why, _ = A.gov_fits("agent", 1, [], A.gov_machine(self.m))
             self.assertEqual((ok, why), (False, "laptop pressure: kernel memory pressure warn (level 2)"))
-            self.assertTrue(A.gov_fits("red", 1, [], A.gov_machine())[0])
+            self.assertTrue(A.gov_fits("red", 1, [], A.gov_machine(self.m))[0])
         finally:
             os.environ["AGENTCTL_LAPTOP_PRESSURE"] = "-"
 
     def set_busy(self, cores):
-        os.environ["AGENTCTL_GOV_BUSY_PROBE"] = f"echo {cores}"
+        self.machine_file.update(busy=float(cores))
 
     def m18(self):
-        return {"cores": 18, "queues": A.run_queues()}
+        return {"cores": 18, "queues": self.m.load_averages(), "busy": A.gov_busy_cores(self.m)}
 
     def machine(self, load1, load5, cores=18):
-        os.environ["AGENTCTL_MACHINE"] = json.dumps({"ram_gb": 36, "free_gb": 20, "pressure": 40, "swap_used_mb": 0,
-            "swap_total_mb": 0, "load1": load1, "load5": load5, "cores": cores, "free_pct": 60, "level": 1})
+        self.machine_file.update(load1=float(load1), load5=float(load5), cores=cores)
 
     def test_a_sustained_run_queue_starves_the_governor_however_few_cores_read_busy(self):
         """2026-11-27 10:30Z: uptime 91 / 118 / 120 on 18 cores (bursts of ~25 short `node` processes), yet gov status said
@@ -128,7 +136,7 @@ class GovernorTest(unittest.TestCase):
         self.assertIsNone(self.admit("agent", 1), "paused on the run queue")
         self.assertIsNone(self.admit("check", 1))
         self.assertIsNotNone(self.admit("red", 1), "a red fix never waits")
-        ok, why, _ = A.gov_fits("agent", 1, [], dict(A.gov_machine(), cores=18))
+        ok, why, _ = A.gov_fits("agent", 1, [], dict(A.gov_machine(self.m), cores=18))
         self.assertFalse(ok)
         self.assertIn("run queue 100", why)
         self.machine(100, 10)
@@ -154,23 +162,23 @@ class GovernorTest(unittest.TestCase):
         """The owner, 2026-11-19: "if cpu is starved then pause until we have enough resources and resume when we have
         too much". Work waits once the cores busy pass 1.0x the machine's and goes again only under 0.8x (hysteresis:
         no thrashing at the line); red never waits."""
-        n = A.machine_cores()
+        n = self.m.cores()
         self.set_busy(n * 0.9)
-        self.assertEqual(A.gov_capacity()["state"], "ok")
+        self.assertEqual(self.capacity()["state"], "ok")
         self.assertIsNotNone(self.admit("agent", 1))
         self.set_busy(n * 1.1)
-        self.assertEqual(A.gov_capacity()["state"], "starved")
+        self.assertEqual(self.capacity()["state"], "starved")
         self.assertIsNone(self.admit("agent", 1), "starved: paused")
         self.assertIsNone(self.admit("check", 1), "a check pauses too")
         self.assertIsNotNone(self.admit("red", 1), "a red fix never waits")
         self.set_busy(n * 0.9)
-        self.assertEqual(A.gov_capacity()["state"], "starved", "between the marks: still paused")
+        self.assertEqual(self.capacity()["state"], "starved", "between the marks: still paused")
         self.assertIsNone(self.admit("agent", 1))
         self.set_busy(n * 0.7)
-        self.assertEqual(A.gov_capacity()["state"], "ok")
+        self.assertEqual(self.capacity()["state"], "ok")
         self.assertIsNotNone(self.admit("agent", 1), "under 0.8x: resumed")
         self.set_busy(n * 0.2)
-        self.assertEqual(A.gov_capacity()["state"], "spare")
+        self.assertEqual(self.capacity()["state"], "spare")
 
     def test_busy_cores_are_measured_without_the_waiters_and_idle_claude_sessions(self):
         """2026-11-19 16:33: the load average read 46 on 18 cores while the processes used 5.2 cores -- the load counts
@@ -183,40 +191,33 @@ class GovernorTest(unittest.TestCase):
                     "  3.0 /Users/x/.local/bin/claude --bg\n"
                     " 80.0 /Users/x/.local/bin/claude\n"
                     " 20.0 git status\n")
-        os.environ.pop("AGENTCTL_GOV_LOAD_PROBE", None)
-        os.environ["AGENTCTL_GOV_PS_PROBE"] = f"cat {ps}"
-        self.assertAlmostEqual(A.gov_busy_cores(), 3.5)
+        with open(ps) as f:
+            self.machine_file.update(busy=None, ps=f.read(), ps_cols=["pcpu", "args"])  # its own ticks unreadable
+        self.assertAlmostEqual(A.gov_busy_cores(self.m), 3.5)
 
-    def test_a_probe_is_argv_never_a_shell_command(self):
-        """Review 2026-11-26 (D B1): the governor ran $AGENTCTL_GOV_*_PROBE through `shell=True`, so any such variable
-        was a shell command it ran (`;`, `$(...)`, pipes). Now each is argv: the `;` is an argument of echo."""
+    def test_the_governor_runs_no_command_the_environment_names(self):
+        """Review 2026-11-26 (D B1): the governor ran $AGENTCTL_GOV_*_PROBE (a shell string, later argv) for its free
+        memory, load, busy cores and process table: any such variable was a command the governor ran. The machine is
+        a MachineProbe now, picked once by cli: no reading runs a command an environment variable names."""
         marker = os.path.join(self.d, "ran")
-        saved = {k: os.environ.get(k) for k in ("AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_LOAD_PROBE")}
+        for k in ("AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_LOAD_PROBE", "AGENTCTL_GOV_PRESSURE_PROBE",
+                  "AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_PS_PROBE"):
+            os.environ[k] = f"touch {marker}"
         try:
-            os.environ["AGENTCTL_GOV_FREE_PROBE"] = f"echo 5; touch {marker}"
-            self.assertIsNone(A.free_gb())
-            os.environ["AGENTCTL_GOV_LOAD_PROBE"] = f"echo 2 && touch {marker}"
-            self.assertEqual(A.gov_busy_cores(), 0.0)
-            self.assertFalse(os.path.exists(marker), "the probe ran through a shell")
-            os.environ["AGENTCTL_GOV_FREE_PROBE"] = "echo 5"
-            self.assertEqual(A.free_gb(), 5.0)
+            m = A.gov_machine(self.m)
+            self.assertEqual((m["free"], m["pressure"], m["busy"]), (30.0, 20, 1.0), "the machine's own readings")
+            out = subprocess.run([sys.executable, TOOL, "gov", "capacity"], capture_output=True, text=True, timeout=60)
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertFalse(os.path.exists(marker), "a probe command ran")
         finally:
-            for k, v in saved.items():
-                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
-
-    def test_ram_unread_is_the_machines_own_not_a_fixed_36_gb(self):
-        """Review 2026-11-26 (D I3): ram_gb fell back to a hard-coded 36 GB when its probes read nothing."""
-        saved = os.environ.get("AGENTCTL_MACHINE")
-        os.environ["AGENTCTL_MACHINE"] = json.dumps({"free_gb": 10})
-        try:
-            self.assertAlmostEqual(A.ram_gb(), os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 2 ** 30)
-        finally:
-            os.environ.pop("AGENTCTL_MACHINE") if saved is None else os.environ.__setitem__("AGENTCTL_MACHINE", saved)
+            for k in ("AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_LOAD_PROBE", "AGENTCTL_GOV_PRESSURE_PROBE",
+                      "AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_PS_PROBE"):
+                os.environ.pop(k, None)
 
     def test_capacity_prints_one_line(self):
-        self.set_busy(A.machine_cores() * 0.2)
+        self.set_busy(self.m.cores() * 0.2)
         with contextlib.redirect_stdout(io.StringIO()) as out:
-            rc = A.cmd_gov(A.argparse.Namespace(gcmd="capacity"))
+            rc = A.cmd_gov(A.argparse.Namespace(gcmd="capacity"), self.m)
         self.assertEqual(rc, 0)
         line = out.getvalue().strip()
         self.assertRegex(line, r"^spare: [\d.]+ of \d+ cores busy")
@@ -302,7 +303,7 @@ class GovernorTest(unittest.TestCase):
         self.procs.append(p)
         stub = os.path.join(root, "scripts", "sbt-warm")
         with open(stub, "w") as f:
-            f.write(f"#!/bin/sh\necho \"$*\" >> {self.d}/stops-{name}\nkill {p.pid}\necho 30 > {self.free}\n")
+            f.write(f"#!/bin/sh\necho \"$*\" >> {self.d}/stops-{name}\nkill {p.pid}\necho '{json.dumps(dict(self.machine_file.fields, free_gb=30))}' > {self.machine_file.path}\n")
         os.chmod(stub, 0o755)
         state = os.environ["KINOWO_SBT_WARM_STATE"]
         os.makedirs(state, exist_ok=True)
@@ -381,10 +382,10 @@ class GovernorTest(unittest.TestCase):
     # ---------------------------------------------------------------- cores (the owner, 2026-11-18)
     def test_cores_are_charged_and_hold_work_past_the_machine_cores(self):
         """8 JVMs on 40 of 77 GB drove 18 cores to a load of 100: memory alone over-admits CPU-bound work."""
-        cores = A.machine_cores()  # 12, the harness's machine
+        cores = self.m.cores()  # 12, the harness's machine
         for _ in range(cores // 4):
             self.assertIsNotNone(self.admit("agent", 1, job="testUnit"))
-        ok, why, on_mem = A.gov_fits("agent", 1, A.gov_tickets(), A.gov_machine(), cores=4)
+        ok, why, on_mem = A.gov_fits("agent", 1, A.gov_tickets(), A.gov_machine(self.m), cores=4)
         self.assertEqual((ok, on_mem), (False, False))
         self.assertIn(f"cores: {cores} charged", why)
         self.assertIsNone(self.admit("agent", 1, job="compile"))
@@ -394,12 +395,12 @@ class GovernorTest(unittest.TestCase):
     def test_the_load_counts_when_it_is_above_the_charged_cores(self):
         """What holds no ticket (a browser, Xcode) is in the load; a burst not yet in the 1-min load is in the charge."""
         self.assertIsNotNone(self.admit("agent", 1, job="testUnit"))
-        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = "echo 10"
+        self.set_load(10)
         self.assertIsNone(self.admit("agent", 1, job="testUnit"), "max(4 charged, load 10) + 4 > 12")
-        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = "echo 6"
+        self.set_load(6)
         self.assertIsNotNone(self.admit("agent", 1, job="testUnit"), "max(4, 6) + 4 <= 12")
         os.environ["AGENTCTL_GOV_CPU_FACTOR"] = "2"
-        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = "echo 1"
+        self.set_load(1)
         self.assertIsNotNone(self.admit("agent", 1, job="testUnit"), "the factor scales the cap: 8 + 4 <= 24")
 
     def test_a_ticket_of_no_cores_never_waits_on_cores(self):
@@ -414,7 +415,7 @@ class GovernorTest(unittest.TestCase):
         """THE GRANTED WIDTH (2026-11-26: one movies run-script-tests ticket charged 17 of 18 cores at load 9.8 -- with
         nothing charged the head went whatever it asked -- and every suite waited behind it). A pool asking with a floor
         is charged what the free cores allow, at most GOV_POOL_SHARE of the machine, and the ticket's record says it."""
-        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = "echo 7"  # 7 of the harness's 12 cores busy, nothing charged
+        self.set_load(7)  # 7 of the harness's 12 cores busy, nothing charged
         t = self.admit("agent", 1, cores=11, min_cores=1, job="script-tests")
         self.assertIsNotNone(t, "its floor fits")
         self.assertEqual(A.read_record(t.path[:-5] + ".json")["cores"], 5.0, "12 - 7 busy: the free cores")
@@ -422,7 +423,7 @@ class GovernorTest(unittest.TestCase):
         self.assertIsNotNone(self.admit("agent", 1, job="compile"), "beside it there is room still: 7 + 3 <= 12")
 
     def test_an_idle_machine_grants_a_pool_at_most_its_share(self):
-        os.environ["AGENTCTL_GOV_LOAD_PROBE"] = "echo 0"
+        self.set_load(0)
         t = self.admit("agent", 1, cores=11, min_cores=1, job="script-tests")
         self.assertEqual(t.rec["cores"], 6.0, "half of the 12 cores (GOV_POOL_SHARE)")
         self.assertIsNotNone(self.admit("suite", 1, cores=4, job="suite"), "a suite still fits beside it")
@@ -431,15 +432,15 @@ class GovernorTest(unittest.TestCase):
 
     def usage(self, job, cores, load1=1.0, n=3, wall=100, meter="tree"):
         for _ in range(n):
-            A.gov_record_usage(job, wall, cores * wall, load1, meter=meter)
+            A.gov_record_usage(job, wall, cores * wall, load1, meter=meter, machine=self.m)
 
     def test_two_testunits_wider_than_the_cores_are_not_both_admitted(self):
         """2026-11-25: every testUnit's ps -S measure missed its forked test JVMs (0.5 cores while the fork ran at 5),
         so the governor charged 0.5 and admitted them all: load 83 on 18 cores. Unmetered runs are not counted."""
         self.usage("testUnit", 0.5, n=10, meter="")
-        self.assertEqual(A.gov_job_cores("testUnit"), 4.0, "the ps -S era's runs say nothing: the default")
+        self.assertEqual(A.gov_job_cores("testUnit", machine_cores=12), 4.0, "the ps -S era's runs say nothing: the default")
         self.usage("testUnit", 7.0)
-        self.assertEqual(A.gov_job_cores("testUnit"), 7.0, "the metered runs' p75")
+        self.assertEqual(A.gov_job_cores("testUnit", machine_cores=12), 7.0, "the metered runs' p75")
         keeper = self.admit("agent", 5, job="keeper")
         self.assertIsNotNone(keeper)
         self.assertIsNotNone(self.admit("agent", 0, job="testUnit"))
@@ -453,18 +454,18 @@ class GovernorTest(unittest.TestCase):
             for _ in range(2):
                 A.main(["gov", "usage", "--job", "test", "--wall", "100", "--cpu", "600", "--load1", "1"])
         self.assertEqual([r["meter"] for r in A.gov_usage()], ["tree", "", ""])
-        self.assertIsNone(A.gov_measured_cores("test"), "one metered run is not enough")
+        self.assertIsNone(A.gov_measured_cores("test", machine_cores=12), "one metered run is not enough")
 
     def test_a_jobs_cores_come_from_its_measured_uncontended_runs(self):
-        self.assertEqual(A.gov_job_cores("testUnit"), 4.0, "the default until measured")
+        self.assertEqual(A.gov_job_cores("testUnit", machine_cores=12), 4.0, "the default until measured")
         self.usage("testUnit", 6.2, n=2)
-        self.assertEqual(A.gov_job_cores("testUnit"), 4.0, "two runs are not enough")
+        self.assertEqual(A.gov_job_cores("testUnit", machine_cores=12), 4.0, "two runs are not enough")
         self.usage("testUnit", 1.0, load1=40, n=5)
-        self.assertEqual(A.gov_job_cores("testUnit"), 4.0, "a starved run (load over the cores) says nothing")
+        self.assertEqual(A.gov_job_cores("testUnit", machine_cores=12), 4.0, "a starved run (load over the cores) says nothing")
         self.usage("testUnit", 6.2, n=1)
-        self.assertEqual(A.gov_job_cores("testUnit"), 6.0, "p75 of the uncontended runs, to the half core")
-        self.assertIsNone(A.gov_record_usage("testUnit", 5, 50), "a 5 s call is not recorded")
-        self.assertEqual(A.gov_job_cores("keeper"), 0.0)
+        self.assertEqual(A.gov_job_cores("testUnit", machine_cores=12), 6.0, "p75 of the uncontended runs, to the half core")
+        self.assertIsNone(A.gov_record_usage("testUnit", 5, 50, machine=self.m), "a 5 s call is not recorded")
+        self.assertEqual(A.gov_job_cores("keeper", machine_cores=12), 0.0)
 
     def test_usage_is_recorded_from_the_command_line(self):
         out = io.StringIO()
@@ -504,25 +505,25 @@ class GovernorTest(unittest.TestCase):
 
     def test_a_job_the_governor_would_hold_goes_to_a_free_ci_lane(self):
         self.lane()
-        self.assertEqual(A.gov_route("testUnit")[0], "local", "admitted now: runs here")
+        self.assertEqual(A.gov_route("testUnit", machine=self.m)[0], "local", "admitted now: runs here")
         for _ in range(3):
             self.admit("agent", 1, job="testUnit")
-        where, why = A.gov_route("testUnit")
+        where, why = A.gov_route("testUnit", machine=self.m)
         self.assertEqual(where, "ci")
         self.assertIn("cores", why)
-        self.assertEqual(A.gov_route("testUnit", cls="red")[0], "local", "a red fix is never held")
+        self.assertEqual(A.gov_route("testUnit", machine=self.m, cls="red")[0], "local", "a red fix is never held")
         self.lane(waiting=["movies-measure"])
-        where, why = A.gov_route("testUnit")
+        where, why = A.gov_route("testUnit", machine=self.m)
         self.assertEqual(where, "local")
         self.assertIn("1 job(s) already wait on movies-measure", why)
         os.environ["AGENTCTL_RUNNERS_PAGE_CACHE"] = os.path.join(self.d, "missing.json")
-        self.assertEqual(A.gov_route("testUnit")[0], "local", "an unread lane is no free lane")
+        self.assertEqual(A.gov_route("testUnit", machine=self.m)[0], "local", "an unread lane is no free lane")
 
     def test_a_waiter_ahead_routes_a_job_to_a_free_lane_too(self):
         self.lane()
         self.waiter("agent", time.time() - 10)
-        self.assertEqual(A.gov_route("testUnit")[0], "ci")
-        self.assertEqual(A.gov_route("testUnit", cls="check")[0], "local", "a check goes before a waiting agent")
+        self.assertEqual(A.gov_route("testUnit", machine=self.m)[0], "ci")
+        self.assertEqual(A.gov_route("testUnit", machine=self.m, cls="check")[0], "local", "a check goes before a waiting agent")
 
     def test_route_from_the_command_line_exits_0_for_ci(self):
         self.lane()
@@ -557,7 +558,7 @@ class GovernorTest(unittest.TestCase):
 
     def test_status_names_each_tickets_job_and_the_cores_outside_any_ticket(self):
         self.admit("agent", 1, job="testUnit")
-        os.environ["AGENTCTL_GOV_BUSY_PROBE"] = "echo 9"
+        self.machine_file.update(busy=9.0)
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
             A.main(["gov", "status"])
@@ -565,7 +566,7 @@ class GovernorTest(unittest.TestCase):
         self.assertIn("outside any ticket: 5.0 of 9.0 busy cores", out.getvalue())
 
     def test_a_checks_hook_runs_its_fanouts_at_the_checks_width(self):
-        slot = A.Slot("lane x")
+        slot = A.Slot("lane x", machine=self.m)
         slot.ticket = self.admit("check", 1, kind="check")
         env = slot.env({"PATH": "/bin"})
         self.assertEqual(env["AGENTCTL_GOV_WIDTH"], "4", "the check's charged cores: a fan-out in its hook rides them")
@@ -590,8 +591,7 @@ class MachineCpuTest(unittest.TestCase):
 
     def setUp(self):
         self.d = tempfile.mkdtemp()
-        self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_GOV_DIR", "AGENTCTL_GOV_BUSY_PROBE", "AGENTCTL_GOV_LOAD_PROBE",
-                                                       "AGENTCTL_GOV_PS_PROBE", "AGENTCTL_MACHINE", "AGENTCTL_LAPTOP_PRESSURE")}
+        self.saved = {k: os.environ.get(k) for k in ("AGENTCTL_GOV_DIR", "AGENTCTL_MACHINE", "AGENTCTL_LAPTOP_PRESSURE")}
         for k in self.saved:
             os.environ.pop(k, None)
         os.environ["AGENTCTL_GOV_DIR"] = self.d
@@ -631,13 +631,8 @@ class MachineCpuTest(unittest.TestCase):
         self.assertIn("load 100/18 (run queue", line)
 
     def test_the_governor_reads_a_saturated_machine_as_starved(self):
-        saved = A.machine_busy_cores, A.machine_cores
         # an 18-core machine all busy -- never the runner's own core count (a 2-core GitHub runner read as `spare`)
-        A.machine_busy_cores, A.machine_cores = (lambda n, **k: float(n)), (lambda: 18)
-        try:
-            cap = A.gov_capacity(tickets=[], m={"cores": 18})
-        finally:
-            A.machine_busy_cores, A.machine_cores = saved
+        cap = A.gov_capacity([], A.gov_machine(fixed_machine(cores=18, busy=18.0)))
         self.assertEqual((cap["state"], cap["measured"]), ("starved", 18.0))
 
 if __name__ == "__main__":

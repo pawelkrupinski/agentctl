@@ -10,9 +10,9 @@ from agentctl.timefmt import hhmmz, parse_time
 from agentctl.watchknobs import (
     knob_w1_max, knob_w2_max, knob_w5_max, knob_w6_max, knob_w7_max, knob_w8_window, knob_wb_max, knob_wf_pct,
     knob_wm_max)
-from agentctl.core import SHORT, git, host_role, run_cmd
+from agentctl.core import SHORT, git, host_role
 from agentctl.repos import bin_repo, movies_repo_path
-from agentctl.procs import process_cwds, ps
+from agentctl.machine import MachineProbe
 from agentctl.launchd import SERVICE_LABEL, launch_agents_dir
 from agentctl.beats import beat_age
 from agentctl.cistate import ci_state_load, snapshot_gate_reds
@@ -20,7 +20,7 @@ from agentctl.context import Context
 from agentctl.agewords import fmt_age
 from agentctl.conditions import open_conditions
 from agentctl.queuehold import hold_recovers_itself
-from agentctl.procwatch import inv_wp, inv_wt
+from agentctl.procwatch import inv_wp_live, inv_wt
 from agentctl.selfci import inv_wa
 from agentctl.redrecord import red_what
 from agentctl.eventprojection import notify_failure
@@ -270,11 +270,11 @@ def inv_wm(clock, st):
         f"maintain last ran {fmt_age(age) + ' ago' if age is not None else 'never'}"
 
 
-def _pids_working_in(br: Any) -> Any:
+def _pids_working_in(br: Any, machine: MachineProbe) -> Any:
     """`pid N <command>` of every process whose cwd is in checkout br; [] when the processes cannot be read."""
     try:
-        cwds = process_cwds()
-        names = {pid: cmd for pid, _pp, _e, cmd in ps()}
+        cwds = machine.process_cwds()
+        names = {r.pid: r.args for r in machine.process_rows(("pid", "command"))}
         return [f"pid {p} {names.get(p, '')[:60]}" for p, c in cwds.items()
                 if os.path.realpath(c) == os.path.realpath(br)
                 or os.path.realpath(c).startswith(os.path.realpath(br) + "/")]
@@ -282,7 +282,7 @@ def _pids_working_in(br: Any) -> Any:
         return []
 
 
-def inv_wb(clock, st):
+def inv_wb(clock, st, *, machine):
     """WB: ~/bin's own checkout carries no uncommitted edit older than WB_MAX (work goes in worktrees: an edit there
     blocks every other agent's merge). Names the processes working in it."""
     br = bin_repo()
@@ -295,7 +295,7 @@ def inv_wb(clock, st):
     newest = max((os.path.getmtime(os.path.join(br, f)) for f in files if os.path.exists(os.path.join(br, f))), default=0)
     if clock.time() - newest < knob_wb_max():
         return True, f"{br}: {len(files)} file(s) edited just now"
-    who = _pids_working_in(br)
+    who = _pids_working_in(br, machine)
     return False, (f"{br} has uncommitted edits ({', '.join(files[:4])}) unchanged for {fmt_age(clock.time() - newest)}"
                    + (f"; working there: {'; '.join(who[:3])}" if who else "; nobody works there now") +
                    ": commit them in a worktree of ~/bin")
@@ -305,16 +305,6 @@ WF_VM = "com.apple.Virtualization"
 
 
 WF_VM_RELEASE = "~/.rd/bin/rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'"
-
-
-def file_table_reading():
-    """(kern.num_files, kern.maxfiles), or None where there is no such sysctl (ci-runner's Linux) or it cannot say."""
-    try:
-        r = run_cmd(["sysctl", "-n", "kern.num_files", "kern.maxfiles"], timeout=10)
-        num, most = (int(x) for x in r.stdout.split())
-    except (OSError, ValueError):
-        return None
-    return (num, most) if r.returncode == 0 and most > 0 else None
 
 
 def file_holders(lsof_out):
@@ -331,12 +321,12 @@ def file_holders(lsof_out):
     return sorted(((n, p, names.get(p, "?")) for p, n in counts.items()), key=lambda x: (-x[0], x[1]))
 
 
-def inv_wf(clock, st, reading=False, lsof_out=None):
+def inv_wf(clock, st, *, machine):
     """WF: the system-wide file table under WF_PCT of kern.maxfiles. 2026-11-20 it overflowed (ENFILE: no process
     could open a file): Rancher Desktop's VM held ~200k virtiofs descriptors, one for every file and directory a
     container had seen in ~25 worktrees (`run-script-tests --linux` mounted each; it now mounts fixed copies). Past the
     bound it names the top holders, and for the VM the command that releases what its guest caches."""
-    reading = file_table_reading() if reading is False else reading
+    reading = machine.file_table()
     if not reading:
         return True, "no kern.num_files here"
     num, most = reading
@@ -344,12 +334,7 @@ def inv_wf(clock, st, reading=False, lsof_out=None):
     said = f"{num} of {most} open ({pct}%)"
     if pct < bound:
         return True, said
-    if lsof_out is None:
-        try:
-            lsof_out = run_cmd(["lsof", "-n", "-F", "pc"], timeout=60).stdout
-        except OSError:
-            lsof_out = ""
-    top = file_holders(lsof_out)[:3]
+    top = file_holders(machine.open_files())[:3]
     detail = f"{said}, past {bound:g}%; top: " + \
         ", ".join(f"pid {p} {c} ({n})" for n, p, c in top)
     if top and top[0][2].startswith(WF_VM):
@@ -358,14 +343,19 @@ def inv_wf(clock, st, reading=False, lsof_out=None):
 
 
 # EVERY INVARIANT IS CHECKED AS fn(clock, st): the watchdog's clock and store, from cli (the composition root); one
-# that reads CI runs (READS_CI) as fn(clock, st, ctx=ctx), with the process's context too
+# that reads CI runs (READS_CI) as fn(clock, st, ctx=ctx), with the process's context too; one that reads the machine
+# (READS_MACHINE) as fn(clock, st, machine=machine), with the context's machine probe
 INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "WR": inv_wr, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7,
               "W8": inv_w8, "WA": inv_wa, "WM": inv_wm, "WN": inv_wn, "WF": inv_wf, "WU": inv_wu,
-              "WP": lambda clock, st: inv_wp(now_=clock.time()), "WT": lambda clock, st: inv_wt(now_=clock.time())}
+              "WP": lambda clock, st, machine: inv_wp_live(machine, now_=clock.time()),
+              "WT": lambda clock, st, machine: inv_wt(machine, now_=clock.time())}
 READS_CI = frozenset({"WR", "W2", "WA"})
+READS_MACHINE = frozenset({"WB", "WF", "WP", "WT"})
 
 
 def probe_invariant(a: dict[str, Any], clock: Clock, st: Any, *, ctx: Context) -> Any:
     """The `invariant` probe (cli wires it with the process's clock, store and context): invariant a["id"] checked."""
     check = INVARIANTS[a["id"]]
-    return check(clock, st, ctx=ctx) if a["id"] in READS_CI else check(clock, st)
+    if a["id"] in READS_CI:
+        return check(clock, st, ctx=ctx)
+    return check(clock, st, machine=ctx.machine) if a["id"] in READS_MACHINE else check(clock, st)

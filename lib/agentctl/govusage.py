@@ -3,7 +3,6 @@
 
 from agentctl.statefile import note_failure
 from agentctl.clock import epoch_now
-from agentctl.machine import machine_cores, machine_load1
 from agentctl.govtickets import gov_dir
 from agentctl.percentile import pct
 from typing import Any
@@ -53,23 +52,23 @@ def gov_usage(days=GOV_USAGE_DAYS, now=None):
     return out
 
 
-def uncontended_run(r: Any, job: Any) -> bool:
+def uncontended_run(r: Any, job: Any, machine_cores: int) -> bool:
     """Whether usage record r is a metered (GOV_USAGE_METER) run of `job` that measured cores, long enough, with the load
     at its end within the cores."""
     return bool(r.get("job") == job and r.get("meter") == GOV_USAGE_METER and r.get("cores") is not None and float(r.get("wall") or 0) >= GOV_USAGE_MIN_WALL
-                and r.get("load1") is not None and float(r["load1"]) <= float(r.get("machine_cores") or machine_cores()))
+                and r.get("load1") is not None and float(r["load1"]) <= float(r.get("machine_cores") or machine_cores))
 
 
-def gov_measured_cores(job, usage=None):
+def gov_measured_cores(job, usage=None, *, machine_cores):
     """The job's p75 cores over its uncontended metered runs (uncontended_run: a starved run uses fewer cores than it
     wants), to the half core; None under GOV_USAGE_MIN such runs."""
-    runs = [float(r["cores"]) for r in (gov_usage() if usage is None else usage) if uncontended_run(r, job)]
+    runs = [float(r["cores"]) for r in (gov_usage() if usage is None else usage) if uncontended_run(r, job, machine_cores)]
     if len(runs) < GOV_USAGE_MIN:
         return None
-    return min(float(machine_cores()), max(0.5, round(2 * pct(runs, .75)) / 2))
+    return min(float(machine_cores), max(0.5, round(2 * pct(runs, .75)) / 2))
 
 
-def gov_job_cores(job=None, cls="agent", kind="job"):
+def gov_job_cores(job=None, cls="agent", kind="job", *, machine_cores):
     """The cores a ticket is charged: its job's measured cores, else its default; with no job named, a check's (agentctl's
     own pre-commit check: the hook's sbt) or the suite's, else none (a caller from before cores were charged: memory
     only, as it was)."""
@@ -79,18 +78,18 @@ def gov_job_cores(job=None, cls="agent", kind="job"):
             return 0.0
     if job == "keeper":
         return 0.0
-    measured = gov_measured_cores(job)
+    measured = gov_measured_cores(job, machine_cores=machine_cores)
     return measured if measured is not None else GOV_JOB_CORES.get(job, GOV_JOB_CORES["job"])
 
 
-def gov_record_usage(job, wall, cpu, load1=None, label="", meter=""):
+def gov_record_usage(job, wall, cpu, load1=None, label="", meter="", *, machine):
     """One run's cores (CPU seconds over wall seconds) for the job's measured history, with how it was measured
     (`meter`: only GOV_USAGE_METER's are counted); a run under GOV_USAGE_MIN_WALL is not recorded."""
     if wall < GOV_USAGE_MIN_WALL:
         return None
     rec = {"at": epoch_now(), "job": job, "label": label, "wall": round(wall, 1), "cpu": round(cpu, 1),
-           "cores": round(cpu / wall, 2), "load1": machine_load1() if load1 is None else load1,
-           "machine_cores": machine_cores(), "meter": meter}
+           "cores": round(cpu / wall, 2), "load1": machine.load1() if load1 is None else load1,
+           "machine_cores": machine.cores(), "meter": meter}
     with open(os.path.join(gov_dir(), "usage.jsonl"), "a") as f:
         f.write(json.dumps(rec) + "\n")
     return rec

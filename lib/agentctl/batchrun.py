@@ -97,7 +97,8 @@ RED_PRECHECK_MODE = "--checks-only"  # a waiting batch's pre-check while main is
 BATCH_FULL_MODE = "--range"  # a backlog batch's check: the full landing check a change gets (check/batch-<tip> on CI)
 
 
-def batch_check(repo, d, tree, base, tip, clock, st, cls="check", depth: str = "fast", runs = None, range_base = None):
+def batch_check(repo, d, tree, base, tip, clock, st, cls="check", depth: str = "fast", runs = None, range_base = None, *,
+                machine):
     """The hook's dry run over base..tip in `tree` (depth fast: batch_mode's; full, a backlog batch: the full landing
     check, BATCH_FULL_MODE; verify, a push batch: the combined tree's VERIFY_MODE over range_base..tip, range_base the
     oldest member's full base), on a fresh sbt server, under the stall abort. (ok, output, stalled): a stall -- land's
@@ -112,7 +113,7 @@ def batch_check(repo, d, tree, base, tip, clock, st, cls="check", depth: str = "
     rng_base = (range_base or base) if depth == "verify" else base
     if host_role() == "server" and remote_checks_supported(tree):  # ci-runner: the CI check tier (owner decision 1)
         return _remote_batch_check(repo, tip, base, rng_base, mode, depth, cls, clock, st, runs)
-    return _local_batch_check(repo, d, tree, base, tip, rng_base, hook, mode, cls)
+    return _local_batch_check(repo, d, tree, base, tip, rng_base, hook, mode, cls, machine=machine)
 
 
 def _remote_batch_check(repo, tip, base, rng_base, mode, depth, cls, clock, st, runs):
@@ -126,14 +127,14 @@ def _remote_batch_check(repo, tip, base, rng_base, mode, depth, cls, clock, st, 
     return (ok, out, False) if ok is not None else (False, out, True)
 
 
-def _local_batch_check(repo, d, tree, base, tip, rng_base, hook, mode, cls):
+def _local_batch_check(repo, d, tree, base, tip, rng_base, hook, mode, cls, *, machine):
     """The hook's dry run here, twice at most: a stall is retried once on a fresh sbt server."""
     out = ""
     for attempt in (1, 2):
         git(tree, "checkout", "-q", "--force", "--detach", tip)
         sbt_stop(tree)
         wlog(d, f"checking {base[:10]}..{tip[:10]} (attempt {attempt}, fresh sbt server)")
-        with check_slot(repo, f"waiting batch {tip[:10]}", cls) as slot:
+        with check_slot(repo, f"waiting batch {tip[:10]}", cls, machine=machine) as slot:
             rc, out = run_watched([hook, mode, f"{rng_base}..{tip}"], tree, slot.env(tool_env()),
                                   os.path.join(d, f"check-{tip[:10]}"), f"batch-check-{attempt}", sampler=slot.sample)
             slot.done(rc, out)
@@ -163,13 +164,15 @@ def _first_failing_prefix(check: Any, batch: Any, out_hi: Any) -> Any:
     return lo, out_hi
 
 
-def bisect(repo, d, batch, base, bwt, clock, st, depth: str = "fast", runs = None, failed_out = None, range_base = None, cls="check"):
+def bisect(repo, d, batch, base, bwt, clock, st, depth: str = "fast", runs = None, failed_out = None, range_base = None, cls="check",
+           *, machine):
     """The batch failed: the first entry whose prefix fails (binary search over the prefixes' tips, in the batch's tree
     bwt). (index, output) of the culprit; (None, output) when the whole batch passes on its own again (flaky or infra).
     A backlog or push batch (failed_out: its check's output) is not checked whole again first: each check is a landing
     check's 30-40 min or a verify round's ~10, and the culprit's confirmation below still clears a flaky failure."""
     hi, out_hi = len(batch) - 1, ""
-    check = lambda tip: batch_check(repo, d, bwt, base, tip, clock, st, cls=cls, depth=depth, runs=runs, range_base=range_base)
+    check = lambda tip: batch_check(repo, d, bwt, base, tip, clock, st, cls=cls, depth=depth, runs=runs, range_base=range_base,
+                                    machine=machine)
     if depth in ("full", "verify") and failed_out is not None:
         out_hi = failed_out
     else:

@@ -160,7 +160,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
             ("vendor drift", duty(partial(vendor_drift_step, store, registry.check("vendor_drift"), clock.time, os.path.dirname(TOOL_PATH), vendor_drift_auto(os.path.dirname(TOOL_PATH), state_root("vendor-autosync.json"), clock.time)))),  # vendordrift.py
             ("network watch", lambda: network_watch(store)), ("tunnel probe", lambda: tunnel_watch(store)),
             ("red status snapshot", lambda: run_bounded("red status snapshot", lambda: write_red_status_snapshot(store, ctx=ctx), 1)),
-            ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep(store)]),
+            ("upkeep", lambda: [err(f"upkeep: {x}") for x in maybe_upkeep(store, machine=ctx.machine)]),
             ("root checkout", lambda: [err(x) for x in root_checkout_ff(repo)]),
             ("recovery", lambda: maybe_recovery_tick(store, registry, clock.time())))
 

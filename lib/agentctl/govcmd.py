@@ -4,7 +4,7 @@
 from agentctl.clock import epoch_now
 from agentctl.govknobs import knob_gov_cpu_factor, knob_max_checks
 from agentctl.core import attempt
-from agentctl.machine import machine_cores, machine_load1
+from agentctl.machine import MachineProbe
 from agentctl.govtickets import gov_dir, gov_tickets
 from agentctl.govbudget import cap_state, check_runs, checks_cap, gov_budget, slot_holders
 from agentctl.pressure import pressure_report
@@ -37,30 +37,30 @@ def admit_rows() -> list[Any]:
                 rows.append(json.loads(line))
     return rows
 
-def gov_probe(a: Any) -> int:
+def gov_probe(a: Any, machine: MachineProbe) -> int:
     print("agentctl governor: " + " ".join(GOV_FEATURES))
     return 0
 
 
-def gov_admit_cmd(a: Any) -> int:
+def gov_admit_cmd(a: Any, machine: MachineProbe) -> int:
     t = gov_admit(a.cls, a.mem, a.label or "", kind=a.kind, fd=a.fd, ticket=a.ticket, wait=not a.try_,
-                  force=a.force, pid=a.pid, cwd=a.cwd, cores=a.cores, job=a.job, min_cores=a.min_cores)
+                  force=a.force, pid=a.pid, cwd=a.cwd, cores=a.cores, job=a.job, min_cores=a.min_cores, machine=machine)
     return 0 if t else 1
 
 
-def gov_usage_cmd(a: Any) -> int:
-    rec = gov_record_usage(a.job, a.wall, a.cpu, a.load1, a.label or "", a.meter)
+def gov_usage_cmd(a: Any, machine: MachineProbe) -> int:
+    rec = gov_record_usage(a.job, a.wall, a.cpu, a.load1, a.label or "", a.meter, machine=machine)
     print(f"{a.job}: {rec['cores']:g} cores over {a.wall:g} s" if rec else f"{a.job}: under {GOV_USAGE_MIN_WALL} s, not recorded")
     return 0
 
 
-def gov_cores_cmd(a: Any) -> int:
-    print(f"{gov_job_cores(a.job, a.cls):g}")
+def gov_cores_cmd(a: Any, machine: MachineProbe) -> int:
+    print(f"{gov_job_cores(a.job, a.cls, machine_cores=machine.cores()):g}")
     return 0
 
 
-def gov_route_cmd(a: Any) -> int:
-    where, why = gov_route(a.job, a.cls, a.mem)
+def gov_route_cmd(a: Any, machine: MachineProbe) -> int:
+    where, why = gov_route(a.job, a.cls, a.mem, machine=machine)
     print(f"{where}: {why}")
     return 0 if where == "ci" else 1
 
@@ -69,11 +69,11 @@ def _live_cores(jobs: Any) -> str:
     return ", ".join(f"{label} {cores:g}" for label, cores in jobs) or "-"
 
 
-def gov_replay_cmd(a: Any) -> int:
+def gov_replay_cmd(a: Any, machine: MachineProbe) -> int:
     """`gov replay --at T`: the admissions around T, as admitted and under the cores rule."""
     at = dt.datetime.fromisoformat(a.at.replace("Z", "+00:00")).timestamp()
     rows = [r for r in admit_rows() if abs(float(r.get("at", r.get("end", 0))) - at) <= 12 * 3600]
-    cap = knob_gov_cpu_factor() * (a.cores or machine_cores())
+    cap = knob_gov_cpu_factor() * (a.cores or machine.cores())
     res = gov_replay(rows, cap, at, a.hold * 60)
     print(f"replay at {a.at} (cap {cap:g} cores; a ticket with no end record held {a.hold:g} min):")
     print(f"  as admitted:    {len(res['old'])} live, {sum(c for _, c in res['old']):g} cores: {_live_cores(res['old'])}")
@@ -84,7 +84,7 @@ def gov_replay_cmd(a: Any) -> int:
     return 0
 
 
-def gov_evict_cmd(a: Any) -> int:
+def gov_evict_cmd(a: Any, machine: MachineProbe) -> int:
     if a.dry_run:
         for idle, root, _p in idle_servers():
             print(f"would evict {root} (unused {int(idle // 60)} min)")
@@ -94,17 +94,17 @@ def gov_evict_cmd(a: Any) -> int:
     return 0
 
 
-def gov_capacity_cmd(a: Any) -> int:
+def gov_capacity_cmd(a: Any, machine: MachineProbe) -> int:
     tickets = gov_tickets()
-    cap = gov_capacity(tickets, gov_machine())
+    cap = gov_capacity(tickets, gov_machine(machine))
     print(f"{cap['state']}: {cap['busy']:.1f} of {cap['cores']} cores busy ({cap['charged']:g} charged, "
-          f"{cap['measured']:.1f} measured, load {machine_load1():.1f}); {len(tickets)} admitted, "
+          f"{cap['measured']:.1f} measured, load {cap['load1']:.1f}); {len(tickets)} admitted, "
           f"{len(gov_waiters())} waiting")
     return 0
 
 
-def gov_status_cmd(a: Any) -> int:
-    return gov_status()
+def gov_status_cmd(a: Any, machine: MachineProbe) -> int:
+    return gov_status(machine)
 
 
 def _admit_waits(days: int) -> None:
@@ -119,19 +119,19 @@ def _admit_waits(days: int) -> None:
             print(f"{cls:>7} {len(rs):>6} {pct(w, .5):>8.0f}s {pct(w, .9):>8.0f}s {sum(1 for x in w if x > 60):>9}")
 
 
-def _measured_cores(days: int) -> None:
+def _measured_cores(days: int, machine_cores: int) -> None:
     """A line per job with usage records: its runs and the cores it is charged."""
     usage = gov_usage(days)
     for job in sorted({r.get("job") for r in usage if r.get("job")}):
-        m_ = gov_measured_cores(job, usage)
+        m_ = gov_measured_cores(job, usage, machine_cores=machine_cores)
         print(f"cores {job}: {sum(1 for r in usage if r.get('job') == job)} runs, charged "
-              f"{gov_job_cores(job):g} ({'measured p75' if m_ is not None else 'default'})")
+              f"{gov_job_cores(job, machine_cores=machine_cores):g} ({'measured p75' if m_ is not None else 'default'})")
 
 
-def gov_stats_cmd(a: Any) -> int:
-    rc = cmd_checks(argparse.Namespace(ccmd="stats", days=a.days))
+def gov_stats_cmd(a: Any, machine: MachineProbe) -> int:
+    rc = cmd_checks(argparse.Namespace(ccmd="stats", days=a.days), machine)
     _admit_waits(a.days)
-    _measured_cores(a.days)
+    _measured_cores(a.days, machine.cores())
     ev = attempt(lambda: sum(1 for l in open(os.path.join(gov_dir(), "gov.log")) if " evicted " in l), 0, catch=(OSError,))
     print(f"evictions (all time): {ev}")
     return rc
@@ -142,9 +142,9 @@ GOV_COMMANDS = {"probe": gov_probe, "admit": gov_admit_cmd, "usage": gov_usage_c
                 "status": gov_status_cmd, "stats": gov_stats_cmd}
 
 
-def cmd_gov(a: Any) -> int:
+def cmd_gov(a: Any, machine: MachineProbe) -> int:
     handler = GOV_COMMANDS.get(a.gcmd)
-    return handler(a) if handler else 2
+    return handler(a, machine) if handler else 2
 
 
 def ticket_line(t: dict[str, Any]) -> str:
@@ -154,14 +154,14 @@ def ticket_line(t: dict[str, Any]) -> str:
             f"{t.get('cwd')}")
 
 
-def gov_status() -> int:
+def gov_status(machine: MachineProbe) -> int:
     """`agentctl gov status`: the totals, every live ticket and waiter, the cores outside any ticket, the evictable
     servers and the pressure."""
-    tickets, m = gov_tickets(), gov_machine()
+    tickets, m = gov_tickets(), gov_machine(machine)
     cap = knob_gov_cpu_factor() * m["cores"]
-    print(f"governor: {len(tickets)} admitted, {gov_committed(tickets):.1f}/{gov_budget():.0f} GB committed, "
+    print(f"governor: {len(tickets)} admitted, {gov_committed(tickets):.1f}/{gov_budget(m['ram_gb']):.0f} GB committed, "
           f"{gov_charged(tickets):g}/{cap:g} cores charged, {gov_ramp(tickets):.0f} GB still growing; free {m['free'] if m['free'] is None else round(m['free'], 1)} "
-          f"GB, pressure {m['pressure']}%, load {m['load1']:.1f}/{m['cores']} cores; check cap {checks_cap()}")
+          f"GB, pressure {m['pressure']}%, load {m['load1']:.1f}/{m['cores']} cores; check cap {checks_cap(m['ram_gb'])}")
     for t in tickets:
         print(ticket_line(t))
     capacity = gov_capacity(tickets, m)
@@ -174,7 +174,7 @@ def gov_status() -> int:
     idle = idle_servers()
     if idle:
         print("evictable: " + ", ".join(f"{os.path.basename(r)} ({int(i // 60)} min)" for i, r, _p in idle))
-    why, summary = pressure_report()
+    why, summary = pressure_report(machine)
     print(f"pressure: {why} -- holds all but red fixes [{summary}]" if why else f"pressure: none [{summary}]")
     return 0
 
@@ -188,9 +188,9 @@ def _checks_level_line(level: Any, rs: Any) -> Any:
             f"{pct(wait, .9):>8.0f}s {max(mem) if mem else '-':>8} {int(max(swp)) if swp else '-':>8}")
 
 
-def _checks_stats(a: Any) -> Any:
+def _checks_stats(a: Any, ram_gb: float) -> Any:
     runs = check_runs(a.days)
-    cap = checks_cap()
+    cap = checks_cap(ram_gb)
     st = cap_state()
     print(f"check slots: cap {cap}" + (" ($AGENTCTL_MAX_CHECKS)" if knob_max_checks() else
                                       f" (auto; last change: {st.get('reason', 'none')})")
@@ -201,11 +201,11 @@ def _checks_stats(a: Any) -> Any:
     return 0
 
 
-def cmd_checks(a):
+def cmd_checks(a: Any, machine: MachineProbe) -> int:
     if a.ccmd == "stats":
-        return _checks_stats(a)
+        return _checks_stats(a, machine.ram_gb())
     if a.ccmd == "status":
-        cap = checks_cap()
+        cap = checks_cap(machine.ram_gb())
         holders = slot_holders(cap)
         print(f"checks: {len(holders)}/{cap} running (the governor's check cap; `agentctl gov status` for the rest)"
               + "".join(f"\n  {h}" for h in holders))

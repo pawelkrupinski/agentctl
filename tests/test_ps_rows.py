@@ -42,12 +42,12 @@ class PsReadingsTest(unittest.TestCase):
 
     def test_the_procwatch_rows_take_the_command_name_and_skip_a_garbled_row(self):
         text = "  10 1 2048 3.5 /usr/bin/java\n  x 1 2 3 foo\n  11 10 100\n  12 10 100 0.0 /a/b c\n"
-        self.assertEqual(A.proc_rows(text), [(10, 1, 2048, 3.5, "java"), (12, 10, 100, 0.0, "b c")])
+        self.assertEqual(A.proc_rows(A.FixedMachine({"ps": text})), [(10, 1, 2048, 3.5, "java"), (12, 10, 100, 0.0, "b c")])
 
     def test_the_busy_cores_sum_pcpu_less_waiters_and_idle_claude(self):
         text = "50.0 /bin/java -x\n100 agentctl gov admit --fd 3\n2.0 /usr/bin/claude\nx y\n20.0\n150 node\n"
         with mock.patch.object(A, "run_cmd", ran(text)):
-            self.assertAlmostEqual(A.ps_busy_cores(), 2.0)
+            self.assertAlmostEqual(A.ps_busy_cores(A.HostMachine().process_rows(("pcpu", "args"))), 2.0)
 
     def test_the_orphan_sweep_rows_have_pid_ppid_etime_command(self):
         text = " 10 1 01:02 /usr/bin/java -Xmx1g\n 11 x 01:02 bad\n 12 10 5-01:02:03 sbt a b\n 13 1 00:01\n"

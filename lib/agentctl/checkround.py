@@ -87,7 +87,8 @@ def run_hook_checks(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any, ba
                     cls: Any, log_path: str, clock: Clock, own: Any, *, ctx: Context) -> tuple[int | None, str, Any]:
     """The hook's checks over the change: (the round's exit code when it ended here, else None; where they ran; the
     red they failed only as its base fails, if any). An infra failure (stalled, network, laptop, time cap) requeues."""
-    ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own)
+    ok, out, where = run_entry_checks(repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own,
+                                       machine=ctx.machine)
     if requeued_for_infra(st, repo, d, e, ok, out, where, clock):
         return 0, where, None
     if ok:

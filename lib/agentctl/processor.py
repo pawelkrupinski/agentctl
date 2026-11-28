@@ -125,7 +125,7 @@ def waiting_run(repo: str, clock: Clock, store: Any, registry: ConditionRegistry
         if service:
             keep_awake()  # a plugged-in laptop never sleeps under the service (no-op off macOS)
         if service and role != "server":
-            status_page_start()  # the read-only status page, a daemon thread (see "the status page"); never fatal
+            status_page_start(ctx.machine)  # the read-only status page, a daemon thread (see "the status page"); never fatal
 
         def shared(fn: Callable[[], Any]) -> Callable[[], Any]:  # a step that uses the clone holds it shared: a repair's swap waits for it
             def run() -> Any:

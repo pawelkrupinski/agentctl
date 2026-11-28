@@ -31,6 +31,14 @@ locators stay for every other reader, and `tests/test_no_service_locators.py` fr
 top-level definitions) in READER_CEILINGS, which only fall: the clock 88 / 128, the runner 40 / 55, the inbox writer
 32 / 39. A test's context (`tests/harness.py context_with`) reads whatever the test wired or faked, at each call.
 
+`machine: MachineProbe` (2026-11-28, R5: lib/agentctl/machine.py, the one seam for every read of the machine --
+load, cores, memory, busy cores, process table, cwds, open files, the file table, free disk) joined it the same way:
+cli builds the process's probe once (`machine.process_machine`: this host, or the tests' FixedMachine that
+$AGENTCTL_MACHINE pins) and passes it as a PARAMETER to the governor (`gov_admit(..., machine=)`, `cmd_gov(a,
+machine)`), the condition probes (`partial(probe_disk_free, machine=)`) and the status page; a function holding `ctx`
+unpacks `ctx.machine` where it calls a reader (the land, batch and queue checks' `check_slot`, the watchdog's
+READS_MACHINE invariants, the upkeep step, `red status`).
+
 The store, the condition registry and an explicit `clock` stay their own parameters where they are already passed
 (830 functions take a store). Folding them into the context is a later cleanup, made where a function is changed
 anyway, never in a sweep.

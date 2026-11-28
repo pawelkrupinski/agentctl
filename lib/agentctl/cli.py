@@ -33,6 +33,7 @@ from agentctl.store import CurrentStore
 from agentctl.timelinecmd import cmd_analyze, cmd_history
 from agentctl.ciruns import CiRuns
 from agentctl.context import Context
+from agentctl.machine import MachineProbe, process_machine
 from agentctl.ciwhy import gate_from_snap, outside_from_snap
 from agentctl.leases import cmd_lease
 from agentctl.laptoprole import cmd_laptop
@@ -80,7 +81,8 @@ def condition_registry(clock: Clock, store: Any, ctx: Context) -> ConditionRegis
     them (the watchdog's invariants, a change's source, a red's newer run, the queue's movement), the context into
     those reading CI runs, and the recovery actions."""
     return ConditionRegistry(
-        [probe_disk_free, probe_run_queue, partial(probe_quota_reset, ctx=ctx), probe_waiting_ok, probe_workflow_green, probe_http, probe_tcp, probe_route,
+        [partial(probe_disk_free, machine=ctx.machine), partial(probe_run_queue, machine=ctx.machine),
+         partial(probe_quota_reset, ctx=ctx), probe_waiting_ok, probe_workflow_green, probe_http, probe_tcp, probe_route,
          probe_tunnel, probe_gate_read, probe_token, probe_git_fetch, probe_clone_health, probe_red_read,
          partial(probe_orphan_landed, store=store), partial(probe_invariant, clock=clock, st=store, ctx=ctx),
          partial(probe_change_source, store=store), partial(probe_push_credential, st=store),
@@ -90,10 +92,10 @@ def condition_registry(clock: Clock, store: Any, ctx: Context) -> ConditionRegis
         {"clear_hold": recover_clear_hold, "tunnel_reset": recover_tunnel_reset, "clear_flag": recover_clear_flag})
 
 
-def process_context(clock: Clock, runner: ProcessRunner, inbox: InboxWriter) -> Context:
+def process_context(clock: Clock, runner: ProcessRunner, inbox: InboxWriter, machine: MachineProbe) -> Context:
     """The process's Context (docs/design/contexts.md): its one CI runs reader (CiRuns: what was read of GitHub's runs
-    and jobs), new for each main, and the clock, process runner and inbox writer main wired."""
-    return Context(runs=CiRuns(), clock=clock, runner=runner, inbox=inbox)
+    and jobs), new for each main, and the clock, process runner, inbox writer and machine main wired."""
+    return Context(runs=CiRuns(), clock=clock, runner=runner, inbox=inbox, machine=machine)
 
 
 def wire_collaborators(clock: Clock, store: Any) -> InboxWriter:
@@ -132,13 +134,14 @@ def main(argv: list[str] | None = None, clock: Clock | None = None, runner: Proc
     inbox = wire_collaborators(clock, store)
     runner = runner or ProcessRunner()
     wire_runner(runner)
-    ctx = process_context(clock, runner, inbox)
+    machine = process_machine()
+    ctx = process_context(clock, runner, inbox, machine)
     registry = condition_registry(clock, store, ctx)
     if (sys.argv[1:] if argv is None else argv) == ["--selftest"]:
         return selftest(ctx)
     a = parser().parse_args(argv)
     handler: Callable[[argparse.Namespace], Any] = {"maintain": with_store(cmd_maintain, store), "reap": lambda a: cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True)),
-               "red": lambda a: cmd_red(a, clock, store, registry, ctx=ctx), "decide": with_store(partial(cmd_decide, ctx=ctx), store), "config": cmd_config, "issue": with_store(cmd_issue, store), "revert": with_store(cmd_revert, store), "dispatch": cmd_dispatch, "gov": cmd_gov, "suite": cmd_suite, "checks": cmd_checks, "inbox": with_store(cmd_inbox, store), "recover": lambda a: cmd_recover(a, store, registry), "watchdog": lambda a: cmd_watchdog(a, clock, store, registry, ctx=ctx), "lease": with_store(cmd_lease, store), "laptop": with_store(cmd_laptop, store), "status": with_store(partial(cmd_status, ctx=ctx), store), "queue": cmd_queue_retired, "tick": lambda a: cmd_tick(a, clock, store, registry, ctx=ctx), "store": lambda a: cmd_store(a, ctx=ctx), "github-app": cmd_github_app, "waiting": lambda a: cmd_waiting(a, clock, store, registry, ctx=ctx), "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": with_store(cmd_supersede, store), "park": with_store(cmd_park, store), "unpark": cmd_unpark, "watch": lambda a: cmd_watch(a, clock, store, ctx=ctx), "sweep": with_store(cmd_sweep, store), "ci-why": with_store(partial(cmd_ci_why, ctx=ctx), store), "land": lambda a: cmd_land(a, clock, store, ctx=ctx), "land-precheck": with_store(partial(cmd_land_precheck, ctx=ctx), store), "env": cmd_env, "history": lambda a: cmd_history(a, store, clock.time), "analyze": lambda a: cmd_analyze(a, store, clock.time)}[a.cmd]
+               "red": lambda a: cmd_red(a, clock, store, registry, ctx=ctx), "decide": with_store(partial(cmd_decide, ctx=ctx), store), "config": cmd_config, "issue": with_store(cmd_issue, store), "revert": with_store(cmd_revert, store), "dispatch": cmd_dispatch, "gov": lambda a: cmd_gov(a, machine), "suite": cmd_suite, "checks": lambda a: cmd_checks(a, machine), "inbox": with_store(cmd_inbox, store), "recover": lambda a: cmd_recover(a, store, registry), "watchdog": lambda a: cmd_watchdog(a, clock, store, registry, ctx=ctx), "lease": with_store(cmd_lease, store), "laptop": with_store(cmd_laptop, store), "status": with_store(partial(cmd_status, ctx=ctx), store), "queue": cmd_queue_retired, "tick": lambda a: cmd_tick(a, clock, store, registry, ctx=ctx), "store": lambda a: cmd_store(a, ctx=ctx), "github-app": cmd_github_app, "waiting": lambda a: cmd_waiting(a, clock, store, registry, ctx=ctx), "wait": cmd_wait, "state": cmd_state, "prepush-check": cmd_prepush, "cleanup": cmd_cleanup, "orphans": cmd_orphans, "supersede": with_store(cmd_supersede, store), "park": with_store(cmd_park, store), "unpark": cmd_unpark, "watch": lambda a: cmd_watch(a, clock, store, ctx=ctx), "sweep": with_store(cmd_sweep, store), "ci-why": with_store(partial(cmd_ci_why, ctx=ctx), store), "land": lambda a: cmd_land(a, clock, store, ctx=ctx), "land-precheck": with_store(partial(cmd_land_precheck, ctx=ctx), store), "env": cmd_env, "history": lambda a: cmd_history(a, store, clock.time), "analyze": lambda a: cmd_analyze(a, store, clock.time)}[a.cmd]
     command = inbox_command(a)
     try:
         return with_inbox(command, handler, a) if command else handler(a)

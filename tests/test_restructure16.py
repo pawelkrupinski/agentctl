@@ -307,7 +307,8 @@ class BatchCheckTest(unittest.TestCase):
     def test_batch_check(self):
         def run(A):
             def go(repo, d, tree, base, tip, clock, st, cls, depth, runs, rb):
-                return A.batch_check(repo, d, tree, base, tip, clock, st, cls=cls, depth=depth, runs=runs, range_base=rb), runs
+                return A.batch_check(repo, d, tree, base, tip, clock, st, cls=cls, depth=depth, runs=runs, range_base=rb,
+                                     machine=A.FixedMachine()), runs
             return go
         check(self, "batch_check", self.build, run, 3000)
 
@@ -522,7 +523,7 @@ class StatusPageStartTest(unittest.TestCase):
     def test_status_page_start(self):
         def run(A):
             def go():
-                got = A.status_page_start()
+                got = A.status_page_start(A.machine_probe(A.knob_machine()))
                 return got, A._status_page.get("url"), sorted(A._status_page)
             return go
         check(self, "status_page_start", self.build, run, 3000)
@@ -575,7 +576,7 @@ class RunLocalRecheckTest(unittest.TestCase):
         return ("/repo", "main1234567890")
 
     def test_run_local_recheck(self):
-        check(self, "run_local_recheck", self.build, lambda A: A.run_local_recheck, 3000)
+        check(self, "run_local_recheck", self.build, lambda A: partial(A.run_local_recheck, machine=A.FixedMachine()), 3000)
 
 
 # ------------------------------------------------------------------------------------------------ orphanreap

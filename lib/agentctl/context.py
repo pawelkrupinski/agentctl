@@ -8,6 +8,7 @@ from agentctl.ciruns import CiRuns
 from agentctl.clock import Clock
 from agentctl.procrunner import ProcessRunner
 from agentctl.inboxentry import InboxWriter
+from agentctl.machine import MachineProbe
 
 
 @dataclass(frozen=True)
@@ -20,3 +21,4 @@ class Context:
     clock: Clock
     runner: ProcessRunner
     inbox: InboxWriter
+    machine: MachineProbe

@@ -5,12 +5,8 @@ configfile	AGENTCTL_CONFIG_SET	bootstrap: the names an earlier process put into 
 fixerlife	AGENTCTL_STORE_TOKEN	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 fixerrecords	AGENTCTL_AGENT_NAME	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 fixerrecords	AGENTCTL_FIXER_RECORD	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
-gov	AGENTCTL_GOV_LOAD_PROBE	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
-gov	AGENTCTL_GOV_PRESSURE_PROBE	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 laptoprole	AGENTCTL_MACHINE_ID	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 launchd	AGENTCTL_LAUNCHCTL	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
-machine	AGENTCTL_GOV_FREE_PROBE	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
-machine	AGENTCTL_MACHINE	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 remotestore	AGENTCTL_STORE_DEFAULT_URL	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 remotestore	AGENTCTL_STORE_TOKEN	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file
 statuspage	AGENTCTL_OPEN	process-level: a process's identity, secret or test seam (config.py CONFIG_INTERNAL), never set in a config file

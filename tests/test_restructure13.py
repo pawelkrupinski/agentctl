@@ -223,23 +223,22 @@ def raise_or(rng, value):
 
 # ------------------------------------------------------------------------------------------------ pressure
 class PressureReadingTest(unittest.TestCase):
+    """Re-recorded 2026-11-28 (R5, the machine probe): the reading's seams (sysctl text, meminfo, a passed load and cores)
+    and its ambient reads (machine_cores, run_queue(s), machine_fixed, read_meminfo, pressure_sysctl) are ONE machine
+    probe now; the case draws that machine's raw reads (its load averages, cores and kernel memory reading) as the old
+    one drew the readers, and the busy cores and swap growth as before."""
+
     def build(self, case):
         r = case.rng
         case.fake("epoch_now", lambda rng: NOW)
         case.fake("gov_busy_cores", lambda rng: rng.choice([0.5, 3, 7.25]))
-        case.fake("machine_cores", lambda rng: rng.choice([8, 18]))
-        case.fake("run_queue", lambda rng, passed=None: rng.choice([None, 2, 9]))
-        case.fake("run_queues", lambda rng: rng.choice([None, (2, 3), (9, 40)]))
-        case.fake("machine_fixed", lambda rng: maybe(rng, {"free_pct": rng.choice([5, 60, None]), "level": rng.choice([1, 4, None]),
-                                                           "swap_used_mb": rng.choice([0, 2048.5, None])}, 0.5))
-        case.fake("read_meminfo", lambda rng: rng.choice([{}, {"MemTotal": 1000, "MemAvailable": 333}, {"MemTotal": 1000, "SwapTotal": 4096, "SwapFree": 1024},
-                                                          {"MemTotal": 2048, "MemAvailable": 1, "SwapTotal": 10, "SwapFree": 4}, {"MemTotal": 0}]))
-        case.fake("pressure_sysctl", lambda rng: rng.choice(["", "52\n2\nvm.swapusage: total = 1024.00M  used = 311.5M  free = 1.00M", "x\n1", "9\n9\n", "52\nx\nused = 3M"]))
         case.fake("swap_growth", lambda rng, mb, now_: (None if mb is None else mb - 10, 120))
-        args = [r.choice([None, None, "40\n1\nused = 5.0M", "", "bad\nx"]), r.choice([None, None, {}, {"MemTotal": 100, "MemAvailable": 50},
-                                                                                       {"MemTotal": 100, "SwapTotal": 8, "SwapFree": 2}]),
-                r.choice([None, None, 1.5]), r.choice([None, None, 12]), r.choice([None, NOW + 5])]
-        return tuple(args)
+        load = r.choice([None, (2, 3), (9, 40)])
+        fields = {"cores": r.choice([8, 18]), "free_pct": r.choice([5, 60, None]), "level": r.choice([1, 4, None]),
+                  "swap_used_mb": r.choice([0, 2048.5, None])}
+        if load:
+            fields.update(load1=load[0], load5=load[1])
+        return A.FixedMachine(fields), r.choice([None, NOW + 5])
 
     def test_pressure_reading(self):
         check(self, "pressure_reading", self.build, lambda A: A.pressure_reading, 6000)

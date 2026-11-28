@@ -6,7 +6,7 @@ import json, os, sys, tempfile, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
-from harness import case_context  # noqa: E402
+from harness import case_context, fixed_machine  # noqa: E402
 from fake_probes import registry  # noqa: E402
 from fake_clock import on_clock  # noqa: E402
 from fake_runner import FakeRunner  # noqa: E402
@@ -70,9 +70,9 @@ class UpkeepTest(unittest.TestCase):
         A.run_upkeep = lambda store: runs.append(1) or []
         A._last_upkeep[0] = 0.0
         try:
-            self.assertTrue(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_000.0))
+            self.assertTrue(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_000.0, machine=fixed_machine()))
             A._bounded["upkeep"].join(5)
-            self.assertEqual(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_000.0 + 60), [])
+            self.assertEqual(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_000.0 + 60, machine=fixed_machine()), [])
             self.assertEqual(runs, [1])
         finally:
             A.run_upkeep = saved
@@ -86,17 +86,17 @@ class DiskTest(unittest.TestCase):
         A._last_upkeep[0] = 10_000.0  # an upkeep ran a minute ago: not hourly yet
         try:
             # low, an upkeep just ran (the 10-min floor) and it is done: WD opens
-            self.assertTrue(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_060.0)[0].startswith("WD: "))
+            self.assertTrue(A.maybe_upkeep(A.CurrentStore(A.process_store), now_=10_060.0, machine=fixed_machine())[0].startswith("WD: "))
             self.assertEqual([c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"] == "disk-free"][0]["kind"], "INVARIANT")
             A._last_upkeep[0] = 0.0
-            out = A.maybe_upkeep(A.CurrentStore(A.process_store), now_=20_000.0)  # low: the upkeep runs at once
+            out = A.maybe_upkeep(A.CurrentStore(A.process_store), now_=20_000.0, machine=fixed_machine())  # low: the upkeep runs at once
             A._bounded["upkeep"].join(5)
             self.assertIn("the disk is low", out[0])
             self.assertEqual(runs, [1])
             [c] = [c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"] == "disk-free"]
             self.assertEqual(c["probe"]["kind"], "disk_free")
             os.environ["AGENTCTL_DISK_MIN_GB"] = "0"
-            self.assertTrue(A.run_probe(A.probe_disk_free, {"min_gb": 0}).ok)  # the same check passes: the condition closes
+            self.assertTrue(A.run_probe(partial(A.probe_disk_free, machine=fixed_machine()), {"min_gb": 0}).ok)  # the same check passes: the condition closes
         finally:
             A.run_upkeep = saved
             os.environ.pop("AGENTCTL_DISK_MIN_GB", None)
@@ -107,29 +107,24 @@ class RunQueueTest(unittest.TestCase):
     invariant, an owner-visible INVARIANT condition that closes by itself."""
 
     def setUp(self):
-        self.saved = os.environ.get("AGENTCTL_MACHINE")
-        m = json.loads(self.saved)
-        os.environ["AGENTCTL_MACHINE"] = json.dumps(dict(m, cores=18, load1=100.0, load5=118.0))
-
-    def tearDown(self):
-        os.environ["AGENTCTL_MACHINE"] = self.saved
+        self.m = fixed_machine(cores=18, load1=100.0, load5=118.0)
 
     @property
     def probe(self):
-        return partial(A.probe_run_queue, load_averages=A.run_queues, cores=A.machine_cores)
+        return partial(A.probe_run_queue, machine=self.m)
 
     def test_the_probe_fails_only_over_three_times_the_cores(self):
         self.assertFalse(A.run_probe(self.probe, {"factor": 3.0}).ok)
-        os.environ["AGENTCTL_MACHINE"] = json.dumps(dict(json.loads(self.saved), cores=18, load1=100.0, load5=50.0))
+        self.m.update(load5=50.0)
         self.assertTrue(A.run_probe(self.probe, {"factor": 3.0}).ok)
 
     def test_wl_opens_only_after_ten_minutes_and_is_an_invariant(self):
         store = A.CurrentStore(A.process_store)
         self.assertEqual(A.RUN_QUEUE_ESCALATE_AFTER, 600)
-        self.assertEqual(A._run_queue_invariant(store, A.run_queues, A.machine_cores), [], "the first sighting: pending, a burst opens nothing")
+        self.assertEqual(A._run_queue_invariant(store, self.m), [], "the first sighting: pending, a burst opens nothing")
         saved, A.RUN_QUEUE_ESCALATE_AFTER = A.RUN_QUEUE_ESCALATE_AFTER, 0
         try:
-            self.assertTrue(A._run_queue_invariant(store, A.run_queues, A.machine_cores)[0].startswith("WL: "))
+            self.assertTrue(A._run_queue_invariant(store, self.m)[0].startswith("WL: "))
         finally:
             A.RUN_QUEUE_ESCALATE_AFTER = saved
         [c] = [c for c in A.open_conditions(store) if c["key"] == "run-queue"]

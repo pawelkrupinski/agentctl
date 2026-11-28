@@ -174,7 +174,8 @@ class BatchCheck:
         data = self.it["data"]
         for attempt in range(BATCH_INFRA_RETRIES + 1):
             ok, out, stalled = batch_check(self.repo, self.d, self.tree, self.base, self.tip, self.clock, self.st,
-                                           data.get("cls") or "check", self.depth, self.runs, range_base=self.range_base)
+                                           data.get("cls") or "check", self.depth, self.runs, range_base=self.range_base,
+                                           machine=self.ctx.machine)
             infra = None if ok or stalled else batch_infra_failure(out)
             if not infra or attempt == BATCH_INFRA_RETRIES:
                 break
@@ -215,7 +216,7 @@ class BatchCheck:
         data = self.it["data"]
         culprit, cout = bisect(self.repo, self.d, self.members, self.base, self.tree, self.clock, self.st, self.depth,
                                self.runs, data.get("failed_out"), range_base=self.range_base,
-                               cls=data.get("cls") or "check")
+                               cls=data.get("cls") or "check", machine=self.ctx.machine)
         self.reread()
         if culprit is None and self.depth == "red":  # every prefix passed: no verdict, pre-checked again at the next change
             return self.prechecked([], None, "its red pre-check failed, then every prefix passed (flaky or infra)",

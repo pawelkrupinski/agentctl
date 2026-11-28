@@ -77,7 +77,8 @@ class DryRun:
 
     def _checks(self) -> Any:
         """(rc, output) of the hook run in a check slot, watched for a stall (rc None)."""
-        with check_slot(self.repo, f"land {os.path.basename(self.repo)} {self.head[:10]}", self.cls) as slot:
+        with check_slot(self.repo, f"land {os.path.basename(self.repo)} {self.head[:10]}", self.cls,
+                        machine=self.ctx.machine) as slot:
             rc, out = run_watched([self.hook, self.mode, f"{remote()}/main..{self.head}"], self.repo, slot.env(tool_env()),
                                   self.log_path, "checks", sampler=slot.sample)
             slot.done(rc, out)
@@ -88,7 +89,7 @@ class DryRun:
         repo = self.repo
         if not REDGATE.search(out) and knob_baseline() != "0":
             main_at = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
-            new, known = judge_against_baseline(repo, self.hook, self.head, out, self.log_path)
+            new, known = judge_against_baseline(repo, self.hook, self.head, out, self.log_path, machine=self.ctx.machine)
             if known is NETWORK_SHAPED:
                 return network_requeue(repo, self.head, out, self.log_path, self.clock, self.store, self.a, ctx=self.ctx)
             if known and not new:
@@ -178,7 +179,7 @@ def _baseline_cached(rec: Any, main: Any) -> Any:
     return {k: set(v) for k, v in rec["fails"].items()}
 
 
-def baseline_failures(repo, hook, head, log_path):
+def baseline_failures(repo, hook, head, log_path, *, machine):
     """The change's checks run on plain origin/main's tree: {check: lines} failing there (cached per main tree and
     change paths), or None when it could not be run."""
     import hashlib
@@ -200,7 +201,7 @@ def baseline_failures(repo, hook, head, log_path):
         return None
     try:
         err(f"the change's checks failed: running them on plain {remote()}/main {main[:10]} (the known-red baseline)")
-        with check_slot(repo, f"baseline {main[:10]}") as slot:
+        with check_slot(repo, f"baseline {main[:10]}", machine=machine) as slot:
             rc, out = run_watched([os.path.join(tree, os.path.relpath(hook, repo)), "--checks-only", f"{head}..{synth}"],
                                   tree, {**slot.env(tool_env()), "PREPUSH_BASELINE_DIR": ""}, log_path, "baseline",
                                   sampler=slot.sample)
@@ -220,13 +221,13 @@ def baseline_failures(repo, hook, head, log_path):
     return fails
 
 
-def judge_against_baseline(repo, hook, head, out, log_path):
+def judge_against_baseline(repo, hook, head, out, log_path, *, machine):
     """(new failures, known): the change's failures that plain origin/main does not share, and those it does.
     known is NETWORK_SHAPED when both runs failed with a network signature (infra: no verdict on either)."""
     mine = check_failures(out)
     if not mine:
         return None, {}
-    base = baseline_failures(repo, hook, head, log_path)
+    base = baseline_failures(repo, hook, head, log_path, machine=machine)
     if base is NETWORK_SHAPED:
         return None, (NETWORK_SHAPED if network_failure(out) else {})
     if base is None:

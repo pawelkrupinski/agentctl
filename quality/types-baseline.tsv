@@ -26,7 +26,7 @@ mypy-errors	changesubmit	12
 mypy-errors	checkround	6
 mypy-errors	checkrun	42
 mypy-errors	checkrunjobs	28
-mypy-errors	checkslot	24
+mypy-errors	checkslot	22
 mypy-errors	cireport	37
 mypy-errors	cistate	1
 mypy-errors	ciwhy	36
@@ -57,10 +57,10 @@ mypy-errors	gating	29
 mypy-errors	generated	21
 mypy-errors	generatedregen	14
 mypy-errors	ghapp	34
-mypy-errors	gov	22
-mypy-errors	govbudget	12
-mypy-errors	govcmd	27
-mypy-errors	govfits	11
+mypy-errors	gov	20
+mypy-errors	govbudget	7
+mypy-errors	govcmd	20
+mypy-errors	govfits	7
 mypy-errors	govroute	8
 mypy-errors	govusage	6
 mypy-errors	hostsleep	6
@@ -68,7 +68,7 @@ mypy-errors	identitychange	8
 mypy-errors	inbox	14
 mypy-errors	inboxcli	17
 mypy-errors	inboxwait	6
-mypy-errors	invariants	30
+mypy-errors	invariants	29
 mypy-errors	issues	12
 mypy-errors	joblog	41
 mypy-errors	jvmreap	7
@@ -104,7 +104,7 @@ mypy-errors	owners	3
 mypy-errors	ownerwrapper	46
 mypy-errors	park	32
 mypy-errors	policy	20
-mypy-errors	pressure	16
+mypy-errors	pressure	6
 mypy-errors	processor	8
 mypy-errors	processorlink	16
 mypy-errors	procwatch	2
@@ -161,10 +161,10 @@ mypy-errors	sessionpaths	8
 mypy-errors	slots	51
 mypy-errors	statemachines	23
 mypy-errors	stats	33
-mypy-errors	status	76
+mypy-errors	status	74
 mypy-errors	statusagents	34
 mypy-errors	statusline	4
-mypy-errors	statuspage	30
+mypy-errors	statuspage	29
 mypy-errors	store	21
 mypy-errors	storeapi	28
 mypy-errors	storeauth	22

@@ -7,6 +7,7 @@ import os, sys, tempfile, time, unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+from harness import fixed_machine  # noqa: E402
 from test_agentctl import A  # noqa: E402
 from test_reds import RedsBase  # noqa: E402
 
@@ -219,7 +220,12 @@ class LaptopPressureTest(unittest.TestCase):
         return f"{free}\n{level}\ntotal = 19456.00M  used = {used:.2f}M  free = 1334.44M  (encrypted)\n"
 
     def read(self, free=58, level=1, used=18124.8, load=5.0, now_=1000.0):
-        return A.pressure_reading(sysctl_out=self.sysctl(free, level, used), meminfo={}, load1=load, cores=14, now_=now_)
+        """The reading of a 14-core macOS machine whose sysctl says `free`, `level` and swap `used`, `load` cores busy
+        (its load average unread)."""
+        got = A.sysctl_pressure(self.sysctl(free, level, used))
+        machine = A.FixedMachine({"free_pct": got.get("free_pct"), "level": got.get("level"),
+                                  "swap_used_mb": got.get("swap_mb"), "busy": load, "cores": 14})
+        return A.pressure_reading(machine, now_=now_)
 
     def test_macos_reads_free_percent_level_load_and_swap(self):
         r = self.read()
@@ -227,8 +233,9 @@ class LaptopPressureTest(unittest.TestCase):
         self.assertAlmostEqual(r["swap_mb"], 18124.8)
 
     def test_linux_reads_meminfo(self):
-        r = A.pressure_reading(sysctl_out="", load1=3.0, cores=32, now_=1000.0,
-                               meminfo={"MemTotal": 1000, "MemAvailable": 150, "SwapTotal": 2048, "SwapFree": 1024})
+        got = A.meminfo_pressure({"MemTotal": 1000, "MemAvailable": 150, "SwapTotal": 2048, "SwapFree": 1024})
+        r = A.pressure_reading(A.FixedMachine({"free_pct": got.get("free_pct"), "swap_used_mb": got.get("swap_mb"),
+                                               "busy": 3.0, "cores": 32}), now_=1000.0)
         self.assertEqual((r["free_pct"], r["level"], r["swap_mb"]), (15, None, 1.0))
         self.assertIn("memory 15% free", A.laptop_pressure(r))
 
@@ -266,11 +273,10 @@ class SuiteGateTest(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.keys = ("AGENTCTL_GOV_DIR", "AGENTCTL_GOV_FREE_PROBE", "AGENTCTL_GOV_PRESSURE_PROBE",
-                     "AGENTCTL_GOV_LOAD_PROBE", "AGENTCTL_GOV_BUDGET_GB", "AGENTCTL_GOV_RESERVE_GB", "AGENTCTL_SUITE_CAP")
+        self.keys = ("AGENTCTL_GOV_DIR", "AGENTCTL_GOV_BUDGET_GB", "AGENTCTL_GOV_RESERVE_GB", "AGENTCTL_SUITE_CAP")
         self.saved = {k: os.environ.get(k) for k in self.keys}
-        os.environ.update(AGENTCTL_GOV_DIR=os.path.join(self.tmp.name, "gov"), AGENTCTL_GOV_FREE_PROBE="echo 30",
-                          AGENTCTL_GOV_PRESSURE_PROBE="echo 20", AGENTCTL_GOV_LOAD_PROBE="echo 1",
+        self.m = fixed_machine(free_gb=30, pressure=20, load1=1.0)
+        os.environ.update(AGENTCTL_GOV_DIR=os.path.join(self.tmp.name, "gov"),
                           AGENTCTL_GOV_BUDGET_GB="20", AGENTCTL_GOV_RESERVE_GB="1")
         os.environ.pop("AGENTCTL_SUITE_CAP", None)
 
@@ -280,20 +286,20 @@ class SuiteGateTest(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_two_suites_at_a_time(self):
-        t0 = A.gov_admit("suite", label="zeroth", wait=False)
-        t1 = A.gov_admit("suite", label="first", wait=False)
+        t0 = A.gov_admit("suite", label="zeroth", wait=False, machine=self.m)
+        t1 = A.gov_admit("suite", label="first", wait=False, machine=self.m)
         self.assertIsNotNone(t0, "the second suite slot")
         self.assertIsNotNone(t1)
         try:
-            self.assertIsNone(A.gov_admit("suite", label="second", wait=False))
-            ok, why, _ = A.gov_fits("suite", 1.0, A.gov_tickets(), A.gov_machine())
+            self.assertIsNone(A.gov_admit("suite", label="second", wait=False, machine=self.m))
+            ok, why, _ = A.gov_fits("suite", 1.0, A.gov_tickets(), A.gov_machine(self.m))
             self.assertFalse(ok)
             self.assertIn("suite cap", why)
-            self.assertIsNotNone(A.gov_admit("check", label="a check is no suite", wait=False))
+            self.assertIsNotNone(A.gov_admit("check", label="a check is no suite", wait=False, machine=self.m))
         finally:
             t1.release()
             t0.release()
-        t2 = A.gov_admit("suite", label="second", wait=False)
+        t2 = A.gov_admit("suite", label="second", wait=False, machine=self.m)
         self.assertIsNotNone(t2)
         t2.release()
 

@@ -11,12 +11,12 @@ import sys
 import time
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import attempt, err, pid_alive, probe_output, process_cache
+from agentctl.core import attempt, err, pid_alive, process_cache
 from agentctl.timefmt import ts
 from agentctl.statefile import read_record, write_json, note_failure, unlink_file
 from agentctl.procs import proc_alive, process_start
 from agentctl.filelock import lock_held
-from agentctl.machine import free_gb, machine_cores, machine_sample, run_queues
+from agentctl.machine import MachineProbe
 from agentctl.filelog import file_event, note_event, note_events
 from agentctl.causes import governor_cause
 from agentctl.govtickets import gov_bump, gov_change_mark, gov_dir, gov_log, gov_log_end, gov_tickets, gov_wait_change
@@ -26,7 +26,7 @@ from agentctl.leasetable import LeaseLost
 from agentctl.leases import lock_beat
 from agentctl.changekind import facts_for
 from agentctl.redland import may_land_on_red
-from agentctl.pressure import laptop_pressure, pressure_reading
+from agentctl.pressure import gov_busy_cores, laptop_pressure, pressure_reading
 from agentctl.govusage import gov_job_cores
 from agentctl.govfits import gov_capacity, gov_charged, gov_committed, gov_fits, gov_grant
 from agentctl.govknobs import knob_gov_poll
@@ -71,19 +71,17 @@ GOV_EVICT_IDLE = 60     # a kept server unused this long (seconds) may be evicte
 GOV_REPORT = 600
 
 
-def gov_machine() -> dict[str, Any]:
-    """{free, pressure, load1, cores, queues (1- and 5-min load), laptop}: live memory and CPU, and why the laptop is under pressure (laptop_pressure
-    without the load: each class has its own) ($AGENTCTL_GOV_PRESSURE_PROBE / _LOAD_PROBE: the tests')."""
-    load1, _cpu, pressure, _swap = machine_sample()
-    if os.environ.get("AGENTCTL_GOV_PRESSURE_PROBE"):
-        pressure = float(probe_output(os.environ["AGENTCTL_GOV_PRESSURE_PROBE"]).strip() or 0)
-    if os.environ.get("AGENTCTL_GOV_LOAD_PROBE"):
-        load1 = float(probe_output(os.environ["AGENTCTL_GOV_LOAD_PROBE"]).strip() or 0)
+def gov_machine(machine: MachineProbe) -> dict[str, Any]:
+    """{free, pressure, load1, cores, queues (1- and 5-min load), busy (gov_busy_cores), ram_gb, laptop}: live memory
+    and CPU, and why the laptop is under pressure (laptop_pressure without the load: each class has its own)."""
+    load1, _cpu, pressure, _swap = machine.sample()
     try:
-        laptop = laptop_pressure(None if knob_laptop_pressure() is not None else pressure_reading(), load=False)
+        laptop = laptop_pressure(None if knob_laptop_pressure() is not None else pressure_reading(machine), load=False)
     except Exception:
         laptop = None
-    return {"free": free_gb(), "pressure": pressure, "load1": load1, "cores": machine_cores(), "queues": run_queues(), "laptop": laptop}
+    return {"free": machine.free_gb(), "pressure": pressure, "load1": load1, "cores": machine.cores(),
+            "queues": machine.load_averages(), "busy": gov_busy_cores(machine), "ram_gb": machine.ram_gb(),
+            "laptop": laptop}
 
 
 GOV_ALIVE_TTL = 60.0    # s a waiter's start time, once read, vouches for its pid
@@ -209,7 +207,8 @@ class GovWait:
     """One unit of work waiting its turn at the governor: the loop that polls until it is the head and fits."""
 
     def __init__(self, cls, mem: Any, cores: Any, label: Any, kind: Any, me: Any, report: Any, force: Any = False,
-                 wait: Any = True, max_wait: Any = None, floor: Any = None) -> None:
+                 wait: Any = True, max_wait: Any = None, floor: Any = None, *, machine) -> None:
+        self.machine = machine
         self.cls, self.mem, self.cores, self.label, self.kind = cls, mem, cores, label, kind
         self.floor = None if floor is None else min(float(floor), cores)  # a pool that can run narrower: its least
         self.granted = cores
@@ -225,7 +224,7 @@ class GovWait:
         if not head:
             w = waiters[0] if waiters else {}
             return False, f"behind {w.get('class')} work ({w.get('label') or '?'}, pid {w.get('pid')})", False
-        m = gov_machine()
+        m = gov_machine(self.machine)
         ok = gov_fits(self.cls, self.mem, tickets, m, self.kind, self.cores if self.floor is None else self.floor)
         if ok[0]:
             self.granted = gov_grant(self.cores, self.floor, gov_capacity(tickets, m))
@@ -247,7 +246,7 @@ class GovWait:
             return
         self.report(f"{'still ' if self.said else ''}waiting for the governor ({self.cls}, {self.mem:g} GB, "
                     f"{self.cores:g} cores, {self.label}): {why}; {len(tickets)} admitted, "
-                    f"{gov_committed(tickets):.0f}/{gov_budget():.0f} GB, {gov_charged(tickets):g} cores charged")
+                    f"{gov_committed(tickets):.0f}/{gov_budget(self.machine.ram_gb()):.0f} GB, {gov_charged(tickets):g} cores charged")
         self.said, self.report_due = True, stopwatch(GOV_REPORT)
 
     def pause(self, head: Any, mark: Any) -> Any:
@@ -299,16 +298,17 @@ def gov_take_ticket(d: Any, t0: Any, ticket: Any, fd: Any) -> Any:
 
 
 def gov_admit(cls, mem=None, label="", kind="job", fd=None, ticket=None, wait=True, force=False, pid=None, cwd=None,
-              report=None, max_wait=None, cores=None, job=None, min_cores=None):
+              report=None, max_wait=None, cores=None, job=None, min_cores=None, *, machine):
     """Admit one unit of work: a GovTicket once it may start (None for a --try that may not). With `fd`, the lock is
     taken on that inherited descriptor (a shell's, which then holds the ticket); else on a file this process keeps open.
     `cores`: what it is charged (default: its `job`'s, gov_job_cores); with `min_cores`, a pool admitted once that
     many fit and charged what it is granted (THE GRANTED WIDTH, govfits.gov_grant: the ticket record's `cores`)."""
     cls = cls if cls in GOV_CLASSES else "agent"
     mem = GOV_MEM_GB.get(cls, 5.0) if mem is None else float(mem)
-    cores = gov_job_cores(job, cls, kind) if cores is None else float(cores)
+    cores = gov_job_cores(job, cls, kind, machine_cores=machine.cores()) if cores is None else float(cores)
     d = gov_dir()
-    waiter = GovWait(cls, mem, cores, label, kind, None, report or err, force, wait, max_wait, floor=min_cores)
+    waiter = GovWait(cls, mem, cores, label, kind, None, report or err, force, wait, max_wait, floor=min_cores,
+                     machine=machine)
     t0 = waiter.t0
     waiter.me = me = os.path.join(d, f"w-{t0:.6f}-{os.getpid()}.json")
     write_json(me, {"class": cls, "mem": mem, "cores": cores, "job": job, "label": label, "kind": kind,

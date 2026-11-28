@@ -70,7 +70,7 @@ def run_check_batch(module, script):
         out["data"].update(data or {})
         return out
 
-    def batch_check(repo, d, tree, base, tip, clock, st, cls, depth, runs, range_base=None):
+    def batch_check(repo, d, tree, base, tip, clock, st, cls, depth, runs, range_base=None, machine=None):
         log.append(f"batch_check {tree} {base} {tip} {cls} {depth} {runs} {range_base}")
         return next(checks)
 
@@ -84,7 +84,7 @@ def run_check_batch(module, script):
         "batch_move": batch_move,
         "batch_drift_check": lambda repo, d, tree, base, tip, red: (log.append(f"drift {red}"), (script["drift"], "dout"))[1],
         "batch_drift_split": lambda repo, d, st, it, mem, tree, out: log.append(f"drift_split {out!r}") or 1,
-        "bisect": lambda repo, d, mem, base, tree, clock, st, depth, runs, failed, range_base=None, cls=None:
+        "bisect": lambda repo, d, mem, base, tree, clock, st, depth, runs, failed, range_base=None, cls=None, machine=None:
             log.append(f"bisect {depth} {failed!r} {range_base} {cls}") or script["bisect"],
         "culprit_own_failure": lambda st, repo, d, e, base, out, now, ctx=None: log.append(f"own {e['id']} {out!r} {now}") or script["own"],
         "queue_verdict": record("verdict", show=lambda st, d, e, kind, text, lines: (e["id"], kind, text, lines)),

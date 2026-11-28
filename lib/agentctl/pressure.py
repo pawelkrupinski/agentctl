@@ -3,43 +3,28 @@
 
 from agentctl.clock import epoch_now
 import os
-import re
-import sys
-from typing import Any
-from agentctl.core import attempt, probe_output, run_cmd
-from agentctl.procs import ps_rows
-from agentctl.psparse import PsRow, parse_ps
+from typing import Any, Optional
+from agentctl.psparse import PsRow
 from agentctl.statefile import read_record, write_json, note_failure
-from agentctl.cpu import cpu_pressure, machine_busy_cores
-from agentctl.machine import machine_cores, machine_fixed, read_meminfo, run_queue, run_queues
+from agentctl.cpu import cpu_pressure
+from agentctl.machine import MachineProbe
 from agentctl.govtickets import gov_dir
 from agentctl.govknobs import LAPTOP_SWAP_WINDOW, knob_laptop_free_pct, knob_laptop_pressure_level, knob_laptop_swap_growth_mb, knob_laptop_swap_window
-from agentctl.govknobs import knob_gov_busy_probe, knob_gov_load_probe, knob_gov_ps_probe, knob_laptop_pressure
+from agentctl.govknobs import knob_laptop_pressure
 
 
 GOV_IDLE_CLAUDE = 10.0  # %CPU under which a Claude session is idle (not work)
 
 
-def gov_busy_cores():
+def gov_busy_cores(machine: MachineProbe) -> float:
     """The cores the machine is busy on now: its own CPU ticks (cpu.py machine_busy_cores: user + sys), else ps's %CPU
-    summed (ps_busy_cores). Seams: $AGENTCTL_GOV_BUSY_PROBE (its output: the number), the tests' $AGENTCTL_GOV_LOAD_PROBE (read as
-    busy), $AGENTCTL_GOV_PS_PROBE (ps's `pcpu args` rows)."""
-    for cmd in (knob_gov_busy_probe(), knob_gov_load_probe()):
-        if cmd:
-            return attempt(lambda: float(probe_output(cmd).strip() or 0), 0.0, catch=(ValueError,))
-    probe = knob_gov_ps_probe()
-    fixed = machine_fixed() if not probe else None
-    if fixed is not None:  # the tests' fixed machine (AGENTCTL_MACHINE): its busy cores, else its load
-        return float(fixed.get("busy", fixed.get("load1")) or 0)
-    whole = None if probe else machine_busy_cores(machine_cores())
-    return whole if whole is not None else ps_busy_cores(probe)
+    summed (ps_busy_cores)."""
+    whole = machine.tick_busy_cores()
+    return whole if whole is not None else ps_busy_cores(machine.process_rows(("pcpu", "args")))
 
 
-def ps_busy_cores(probe=None):
-    """ps's %CPU summed (the machine's own ticks unreadable, or the tests' $AGENTCTL_GOV_PS_PROBE rows), less the
-    governor's waiters and idle Claude sessions."""
-    cols = ("pcpu", "args")
-    rows = parse_ps(probe_output(probe), cols) if probe else ps_rows(cols)
+def ps_busy_cores(rows: list[PsRow]) -> float:
+    """ps's %CPU summed (the machine's own ticks unreadable), less the governor's waiters and idle Claude sessions."""
     return sum(ps_row_percent(row) for row in rows) / 100.0
 
 
@@ -53,14 +38,6 @@ def ps_row_percent(row: PsRow) -> float:
 
 
 PRESSURE_LEVELS = {1: "normal", 2: "warn", 4: "critical"}
-
-
-def pressure_sysctl():
-    """macOS: free %, pressure level and vm.swapusage, one sysctl call ("" elsewhere)."""
-    if sys.platform != "darwin":
-        return ""
-    return run_cmd(["sysctl", "-n", "kern.memorystatus_level", "kern.memorystatus_vm_pressure_level", "vm.swapusage"],
-                   timeout=10).stdout
 
 
 def swap_growth(mb, now_):
@@ -79,50 +56,17 @@ def swap_growth(mb, now_):
     return mb - first[1], now_ - first[0]
 
 
-def _meminfo_reading(mi: dict[str, Any]) -> dict[str, Any]:
-    """The memory fields (free_pct, swap_mb) a Linux /proc/meminfo dict gives, those it has."""
-    got: dict[str, Any] = {}
-    if "MemAvailable" in mi:
-        got["free_pct"] = round(100 * mi["MemAvailable"] / mi["MemTotal"])
-    if "SwapTotal" in mi and "SwapFree" in mi:
-        got["swap_mb"] = (mi["SwapTotal"] - mi["SwapFree"]) / 1024
-    return got
-
-
-def _sysctl_reading(text: str) -> dict[str, Any]:
-    """The memory fields (free_pct, level, swap_mb) macOS's pressure_sysctl text gives, those it has."""
-    lines = text.splitlines()
-    got: dict[str, Any] = {}
-    if len(lines) >= 2 and lines[0].strip().isdigit() and lines[1].strip().isdigit():
-        got["free_pct"], got["level"] = int(lines[0]), int(lines[1])
-    used = re.search(r"used = ([\d.]+)M", "\n".join(lines))
-    if used:
-        got["swap_mb"] = float(used.group(1))
-    return got
-
-
-def _memory_reading(sysctl_out: Any, meminfo: Any) -> dict[str, Any]:
-    """The memory fields of this machine: the fixed probe's (the tests'), else /proc/meminfo, else sysctl."""
-    fixed = machine_fixed() if meminfo is None and sysctl_out is None else None
-    if fixed is not None:
-        return {"free_pct": fixed.get("free_pct"), "level": fixed.get("level"), "swap_mb": fixed.get("swap_used_mb")}
-    mi = read_meminfo() if meminfo is None else meminfo
-    if mi.get("MemTotal"):
-        return _meminfo_reading(mi)
-    return _sysctl_reading(pressure_sysctl() if sysctl_out is None else sysctl_out)
-
-
-def pressure_reading(sysctl_out=None, meminfo=None, load1=None, cores=None, now_=None):
-    """{free_pct, level, load1, cores, swap_mb, swap_growth_mb, swap_span}: this machine now, None where unreadable.
-    The readers are the tests' seams: sysctl_out (pressure_sysctl's text), meminfo (read_meminfo's dict)."""
+def pressure_reading(machine: MachineProbe, now_: Optional[float] = None) -> dict[str, Any]:
+    """{free_pct, level, load1, cores, runq, runq5, swap_mb, swap_growth_mb, swap_span}: this machine now, None where
+    unreadable."""
     now_ = epoch_now() if now_ is None else now_
     # its CPU is the cores processes use (gov_busy_cores), never the load average, which counts threads waiting (46 on
-    # 18 cores while 5.2 were busy, 2026-11-19); `load1` passed in (the tests' seam) stands for it
-    r = {"free_pct": None, "level": None, "swap_mb": None, "load1": gov_busy_cores() if load1 is None else load1,
-         "cores": cores or machine_cores(), "runq": run_queue(passed=load1)}
-    queues = None if load1 is not None else run_queues()
-    r["runq5"] = queues[1] if queues else None  # the run queue sustained: the 5-min load (cpu_pressure)
-    r.update(_memory_reading(sysctl_out, meminfo))
+    # 18 cores while 5.2 were busy, 2026-11-19)
+    queues = machine.load_averages()
+    r: dict[str, Any] = {"free_pct": None, "level": None, "swap_mb": None, "load1": gov_busy_cores(machine),
+                         "cores": machine.cores(), "runq": queues[0] if queues else None,
+                         "runq5": queues[1] if queues else None}  # the run queue sustained: the 5-min load (cpu_pressure)
+    r.update({k: v for k, v in machine.pressure_memory().items() if k in ("free_pct", "level", "swap_mb")})
     r["swap_growth_mb"], r["swap_span"] = swap_growth(r["swap_mb"], now_)
     return r
 
@@ -148,20 +92,18 @@ def _swap_pressure(r: Any) -> Any:
     return why
 
 
-def laptop_pressure(r: Any = None, load: Any = True) -> Any:
-    """Why this machine is under pressure now, with its numbers ("; "-joined), or None. load=False leaves the load out
-    (the governor holds each class on its own load factor). $AGENTCTL_LAPTOP_PRESSURE set (the tests'): its value is
-    the answer, `-` or empty for none."""
-    if r is None and knob_laptop_pressure() is not None:
+def laptop_pressure(r: Optional[dict[str, Any]], load: bool = True) -> Optional[str]:
+    """Why this machine is under pressure now (reading `r`), with its numbers ("; "-joined), or None. load=False leaves
+    the load out (the governor holds each class on its own load factor). $AGENTCTL_LAPTOP_PRESSURE set (the tests'),
+    with no reading: its value is the answer, `-` or empty for none."""
+    if r is None:
         return (knob_laptop_pressure() or "").strip("-") or None  # `-` or empty: none
-    r = r or pressure_reading()
     why = _memory_pressure(r) + (cpu_pressure(r) if load else []) + _swap_pressure(r)
     return "; ".join(why) or None
 
 
-def pressure_summary(r=None):
+def pressure_summary(r):
     """Every number of the reading, for a status line."""
-    r = r or pressure_reading()
     q = lambda v, f="{}": "?" if v is None else f.format(v)
     lvl = f"{r['level']} ({PRESSURE_LEVELS.get(r['level'], '?')})" if r.get("level") is not None else "?"
     swap = "swap ?" if r.get("swap_mb") is None else (
@@ -171,10 +113,10 @@ def pressure_summary(r=None):
     return f"memory {q(r.get('free_pct'))}% free, level {lvl}, busy {q(r.get('load1'), '{:.1f}')}/{r['cores']} cores{queue}, {swap}"
 
 
-def pressure_report():
+def pressure_report(machine: MachineProbe):
     """(why or None, summary) of this machine now: the tests' $AGENTCTL_LAPTOP_PRESSURE stands for both."""
     if knob_laptop_pressure() is not None:
-        why = laptop_pressure()
+        why = laptop_pressure(None)
         return why, why or "none (test)"
-    r = pressure_reading()
+    r = pressure_reading(machine)
     return laptop_pressure(r), pressure_summary(r)

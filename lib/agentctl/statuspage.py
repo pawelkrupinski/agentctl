@@ -26,6 +26,7 @@ from agentctl.remotestore import store_unreachable_text
 from agentctl.storestate import port_open
 from agentctl.redhold import red_fix_liveness
 from agentctl.status import render_status, status_cached, status_header
+from agentctl.machine import MachineProbe
 from agentctl.paths import reds_dir, state_root
 
 
@@ -166,7 +167,7 @@ class StatusHandler(http.server.BaseHTTPRequestHandler):
         self.send(200, STATUS_PAGE_HTML, "text/html; charset=utf-8")
 
     def api(self, _u: Any) -> None:
-        self.send(200, json.dumps(status_cached(), default=str), "application/json")
+        self.send(200, json.dumps(status_cached(self.server.machine), default=str), "application/json")
 
     def agent_page(self, u: Any) -> None:
         if not live_lookup(urllib.parse.unquote(u.path[len("/agent/"):])):
@@ -223,13 +224,18 @@ class StatusHandler(http.server.BaseHTTPRequestHandler):
 
 
 class StatusServer(http.server.ThreadingHTTPServer):
+    """The page's server: its handlers read the status model of `machine` (the processor's probe)."""
     daemon_threads = True
     allow_reuse_address = True
 
+    def __init__(self, address: tuple[str, int], machine: MachineProbe) -> None:
+        super().__init__(address, StatusHandler)
+        self.machine = machine
 
-def status_page_server(host, port):
+
+def status_page_server(host, port, machine):
     """The page's HTTP server (not started)."""
-    return StatusServer((host, port), StatusHandler)
+    return StatusServer((host, port), machine)
 
 
 _status_page = process_cache({})
@@ -247,19 +253,19 @@ def _write_status_page_file(url, port, why) -> None:
         err(f"status page: {status_page_file()} not written: {e}")
 
 
-def _bind_status_page(port, why):
+def _bind_status_page(port, why, machine):
     """The page's server on 127.0.0.1:port, or None -- the reason appended to `why`."""
     try:
         if port == STATUS_PAGE_PORT and port_open(port, timeout=0.5):
             why.append(f"port {port}: something already listens on it (not shadowed)")
             return None
-        return status_page_server("127.0.0.1", port)
+        return status_page_server("127.0.0.1", port, machine)
     except (OSError, ValueError) as e:
         why.append(f"port {port}: {e}")
         return None
 
 
-def status_page_start() -> Any:
+def status_page_start(machine: MachineProbe) -> Any:
     """Serve the page from a daemon thread of this process, once: 127.0.0.1:80, else :3015 ($AGENTCTL_STATUS_PORT: that
     port alone; AGENTCTL_STATUS_PAGE=off: none). Writes status-page.json (its URL, for `status --open`). Returns the URL
     or None. Never raises."""
@@ -271,11 +277,11 @@ def status_page_start() -> Any:
              else [STATUS_PAGE_PORT, STATUS_PAGE_FALLBACK])
     why: list[str] = []
     for p in ports:
-        srv = _bind_status_page(p, why)
+        srv = _bind_status_page(p, why, machine)
         if srv is None:
             continue
         threading.Thread(target=srv.serve_forever, daemon=True, name="status-page").start()
-        threading.Thread(target=status_warm, daemon=True, name="status-warm").start()  # the first refresh has data
+        threading.Thread(target=lambda: status_warm(machine), daemon=True, name="status-warm").start()  # the first refresh has data
         url = f"http://{STATUS_PAGE_HOST}/" if p == 80 else f"http://{STATUS_PAGE_HOST}:{p}/"
         _status_page.update(url=url, server=srv)
         if why:
@@ -287,9 +293,9 @@ def status_page_start() -> Any:
     return None
 
 
-def status_warm() -> None:
+def status_warm(machine: MachineProbe) -> None:
     try:
-        status_cached()
+        status_cached(machine)
     except (Exception, SystemExit) as e:
         err(f"status page: the first read failed: {str(e)[:200]}")
 

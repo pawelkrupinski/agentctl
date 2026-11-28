@@ -26,7 +26,7 @@ class StatusModelTest(unittest.TestCase):
     def test_the_line_the_page_and_ci_why_say_the_same_gate(self):
         A.state_update(tick_at=self.t - 3, waiting=["/x/movies-wt-a"], queued=[],
                        summary={"at": int(self.t - 10), "repo": A.SHORT["movies"], "line": "gate RED (main #9 -> NOBODY)"})
-        h = A.status_data(only=("header",), now_=self.t)["header"]
+        h = A.status_data(machine=A.machine_probe(A.knob_machine()), only=("header",), now_=self.t)["header"]
         self.assertEqual(h["gate_text"], "gate RED (main #9 -> NOBODY)")
         self.assertEqual(status_line(self.t), h["line"])
         self.assertEqual(self.out(["status", "--line"])[1], status_line())
@@ -108,7 +108,7 @@ class StatusModelTest(unittest.TestCase):
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
                 A.red_status(st, ctx=case_context())
-            m = A.status_data(store=st, now_=st.clock(), only=("reds", "families", "owners", "dispatcher"))
+            m = A.status_data(machine=A.machine_probe(A.knob_machine()), store=st, now_=st.clock(), only=("reds", "families", "owners", "dispatcher"))
         finally:
             A.cached_dispatch_blocker = saved
         self.assertEqual(buf.getvalue().strip(), A.render_red_status(m))

@@ -694,7 +694,7 @@ class Sim:
         """What fails on the change's base: the open gate red's own test, in the gate's newest run (queuefailure)."""
         return {k: f"Main #{self.red_run}{A.GATE_RUN_WHERE}" for k in A.test_keys([MAIN_FAILS_LINE])} if self.reds else {}
 
-    def run_entry_checks(self, repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None):
+    def run_entry_checks(self, repo, d, e, tree, base, head, mode, cls, log_path, clock, st, own=None, machine=None):
         open_ = set(self.reds) | set(self.outside)
         red_fix = lambda x: bool({str(f) for f in x.get("fixes") or []} & open_)  # the simulation's truth
         if red_fix(e) and not tree.endswith("-wt-check-redfix"):
@@ -713,7 +713,7 @@ class Sim:
         ok, out = self.verdict(head, f"{mode} {head[:8]}")
         return ok, out, "in the simulation"
 
-    def batch_check(self, repo, d, tree, base, tip, clock, st, cls="check", depth="fast", runs=None, range_base=None):
+    def batch_check(self, repo, d, tree, base, tip, clock, st, cls="check", depth="fast", runs=None, range_base=None, machine=None):
         self.batch_checks += 1
         self.local.task.block(self.rng.randint(*self.profile.get("verify_ticks", (1, 2))) if depth == "verify"
                               else self.rng.randint(*self.profile.get("batch_ticks", (2, 5))))

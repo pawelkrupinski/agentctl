@@ -30,17 +30,17 @@ def measure_lane_free(q=None):
     return True, f"no job waits on {MEASURE_LANE}"
 
 
-def gov_route(job, cls="agent", mem=None, kind="job", q=None):
+def gov_route(job, cls="agent", mem=None, kind="job", q=None, *, machine):
     """("ci" | "local", why) for a job about to ask the governor: ci when it would be held now and the lane is free."""
     if cls == "red":
         return "local", "a red fix is never held"
-    cores = gov_job_cores(job, cls, kind)
+    cores = gov_job_cores(job, cls, kind, machine_cores=machine.cores())
     mem = GOV_MEM_GB.get(cls, 5.0) if mem is None else float(mem)
     ahead = [w for w in gov_waiters() if GOV_CLASSES.get(w.get("class"), 9) <= GOV_CLASSES.get(cls, 9)]
     if ahead:
         held = f"{len(ahead)} waiter(s) ahead of it"
     else:
-        ok, held, _ = gov_fits(cls, mem, gov_tickets(), gov_machine(), kind, cores)
+        ok, held, _ = gov_fits(cls, mem, gov_tickets(), gov_machine(machine), kind, cores)
         if ok:
             return "local", f"the governor admits it now ({cores:g} cores)"
     free, lane = measure_lane_free(q)

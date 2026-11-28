@@ -323,7 +323,8 @@ class BatchRetryTest(unittest.TestCase):
         saved = A.batch_check
         A.batch_check = lambda *a, **k: next(results)
         try:
-            culprit, _out = A.bisect(d, d, batch, "base", d, FakeClock(), A.CurrentStore(A.process_store))
+            culprit, _out = A.bisect(d, d, batch, "base", d, FakeClock(), A.CurrentStore(A.process_store),
+                                    machine=A.FixedMachine())
         finally:
             A.batch_check = saved
         self.assertIsNone(culprit)  # flaky: nobody rejected
@@ -359,7 +360,8 @@ class GovBoundTest(unittest.TestCase):
         A.gov_fits = lambda *a, **k: (False, "no memory", False)
         try:
             with self.assertRaises(A.GovTimeout):
-                A.gov_admit("check", 1, "t", kind="check", max_wait=0.5, report=lambda m: None)
+                A.gov_admit("check", 1, "t", kind="check", max_wait=0.5, report=lambda m: None,
+                            machine=A.machine_probe(A.knob_machine()))
         finally:
             A.gov_fits, A.gov_waiters = saved
 

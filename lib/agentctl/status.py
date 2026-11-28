@@ -15,6 +15,7 @@ from agentctl.forge import RED_CONCLUSIONS, forge_run_url
 from agentctl.redrepos import red_family
 from agentctl.cistate import state_read
 from agentctl.pressure import pressure_report
+from agentctl.machine import MachineProbe
 from agentctl.store import Store
 from agentctl.landhold import hold_row, land_hold
 from agentctl.fixerblockers import cached_dispatch_blocker
@@ -254,19 +255,19 @@ def status_store_probe(st, t):
     return {"remote": None, "reachable": True, "ms": int((time.monotonic() - t0) * 1000)}  # wall: as above
 
 
-def status_pressure():
+def status_pressure(machine: MachineProbe):
     """The laptop's pressure reading, with its numbers (why it holds other work, else the plain reading)."""
     try:
-        why, summary = pressure_report()
+        why, summary = pressure_report(machine)
     except Exception as e:
         return f"unread ({e})"
     return f"UNDER PRESSURE: {why} [{summary}]" if why else summary
 
 
-def status_dispatcher(st, t):
+def status_dispatcher(st, t, machine):
     return {"blocker": cached_dispatch_blocker(), "off_flag": os.path.exists(reds_dir("DISPATCH_OFF")),
             "repos_off": repo_dispatch_off_all(st),
-            "alive": len(red_fixers_alive(st, t)), "cap": red_cap(), "pressure": status_pressure(),
+            "alive": len(red_fixers_alive(st, t)), "cap": red_cap(), "pressure": status_pressure(machine),
             "escalated": [{"type": typ, "id": it["id"], "words": words} for typ, it, words in escalated_now(st)]}
 
 
@@ -380,11 +381,11 @@ def open_status_store(store: Any, only: Any) -> tuple[Any, Any]:
         return None, status_err(e)
 
 
-def status_section_sources(t: float, repo: str, need: Any) -> tuple[Any, ...]:
+def status_section_sources(t: float, repo: str, need: Any, machine: MachineProbe) -> tuple[Any, ...]:
     """The status model's sections: (name, producer, weight) each, every producer reading the store through `need`."""
     return (("header", lambda: status_header(t), 1),
                ("store", lambda: status_store_probe(need(), t), 1),
-               ("dispatcher", lambda: status_dispatcher(need(), t), 1),
+               ("dispatcher", lambda: status_dispatcher(need(), t, machine), 1),
                ("reds", lambda: status_reds(need(), t, repo), 1),
                ("families", lambda: status_families(need(), t), 1),
                ("untracked", lambda: [{"repo": o_r, **r} for o_r, r in red_untracked_list(need())], 1),
@@ -397,7 +398,7 @@ def status_section_sources(t: float, repo: str, need: Any) -> tuple[Any, ...]:
                ("events", lambda: status_events(need()), 1))
 
 
-def status_data(store=None, now_=None, bound=None, keep=False, only=None):
+def status_data(store=None, now_=None, bound=None, keep=False, only=None, *, machine):
     """THE STATUS MODEL (/api/status): every section from its own bounded source; a failing one is {"error": ...} in
     its place. only: just these sections (a renderer's)."""
     t = now_ if now_ is not None else epoch_now()
@@ -410,7 +411,7 @@ def status_data(store=None, now_=None, bound=None, keep=False, only=None):
         if st is None:
             raise RuntimeError(st_err["error"])
         return st
-    sources = status_section_sources(t, repo, need)
+    sources = status_section_sources(t, repo, need, machine)
     res, meta = status_sources(tuple(x for x in sources if not only or x[0] in only), b, keep=keep)
     if "error" in res.get("store", {}):
         res["store"] = {**res["store"], "remote": store_url(), "reachable": False}
@@ -421,10 +422,10 @@ _status_cache = {"at": 0.0, "data": None}
 _status_cache_lock = threading.Lock()
 
 
-def status_cached():
+def status_cached(machine: MachineProbe):
     with _status_cache_lock:  # one assembly at a time: refreshing tabs share it
         if _status_cache["data"] is None or epoch_now() - _status_cache["at"] >= STATUS_CACHE:
-            _status_cache["data"] = status_data(keep=True)
+            _status_cache["data"] = status_data(keep=True, machine=machine)
             _status_cache["at"] = epoch_now()
         return _status_cache["data"]
 

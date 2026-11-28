@@ -76,7 +76,7 @@ def note_local_red(main, fails, passes) -> None:
 # processor's patrol (the governor's check class), synchronously by `red patrol`, or by the next land's dry run. A pass
 # clears the red, releases its claims, stops its dispatched fixer (process groups) and puts FIX OK in the inbox; the
 # fixer's worktrees whose commits are patch-equivalent on main are removed, any other is listed in the inbox.
-def recheck_local(repo, wait: bool = True):
+def recheck_local(repo, wait: bool = True, *, machine):
     """Recompute a stale local red on the current origin/main. Returns action lines (when it ran synchronously)."""
     main = local_stale(repo)
     if not main:
@@ -86,21 +86,21 @@ def recheck_local(repo, wait: bool = True):
         t = _bounded.get("local-recheck")
         if t and t.is_alive():
             return []
-        t = threading.Thread(target=lambda: _recheck_guarded(repo, main), name="local-recheck", daemon=True)
+        t = threading.Thread(target=lambda: _recheck_guarded(repo, main, machine), name="local-recheck", daemon=True)
         _bounded["local-recheck"] = t
         t.start()
         return []
-    return _recheck_guarded(repo, main)
+    return _recheck_guarded(repo, main, machine)
 
 
-def _recheck_guarded(repo, main):
+def _recheck_guarded(repo, main, machine):
     """One recheck at a time across processes (the processor's and a `red patrol`): the second one leaves it."""
     try:
         lock = FileLock(reds_dir("local", "recheck.lock"))
         if not lock.try_acquire():
             return []
         try:
-            return run_local_recheck(repo, main)
+            return run_local_recheck(repo, main, machine)
         finally:
             lock.release()
     except (Exception, SystemExit) as e:
@@ -108,7 +108,7 @@ def _recheck_guarded(repo, main):
         return []
 
 
-def run_local_recheck(repo, main):
+def run_local_recheck(repo, main, machine):
     """Run the recorded failing checks on main's tree (the hook over <recorded main>..main, every other check skipped)."""
     failing = sorted(local_red().get("checks") or {})
     hook = precheck_hook(repo)
@@ -125,7 +125,7 @@ def run_local_recheck(repo, main):
     if git(repo, "worktree", "add", "-q", "--detach", mark_internal(tree), synth, check=False).returncode != 0:
         return []
     try:
-        rc, out = _recheck_in_tree(repo, main, hook, tree, base, synth, failing)
+        rc, out = _recheck_in_tree(repo, main, hook, tree, base, synth, failing, machine)
     finally:
         git(repo, "worktree", "remove", "--force", tree, check=False)
         git(repo, "gc", "--auto", "--quiet", check=False)
@@ -146,13 +146,13 @@ def _recheck_base(repo):
     return git(repo, "commit-tree", empty, "-m", "agentctl recheck base").strip()
 
 
-def _recheck_in_tree(repo, main, hook, tree, base, synth, failing):
+def _recheck_in_tree(repo, main, hook, tree, base, synth, failing, machine):
     """The hook of the recheck tree over base..synth with every check but the failing ones skipped: (rc, output)."""
     log_path = reds_dir("local", "recheck.log")
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
     tree_hook = os.path.join(tree, os.path.relpath(hook, repo))
     err(f"local checks were recorded on an older main: rechecking {', '.join(failing)} on {remote()}/main {main[:10]}")
-    with check_slot(repo, f"local recheck {main[:10]}", "check") as slot:
+    with check_slot(repo, f"local recheck {main[:10]}", "check", machine=machine) as slot:
         env = {**slot.env(tool_env()), "PREPUSH_BASELINE_DIR": "",
                "PREPUSH_SKIP": " ".join(c for c in hook_checks(tree_hook) if c not in failing)}
         rc, out = run_watched([tree_hook, "--checks-only", f"{base}..{synth}"],
