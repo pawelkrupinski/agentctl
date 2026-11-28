@@ -70,11 +70,12 @@ class FakeRunner:
     the last repeating), records them all; `effects` (a substring -> a function) does what a command would."""
 
     def __init__(self, plan, effects=None):
-        self.plan, self.calls, self.effects = plan, [], effects or {}
+        self.plan, self.calls, self.cwds, self.effects = plan, [], [], effects or {}
 
     def __call__(self, argv, cwd):
         line = " ".join(argv)
         self.calls.append(line)
+        self.cwds.append(cwd)
         for k, effect in self.effects.items():
             if k in line:
                 effect()
@@ -167,6 +168,38 @@ class VendorSyncTest(unittest.TestCase):
         sync, run = self.sync({})
         self.assertEqual(sync.execute(), "nothing to sync")
         self.assertFalse(any("commit" in c or "selfpush" in c for c in run.calls))
+
+    FOLLOW = "git merge --ff-only -q origin/main"
+
+    def test_a_pushed_sync_fast_forwards_the_live_checkout_its_probe_reads(self):
+        """2026-11-28, condition vendor-drift.5: the sync pushed, ~/bin stayed a commit behind (nothing else
+        fast-forwards it), and 15 min later "pushed but the drift persists" dispatched an agent."""
+        sync, run = self.sync({"git status": (0, f" M {MODEL}\n"), "quality/tools.py": (0, "/venv/python\n")})
+        sync.execute()
+        self.assertIn(self.FOLLOW, run.calls)
+        at = run.calls.index(self.FOLLOW)
+        self.assertEqual(run.cwds[at], "/root")
+        self.assertLess(next(i for i, c in enumerate(run.calls) if "selfpush.py" in c), at)
+
+    def test_a_checkout_behind_a_main_that_already_has_the_copies_is_fast_forwarded(self):
+        sync, run = self.sync({})
+        self.assertEqual(sync.execute(), "nothing to sync")
+        self.assertIn(("git merge --ff-only -q origin/main", "/root"), list(zip(run.calls, run.cwds)))
+
+    def test_a_live_checkout_that_cannot_follow_is_a_failure_saying_why(self):
+        sync, _ = self.sync({"git status": (0, f" M {MODEL}\n"), "quality/tools.py": (0, "/venv/python\n"),
+                             self.FOLLOW: (128, "fatal: Not possible to fast-forward, aborting.")})
+        result = vendorsync.verdict(sync, 5.0)
+        self.assertEqual(result["state"], "failed")
+        self.assertIn("fast-forwarding the live checkout (exit 128)", result["why"])
+        self.assertIn("Not possible to fast-forward", result["why"])
+
+    def test_a_refused_push_leaves_the_live_checkout_alone(self):
+        sync, run = self.sync({"git status": (0, f" M {MODEL}\n"), "quality/tools.py": (0, "/venv/python\n"),
+                               "selfpush.py": (1, "NOT PUSHED")})
+        with self.assertRaises(vendorsync.Failed):
+            sync.execute()
+        self.assertNotIn(self.FOLLOW, run.calls)
 
     def test_a_failing_scoped_test_is_a_failure_for_the_agent_and_pushes_nothing(self):
         sync, run = self.sync({"git status": (0, f" M {MODEL}\n"), "tests/run.py": (1, "FAIL test_uses_model: API changed")})

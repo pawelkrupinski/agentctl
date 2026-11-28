@@ -101,7 +101,7 @@ to a vendored file is followed by agentctl's automatic sync, WITH NO AGENT (2026
 (`lib/agentctl/vendordrift.py`) runs `devtools/vendorsync.py` detached -- copy, the scoped tests (`devtools/vendorscope.py`:
 `test_vendored` and the tests importing a changed copy, the simulator gate only when it imports one), the ratchets (a check the new copies refuse
 for unrecorded FALLS alone is answered by `ratchet.py update`, the baselines committed with the copies), a commit,
-`selfpush`, and a sync that failed is tried again once movies moves a vendored file again; the pre-push hook runs the same scoped suite for a push of vendored copies alone. Only when that FAILS (a real API
+`selfpush`, `~/bin` fast-forwarded to it, and a sync that failed is tried again once movies moves a vendored file again; the pre-push hook runs the same scoped suite for a push of vendored copies alone. Only when that FAILS (a real API
 change to adapt) does the sync open a `VENDOR_DRIFT` condition, which the escalation table routes to a Sonnet agent that adapts
 agentctl's code, freezes any new ratchet rows with the right trailer and pushes. Never edit a copy: change it in movies, then sync; an improvement made here is written down
 for a movies lane. `quality/design.py` is agentctl's extractor over the core (the Python modules, `agentctl.<part>` imports),

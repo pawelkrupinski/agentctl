@@ -7,17 +7,19 @@ committed the right 5-file sync and hit their 60-min wall time without pushing (
 load 25-45), and drifted into side fixes. So the laptop's sync loop (lib/agentctl/vendordrift.py) runs THIS first:
 
   1. a detached worktree of origin/main (no branch, nothing to delete)
-  2. `vendor.py sync`; nothing changed -> done
+  2. `vendor.py sync`; nothing changed -> step 5, then done
   3. the scoped tests (devtools/vendorscope.py: test_vendored and the tests importing a changed copy), the simulator gate
      when the simulator imports one, the ratchets' selftest and check; a check the new copies refuse is answered by
      `ratchet.py update` when what it records is only FALLS (movies' fall lock, 2a65c3fb37: an unrecorded fall refuses),
      the baselines then committed with the copies
   4. a commit of exactly the changed copies and VENDORED.tsv, pushed with devtools/selfpush.py (the pre-push hook scopes
      its suite the same way: a vendored-only push runs the scoped tests)
-  5. the worktree is removed
+  5. the live checkout (the one this script runs from: ~/bin) is fast-forwarded to origin/main: the condition's probe
+     reads it, and nothing else moves it (2026-11-28, vendor-drift.5: a pushed sync left it behind and cost an agent)
+  6. the worktree is removed
 
-Exit 0 and `done` when synced and pushed; exit 3 and `failed: <why>` when a scoped test or ratchet fails -- a real API
-change to adapt, which is what the VENDOR_DRIFT agent is for (its brief carries the why). --result FILE gets the
+Exit 0 and `done` when synced, pushed and taken; exit 3 and `failed: <why>` when a scoped test or ratchet fails (a real
+API change to adapt) or a step cannot run, which is what the VENDOR_DRIFT agent is for (its brief carries the why). --result FILE gets the
 verdict as JSON (state, why, at), written last."""
 import argparse
 import os
@@ -107,6 +109,10 @@ class VendorSync:
             raise Failed(f"git diff in the movies checkout (exit {status}): {out.strip()}")
         return out.split()
 
+    def follow_main(self):
+        """The live checkout takes origin/main (fetched at the start, moved by selfpush's push): fast-forward only."""
+        self.step("fast-forwarding the live checkout", ["git", "merge", "--ff-only", "-q", "origin/main"], self.root)
+
     def execute(self):
         """('done', why) or raises Failed."""
         self.step("git fetch", ["git", "fetch", "-q", "origin", "main"], self.root)
@@ -118,6 +124,7 @@ class VendorSync:
             self.python("vendor.py sync", "devtools/vendor.py", "sync")
             changed = self.changed()
             if not changed:
+                self.follow_main()
                 return "nothing to sync"
             self.verify(changed)
             changed = self.changed()  # with the baselines a recorded fall changed
@@ -126,6 +133,7 @@ class VendorSync:
                                      "Mechanical (devtools/vendorsync.py): copied byte for byte, the scoped tests, the simulator gate where "
                                      "it imports a copy and the ratchets green."])
             self.python("selfpush", "devtools/selfpush.py", "--wait", str(self.wait))
+            self.follow_main()
             return "synced: " + ", ".join(changed)
         finally:
             self.run(["git", "worktree", "remove", "--force", self.tree], self.root)
