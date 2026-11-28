@@ -64,10 +64,10 @@ def red_wait_cycle(store, own_key, other):
 
 def _waits_on_landed(store: Any, it: dict[str, Any], sha: str, other: Any, ofix: dict[str, Any], repo: Any, t: float) -> Any:
     """The fix it waited on (or the other red's own landed one) is on main: verified against the next run; else None."""
-    d = it["data"]
+    d, main = it["data"], MainContainment(repo)
     for cand in [sha] + ([ofix["sha"]] if ofix.get("status") == "landed" and ofix.get("sha") else []):
-        on = MainContainment(repo).carrying(cand)
-        if on and MainContainment(repo).contains(on) is True:
+        on = main.carrying(cand)
+        if on and main.contains(on) is True:
             line = f"{red_what(d)}: red {other}'s fix {cand[:10]} is on main ({on[:10]}): verifying"
             red_move(store, it, "fix-pending", line, data={"fix": {"entry": None, "status": "landed", "sha": on,
                                                                     "at": t, "verify_since": t, "waited_on": other}})
