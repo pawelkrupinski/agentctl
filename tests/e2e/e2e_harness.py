@@ -20,6 +20,7 @@ sys.path.insert(0, TESTS)
 sys.path.insert(0, HERE)
 import harness  # noqa: E402,F401  -- the hermetic HOME, PATH and git config of this process, before anything runs
 import ghstub  # noqa: E402
+from patience import Patience, SpawnSlowdown  # noqa: E402
 
 TOOL = os.path.join(BIN, "agentctl")
 USER = "e2e"
@@ -92,6 +93,7 @@ class World:
         self.root = os.path.realpath(tempfile.mkdtemp(prefix="agentctl-e2e-"))
         self.tool, self.server_tool = tool, server_tool or TOOL
         self.procs, self.logs, self.gh_srv = [], os.path.join(self.root, "logs"), None
+        self.slowdown = SpawnSlowdown()  # how much slower than idle the machine starts a process, read as the steps wait
         self.extra_env = {}  # a scenario's own variables, in every process's environment (the stub claude's, ...)
         os.makedirs(self.logs)
         try:
@@ -235,12 +237,17 @@ class World:
         p = subprocess.Popen(argv, env=env, cwd=cwd or self.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              text=True, start_new_session=True)
         t0 = time.monotonic()
-        try:
-            out, errs = p.communicate(timeout=bound)
-        except subprocess.TimeoutExpired:
+        patience = self.patience(bound)
+        while True:
+            try:
+                out, errs = p.communicate(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                if not patience.expired():
+                    continue
             os.killpg(p.pid, signal.SIGKILL)
             out, errs = p.communicate()
-            raise AssertionError(f"{name} {' '.join(argv[1:])} still running after {bound} s\n{out[-2000:]}\n{errs[-4000:]}")
+            raise AssertionError(f"{name} {' '.join(argv[1:])} still running after {bound} s of patience ({time.monotonic() - t0:.0f} s)\n{out[-2000:]}\n{errs[-4000:]}")
         r = subprocess.CompletedProcess(argv, p.returncode, out, errs)
         r.seconds = time.monotonic() - t0
         with open(os.path.join(self.logs, "steps.log"), "a") as f:
@@ -284,18 +291,23 @@ class World:
                         bound=bound, name="sync")
 
     def until(self, cond, what, deadline=STEP_BOUND, step=None):
-        """Poll cond() (running `step` between looks, when given) until it is truthy or the deadline passes."""
-        end = time.monotonic() + deadline
+        """Poll cond() (running `step` between looks, when given) until it is truthy or the deadline's patience is spent
+        (patience.py: the deadline counts at the machine's pace, so load alone never fails a wait)."""
+        patience = self.patience(deadline)
         while True:
             got = cond()
             if got:
                 return got
-            if time.monotonic() > end:
-                raise AssertionError(f"timed out waiting for {what} ({deadline} s)\n{self.diagnosis()}")
+            if patience.expired():
+                raise AssertionError(f"timed out waiting for {what} ({deadline} s of patience)\n{self.diagnosis()}")
             if step:
                 step()
             else:
-                time.sleep(0.05)  # a poll's own interval, never a wait for a result
+                patience.pause()
+
+    def patience(self, bound):
+        """The patience of `bound` s a step or a wait has: one per step, on the real clock and the machine's own pace."""
+        return Patience(bound, slowdown=self.slowdown)
 
     # --- what the store holds (read from the server's database, as ci-runner reads it)
     def db(self, sql, *args):

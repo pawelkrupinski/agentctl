@@ -12,8 +12,10 @@ import argparse, os, subprocess, sys, time, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(HERE)), "lib"))
 from agentctl.govpool import governed, run_main  # noqa: E402
+sys.path.insert(0, HERE)
+from patience import HARD_FACTOR, Patience, SpawnSlowdown  # noqa: E402
 
-SCENARIO_BOUND = 150  # s one scenario may take (its own steps are bounded tighter: e2e_harness STEP_BOUND)
+SCENARIO_BOUND = 150  # s of patience one scenario has (patience.py: at the machine's pace; its steps have tighter ones: e2e_harness STEP_BOUND)
 
 
 def scenarios(patterns):
@@ -34,29 +36,29 @@ def main():
     ap.add_argument("patterns", nargs="*")
     a = ap.parse_args()
     todo = scenarios(a.patterns)
-    env = dict(os.environ, AGENTCTL_TEST_TIMEOUT=str(int(a.bound) - 10), PYTHONDONTWRITEBYTECODE="1")
+    env = dict(os.environ, AGENTCTL_TEST_TIMEOUT=str(int(a.bound * HARD_FACTOR) - 10), PYTHONDONTWRITEBYTECODE="1")
     results = {}
     with governed("e2e", min(a.jobs, len(todo)), f"tests/e2e/run.py {os.path.dirname(os.path.dirname(HERE))}") as pool:
         width, env = max(1, pool.width), pool.env(env)
         t0 = time.monotonic()
-        running, queue = {}, list(todo)
+        running, queue, slowdown = {}, list(todo), SpawnSlowdown()
         while queue or running:
             while queue and len(running) < width:
                 tid = queue.pop(0)
                 running[tid] = (subprocess.Popen([sys.executable, "-m", "unittest", "-v", tid], cwd=HERE, env=env,
                                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-                                                 start_new_session=True), time.monotonic())
-            for tid, (p, started) in list(running.items()):
+                                                 start_new_session=True), Patience(a.bound, slowdown=slowdown))
+            for tid, (p, patience) in list(running.items()):
                 try:
                     out, _ = p.communicate(timeout=0.2)
                 except subprocess.TimeoutExpired:
-                    if time.monotonic() - started < a.bound:
+                    if not patience.expired():
                         continue
                     os.killpg(p.pid, 9)
                     out, _ = p.communicate()
-                    out += f"\nSCENARIO BOUND: {tid} still running after {a.bound:.0f} s (killed)\n"
+                    out += f"\nSCENARIO BOUND: {tid} still running after {a.bound:.0f} s of patience (killed)\n"
                     p.returncode = 1
-                results[tid] = (p.returncode, out, time.monotonic() - started)
+                results[tid] = (p.returncode, out, time.monotonic() - patience.started)
                 del running[tid]
                 print(f"{'ok  ' if p.returncode == 0 else 'FAIL'} {tid} ({results[tid][2]:.0f} s)", flush=True)
         took = time.monotonic() - t0
