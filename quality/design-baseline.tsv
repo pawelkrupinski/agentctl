@@ -230,7 +230,7 @@ effect	lib/agentctl/storetoken.py	1
 effect	lib/agentctl/storetoken.py:files	3
 effect	lib/agentctl/storetoken.py:network	2
 effect	lib/agentctl/superseded.py:files	4
-effect	lib/agentctl/syncsteps.py:files	9
+effect	lib/agentctl/syncsteps.py:files	6
 effect	lib/agentctl/testtmp.py	1
 effect	lib/agentctl/testtmp.py:files	7
 effect	lib/agentctl/tickservice.py:files	4
@@ -758,12 +758,6 @@ mixed	lib/agentctl/superseded.py:_mark_superseded	5
 mixed	lib/agentctl/superseded.py:close_superseded	10
 mixed	lib/agentctl/superseded.py:cmd_supersede	7
 mixed	lib/agentctl/superseded.py:resolve_successor	4
-mixed	lib/agentctl/syncsteps.py:_regen_answerable	8
-mixed	lib/agentctl/syncsteps.py:_root_checkout_ff_safe	6
-mixed	lib/agentctl/syncsteps.py:answer_regen_holds	3
-mixed	lib/agentctl/syncsteps.py:close_landed_worktrees	7
-mixed	lib/agentctl/syncsteps.py:flush_outbox	6
-mixed	lib/agentctl/syncsteps.py:root_checkout_ff	9
 mixed	lib/agentctl/testtmp.py:_suite_root_in_use	5
 mixed	lib/agentctl/testtmp.py:_sweepable	6
 mixed	lib/agentctl/testtmp.py:sweep_test_temp	6
@@ -909,7 +903,6 @@ fanout	lib/agentctl/storeapi.py	10
 fanout	lib/agentctl/storecmd.py	10
 fanout	lib/agentctl/storetoken.py	10
 fanout	lib/agentctl/superseded.py	11
-fanout	lib/agentctl/syncsteps.py	33
 fanout	lib/agentctl/tickloop.py	28
 fanout	lib/agentctl/tools.py	15
 fanout	lib/agentctl/upkeep.py	14

@@ -1,6 +1,7 @@
 # agentctl, part `storestate`: the store as the status line sees it: its last unanswered call, ci-runner's state mirrored to the laptop, the remote mode's line state, a port's probe
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+from typing import Any
 from agentctl.clock import epoch_now
 from agentctl.store import StoreUnavailable
 from agentctl.cistate import state_read, state_update
@@ -48,7 +49,7 @@ def port_open(port, host="127.0.0.1", timeout=2.0):
         return False
 
 
-def mirror_state(st, now_=None):
+def mirror_state(st: Any, now_: float | None = None) -> None:
     """ci-runner's /v1/state copied into the laptop's state.json (with fetched_at): the status line reads it."""
     try:
         snap = st.state()

@@ -16,7 +16,7 @@ from agentctl.fixerblockers import claude_cli
 from agentctl.agewords import fmt_age
 from agentctl.fixersession import bg_rows, bg_session, bg_stop, bg_turn_over, bg_waiting
 from agentctl.redrecord import lease_is_live
-from agentctl.leases import lease_meta
+from agentctl.leases import LeaseStore, lease_meta
 from agentctl.owners import owner_record_path
 from agentctl.red import tail_lines
 from agentctl.paths import reds_dir
@@ -172,11 +172,12 @@ def holder_work(row, t, cache = None):
     return None, "not judged here"
 
 
-def red_reap_orphans(store, t):
+def red_reap_orphans(store: LeaseStore, t: float) -> list[str]:
     """The laptop's tick: every live laptop-held fixer and owner lease whose holder is not at work is revoked
     (`ORPHANED: <why>`) -- the red offered again at once, its wrapper's next renewal lost. An orphaned fixer's session,
     if any still runs, is stopped (its wrapper is gone)."""
-    acts, cache = [], {}
+    acts: list[str] = []
+    cache: dict[str, Any] = {}
     for row in list(store.list("owner/")) + list(store.list("red/")):
         if not lease_is_live(row, t):
             continue

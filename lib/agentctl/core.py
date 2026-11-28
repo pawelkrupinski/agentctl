@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 import time
-from typing import Any, Callable, Sequence, TypeVar
+from typing import Any, Callable, Iterable, Sequence, TypeVar
 from agentctl.procrunner import process_runner
 from agentctl.psparse import parse_ps
 from agentctl.storeknobs import knob_host, knob_remote, knob_role
@@ -51,6 +51,12 @@ ZERO = "0" * 40
 # ---------------------------------------------------------------- helpers
 def print_error(msg: object) -> None:
     print(f"agentctl: {msg}", file=sys.stderr, flush=True)
+
+
+def print_errors(lines: Iterable[object], prefix: str = "") -> None:
+    """Each of `lines` said, one print_error each, after `prefix`."""
+    for line in lines:
+        print_error(f"{prefix}{line}")
 
 
 D = TypeVar("D")
@@ -198,7 +204,7 @@ def branch_of(wt: str | None) -> str:
     return str(git(wt or "", "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout).strip()
 
 
-def run_bounded(name, fn, secs, threads):
+def run_bounded(name: str, fn: Callable[[], Any], secs: float, threads: dict[str, Any]) -> bool:
     """Run fn in a daemon thread and wait at most secs: a hung network call can never stall the processor's loop. A step
     still running from an earlier cycle is not started again (False); True when fn finished in time. threads: the
     process's bounded threads by name (Caches.bounded), where an earlier cycle's is found."""

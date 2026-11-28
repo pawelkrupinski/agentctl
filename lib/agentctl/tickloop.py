@@ -34,7 +34,7 @@ from agentctl.changekind import HOLD_SHOWN
 from agentctl.ask import owner_asks
 from agentctl.statuspage import status_page_start
 from agentctl.changerows import change_rows
-from agentctl.syncsteps import sync_steps
+from agentctl.syncloop import sync_steps
 from agentctl.serversteps import server_steps
 from agentctl.landqueue import land_await, queue_checker, queue_command, waiting_repo
 

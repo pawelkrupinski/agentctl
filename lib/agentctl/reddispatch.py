@@ -149,7 +149,7 @@ def _renew_target(store: Any, row: Any, m: Any, t: Any) -> Any:
     return f"with {prim['renewed_at']}", RED_FIXER_TTL
 
 
-def red_renew_holders(store, t):
+def red_renew_holders(store: Any, t: float) -> None:
     """Each live interactive claim renewed by its worktree's activity (no activity: it lapses at its TTL); each sibling
     exactly as long as its run's fixer's own lease; a joined red released when it shows no progress (red_joined_idle)."""
     for row in store.list("red/"):

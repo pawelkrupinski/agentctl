@@ -84,7 +84,7 @@ def open_outage(store, kind, text, probe, on_recover, **kw):
         return None
 
 
-def network_watch(store, seen, route=None, kick=None):
+def network_watch(store: Any, seen: dict[str, Any], route: Any = None, kick: Any = None) -> str:
     """React to the laptop's network changing (another Wi-Fi, a hotspot, back online): the tunnel's ssh rides the old
     route and would take ServerAlive's 30 s to notice, the gate line says UNREAD until the next read. A changed default
     route kickstarts the tunnel at once and marks the gate dirty. Returns 'changed', 'offline' or ''. seen: the
@@ -215,7 +215,7 @@ def inv_wu(clock: Any, st: Any, listening: Any = None) -> tuple[Any, str]:
                    f"or a wedged forward -- `agentctl env --check`; `launchctl kickstart -k gui/$(id -u)/{TUNNEL_LABEL}`")
 
 
-def tunnel_watch(store, now_=None, probe=None, kick=None, uplink=None):
+def tunnel_watch(store: Any, now_: float | None = None, probe: Any = None, kick: Any = None, uplink: Any = None) -> str:
     """One processor cycle of the health probe. Returns what it did: ok, down, kicked, restored, escalated, network, or
     ''. A tunnel that fails while the laptop's own uplink loses packets is the network's fault: no kickstart (it only
     churns the tunnel), no STALLED escalation, one NETWORK note per outage."""

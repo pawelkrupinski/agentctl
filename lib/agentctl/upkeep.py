@@ -116,7 +116,7 @@ def _run_queue_invariant(store: Any, machine: MachineProbe) -> list[str]:
     return [f"WL: {pr.detail}"] if cond else []
 
 
-def maybe_upkeep(store, now_=None, *, machine, ran_at, threads):
+def maybe_upkeep(store: Any, now_: float | None = None, *, machine: Any, ran_at: dict[str, float], threads: dict[str, Any]) -> list[str]:
     """The tick's upkeep step: at most every UPKEEP_EVERY s, or within 10 min when the disk is low (DISK_MIN_GB); and
     WD, the disk invariant: still low with the last upkeep done, an INVARIANT condition whose probe is that same
     free-space check (it closes itself once space is back; it escalates only while it stays open). ran_at: the

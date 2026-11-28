@@ -322,7 +322,7 @@ def revert_note_text(iid, d):
     return f"# {ts()} {lv}\n\n" + "\n".join(f"    {x}" for x in tail) + "\n\n"
 
 
-def revert_notes(st):
+def revert_notes(st: Any) -> list[str]:
     """The laptop's step: REVERTED.md in each told lander's worktree that is on this machine (once per notice), kept
     out of commits by the clone's info/exclude. Its lines."""
     out = []

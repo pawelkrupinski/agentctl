@@ -3,7 +3,7 @@
 
 from agentctl.clock import epoch_now
 import os
-from typing import Any, Optional
+from typing import Any, Optional, Protocol
 import re
 from agentctl.core import process_cache
 from agentctl.statefile import json_object
@@ -11,6 +11,14 @@ from agentctl.timefmt import ts
 from agentctl.leasetable import LeaseLost
 from agentctl.procs import socket_host
 from agentctl.redrecord import lease_is_live
+
+
+class LeaseStore(Protocol):
+    """The store calls a sweep of other holders' leases makes: the leases under a prefix, one revoked."""
+
+    def list(self, prefix: str) -> list[dict[str, Any]]: ...
+
+    def revoke(self, name: str, why: str) -> bool: ...
 
 
 _landing: list["LeaseHold | None"] = [None]  # the LeaseHold of the landing lease this process holds (land_lock)

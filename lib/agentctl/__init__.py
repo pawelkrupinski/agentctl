@@ -46,5 +46,7 @@ MODULES = ("caches", "procrunner", "conditionregistry", "escalationtable", "pspa
            "serversteps", "landqueue", "cliprobes", "cliprobesstore", "clihandler", "clihandlersmachine",
            "clihandlerstools", "clihandlersrecords", "cliprocess", "cliwiring", "cliregistry", "cliselftest",
            "statusheader", "statusrender", "statusreds", "statusfamilies", "statusqueue", "statussections",
-           "statusmachine", "statusstore", "status", "statuspage", "redcli", "syncsteps", "tickloop", "queueenter",
-           "landdryrun", "slots", "cliparser", "clihandlersloop", "clihandlerslanding", "clihandlers", "cli")
+           "statusmachine", "statusstore", "status", "statuspage", "redcli", "syncsteps", "queueenter", "landdryrun",
+           "slots", "cliparser", "clihandlerslanding", "outboxflush", "regenholds", "syncworktrees", "syncplumbing",
+           "synclanding", "syncdispatch", "syncwatches", "syncmaintenance", "syncloop", "tickloop",
+           "clihandlersloop", "clihandlers", "cli")

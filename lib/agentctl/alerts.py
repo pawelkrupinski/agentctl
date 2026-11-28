@@ -375,7 +375,7 @@ class AlertReconcile:
         return f"{item}: now the {aud}'s"
 
 
-def reconcile_alerts(store, force=False):
+def reconcile_alerts(store: Any, force: bool = False) -> list[str]:
     """The processor's pass: every live alert's item probed -- cleared: closed (acked, `closed` recorded); its audience
     changed (a red nobody holds became the owner's; a self-healing condition outlived its bound): re-stamped, surfaced
     again when it became the owner's. Returns what it did."""

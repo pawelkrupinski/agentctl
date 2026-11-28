@@ -74,7 +74,7 @@ CEILINGS = {
     "storecmd": 2,
     "storemetrics": 2,
     "stuckruns": 1,
-    "syncsteps": 1,
+    "syncloop": 1,
     "tickloop": 3,
     "waiting": 3,
     "watchdog": 2,

@@ -154,7 +154,7 @@ def _explorer_filed(o_r: Any, repo: Any, st: Any, new: list[Any], t: Any, filer:
     return [f"drift explorer: filed {len(new)} flip(s), landing from {wt}"]
 
 
-def explorer_tick(o_r, repo, st, now_=None, force=False, fetch=None, filer=None):
+def explorer_tick(o_r: str, repo: str, st: Any, now_: float | None = None, force: bool = False, fetch: Any = None, filer: Any = None) -> list[str]:
     """At most hourly. Returns what it said (a list of strings); never raises."""
     t = now_ if now_ is not None else epoch_now()
     try:
