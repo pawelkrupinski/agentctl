@@ -53,7 +53,7 @@ class CiRunsTest(Base):
     def test_a_workflow_not_on_main_is_no_runs_for_every_reader(self):
         self.assertEqual(A.workflow_main_runs("o/r", "new.yml", case_context().runs), [])
         self.assertIsNone(A.newest_decided_main("o/r", "new.yml", case_context().runs))
-        self.assertIsNone(A.newest_green_main("o/r", "new.yml", case_context().runs))
+        self.assertIsNone(A.newest_green_main("o/r", "new.yml", ctx=case_context()))
         cleared, why = A.probe_quota_reset({"repo": "o/r", "workflow": "new.yml", "job": "preflight", "since": 0}, runs=case_context().runs)
         self.assertFalse(cleared)
         self.assertIn("no run of new.yml since", why)

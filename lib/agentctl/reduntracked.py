@@ -72,11 +72,11 @@ def decided_run_jobs(o_r, rid, *, ctx):
     return ctx.runs.run_jobs(o_r, rid)
 
 
-def newest_green_main(o_r, workflow, runs):
+def newest_green_main(o_r, workflow, *, ctx):
     """The newest green run of workflow on main from GitHub (its file when main names it), or None."""
     wfile = main_workflow_files(o_r).get(workflow, workflow) if not red_is_other(o_r) else workflow
     # listing: GitHub's own success filter; [] is 'never green' only from this complete filtered answer
-    listed = runs.main_runs(o_r, wfile, 1, status="success")
+    listed = ctx.runs.main_runs(o_r, wfile, 1, status="success")
     return next((r for r in listed or [] if r.get("conclusion") == "success"), None)
 
 
@@ -95,7 +95,7 @@ def workflow_ever_green(store, o_r, workflow, runs=(), now_=None, *, ctx):
         if _never_green_recently(ctx.caches.never_green_at, (o_r, workflow), t):
             return False
         # SystemExit: NoToken
-        green = attempt(lambda: newest_green_main(o_r, workflow, ctx.runs), _UNREAD, catch=(Exception, SystemExit))
+        green = attempt(lambda: newest_green_main(o_r, workflow, ctx=ctx), _UNREAD, catch=(Exception, SystemExit))
         if green is _UNREAD:
             return None
     if not green:
@@ -120,7 +120,7 @@ def _job_candidate_runs(o_r: Any, workflow: Any, runs: Any, *, ctx: Context) -> 
     by the newest green run on main when none of them is green."""
     cands = sorted(decided_runs(runs), key=lambda r: r.get("conclusion") != "success")[:EVER_GREEN_JOB_RUNS]
     if not _has_success(cands):
-        g = attempt(lambda: newest_green_main(o_r, workflow, ctx.runs), None, catch=(Exception, SystemExit))
+        g = attempt(lambda: newest_green_main(o_r, workflow, ctx=ctx), None, catch=(Exception, SystemExit))
         cands = ([g] if g else []) + cands
     return cands
 
