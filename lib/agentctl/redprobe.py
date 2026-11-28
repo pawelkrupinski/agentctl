@@ -101,7 +101,7 @@ def probe_drift(repo, commit, run, wall):
     return _seed_checked(v, said, r)
 
 
-def cmd_red_probe(a, clock):
+def cmd_red_probe(a, clock, runner):
     """`agentctl red probe`: one boundary's verdict on CI, written to --out (the red tick reads it)."""
     wall = knob_blame_probe_wall()
     try:
@@ -109,7 +109,7 @@ def cmd_red_probe(a, clock):
             v = probe_drift(a.repo, a.commit, a.run, wall)
         elif a.kind == "checks":
             v = probe_checks(a.repo, slug(a.repo), a.commit, a.run, [t for t in (a.tokens or "").split() if t], wall,
-                             clock)
+                             clock, runner)
         else:
             v = {"verdict": "none", "evidence": f"no probe of kind {a.kind}"}
     except (Exception, SystemExit) as e:

@@ -4,6 +4,7 @@ mode, what each round does after its steps (the beats, the round file, the stall
 snapshot) and when the loop ends (a stop, a drained --once). `run` takes the module so a copy of the code can be driven
 the same way."""
 import contextlib
+import importlib
 import os
 import sys
 import threading
@@ -32,7 +33,9 @@ def probe_by_kind(recorded):
 def run(module, script):
     """waiting_run("REPO", clock, "ST", once, service) with the script's answers: (its return, the calls it made)."""
     log = []
+    parts = [module] + [importlib.import_module(f"agentctl.{n}") for n in ("processorsetup", "processorloop", "tickstate")]
     naps = [0]
+    stopped = [bool(script.get("stopped"))]
     rounds = iter(script.get("fails", []))
 
     def rec(name, ret=None):
@@ -71,7 +74,7 @@ def run(module, script):
             naps[0] += 1
             log.append(f"nap {secs}")
             if naps[0] >= script.get("naps", 3):
-                module.TICK_STOP[0] = True
+                stopped[0] = True  # the list every part's TICK_STOP is patched to
 
     @contextlib.contextmanager
     def shared_clone(repo):
@@ -108,10 +111,14 @@ def run(module, script):
         "print_error": rec("print_error"), "knob_tick": lambda: 5,
     }
     with contextlib.ExitStack() as stack:
-        for name, fake in patches.items():
-            stack.enter_context(mock.patch.object(module, name, fake))
+        for name, fake in patches.items():  # each name is patched in every part of the loop that binds it
+            for part in parts:
+                if hasattr(part, name):
+                    stack.enter_context(mock.patch.object(part, name, fake))
         stack.enter_context(mock.patch.dict(case_context().caches.bounded, {"step:x": alive[0], "other": alive[0]} if script.get("running") else {}))
-        stack.enter_context(mock.patch.object(module, "TICK_STOP", [bool(script.get("stopped"))]))
+        for part in parts:
+            if hasattr(part, "TICK_STOP"):
+                stack.enter_context(mock.patch.object(part, "TICK_STOP", stopped))
         before = list(module._IN_PROCESSOR)
         try:
             got = module.waiting_run("REPO", Clock(), "ST", "REGISTRY", once=script.get("once", False), service=script.get("service", False), ctx=case_context())

@@ -339,7 +339,6 @@ fanout	lib/agentctl/storeapi.py	10
 fanout	lib/agentctl/storecmd.py	10
 fanout	lib/agentctl/storetoken.py	10
 fanout	lib/agentctl/superseded.py	11
-fanout	lib/agentctl/tickloop.py	28
 fanout	lib/agentctl/tools.py	15
 fanout	lib/agentctl/upkeep.py	14
 fanout	lib/agentctl/waiting.py	14
@@ -736,7 +735,6 @@ mixed	lib/agentctl/redlease.py:LeaseEnd.prior_work	6
 mixed	lib/agentctl/redopen.py:red_family_tell	4
 mixed	lib/agentctl/redprobe.py:drift_overlay	8
 mixed	lib/agentctl/redprobe.py:probe_drift	7
-mixed	lib/agentctl/redprobechecks.py:probe_checks	10
 mixed	lib/agentctl/redrepos.py:red_families	5
 mixed	lib/agentctl/redretired.py:_retire_get	5
 mixed	lib/agentctl/redseen.py:convergence_relevant	7
@@ -840,10 +838,10 @@ mixed	lib/agentctl/superseded.py:resolve_successor	4
 mixed	lib/agentctl/testtmp.py:_suite_root_in_use	5
 mixed	lib/agentctl/testtmp.py:_sweepable	6
 mixed	lib/agentctl/testtmp.py:sweep_test_temp	6
-mixed	lib/agentctl/tickloop.py:write_snapshot	8
 mixed	lib/agentctl/tickservice.py:_service_install	3
 mixed	lib/agentctl/tickservice.py:_service_status	6
 mixed	lib/agentctl/tickservice.py:waiting_service	4
+mixed	lib/agentctl/tickstate.py:write_snapshot	8
 mixed	lib/agentctl/timefmt.py:age_since	5
 mixed	lib/agentctl/tools.py:check_java	7
 mixed	lib/agentctl/tools.py:cmd_state	8

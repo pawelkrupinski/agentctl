@@ -3,7 +3,6 @@
 
 import subprocess
 from typing import Any
-from agentctl.procrunner import process_runner
 from agentctl.core import attempt, git, print_error, remote
 from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
 from agentctl.owned import backoff
@@ -28,7 +27,7 @@ def _poll_probe_run(o_r: Any, rem: Any, branch: Any, wall: Any, clock: Any) -> A
     return rem
 
 
-def probe_checks(repo, o_r, commit, run, tokens, wall, clock):
+def probe_checks(repo, o_r, commit, run, tokens, wall, clock, runner):
     """The boundary's TREE through precommit-check.yml on CI: a commit holding it on top of <remote>/main pushed as
     `check/blame-<run>-<sha>` (the change's paths -- everything after the boundary, undone -- select the checks, as
     the known-red baseline does). A pass counts only when the run's log names the failing test (else the check never
@@ -53,7 +52,7 @@ def probe_checks(repo, o_r, commit, run, tokens, wall, clock):
         return {"verdict": "none", "evidence": f"{name}: {st or 'undecided'}"}
     if not tokens:
         return {"verdict": "none", "evidence": f"{name}: success, but the red names no test to look for in its log"}
-    log = attempt(lambda: process_runner().run(forge_argv(o_r, "run", "view", str(rem["run"]), "--log"), capture_output=True,
+    log = attempt(lambda: runner.run(forge_argv(o_r, "run", "view", str(rem["run"]), "--log"), capture_output=True,
                                                text=True, env=forge_env(o_r), timeout=GH_JSON_TIMEOUT).stdout,
                   "", catch=(OSError, subprocess.TimeoutExpired))
     seen = [t for t in tokens if t in log]

@@ -19,7 +19,7 @@ def cmd_red(a: Any, clock: Any, st: Any, registry: Any, *, ctx: Context) -> Any:
     if a.rcmd == "am-fixer":
         return red_am_fixer()
     if a.rcmd == "probe":
-        return cmd_red_probe(a, clock)
+        return cmd_red_probe(a, clock, ctx.runner)
     o_r = red_command_repo(a)
     handlers: dict[str, Callable[..., Any]] = {"block": lambda a, st, o_r: red_block(st, o_r, a, registry, ctx=ctx),
                 "unblock": partial(red_cmd_unblock, ctx=ctx), "owner-push": partial(red_cmd_owner_push, ctx=ctx),

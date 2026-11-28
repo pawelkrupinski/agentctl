@@ -48,8 +48,8 @@ def pick_convergence_run(repo, sha, runs, pushed_at, o_r=None, *, ctx):
     return ok[0] if ok else None
 
 
-def failed_jobs(o_r, rid, *, ctx):
-    return [j["name"] for j in ctx.runs.run_jobs(o_r, rid) if j.get("conclusion") in ("failure", "timed_out", "cancelled")]
+def failed_jobs(o_r, rid, runs):
+    return [j["name"] for j in runs.run_jobs(o_r, rid) if j.get("conclusion") in ("failure", "timed_out", "cancelled")]
 
 
 def start_watch(st, repo, sha, pushed_at, worktree=None, close=None, session=None, o_r=None, follower=None):
@@ -141,7 +141,7 @@ def _watch_red_lines(o_r: Any, sha: Any, flows: Any, reds: Any, *, ctx: Context)
     lines = []
     for kind, r in reds:
         try:
-            failed = failed_jobs(o_r, r["databaseId"], ctx=ctx)
+            failed = failed_jobs(o_r, r["databaseId"], ctx.runs)
         except (Exception, SystemExit) as e:  # the verdict stands without the job names
             print_error(f"could not read the jobs of run {r['databaseId']} ({str(e)[:120]})")
             failed = []

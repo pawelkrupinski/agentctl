@@ -131,7 +131,7 @@ class GuardedCommandsTest(unittest.TestCase):
     def test_each_worktree_changing_command_is_guarded(self):
         lib = os.path.join(os.path.dirname(HERE), "lib", "agentctl")
         for part, needle in (("slots.py", "with exit_guard(), WorktreeGuard(repo):"),
-                             ("queueenter.py", "with WorktreeGuard(repo):\n        return sync_onto_main"),
+                             ("landsync.py", "with WorktreeGuard(repo):\n        return sync_onto_main"),
                              ("culpritfix.py", "with WorktreeGuard(wt):"),
                              ("reddispatch.py", "with WorktreeGuard(wt):"),
                              ("conflicts.py", "with WorktreeGuard(wt):\n        return pick_commits")):

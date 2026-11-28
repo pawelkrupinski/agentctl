@@ -77,8 +77,8 @@ class CiRunsTest(Base):
         self.gh.jobs = {"7": [{"name": "test", "status": "completed", "conclusion": "failure"}],
                         "8": [{"name": "test", "status": "in_progress", "conclusion": ""}]}
         for _ in range(2):
-            self.assertEqual(A.failed_jobs("o/r", 7, ctx=case_context()), ["test"])
-            self.assertEqual(A.failed_jobs("o/r", 8, ctx=case_context()), [])
+            self.assertEqual(A.failed_jobs("o/r", 7, case_context().runs), ["test"])
+            self.assertEqual(A.failed_jobs("o/r", 8, case_context().runs), [])
         views = [c[3] for c in self.gh.calls if c[1:3] == ("run", "view")]
         self.assertEqual(views, ["7", "8", "8"])
 
