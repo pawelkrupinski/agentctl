@@ -34,6 +34,17 @@ class StatusModelTest(unittest.TestCase):
         self.assertEqual((rc, text), (1, h["gate_text"]))
         self.assertTrue(self.out(["status"])[1].startswith(h["line"]))
 
+    def test_the_dispatcher_section_says_whether_the_off_file_is_there(self):
+        """The status model reads the DISPATCH_OFF file and passes it on: the section is the file's presence."""
+        def off_flag():
+            sections = A.status_data(memos=case_context().caches.status, machine=A.machine_probe(A.knob_machine()),
+                                     store=A.Store(), now_=self.t, only=("dispatcher",))
+            return sections["dispatcher"]["off_flag"]
+        self.assertFalse(off_flag())
+        os.makedirs(os.path.dirname(A.reds_dir("DISPATCH_OFF")), exist_ok=True)
+        open(A.reds_dir("DISPATCH_OFF"), "w").close()
+        self.assertTrue(off_flag())
+
     def test_the_line_reads_the_snapshot_only_within_its_budget(self):
         """2026-11-22: the owner's status line read "gate ?" -- ~/bin/claude-statusline gives `status --line` a short
         timeout, and it took 2-4.6 s: cmd_status asked the store (laptop_role_standby, an RPC over the lossy tunnel) for

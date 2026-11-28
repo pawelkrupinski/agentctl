@@ -40,10 +40,11 @@ MODULES = ("caches", "procrunner", "conditionregistry", "escalationtable", "pspa
            "ownerwrapper", "crashloop", "vendordrift", "offerdispatch", "redview", "cireport", "watchtick",
            "recovery", "netwatch", "tools", "redlease", "redpending", "redstep", "redhold", "redtick", "gatepublish",
            "changesubmit", "storemetrics", "storeapi", "storecmd", "ciwhycmd", "inboxwait", "inboxcli",
-           "landedchange", "superseded", "park", "orphans", "orphanpass", "maintain", "status", "statuspage",
-           "redcli", "changerows", "changelap", "overlapcheck", "entrychecks", "queuediff", "batchselect", "batch",
-           "syncsteps", "invariants", "watchdog", "queueinfra", "queuecheck", "checkround", "queuepush", "batchpush",
-           "batchcheck", "batchtick", "serversteps", "landqueue", "tickloop", "queueenter", "landdryrun", "slots",
-           "cliparser", "cliprobes", "cliprobesstore", "clihandler", "clihandlersmachine", "clihandlerstools",
-           "clihandlersrecords", "clihandlersloop", "clihandlerslanding", "cliprocess", "cliwiring", "cliregistry",
-           "clihandlers", "cliselftest", "cli")
+           "landedchange", "superseded", "park", "orphans", "orphanpass", "maintain", "changerows", "changelap",
+           "overlapcheck", "entrychecks", "queuediff", "batchselect", "batch", "invariants", "watchdog",
+           "queueinfra", "queuecheck", "checkround", "queuepush", "batchpush", "batchcheck", "batchtick",
+           "serversteps", "landqueue", "cliprobes", "cliprobesstore", "clihandler", "clihandlersmachine",
+           "clihandlerstools", "clihandlersrecords", "cliprocess", "cliwiring", "cliregistry", "cliselftest",
+           "statusheader", "statusrender", "statusreds", "statusfamilies", "statusqueue", "statussections",
+           "statusmachine", "status", "statuspage", "redcli", "syncsteps", "tickloop", "queueenter", "landdryrun",
+           "slots", "cliparser", "clihandlersloop", "clihandlerslanding", "clihandlers", "cli")

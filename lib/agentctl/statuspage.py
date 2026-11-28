@@ -16,7 +16,9 @@ from agentctl.statefile import read_json_file, write_json
 from agentctl.clock import epoch_now
 from agentctl.livepage import AGENT_PAGE_HTML, STATUS_PAGE_HTML
 from agentctl.watchknobs import knob_status_page, knob_status_port
-from agentctl.core import print_error, on_ci_runner
+from agentctl.core import on_ci_runner, print_error
+from agentctl.machine import MachineProbe
+from agentctl.paths import reds_dir, state_root
 from agentctl.live import live_lookup
 from agentctl.livestream import (
     LIVE_SEND_TIMEOUT, LIVE_STREAMS, _live_streams, live_mask_text, live_peer_closed, live_stream)
@@ -26,9 +28,9 @@ from agentctl.laptoprole import LAPTOP_ROLE_LEASE, standby_of
 from agentctl.remotestore import store_unreachable_text
 from agentctl.storestate import port_open
 from agentctl.redhold import red_fix_liveness
-from agentctl.status import render_status, status_cached, status_header
-from agentctl.machine import MachineProbe
-from agentctl.paths import reds_dir, state_root
+from agentctl.status import status_cached
+from agentctl.statusheader import status_header
+from agentctl.statusrender import render_status
 
 
 # ---------------------------------------------------------------- the status page (2026-10-29)

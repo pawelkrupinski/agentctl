@@ -904,9 +904,9 @@ fanout	lib/agentctl/runsigs.py	10
 fanout	lib/agentctl/serverclone.py	11
 fanout	lib/agentctl/serversteps.py	27
 fanout	lib/agentctl/slots.py	28
-fanout	lib/agentctl/status.py	35
+fanout	lib/agentctl/status.py	10
 fanout	lib/agentctl/statusagents.py	13
-fanout	lib/agentctl/statuspage.py	16
+fanout	lib/agentctl/statuspage.py	18
 fanout	lib/agentctl/storeapi.py	10
 fanout	lib/agentctl/storecmd.py	10
 fanout	lib/agentctl/storetoken.py	10
