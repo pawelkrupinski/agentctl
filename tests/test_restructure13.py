@@ -1,7 +1,7 @@
 """RESTRUCTURE ROUND 13: each function split into named stages keeps its behaviour. The digests (fixtures/
 restructure13-digests.json, recorded from the code BEFORE the split with `R4_RECORD=1`) cover thousands of seeded cases
 each, collaborators faked (golden_cases.py): every call, its order and the result. Every case is bounded."""
-import contextlib, io, json, os, shutil, sys, tempfile, unittest
+import contextlib, dataclasses, io, json, os, shutil, sys, tempfile, unittest
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -197,14 +197,13 @@ class JobEverGreenTest(unittest.TestCase):
         mem = {}
         if r.random() < 0.4:
             mem[("o/r", "wf", "build")] = r.choice([NOW - 10, NOW - 99999])
-        case.put("_never_green_at", mem)
         return (Probe(case, "st"), "o/r", "wf", r.choice(names), runs, r.choice([None, NOW]), mem)
 
     def test_job_ever_green(self):
         def run(A):
             def go(st, o_r, wf, job, runs, now_, mem):
                 try:
-                    got = A.job_ever_green(st, o_r, wf, job, runs, now_, ctx=case_context())
+                    got = A.job_ever_green(st, o_r, wf, job, runs, now_, ctx=dataclasses.replace(case_context(), caches=A.Caches(never_green_at=mem)))
                 except BaseException as e:
                     got = ("raised", type(e).__name__)
                 return got, dict(mem)

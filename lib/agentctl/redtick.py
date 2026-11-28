@@ -6,7 +6,7 @@ from agentctl.statemachines import StaleVersion, is_terminal, open_items
 from agentctl.clock import epoch_now
 from agentctl.tickknobs import knob_step_bound
 from agentctl.redknobs import RED_TICK_INTERVAL, knob_red_others_every, knob_red_skip_say, knob_red_tick
-from agentctl.core import err, process_cache, run_bounded
+from agentctl.core import err, run_bounded
 from agentctl.tokenerrors import NoReadAccess
 from agentctl.repos import RED_PRIMARY, gated_repo, red_repo_clone, red_repo_short, red_repos, slug
 from agentctl.redrepos import red_gate_flows, red_is_other
@@ -228,10 +228,10 @@ def tick_other_repo(store: Any, o_r: str, now_: Any, dispatch: bool, registry: C
         with _red_lock:
             acts = [f"{red_repo_short(o_r)}: {x}" for x in red_tick(store, o_r, clone, snap, now_=now_, dispatch=dispatch,
                                                                      registry=registry, ctx=ctx)]
-        _others_said.pop(o_r, None)
+        ctx.caches.others_said.pop(o_r, None)
         return acts
     except (Exception, SystemExit) as e:
-        red_others_skipped(o_r, str(e).replace('agentctl: ', '')[:200])
+        red_others_skipped(ctx.caches.others_said, o_r, str(e).replace('agentctl: ', '')[:200])
         return []
 
 
@@ -269,16 +269,13 @@ def red_tick_others(store, registry, now_=None, dispatch=False, force=True, *, c
     return acts
 
 
-_others_said = process_cache({})  # repo -> (why, when said): a skipped repo's line is said when it changes, else every RED_SKIP_SAY s
-
-
-def red_others_skipped(o_r, why, now_=None):
+def red_others_skipped(said, o_r, why, now_=None):
     """Another repo's tick failed: said on a new reason, else at most every RED_SKIP_SAY s (it was every tick)."""
     t = now_ if now_ is not None else epoch_now()
-    last = _others_said.get(o_r)
+    last = said.get(o_r)
     if last and last[0] == why and t - last[1] < knob_red_skip_say():
         return None
-    _others_said[o_r] = (why, t)
+    said[o_r] = (why, t)
     line = f"red tick: {o_r}: skipped ({why})" + (" (still)" if last and last[0] == why else "")
     err(line)
     return line

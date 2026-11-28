@@ -39,6 +39,13 @@ machine)`), the condition probes (`partial(probe_disk_free, machine=)`) and the 
 unpacks `ctx.machine` where it calls a reader (the land, batch and queue checks' `check_slot`, the watchdog's
 READS_MACHINE invariants, the upkeep step, `red status`).
 
+`caches: Caches` (2026-11-28, lib/agentctl/caches.py) is where the process's memos are OWNED: one dict per concept, built
+by cli with the context and by a test with its own, so no module keeps a mutable `process_cache` of its own and no test
+sees another's memo. A function holding `ctx` unpacks `ctx.caches.<memo>` and hands the one dict on as a parameter to the
+leaf that reads it (`identity_change(repo, e, known)`, `red_others_skipped(said, ...)`). Moved so far: identity_known,
+trailer_fixes, link_reads, never_green_at, others_said; every other `process_cache(...)` of core.py's registry waits for
+its call tree to reach a boundary that holds a context.
+
 The store, the condition registry and an explicit `clock` stay their own parameters where they are already passed
 (830 functions take a store). Folding them into the context is a later cleanup, made where a function is changed
 anyway, never in a sweep.

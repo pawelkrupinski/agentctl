@@ -10,8 +10,8 @@ must not import (`CurrentStore(process_store)`, the condition registry, ...) and
 MODULES is every module in import order, each after every module it imports (devtools/placemodules.py writes it): the
 manifest the quality tools (quality/typecheck.py) and the tests' view of the package (tests/agentctl_view.py) read.
 """
-MODULES = ("procrunner", "conditionregistry", "escalationtable", "psparse", "govpool", "statefile", "selfcode",
-           "statemachines", "storecalls", "clock", "filelock", "ids", "timefmt", "livepage", "holdgraph",
+MODULES = ("caches", "procrunner", "conditionregistry", "escalationtable", "psparse", "govpool", "statefile",
+           "selfcode", "statemachines", "storecalls", "clock", "filelock", "ids", "timefmt", "livepage", "holdgraph",
            "configfile", "knobread", "watchknobs", "tickknobs", "storeknobs", "storeauth", "redknobs", "blameknobs",
            "queueknobs", "govknobs", "fixerknobs", "leasetable", "offers", "cpu", "core", "texthash", "percentile",
            "tokenerrors", "landedtwin", "ghtally", "workflows", "claudefiles", "allowedpaths", "procs", "machine",

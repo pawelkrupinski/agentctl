@@ -99,7 +99,7 @@ class BacklogBatchTest(test_queue.QueueTest):
         what it changed -- but moves no take, so it is no identity change checked alone: it joins the batch."""
         eb = self.queue("b", "common/src/main/B.scala")
         ea = self.queue("a", "web/src/main/A.scala")
-        self.assertIs(A.identity_change(self.r.path, self.entry(eb)), False)
+        self.assertIs(A.identity_change(self.r.path, self.entry(eb), {}), False)
         A.tick_changes(self.r.path, self.d, *on_clock(self.clock), ctx=case_context())
         self.assertEqual(self.started, [], "nothing is checked alone")
         self.drive()
@@ -122,8 +122,8 @@ class BacklogBatchTest(test_queue.QueueTest):
         eo = self.queued(wt)[0]
         A.tick_changes(self.r.path, self.d, *on_clock(self.clock), ctx=case_context())
         self.assertEqual(self.started, [], "every one batches")
-        self.assertIs(A.identity_change(self.r.path, self.entry(em)), False)
-        self.assertIs(A.identity_change(self.r.path, self.entry(en)), True)
+        self.assertIs(A.identity_change(self.r.path, self.entry(em), {}), False)
+        self.assertIs(A.identity_change(self.r.path, self.entry(en), {}), True)
         self.drive()
         for eid in (em, en, ea, eo):
             self.assertEqual(self.entry(eid)["status"], "landed", eid)

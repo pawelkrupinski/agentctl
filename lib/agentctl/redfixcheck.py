@@ -7,7 +7,7 @@ import os
 from typing import Any
 import re
 from agentctl.statefile import note_failure, read_record, write_json
-from agentctl.core import attempt, err, git, process_cache, remote
+from agentctl.core import attempt, err, git, remote
 from agentctl.trailers import trailer_format, trailer_values
 from agentctl.inboxentry import inbox_write
 from agentctl.context import Context
@@ -257,16 +257,14 @@ def red_own_code(repo: str, sha: str, wf: tuple[str, str], part: str, own: list[
     return {p for p in named if not re.search(rf"(?<![\w/.-]){re.escape(p)}(?![\w-])", others)}
 
 
-_link_reads: dict[tuple[Any, str], LinkReads | None] = process_cache({})
-
-
 def red_link_reads(repo: str, sha: str, d: dict[str, Any], *, ctx: Context) -> LinkReads | None:
     """(its workflow file, its failing steps' failing part, {paths only its failing steps name}) read at commit sha;
     None when no failing step can be told there (the workflow or the step unread)."""
     k = (d.get("key"), sha)
-    if k not in _link_reads:
-        _link_reads[k] = red_link_read(repo, sha, d, ctx=ctx)
-    return _link_reads[k]
+    known: dict[tuple[Any, str], LinkReads | None] = ctx.caches.link_reads
+    if k not in known:
+        known[k] = red_link_read(repo, sha, d, ctx=ctx)
+    return known[k]
 
 
 def red_link_read(repo: str, sha: str, d: dict[str, Any], *, ctx: Context) -> LinkReads | None:

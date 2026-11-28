@@ -4,6 +4,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from dataclasses import dataclass
+from agentctl.caches import Caches
 from agentctl.ciruns import CiRuns
 from agentctl.clock import Clock
 from agentctl.procrunner import ProcessRunner
@@ -16,9 +17,11 @@ class Context:
     """The collaborators a call tree reaches that are no parameter of their own: runs, the process's one reader of CI
     runs and jobs (what it read is kept for the process: every reader in a tick or a command sees one listing); clock,
     the process's clock, runner, its process runner, and inbox, its inbox writer (the ones clock.wire_clock,
-    procrunner.wire_runner and inboxentry.wire_inbox_writer wire for the readers no context reaches yet)."""
+    procrunner.wire_runner and inboxentry.wire_inbox_writer wire for the readers no context reaches yet), machine,
+    the machine it runs on, and caches, the process's memos (caches.py)."""
     runs: CiRuns
     clock: Clock
     runner: ProcessRunner
     inbox: InboxWriter
     machine: MachineProbe
+    caches: Caches

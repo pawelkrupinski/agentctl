@@ -8,7 +8,7 @@ import time
 from contextlib import suppress
 from typing import Any
 from agentctl.timefmt import parse_time, ts
-from agentctl.core import attempt, git, process_cache
+from agentctl.core import attempt, git
 from agentctl.trailers import commit_trailer_values
 from agentctl.waitingdir import ChangeRecords, waiting_state
 from agentctl.onmain import MainContainment, patch_id
@@ -28,14 +28,12 @@ def commit_fixes(repo: str, sha: str, store: Any, *, ctx: Context) -> set[str]:
     return fix_check(repo, sha, vals, store, ctx=ctx)[0] if vals else set()
 
 
-_trailer_fixes = process_cache({})
-
-
 def _commit_fixes(repo: Any, c: Any, store: Any, *, ctx: Context) -> Any:
     """The runs commit c's Fixes-Red trailers name that count (cached per commit)."""
-    if c not in _trailer_fixes:
-        _trailer_fixes[c] = sorted(commit_fixes(repo, c, store, ctx=ctx))  # only those that count
-    return _trailer_fixes[c]
+    known = ctx.caches.trailer_fixes
+    if c not in known:
+        known[c] = sorted(commit_fixes(repo, c, store, ctx=ctx))  # only those that count
+    return known[c]
 
 
 def entry_fixes(repo, e, store, *, ctx):

@@ -4,7 +4,6 @@
 import fnmatch
 from typing import Any
 from agentctl.statefile import read_text_or
-from agentctl.core import process_cache
 from agentctl.gitrepo import commit_files
 from agentctl.repos import precheck_hook
 from agentctl.trailers import commit_trailer_values
@@ -35,9 +34,6 @@ def pure_move_claimed(repo, commit):
     return commit_trailer_values(repo, commit, "Pure-Move") == {"verified"}
 
 
-_identity_known = process_cache({})  # (entry id, head) -> identity_change's verdict
-
-
 def hook_identity_flag(hook: Any) -> Any:
     """The hook's flag that answers 'does this change touch identity': --identity-change, else --plan, else None. A flag
     is never asked unless the hook has it: an unknown flag runs the real checks."""
@@ -45,20 +41,20 @@ def hook_identity_flag(hook: Any) -> Any:
     return "--identity-change" if "--identity-change)" in text else "--plan" if "--plan)" in text else None
 
 
-def identity_change(repo, e):
+def identity_change(repo, e, known):
     """Whether the change is an identity change (G5's drift check of a batch holding more than one): G5's identity-model commits, or the hook's
     --identity-change naming a path that can move takes (a hook without it: its --plan selecting the `identity` area). None when it cannot tell (no plan, unreadable commits): checked alone. Kept per
-    entry and head in the process (never written to the entry: an executor may be saving it meanwhile)."""
+    entry and head in `known` (the process's, caches.py; never written to the entry: an executor may be saving it meanwhile)."""
     key = (e["id"], e.get("head"))
-    if key in _identity_known:
-        return _identity_known[key]
+    if key in known:
+        return known[key]
     fetch_entry_commits(repo, e)
     # A VERIFIED PURE MOVE OWES NO IDENTITY AREA (movies' hook, 2026-11-19): a commit saying `Pure-Move: verified` moves
     # no take -- the hook's puremove check proves the move -- so only the commits without the claim make an identity
     # change; the hook selects the identity area by the same rule, so a batch holding the move runs none for it.
     commits = [c for c in e.get("commits") or [] if not pure_move_claimed(repo, c)]
     if not commits:
-        _identity_known[key] = False
+        known[key] = False
         return False
     paths = change_paths_of(repo, e, commits)
     hook = precheck_hook(repo)
@@ -72,7 +68,7 @@ def identity_change(repo, e):
     if plan is None:
         return None
     verdict = "identity" in plan or bool(identity_model_commits(repo, commits))
-    _identity_known[key] = verdict
+    known[key] = verdict
     return verdict
 
 

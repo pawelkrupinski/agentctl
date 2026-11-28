@@ -120,13 +120,13 @@ def _batch_barrier(e: dict[str, Any], red_fix: bool) -> str | None:
             else f"batch-alone: {e['batch_alone']}" if e.get("batch_alone") else None)
 
 
-def _backlog_barrier(e: dict[str, Any], red_fix: bool, repo: Any) -> tuple[str | None, Any]:
+def _backlog_barrier(e: dict[str, Any], red_fix: bool, repo: Any, identity_known: dict[Any, Any]) -> tuple[str | None, Any]:
     """(what keeps the change out of a backlog batch, its identity answer): when nothing else does and repo is given,
     a queued change is asked whether it is an identity change (batch.identity_change, cached per entry and head)."""
     why = _batch_barrier(e, red_fix)
     if why is not None or repo is None or not e.get("id") or e.get("status") != "queued":
         return why, None
-    identity = identity_change(repo, e)
+    identity = identity_change(repo, e, identity_known)
     # EVERY CHANGE IS A MEMBER (2026-11-20, batch.py): an identity change joins a backlog batch, its identity area
     # in the batch's union; only one whose kind cannot be told stays out
     return ("identity-unknown" if identity is None else None), identity
@@ -152,7 +152,7 @@ def classify_change(e, facts, t=None, repo=None, store=None, *, ctx):
     landing = may_land_on_red(facts, e, repo, store=store, ctx=ctx)
     names, reds = landing.names, list(landing.reds)
     red_fix, gate_fix = landing.red_fix, landing.gate_fix
-    backlog_why, identity = _backlog_barrier(e, red_fix, repo)
+    backlog_why, identity = _backlog_barrier(e, red_fix, repo, ctx.caches.identity_known)
     push_why = _push_barrier(e, red_fix)
     verify = _verify_due(e, t)
     priority = "red-fix" if red_fix else "verify" if verify else "ordinary"

@@ -31,6 +31,7 @@ from agentctl.vendordrift import probe_vendor_drift
 from agentctl.selfcode import code_version
 from agentctl.store import CurrentStore
 from agentctl.timelinecmd import cmd_analyze, cmd_history
+from agentctl.caches import Caches
 from agentctl.ciruns import CiRuns
 from agentctl.context import Context
 from agentctl.machine import MachineProbe, process_machine
@@ -95,7 +96,7 @@ def condition_registry(clock: Clock, store: Any, ctx: Context) -> ConditionRegis
 def process_context(clock: Clock, runner: ProcessRunner, inbox: InboxWriter, machine: MachineProbe) -> Context:
     """The process's Context (docs/design/contexts.md): its one CI runs reader (CiRuns: what was read of GitHub's runs
     and jobs), new for each main, and the clock, process runner, inbox writer and machine main wired."""
-    return Context(runs=CiRuns(), clock=clock, runner=runner, inbox=inbox, machine=machine)
+    return Context(runs=CiRuns(), clock=clock, runner=runner, inbox=inbox, machine=machine, caches=Caches())
 
 
 def wire_collaborators(clock: Clock, store: Any) -> InboxWriter:

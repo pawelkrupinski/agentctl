@@ -253,7 +253,8 @@ class WiredMachine:
 def context_with(runs):
     """A Context over `runs` (a test's own CI reader, or a fake of it) and the case's wired collaborators."""
     return sys.modules["agentctl.context"].Context(runs=runs, clock=WiredClock(), runner=WiredRunner(),
-                                                   inbox=WiredInbox(), machine=WiredMachine())
+                                                   inbox=WiredInbox(), machine=WiredMachine(),
+                                                   caches=sys.modules["agentctl.caches"].Caches())
 
 
 def case_context():

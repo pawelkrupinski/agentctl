@@ -6,7 +6,7 @@ from agentctl.statemachines import is_terminal
 import json
 import time
 from typing import Any
-from agentctl.core import attempt, err, process_cache
+from agentctl.core import attempt, err
 from agentctl.redrecord import canon_job, red_obs_for
 from agentctl.gating import main_workflow_files
 from agentctl.redrepos import red_is_other
@@ -35,7 +35,6 @@ UNTRACKED_META = "red_untracked"      # store meta: {repo: [{key, workflow, jobs
 EVER_GREEN_JOB_RUNS = 10              # runs of the snapshot's list read for a job's success, at most
 UNTRACKED_KINDS = ("gate", "outside", "stuck-run", "predicts")
 _UNREAD = object()  # newest_green_main raised: the answer is unknown, not 'never green'
-_never_green_at = process_cache({})   # (repo, workflow[, job]) -> when GitHub last said never green
 
 
 def ever_green_record(store):
@@ -93,22 +92,22 @@ def workflow_ever_green(store, o_r, workflow, runs=(), now_=None, *, ctx):
         return True
     green = _completed_green(runs)
     if not green:
-        if _never_green_recently((o_r, workflow), t):
+        if _never_green_recently(ctx.caches.never_green_at, (o_r, workflow), t):
             return False
         # SystemExit: NoToken
         green = attempt(lambda: newest_green_main(o_r, workflow, ctx=ctx), _UNREAD, catch=(Exception, SystemExit))
         if green is _UNREAD:
             return None
     if not green:
-        _never_green_at[(o_r, workflow)] = t
+        ctx.caches.never_green_at[(o_r, workflow)] = t
         return False
     ever_green_note(store, o_r, workflow, green.get("databaseId"))
     return True
 
 
-def _never_green_recently(key: tuple[str, ...], t: float) -> bool:
+def _never_green_recently(never_green_at: dict[Any, Any], key: tuple[str, ...], t: float) -> bool:
     """True when the workflow (or job) of `key` was found never green within EVER_GREEN_RECHECK before t."""
-    at = _never_green_at.get(key)
+    at = never_green_at.get(key)
     return at is not None and t - at < knob_ever_green_recheck()
 
 
@@ -152,14 +151,14 @@ def job_ever_green(store, o_r, workflow, job, runs=(), now_=None, *, ctx):
     known = ((ever_green_record(store).get(o_r) or {}).get("jobs") or {}).get(workflow) or {}
     if any(job_matches(k, job) for k in known):
         return True
-    if _never_green_recently((o_r, workflow, job), t):
+    if _never_green_recently(ctx.caches.never_green_at, (o_r, workflow, job), t):
         return False
     cands = _job_candidate_runs(o_r, workflow, runs, ctx=ctx)
     if not _has_success(cands):
         return None  # no green run to read its jobs from: unknown, tracked
     seen = _job_green_in_runs(store, o_r, workflow, job, cands, ctx=ctx)
     if seen is False:
-        _never_green_at[(o_r, workflow, job)] = t
+        ctx.caches.never_green_at[(o_r, workflow, job)] = t
     return seen
 
 

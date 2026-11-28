@@ -252,11 +252,11 @@ class TickTest(RedReposBase):
         self.assertIn(INFRA, self.by_repo())
 
     def test_a_repo_that_keeps_failing_is_said_on_a_new_reason_or_every_ten_minutes(self):
-        A._others_said.clear()
-        self.assertIsNotNone(A.red_others_skipped(CORE, "HTTP 500", now_=1000))
-        self.assertIsNone(A.red_others_skipped(CORE, "HTTP 500", now_=1060))
-        self.assertIsNotNone(A.red_others_skipped(CORE, "HTTP 502", now_=1070))
-        self.assertIn("(still)", A.red_others_skipped(CORE, "HTTP 502", now_=1070 + A.RED_SKIP_SAY))
+        said = {}
+        self.assertIsNotNone(A.red_others_skipped(said, CORE, "HTTP 500", now_=1000))
+        self.assertIsNone(A.red_others_skipped(said, CORE, "HTTP 500", now_=1060))
+        self.assertIsNotNone(A.red_others_skipped(said, CORE, "HTTP 502", now_=1070))
+        self.assertIn("(still)", A.red_others_skipped(said, CORE, "HTTP 502", now_=1070 + A.RED_SKIP_SAY))
 
     def test_another_repos_tick_leaves_the_primarys_run_lists_alone(self):
         case_context().runs.main_runs_of(MOVIES).gate["Main"] = ["movies"]

@@ -5,6 +5,7 @@ import glob, os, re, sys, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A, Base  # noqa: E402
+import harness  # noqa: E402
 from harness import case_context  # noqa: E402
 
 LIB = os.path.join(os.path.dirname(HERE), "lib", "agentctl")
@@ -42,6 +43,28 @@ class EveryTestCaseTest(unittest.TestCase):
         case_context().runs.main_runs_of("leak")
         harness._reset_process_state()
         self.assertEqual([c for c in A.PROCESS_CACHES if len(c)], [])
+
+
+class OwnedCachesTest(unittest.TestCase):
+    """THE MEMOS ARE OWNED (lib/agentctl/caches.py): a context's caches are its own, so a memo filled through one context
+    is empty in the next, and a module keeps none of them at module level."""
+
+    def test_a_memo_filled_through_one_context_is_empty_in_another(self):
+        first, second = case_context(), harness.context_with(case_context().runs)
+        first.caches.trailer_fixes["abc"] = ["run 1"]
+        first.caches.never_green_at[("o/r", "wf")] = 1.0
+        self.assertEqual((second.caches.trailer_fixes, second.caches.never_green_at), ({}, {}))
+        self.assertEqual(first.caches.trailer_fixes, {"abc": ["run 1"]})
+
+    def test_a_skipped_repos_line_is_said_once_per_memo_not_once_per_process(self):
+        said, other = {}, {}
+        self.assertIsNotNone(A.red_others_skipped(said, "o/r", "HTTP 500", now_=1000))
+        self.assertIsNone(A.red_others_skipped(said, "o/r", "HTTP 500", now_=1001))
+        self.assertIsNotNone(A.red_others_skipped(other, "o/r", "HTTP 500", now_=1002), "another memo has not said it")
+
+    def test_the_moved_memos_are_no_module_level_state(self):
+        for name in ("_identity_known", "_trailer_fixes", "_link_reads", "_never_green_at", "_others_said"):
+            self.assertFalse(hasattr(A, name), name)
 
 
 if __name__ == "__main__":
