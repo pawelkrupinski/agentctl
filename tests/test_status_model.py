@@ -40,9 +40,13 @@ class StatusModelTest(unittest.TestCase):
             sections = A.status_data(memos=case_context().caches.status, machine=A.machine_probe(A.knob_machine()),
                                      store=A.Store(), now_=self.t, only=("dispatcher",))
             return sections["dispatcher"]["off_flag"]
+        flag = A.reds_dir("DISPATCH_OFF")
+        if os.path.exists(flag):
+            os.unlink(flag)
+        self.addCleanup(lambda: os.path.exists(flag) and os.unlink(flag))  # reds_dir is shared by the process's tests
         self.assertFalse(off_flag())
-        os.makedirs(os.path.dirname(A.reds_dir("DISPATCH_OFF")), exist_ok=True)
-        open(A.reds_dir("DISPATCH_OFF"), "w").close()
+        os.makedirs(os.path.dirname(flag), exist_ok=True)
+        open(flag, "w").close()
         self.assertTrue(off_flag())
 
     def test_the_line_reads_the_snapshot_only_within_its_budget(self):
