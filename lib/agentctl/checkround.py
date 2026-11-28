@@ -38,7 +38,7 @@ def check_entry(repo: str, eid: str, clock: Clock, store: Any, *, ctx: Context) 
         e = ChangeRecords(store, d).get(eid)
         if not e or e.get("status") not in ("queued", "checking") or e.get("backlog_batch"):  # a backlog batch's
             return 0
-        fix = may_land_on_red(facts_for(gate_reds(repo, ctx=ctx), store), e, repo, store=store, ctx=ctx).red_fix  # its own tree
+        fix = may_land_on_red(facts_for(gate_reds(repo, ctx=ctx), store, ctx.caches.tick_facts), e, repo, store=store, ctx=ctx).red_fix  # its own tree
         slot = check_tree_slot(store, repo, d, fix=fix)
         if not slot:  # all trees busy: it stays queued, the tick starts it again when one frees
             return 0

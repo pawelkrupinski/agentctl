@@ -12,7 +12,8 @@ from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
 from agentctl.tickknobs import knob_upkeep_every
 from agentctl.govknobs import DISK_MIN_GB, knob_disk_min_gb, knob_disk_path
-from agentctl.core import HOME, _bounded, print_error, run_bounded
+from agentctl.core import HOME, print_error, run_bounded
+
 from agentctl.fixerrecords import fixer_records
 from agentctl.machine import MachineProbe
 from agentctl.cleanup import close_worktree
@@ -89,9 +90,10 @@ def run_upkeep(store):
     return lines
 
 
-def _disk_invariant(store: Any, pr: Any, min_gb: Any, low: Any) -> Any:
-    """WD lines: the upkeep ran (none is running) and the disk is still low: the owner's to free."""
-    t_up = _bounded.get("upkeep")
+def _disk_invariant(store: Any, pr: Any, min_gb: Any, low: Any, threads: dict[str, Any]) -> Any:
+    """WD lines: the upkeep ran (none is running in `threads`, Caches.bounded) and the disk is still low: the owner's
+    to free."""
+    t_up = threads.get("upkeep")
     if not low or (t_up and t_up.is_alive()):
         return []
     open_condition("INVARIANT", f"INVARIANT WD: the disk is low -- {pr.detail} (under {min_gb:.0f} GB) after the "
@@ -114,11 +116,11 @@ def _run_queue_invariant(store: Any, machine: MachineProbe) -> list[str]:
     return [f"WL: {pr.detail}"] if cond else []
 
 
-def maybe_upkeep(store, now_=None, *, machine, ran_at):
+def maybe_upkeep(store, now_=None, *, machine, ran_at, threads):
     """The tick's upkeep step: at most every UPKEEP_EVERY s, or within 10 min when the disk is low (DISK_MIN_GB); and
     WD, the disk invariant: still low with the last upkeep done, an INVARIANT condition whose probe is that same
     free-space check (it closes itself once space is back; it escalates only while it stays open). ran_at: the
-    process's throttles (Caches.ran_at), "upkeep" when the last one started."""
+    process's throttles (Caches.ran_at), "upkeep" when the last one started; threads, its bounded threads."""
     t = now_ if now_ is not None else epoch_now()
     min_gb = knob_disk_min_gb()
     pr = run_probe(partial(probe_disk_free, machine=machine), {"path": knob_disk_path() or HOME, "min_gb": min_gb})
@@ -129,9 +131,9 @@ def maybe_upkeep(store, now_=None, *, machine, ran_at):
         ran_at["upkeep"] = t
 
         # in its thread (minutes of git): the tick goes on; it logs to upkeep.log
-        done = run_bounded("upkeep", lambda: run_upkeep(store), 1)
+        done = run_bounded("upkeep", lambda: run_upkeep(store), 1, threads)
         out.append(f"{'done' if done else 'started'}{' (the disk is low: ' + pr.detail + ')' if low else ''} "
                    f"(log {state_root('upkeep.log')})")
         return out
-    out += _disk_invariant(store, pr, min_gb, low)
+    out += _disk_invariant(store, pr, min_gb, low, threads)
     return out

@@ -10,7 +10,8 @@ from agentctl.statefile import mtime, read_record, read_text_or, unlink_file, wr
 from agentctl.clock import wall_epoch
 from agentctl.filelock import FileLock
 from agentctl.timefmt import ts
-from agentctl.core import _bounded, print_error, git, pid_alive, remote
+from agentctl.core import print_error, git, pid_alive, remote
+
 from agentctl.repos import precheck_hook
 from agentctl.workflows import LOCAL_FLOW
 from agentctl.fixerrecords import fixer_records
@@ -76,18 +77,19 @@ def note_local_red(main, fails, passes) -> None:
 # processor's patrol (the governor's check class), synchronously by `red patrol`, or by the next land's dry run. A pass
 # clears the red, releases its claims, stops its dispatched fixer (process groups) and puts FIX OK in the inbox; the
 # fixer's worktrees whose commits are patch-equivalent on main are removed, any other is listed in the inbox.
-def recheck_local(repo, wait: bool = True, *, machine):
-    """Recompute a stale local red on the current origin/main. Returns action lines (when it ran synchronously)."""
+def recheck_local(repo, wait: bool = True, *, machine, threads):
+    """Recompute a stale local red on the current origin/main. Returns action lines (when it ran synchronously).
+    threads: the process's bounded threads (Caches.bounded), where a background recheck still at work is found."""
     main = local_stale(repo)
     if not main:
         return release_local_leftovers(repo)
     if not wait:
         import threading
-        t = _bounded.get("local-recheck")
+        t = threads.get("local-recheck")
         if t and t.is_alive():
             return []
         t = threading.Thread(target=lambda: _recheck_guarded(repo, main, machine), name="local-recheck", daemon=True)
-        _bounded["local-recheck"] = t
+        threads["local-recheck"] = t
         t.start()
         return []
     return _recheck_guarded(repo, main, machine)

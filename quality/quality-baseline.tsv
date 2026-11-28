@@ -8,3 +8,4 @@ limit	method-lines	50
 limit	file-lines	500
 limit	copies	0
 limit	cycle	0
+copies	batchselect	2

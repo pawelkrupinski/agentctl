@@ -25,6 +25,11 @@ class Caches:
     flow_bounds: dict[Any, Any] = field(default_factory=dict)  # (main sha, workflow path) -> the workflow's timeout bound
     production: dict[str, bool] = field(default_factory=dict)  # sha -> whether it touches a production path (a commit never changes)
     ran_at: dict[str, float] = field(default_factory=dict)  # a throttled step ("upkeep", "recovery", ...) -> when it last ran
-    route_seen: list[Any] = field(default_factory=lambda: ["unseen"])  # the default route at the network watch's last look
-    batch_said: list[Any] = field(default_factory=lambda: [None])  # the batch tick's lines last said in the journal
+    route_seen: dict[str, Any] = field(default_factory=dict)  # "route": the default route at the network watch's last look
+    batch_said: dict[str, Any] = field(default_factory=dict)  # "lines": the batch tick's lines last said in the journal
+    tick_facts: dict[str, Any] = field(default_factory=dict)  # "memo": the queue facts of the tick under way (None: none is)
+    bounded: dict[str, Any] = field(default_factory=dict)  # a bounded step's name -> the thread it runs in (core.run_bounded)
+    step_errors: dict[str, Any] = field(default_factory=dict)  # a tick step -> its last error (None: it ended well)
+    status_page: dict[str, Any] = field(default_factory=dict)  # the status page this process serves: its url and server
+
 

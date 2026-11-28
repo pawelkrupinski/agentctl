@@ -26,7 +26,7 @@ from agentctl.batchpush import push_batch_item
 
 def tick_batch(repo: str, d: str, clock: Any, st: Any, *, ctx: Context) -> list[str]:
     """One tick of the repository's batch. Returns what it did. A queue that stops moving is named by queuestall."""
-    with facts_tick():  # the queue facts read once for the tick (changekind.py)
+    with facts_tick(ctx.caches.tick_facts):  # the queue facts read once for the tick (changekind.py)
         return _tick_batch(repo, d, st, ctx=ctx)
 
 
@@ -129,7 +129,7 @@ def batch_forming(it: Any, depth: Any, waiting: Any) -> bool:
 def gate_fix_waits(repo: str, st: Any, reds: Any, waiting: Any, *, ctx: Context) -> bool:
     """Whether the gate is red and a waiting change names its red (THE RED-LANDING RULE: one that may land on it is
     released to the queue; one that waits beside a production commit naming no red stays)."""
-    facts = facts_for(reds, st)
+    facts = facts_for(reds, st, ctx.caches.tick_facts)
     return bool(reds) and any(may_land_on_red(facts, e, repo, store=st, ctx=ctx).names_gate_red for e in waiting)
 
 
@@ -169,7 +169,7 @@ def batch_formed(repo: str, d: str, st: Any, t: float, it: Any, reds: Any, depth
 def batch_candidates(repo: str, d: str, st: Any, t: float, it: Any, reds: Any, depth: Any, *, ctx: Context) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """(the push batch's candidates, what is ready): the checked changes owing a verify round, else the queued ones a
     backlog batch would take -- each asked only when the batch is new or of that depth."""
-    facts = facts_for(reds, st)
+    facts = facts_for(reds, st, ctx.caches.tick_facts)
     push = push_candidates(repo, d, reds, st, t, facts, ctx=ctx) if not it or depth == "verify" else []
     return push, push or (backlog_candidates(repo, d, reds, st, t, facts, ctx=ctx) if not it or depth == "full" else [])
 

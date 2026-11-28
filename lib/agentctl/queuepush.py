@@ -60,7 +60,7 @@ def older_verifying(todo, e, t, kinds=None, waits=frozenset()):
 
 def tick_changes(repo: str, d: str, clock: Any, st: Any, *, ctx: Context) -> list[str]:
     """One tick over the change items (_tick_changes), the queue facts read once for it (changekind.py facts_tick)."""
-    with facts_tick():
+    with facts_tick(ctx.caches.tick_facts):
         return _tick_changes(repo, d, clock, st, ctx=ctx)
 
 
@@ -71,7 +71,7 @@ def _tick_changes(repo: str, d: str, clock: Any, st: Any, *, ctx: Context) -> li
     checked change pushed. Returns what it did."""
     t = clock.time()
     reds = attempt(lambda: gate_reds(repo, ctx=ctx), set(), catch=(Exception,))
-    facts = facts_for(reds, st)  # A FIX OF ANY OPEN RED GOES FIRST (above): each change's KIND, recorded on its item
+    facts = facts_for(reds, st, ctx.caches.tick_facts)  # A FIX OF ANY OPEN RED GOES FIRST (above): each change's KIND, recorded on its item
     entries = ChangeRecords(st, d).queued()
     kinds = classify_queue(repo, d, entries, facts, t, st, ctx=ctx)
     todo = sorted(entries, key=lambda e: kind_order(kinds, e))  # THE PRIORITY ORDER (changekind.py PRIORITY)

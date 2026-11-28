@@ -15,7 +15,7 @@ from agentctl.statefile import read_json_file, write_json
 from agentctl.clock import epoch_now
 from agentctl.livepage import AGENT_PAGE_HTML, STATUS_PAGE_HTML
 from agentctl.watchknobs import knob_status_page, knob_status_port
-from agentctl.core import print_error, on_ci_runner, process_cache
+from agentctl.core import print_error, on_ci_runner
 from agentctl.live import live_lookup
 from agentctl.livestream import (
     LIVE_SEND_TIMEOUT, LIVE_STREAMS, _live_streams, live_mask_text, live_peer_closed, live_stream)
@@ -238,8 +238,6 @@ def status_page_server(host, port, machine):
     return StatusServer((host, port), machine)
 
 
-_status_page = process_cache({})
-
 
 def status_page_file():
     return state_root("status-page.json")
@@ -265,12 +263,13 @@ def _bind_status_page(port, why, machine):
         return None
 
 
-def status_page_start(machine: MachineProbe) -> Any:
-    """Serve the page from a daemon thread of this process, once: 127.0.0.1:80, else :3015 ($AGENTCTL_STATUS_PORT: that
+def status_page_start(machine: MachineProbe, page: dict[str, Any]) -> Any:
+    """Serve the page from a daemon thread of this process, once (page: the process's served page, Caches.status_page,
+    its url and server once started): 127.0.0.1:80, else :3015 ($AGENTCTL_STATUS_PORT: that
     port alone; AGENTCTL_STATUS_PAGE=off: none). Writes status-page.json (its URL, for `status --open`). Returns the URL
     or None. Never raises."""
-    if _status_page.get("url"):
-        return _status_page["url"]
+    if page.get("url"):
+        return page["url"]
     if knob_status_page().lower() in ("0", "off", "no"):
         return None
     ports = ([int(knob_status_port())] if knob_status_port()
@@ -283,7 +282,7 @@ def status_page_start(machine: MachineProbe) -> Any:
         threading.Thread(target=srv.serve_forever, daemon=True, name="status-page").start()
         threading.Thread(target=lambda: status_warm(machine), daemon=True, name="status-warm").start()  # the first refresh has data
         url = f"http://{STATUS_PAGE_HOST}/" if p == 80 else f"http://{STATUS_PAGE_HOST}:{p}/"
-        _status_page.update(url=url, server=srv)
+        page.update(url=url, server=srv)
         if why:
             print_error(f"status page: {'; '.join(why)}: serving {url} instead")
         print_error(f"status page: {url} (127.0.0.1:{p})")

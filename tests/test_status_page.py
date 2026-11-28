@@ -501,20 +501,18 @@ class AgentMetaPathTest(Base):
 class StartTest(Base):
     def setUp(self):
         super().setUp()
-        self.saved_ports = A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK, dict(A._status_page)
-        A._status_page.clear()
+        self.saved_ports = A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK
+        self.page: dict = {}  # the process's served page (Caches.status_page)
         A.port_open = self.patched["port_open"]
         self.saved_warm = A.status_warm
         A.status_warm = lambda machine: None
 
     def tearDown(self):
-        srv = A._status_page.get("server")
+        srv = self.page.get("server")
         if srv:
             srv.shutdown()
             srv.server_close()
-        A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK, saved = self.saved_ports
-        A._status_page.clear()
-        A._status_page.update(saved)
+        A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK = self.saved_ports
         A.status_warm = self.saved_warm
         super().tearDown()
 
@@ -530,12 +528,12 @@ class StartTest(Base):
         A.STATUS_PAGE_PORT, A.STATUS_PAGE_FALLBACK = taken.getsockname()[1], self.free_port()
         try:
             with contextlib.redirect_stderr(io.StringIO()) as e:
-                url = A.status_page_start(A.machine_probe(A.knob_machine()))
+                url = A.status_page_start(A.machine_probe(A.knob_machine()), self.page)
         finally:
             taken.close()
         self.assertEqual(url, f"http://agentctl.localhost:{A.STATUS_PAGE_FALLBACK}/")
         self.assertIn("already listens", e.getvalue())
-        self.assertEqual(A.status_page_start(A.machine_probe(A.knob_machine())), url, "once per process")
+        self.assertEqual(A.status_page_start(A.machine_probe(A.knob_machine()), self.page), url, "once per process")
         self.assertEqual(A.status_page_url(), url)
         opened = os.path.join(self.root, "opened")
         os.environ["AGENTCTL_OPEN"] = os.path.join(self.root, "fake-open")
@@ -551,7 +549,7 @@ class StartTest(Base):
     def test_switched_off(self):
         os.environ["AGENTCTL_STATUS_PAGE"] = "off"
         try:
-            self.assertIsNone(A.status_page_start(A.machine_probe(A.knob_machine())))
+            self.assertIsNone(A.status_page_start(A.machine_probe(A.knob_machine()), self.page))
         finally:
             os.environ.pop("AGENTCTL_STATUS_PAGE")
 

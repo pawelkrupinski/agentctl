@@ -461,7 +461,7 @@ class SyncStepsTest(unittest.TestCase):
         case.fake("refresh_pinned_recording", lambda rng, *a, **k: None)
         case.fake("write_red_status_snapshot", lambda rng, store: None)
 
-        def run_bounded(name, fn, bound):
+        def run_bounded(name, fn, bound, threads):
             case.log.append(["run_bounded", name, bound])
             fn()
             return case.rng.random() < 0.8
@@ -496,7 +496,7 @@ class SyncStepsTest(unittest.TestCase):
 class StatusPageStartTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
-        case.put("_status_page", r.choice([{}, {}, {"url": "http://already/"}]))
+        page = r.choice([{}, {}, {"url": "http://already/"}])
         env = {}
         if r.random() < 0.3:
             env["AGENTCTL_STATUS_PORT"] = r.choice(["3015", "8080", "80"])
@@ -518,13 +518,13 @@ class StatusPageStartTest(unittest.TestCase):
             def start(self):
                 case.log.append(["start"])
         raw(case, threading, "Thread", FakeThread)
-        return ()
+        return (page,)
 
     def test_status_page_start(self):
         def run(A):
-            def go():
-                got = A.status_page_start(A.machine_probe(A.knob_machine()))
-                return got, A._status_page.get("url"), sorted(A._status_page)
+            def go(page):
+                got = A.status_page_start(A.machine_probe(A.knob_machine()), page)
+                return got, page.get("url"), sorted(page)
             return go
         check(self, "status_page_start", self.build, run, 3000)
 

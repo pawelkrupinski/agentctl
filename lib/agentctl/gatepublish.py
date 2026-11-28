@@ -29,7 +29,8 @@ def gate_publish_cycle(repo: str, store: Any, registry: ConditionRegistry, *, ct
         ci_state_write(snap)
         # THE RED TICK ON THIS SNAPSHOT before its line is published: every red it shows is an item, offered or
         # held (never NOBODY). Bounded: a dispatch's worktree checkout finishes on the tick's own thread
-        if not run_bounded("red-tick", lambda: red_tick_repo(repo, store, registry, snap, ctx=ctx), knob_assign_bound()):
+        if not run_bounded("red-tick", lambda: red_tick_repo(repo, store, registry, snap, ctx=ctx), knob_assign_bound(),
+                           ctx.caches.bounded):
             print_error("red tick: still running; the gate line is published meanwhile")
         _red, line = ci_why(o_r, summary=True, snap=snap, repo=repo, store=store, ctx=ctx)
         publish_gate_summary(o_r, line.splitlines()[-1], epoch=snap["at"])
@@ -54,5 +55,7 @@ def maybe_publish_gate(repo, store, registry, *, ctx):
         return
     _last_gate_publish[0] = wall_epoch()  # the wall's: it is compared with a file's mtime above
 
-    if not run_bounded("gate-publish", lambda: gate_publish_cycle(repo, store, registry, ctx=ctx), knob_step_bound()):
+    if not run_bounded("gate-publish", lambda: gate_publish_cycle(repo, store, registry, ctx=ctx), knob_step_bound(),
+                       ctx.caches.bounded):
+
         print_error("gate summary: still reading from an earlier cycle (the loop goes on)")

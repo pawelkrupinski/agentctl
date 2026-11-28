@@ -70,7 +70,7 @@ def must_wait(repo: str, commits: list[str], reds: set[str], store: Any, *, ctx:
 def must_wait_why(repo: str, commits: list[str], reds: set[str], store: Any, *, ctx: Context) -> str | None:
     """None when the commits may land on the gate's red (`reds`; or it is green), else why the first that may not
     waits, in words: THE RED-LANDING RULE (redland.may_land_on_red)."""
-    return may_land_on_red(facts_for(reds, store), repo=repo, commits=commits, store=store, ctx=ctx).wait
+    return may_land_on_red(facts_for(reds, store, ctx.caches.tick_facts), repo=repo, commits=commits, store=store, ctx=ctx).wait
 
 
 def record_autoresolved(d: Any, e: dict[str, Any], resolved: Any, conflict: Any) -> None:
@@ -205,7 +205,7 @@ def diagnoses_of(repo, commits):
 def batch_order(repo, entries, reds, store, *, ctx):
     """The order a batch is built in: a fix for the current red first, then (main red) what may land while red -- tools
     only, or every commit carrying a Fixes-Red for a red run -- then the rest; by join order within each."""
-    facts = facts_for(reds, store)
+    facts = facts_for(reds, store, ctx.caches.tick_facts)
 
     def rank(e):
         landing = may_land_on_red(facts, e, repo, store=store, ctx=ctx)  # THE RED-LANDING RULE (redland.py)

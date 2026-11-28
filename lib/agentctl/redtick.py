@@ -160,7 +160,8 @@ def red_tick_repo(repo, store, registry, snap=None, dispatch=False, *, ctx):
         return []
     with _red_lock:
         ctx.caches.ran_at["red tick"] = ctx.clock.time()
-        recheck_local(repo, wait=False, machine=ctx.machine)
+        recheck_local(repo, wait=False, machine=ctx.machine, threads=ctx.caches.bounded)
+
         acts = red_tick(store, o_r, repo, snap or ci_state_load(o_r), dispatch=dispatch, registry=registry, ctx=ctx)
     for line in acts:
         print_error(f"red: {line}")
@@ -292,7 +293,7 @@ def maybe_red_tick(repo, store, registry, *, ctx):
             except (Exception, SystemExit) as spell_error:
                 print_error(f"red tick: the gate spell was not recorded ({str(spell_error)[:160]})")
         red_tick_others(store, registry, force=False, ctx=ctx)  # the other watched repos (red-repos.json); never fatal, never the primary's gate spell
-    if not run_bounded("red-tick", work, knob_step_bound()):
+    if not run_bounded("red-tick", work, knob_step_bound(), ctx.caches.bounded):
         print_error("red tick: still running from an earlier cycle (the loop goes on)")
 
 

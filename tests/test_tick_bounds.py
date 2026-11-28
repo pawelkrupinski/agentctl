@@ -12,6 +12,7 @@ from fake_clock import FakeClock, on_clock  # noqa: E402
 class StepBoundTest(unittest.TestCase):
     def setUp(self):
         os.environ["AGENTCTL_STEP_JOIN"] = "0.3"
+        self.threads, self.errors = {}, {}  # the process's Caches.bounded and Caches.step_errors
 
     def tearDown(self):
         os.environ.pop("AGENTCTL_STEP_JOIN", None)
@@ -23,28 +24,28 @@ class StepBoundTest(unittest.TestCase):
             runs.append(1)
             gate.wait(10)
         t0 = time.time()
-        self.assertIsNone(A.run_step("t-hung", hung))
+        self.assertIsNone(A.run_step("t-hung", hung, self.threads, self.errors))
         self.assertLess(time.time() - t0, 2)
-        self.assertIsNone(A.run_step("t-hung", hung))  # still running: not again, and no wait at all
+        self.assertIsNone(A.run_step("t-hung", hung, self.threads, self.errors))  # still running: not again, and no wait at all
         self.assertEqual(runs, [1])
         gate.set()
-        A._bounded["step:t-hung"].join(5)
-        self.assertTrue(A.run_step("t-hung", lambda: None))
+        self.threads["step:t-hung"].join(5)
+        self.assertTrue(A.run_step("t-hung", lambda: None, self.threads, self.errors))
 
     def test_a_steps_error_is_reported_now_or_at_the_next_look(self):
         def boom():
             raise RuntimeError("github said no")
-        self.assertFalse(A.run_step("t-boom", boom))
+        self.assertFalse(A.run_step("t-boom", boom, self.threads, self.errors))
         gate = threading.Event()
 
         def late():
             gate.wait(5)
             raise RuntimeError("late")
-        self.assertIsNone(A.run_step("t-late", late))
+        self.assertIsNone(A.run_step("t-late", late, self.threads, self.errors))
         gate.set()
-        A._bounded["step:t-late"].join(5)
-        self.assertTrue(A.run_step("t-late", lambda: None))  # its old error said once, then this run is good
-        self.assertNotIn("t-late", {k for k, v in A._step_errors.items() if v})
+        self.threads["step:t-late"].join(5)
+        self.assertTrue(A.run_step("t-late", lambda: None, self.threads, self.errors))  # its old error said once, then this run is good
+        self.assertNotIn("t-late", {k for k, v in self.errors.items() if v})
 
     def test_no_external_call_of_the_tick_is_unbounded(self):
         src = code_source()

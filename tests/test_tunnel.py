@@ -148,7 +148,7 @@ class TunnelTest(unittest.TestCase):
         self.assertEqual(A.tunnel_watch(A.CurrentStore(A.process_store), A.epoch_now() + 10, down, uplink=clean), "kicked")
 
     def test_network_change_kicks_the_tunnel_and_marks_the_gate(self):
-        seen = ["unseen"]  # the route at the last look (Caches.route_seen)
+        seen: dict = {}  # the route at the last look (Caches.route_seen): unseen
         home, phone = ("en0", "172.30.154.83"), ("en0", "172.20.10.1")
         saved, A.mark_gate_dirty = A.mark_gate_dirty, (lambda: self.inbox.append("DIRTY"))
         try:

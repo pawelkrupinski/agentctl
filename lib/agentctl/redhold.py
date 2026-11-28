@@ -85,7 +85,7 @@ def inv_wr(clock, st, reds = None, *, ctx):
     a violation that is left names the rule that holds the fix (`wait_rule`)."""
     if reds is None:
         reds = snap_reds(ci_state_load(SHORT["movies"]))
-    facts = facts_for(reds or set(), st)
+    facts = facts_for(reds or set(), st, ctx.caches.tick_facts)
     if not reds and not facts["open"]:
         return True, "main green (or its gate unread) and no red open: no red fix to hold"
     bad = red_fix_stalls(st, clock.time(), facts, ctx=ctx)
@@ -143,7 +143,7 @@ def red_fix_liveness(st: Any, t: float, snap: Any = None, *, ctx: Context) -> st
     age_since = t - min(parse_time(g["since"]).timestamp() for g in rows)
     if age_since <= knob_red_liveness_max():
         return None
-    stalls = red_fix_stalls(st, t, facts_for(snap_reds(snap), st), ctx=ctx)
+    stalls = red_fix_stalls(st, t, facts_for(snap_reds(snap), st, ctx.caches.tick_facts), ctx=ctx)
     if not stalls:
         return None
     return (f"RED FIX STALLED: the gate has been red {fmt_age(age_since)}; {stalls[0]}"

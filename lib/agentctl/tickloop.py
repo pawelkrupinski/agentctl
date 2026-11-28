@@ -12,7 +12,7 @@ from agentctl.selfcode import code_version
 from agentctl.statemachines import MACHINES, machine_state
 from agentctl.clock import Clock, epoch_now
 from agentctl.tickknobs import knob_step_join, knob_tick
-from agentctl.core import SHORT, _bounded, attempt, print_error, git, git_ok, host_role, process_cache, run_bounded
+from agentctl.core import SHORT, attempt, print_error, git, git_ok, host_role, run_bounded
 from agentctl.tokenerrors import NoToken
 from agentctl.procs import safe_cwd
 from agentctl.sdnotify import SD_READY, sd_notify
@@ -44,19 +44,20 @@ class ProcessorLoop:
     steps, the stall note, the round's files, the pause."""
 
     def __init__(self, repo: str, d: str, clock: Clock, store: Any, own: Any, drop: Any, steps: Sequence[Any],
-                 role: str, once: bool, argv: list[str]) -> None:
+                 role: str, once: bool, argv: list[str], threads: dict[str, Any], errors: dict[str, Any]) -> None:
         self.repo, self.d, self.clock, self.store, self.own, self.drop = repo, d, clock, store, own, drop
         self.steps, self.role, self.once, self.argv = steps, role, once, argv
+        self.threads, self.step_errors = threads, errors  # the process's bounded threads and steps' errors (Caches)
         self.errors, self.stalled_noted = 0, False
 
     def run_steps(self) -> bool:
         """Every step of the round, bounded; whether any failed."""
         write_beat("processor")
-        if not any(t.is_alive() for k, t in _bounded.items() if k.startswith("step:")):
+        if not any(t.is_alive() for k, t in self.threads.items() if k.startswith("step:")):
             restart_if_changed([self.own], self.argv)  # never under a step still at work in its thread (a push, say)
         failed = False
         for name, step in self.steps:
-            failed = run_step(name, step) is False or failed
+            failed = run_step(name, step, self.threads, self.step_errors) is False or failed
             write_beat("processor")
             sd_notify("WATCHDOG=1")  # each bounded step is progress: systemd's WatchdogSec never cuts a long tick
         return failed
@@ -125,7 +126,7 @@ def waiting_run(repo: str, clock: Clock, store: Any, registry: ConditionRegistry
         if service:
             keep_awake()  # a plugged-in laptop never sleeps under the service (no-op off macOS)
         if service and role != "server":
-            status_page_start(ctx.machine)  # the read-only status page, a daemon thread (see "the status page"); never fatal
+            status_page_start(ctx.machine, ctx.caches.status_page)  # the read-only status page, a daemon thread (see "the status page"); never fatal
 
         def shared(fn: Callable[[], Any]) -> Callable[[], Any]:  # a step that uses the clone holds it shared: a repair's swap waits for it
             def run() -> Any:
@@ -134,7 +135,8 @@ def waiting_run(repo: str, clock: Clock, store: Any, registry: ConditionRegistry
             return run
         steps = (sync_steps(repo, d, o_r, clock, store, registry, ctx=ctx) if role == "sync"
                  else server_steps(repo, d, shared, clock, store, registry, ctx=ctx))
-        return ProcessorLoop(repo, d, clock, store, own, drop, steps, role, once, argv).run()
+        return ProcessorLoop(repo, d, clock, store, own, drop, steps, role, once, argv, ctx.caches.bounded,
+                             ctx.caches.step_errors).run()
 
 
 TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns between ticks
@@ -173,30 +175,29 @@ def cmd_waiting(a: argparse.Namespace, clock: Clock, store: Any, registry: Condi
 ROUND_ERRORS_MAX = 3
 
 
-_step_errors = process_cache({})
-
-
-def run_step(name: str, step: Callable[[], Any]) -> bool | None:
+def run_step(name: str, step: Callable[[], Any], threads: dict[str, Any], errors: dict[str, Any]) -> bool | None:
     """One tick step, bounded (see above). True: done; False: it failed (now or, still running before, since);
-    None: still running in its thread."""
+    None: still running in its thread. threads and errors: the process's bounded threads and the steps' last errors
+    (Caches.bounded, Caches.step_errors)."""
     def work():
         try:
             step()
-            _step_errors[name] = None
+            errors[name] = None
         except NoToken:  # token_missing said it, on its transition: a step never repeats it every tick
-            _step_errors[name] = STEP_NO_TOKEN
+            errors[name] = STEP_NO_TOKEN
         except (Exception, SystemExit) as e:  # one step's error is that step's, never the loop's (audit #9)
-            _step_errors[name] = str(e).replace("agentctl: ", "")[:200]
-    t = _bounded.get(f"step:{name}")
+            errors[name] = str(e).replace("agentctl: ", "")[:200]
+    t = threads.get(f"step:{name}")
     if t and t.is_alive():
         return None
-    if _step_errors.get(name):  # it failed after the tick stopped waiting for it
-        step_failed(name, _step_errors.pop(name))
-    if not run_bounded(f"step:{name}", work, knob_step_join()):
+    if errors.get(name):  # it failed after the tick stopped waiting for it
+        step_failed(name, errors.pop(name))
+    if not run_bounded(f"step:{name}", work, knob_step_join(), threads):
         print_error(f"{name}: still running after {knob_step_join():.0f} s; the tick goes on (it ends "
             "in its own thread)")
         return None
-    why = _step_errors.pop(name, None)
+    why = errors.pop(name, None)
+
     if why:
         step_failed(name, why)
         return False

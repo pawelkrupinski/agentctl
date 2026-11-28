@@ -297,7 +297,7 @@ def backlog_batchable(st: Any, repo: str, d: str, e: dict[str, Any], t: float, f
 def kind_of(st, repo, e, facts, t, *, ctx):
     """Entry e's kind (changekind.py classify_change) under facts (queue_facts of the gate's reds when None), read as
     it is now: a flag set since the tick began (push_alone, batch_alone, known_red) counts."""
-    return classify_change(e, facts if facts is not None else facts_for(gate_reds(repo, ctx=ctx), st), t, repo, ctx=ctx)
+    return classify_change(e, facts if facts is not None else facts_for(gate_reds(repo, ctx=ctx), st, ctx.caches.tick_facts), t, repo, ctx=ctx)
 
 
 _behind_said = process_cache({})  # (entry id, what) -> batch id: said once per batch

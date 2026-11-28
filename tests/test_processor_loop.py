@@ -88,7 +88,7 @@ def run(module, script):
 
     first = {"fail": False}
 
-    def run_step(name, step):
+    def run_step(name, step, threads, errors):
         if name == "alpha":
             first["fail"] = next(rounds, False)
         log.append(f"run_step {name}")
@@ -101,7 +101,6 @@ def run(module, script):
         "TokenDrop": Drop, "host_role": lambda: script.get("role", "sync"), "keep_awake": rec("keep_awake"),
         "status_page_start": rec("status_page_start"), "sync_steps": steps(), "server_steps": steps(),
         "clone_shared": shared_clone, "write_beat": rec("write_beat"), "restart_if_changed": rec("restart_if_changed"),
-        "_bounded": {"step:x": alive[0], "other": alive[0]} if script.get("running") else {},
         "run_step": run_step, "sd_notify": rec("sd_notify"), "ROUND_ERRORS_MAX": 2,
         "open_condition": rec("open_condition", script.get("stall")), "run_probe": probe_by_kind(rec("run_probe", "PROBE")),
         "write_json": rec("write_json"), "write_snapshot": rec("write_snapshot", script.get("snapshot")),
@@ -111,6 +110,7 @@ def run(module, script):
     with contextlib.ExitStack() as stack:
         for name, fake in patches.items():
             stack.enter_context(mock.patch.object(module, name, fake))
+        stack.enter_context(mock.patch.dict(case_context().caches.bounded, {"step:x": alive[0], "other": alive[0]} if script.get("running") else {}))
         stack.enter_context(mock.patch.object(module, "TICK_STOP", [bool(script.get("stopped"))]))
         before = list(module._IN_PROCESSOR)
         try:
@@ -319,7 +319,7 @@ EXPECTED = {'not the owner': (0, False, ['own acquire']),
                              'TokenDrop D SLUG',
                              'drop open',
                              'keep_awake () []',
-                             'status_page_start () []',
+                             'status_page_start ({},) []',  # the process's served page (Caches.status_page)
                              "write_beat ('processor',) []",
                              "restart_if_changed ([OWN], ['waiting', 'run', '--repo', 'REPO', '--service']) []",
                              'run_step alpha',

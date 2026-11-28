@@ -173,7 +173,7 @@ class StaleLocalRedTest(RedBase):
         saved = A.slug
         A.slug = lambda r: MOVIES
         try:
-            return A.recheck_local(self.r.path, wait=True, machine=A.machine_probe(A.knob_machine()))
+            return A.recheck_local(self.r.path, wait=True, machine=A.machine_probe(A.knob_machine()), threads={})
         finally:
             A.slug = saved
 

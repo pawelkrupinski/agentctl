@@ -74,10 +74,21 @@ class OwnedCachesTest(unittest.TestCase):
             A.recovery_tick = saved
         self.assertEqual(ran, ["one", "two"])
 
+    def test_a_bounded_step_still_running_holds_back_only_its_own_contexts_next_start(self):
+        import threading
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+        first, second = case_context().caches.bounded, harness.context_with(case_context().runs).caches.bounded
+        self.assertFalse(A.run_bounded("step", lambda: gate.wait(10), 0.05, first))
+        self.assertFalse(A.run_bounded("step", lambda: None, 0.05, first), "still running: not started twice")
+        self.assertTrue(A.run_bounded("step", lambda: None, 1, second), "another context's step is its own")
+
     def test_the_moved_memos_are_no_module_level_state(self):
+
         for name in ("_identity_known", "_trailer_fixes", "_link_reads", "_never_green_at", "_others_said",
                      "_last_upkeep", "_last_recovery", "_last_ref_sweep", "_pin_tried", "_last_red_tick",
-                     "_last_others_tick", "_last_route", "_batch_said"):
+                     "_last_others_tick", "_last_route", "_batch_said", "_bounded", "_step_errors", "_status_page",
+                     "_tick_memo"):
             self.assertFalse(hasattr(A, name), name)
 
 

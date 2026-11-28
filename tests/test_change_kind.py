@@ -173,15 +173,16 @@ class FactsPerTickTest(unittest.TestCase):
         self.st.items = counted
 
     def test_inside_a_tick_one_read_per_gate_reading_outside_every_call_reads(self):
-        with A.facts_tick():
+        tick: dict = {}  # the process's Caches.tick_facts
+        with A.facts_tick(tick):
             for _ in range(5):
-                self.assertIn("7", A.facts_for({"8"}, self.st)["open"])
-            A.facts_for({"9"}, self.st)  # another gate reading: its own read
-            with A.facts_tick():  # a nested scope shares the tick's
-                A.facts_for({"8"}, self.st)
+                self.assertIn("7", A.facts_for({"8"}, self.st, tick)["open"])
+            A.facts_for({"9"}, self.st, tick)  # another gate reading: its own read
+            with A.facts_tick(tick):  # a nested scope shares the tick's
+                A.facts_for({"8"}, self.st, tick)
         self.assertEqual(self.reads, 2)
-        A.facts_for({"8"}, self.st)
-        A.facts_for({"8"}, self.st)
+        A.facts_for({"8"}, self.st, tick)
+        A.facts_for({"8"}, self.st, tick)
         self.assertEqual(self.reads, 4, "outside a tick, afresh")
 
     def test_the_queue_ticks_read_the_facts_once_each(self):
@@ -191,7 +192,7 @@ class FactsPerTickTest(unittest.TestCase):
         per_tick, real, sim = {}, A.queue_facts, {}
 
         def counting(gate, st):
-            if A._tick_memo.get("memo") is not None:  # inside a queue tick
+            if case_context().caches.tick_facts.get("memo") is not None:  # inside a queue tick
                 per_tick[sim["it"].tick] = per_tick.get(sim["it"].tick, 0) + 1
             return real(gate, st)
         A.queue_facts = counting

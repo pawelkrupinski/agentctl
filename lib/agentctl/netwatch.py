@@ -88,9 +88,9 @@ def network_watch(store, seen, route=None, kick=None):
     """React to the laptop's network changing (another Wi-Fi, a hotspot, back online): the tunnel's ssh rides the old
     route and would take ServerAlive's 30 s to notice, the gate line says UNREAD until the next read. A changed default
     route kickstarts the tunnel at once and marks the gate dirty. Returns 'changed', 'offline' or ''. seen: the
-    process's one-cell memo of the route at the last look (Caches.route_seen; None while offline)."""
+    process's memo of the route at the last look (Caches.route_seen: "route", None while offline; unseen before)."""
     r = (route or default_route)()
-    prev, seen[0] = seen[0], r
+    prev, seen["route"] = seen.get("route", "unseen"), r
 
     if prev == "unseen" or r == prev:
         return ""

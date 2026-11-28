@@ -101,7 +101,7 @@ class SyncWritesTheStoreTest(PinsBase):
         self.laptop()
         step = dict(A.sync_steps(self.repo, self.tmp, MOVIES, *on_clock(A.Clock()), registry(A), ctx=case_context()))["pins"]
         step()
-        A._bounded["pins"].join(10)
+        case_context().caches.bounded["pins"].join(10)
         self.assertEqual(self.stored()["pins"], {"pl": "528", "de": "528"})
 
 

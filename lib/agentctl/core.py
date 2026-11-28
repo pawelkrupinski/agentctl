@@ -200,18 +200,17 @@ def branch_of(wt: str | None) -> str:
     return str(git(wt or "", "symbolic-ref", "--short", "-q", "HEAD", check=False).stdout).strip()
 
 
-_bounded = process_cache({})
-
-
-def run_bounded(name, fn, secs):
+def run_bounded(name, fn, secs, threads):
     """Run fn in a daemon thread and wait at most secs: a hung network call can never stall the processor's loop. A step
-    still running from an earlier cycle is not started again (False); True when fn finished in time."""
+    still running from an earlier cycle is not started again (False); True when fn finished in time. threads: the
+    process's bounded threads by name (Caches.bounded), where an earlier cycle's is found."""
     import threading
-    t = _bounded.get(name)
+    t = threads.get(name)
     if t and t.is_alive():
         return False
     t = threading.Thread(target=fn, name=name, daemon=True)
-    _bounded[name] = t
+    threads[name] = t
+
     t.start()
     t.join(secs)
     return not t.is_alive()

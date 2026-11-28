@@ -362,6 +362,6 @@ def cmd_suite(a):
 def gov_class_of(repo, commits, reds, st=None, *, ctx):
     """red when the commits' Fixes-Red names an open red -- the gate's (reds) or any other the store has open: the
     change's red fix, THE RED-LANDING RULE's (redland.may_land_on_red) -- else check."""
-    return "red" if may_land_on_red(facts_for(reds, st), repo=repo, commits=commits, store=st, ctx=ctx).red_fix else "check"
+    return "red" if may_land_on_red(facts_for(reds, st, ctx.caches.tick_facts), repo=repo, commits=commits, store=st, ctx=ctx).red_fix else "check"
 
 

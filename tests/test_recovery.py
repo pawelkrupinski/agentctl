@@ -352,7 +352,7 @@ class DetectorsTest(RegistryBase):
 
     def test_network_offline_clears_on_the_route_probe(self):
         self.fake("route", Recorder())
-        self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), [("en0", "10.0.0.1")], route=lambda: None, kick=lambda: None), "offline")
+        self.assertEqual(A.network_watch(A.CurrentStore(A.process_store), {"route": ("en0", "10.0.0.1")}, route=lambda: None, kick=lambda: None), "offline")
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store))[0]["probe"]["kind"], "route")
         self.tick(force=True)
         self.assertEqual(A.open_conditions(A.CurrentStore(A.process_store)), [])

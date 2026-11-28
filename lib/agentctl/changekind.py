@@ -5,7 +5,6 @@ from typing import Any
 from contextlib import contextmanager, suppress
 from collections.abc import Iterator
 from agentctl.statemachines import StaleVersion, is_terminal, machine_state, open_items
-from agentctl.core import process_cache
 from agentctl.redrecord import episode_unread, red_episode_names, red_names
 from agentctl.issues import issue_open
 from agentctl.queueslots import checker_alive
@@ -82,25 +81,25 @@ def queue_facts(gate: Any, st: Any) -> dict[str, Any]:
 # tick_changes and tick_batch each run inside facts_tick(); facts_for(reds, st) answers from that tick's read, one per
 # database and gate reading. Outside a tick (a checker, `land`, the status page, a test) every call reads afresh. Nothing
 # in a queue tick moves a red item (the red tick, later in the pass, does), so the tick's facts stay true through it.
-_tick_memo: dict[str, dict[Any, Any] | None] = process_cache({})
-
-
 @contextmanager
-def facts_tick() -> Iterator[None]:
-    """The scope of one tick's facts (nested scopes share the outer one's)."""
-    outer = "memo" in _tick_memo and _tick_memo["memo"] is not None
+def facts_tick(tick: dict[str, Any]) -> Iterator[None]:
+    """The scope of one tick's facts (nested scopes share the outer one's), kept in `tick` (the process's
+    Caches.tick_facts)."""
+    outer = tick.get("memo") is not None
     if not outer:
-        _tick_memo["memo"] = {}
+        tick["memo"] = {}
     try:
         yield
     finally:
         if not outer:
-            _tick_memo["memo"] = None
+            tick["memo"] = None
 
 
-def facts_for(reds: Any, st: Any) -> dict[str, Any]:
-    """queue_facts(reds, st), read once per tick (facts_tick); afresh outside one. Never mutate the answer: it is shared."""
-    memo = _tick_memo.get("memo")
+def facts_for(reds: Any, st: Any, tick: dict[str, Any]) -> dict[str, Any]:
+    """queue_facts(reds, st), read once per tick (facts_tick over the same `tick`); afresh outside one. Never mutate the
+    answer: it is shared."""
+    memo = tick.get("memo")
+
     if memo is None:
         return queue_facts(reds, st)
     key = (getattr(st, "path", None) or id(st), frozenset(str(x) for x in reds or ()))  # one database, one read

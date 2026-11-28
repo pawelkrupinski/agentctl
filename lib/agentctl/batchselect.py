@@ -24,11 +24,12 @@ def batch_queued(st: Any, repo: str, d: str, entries: list[dict[str, Any]], fact
                    and not overlap_hold(st, repo, d, e, entries, facts, t, ctx=ctx)), key=lambda e: e["seq"])
 
 
-def batch_round(d: str, reds: set[str], st: Any, t: float | None,
-                facts: dict[str, Any] | None) -> tuple[float, Any, list[dict[str, Any]]]:
+def batch_round(d: str, reds: set[str], st: Any, t: float | None, facts: dict[str, Any] | None,
+                tick_facts: dict[str, Any]) -> tuple[float, Any, list[dict[str, Any]]]:
     """What a backlog or push batch's round reads at a green gate: (now, the queue's facts -- queue_facts, read from
-    the store when None --, its queued entries)."""
-    return (t if t is not None else epoch_now()), (facts_for(reds, st) if facts is None else facts), ChangeRecords(st, d).queued()
+    the store, or the tick's (tick_facts), when None --, its queued entries)."""
+
+    return (t if t is not None else epoch_now()), (facts_for(reds, st, tick_facts) if facts is None else facts), ChangeRecords(st, d).queued()
 
 
 def backlog_min():
@@ -41,7 +42,7 @@ def backlog_candidates(repo, d, reds, st, t=None, facts=None, *, ctx):
     under facts: queue_facts, read from the store when None) is checked alone."""
     if reds:
         return []
-    t, facts, entries = batch_round(d, reds, st, t, facts)
+    t, facts, entries = batch_round(d, reds, st, t, facts, ctx.caches.tick_facts)
     # THE OLDEST VERIFICATION PUSHES FIRST (queuepush.py) holds the batch too (review 2026-11-18): formed meanwhile, the
     # batch held the verified change's push for its whole check (THE BATCH GOES FIRST), then its push moved main under
     # it and it verified again -- behind the next backlog batch, and the next. No backlog batch while one verifies, or
@@ -104,7 +105,7 @@ def push_candidates(repo, d, reds, st, t=None, facts=None, *, ctx):
     under a red fix in flight (a fix of an open red, its kind under facts, pushes alone), or below PUSH_BATCH_MIN."""
     if reds:
         return []
-    t, facts, entries = batch_round(d, reds, st, t, facts)
+    t, facts, entries = batch_round(d, reds, st, t, facts, ctx.caches.tick_facts)
     if _red_fix_in_flight(entries, facts, t, ctx=ctx):
         return []
     main = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()

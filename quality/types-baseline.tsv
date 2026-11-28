@@ -39,7 +39,7 @@ mypy-errors	conditions	2
 mypy-errors	config	17
 mypy-errors	configfile	8
 mypy-errors	conflicts	24
-mypy-errors	core	7
+mypy-errors	core	6
 mypy-errors	culpritfix	29
 mypy-errors	entrychecks	13
 mypy-errors	eventprojection	13
@@ -163,7 +163,7 @@ mypy-errors	stats	33
 mypy-errors	status	74
 mypy-errors	statusagents	34
 mypy-errors	statusline	4
-mypy-errors	statuspage	29
+mypy-errors	statuspage	28
 mypy-errors	store	21
 mypy-errors	storeapi	28
 mypy-errors	storeauth	22
@@ -174,7 +174,7 @@ mypy-errors	storetoken	46
 mypy-errors	stuckruns	4
 mypy-errors	superseded	20
 mypy-errors	syncsteps	28
-mypy-errors	tickloop	8
+mypy-errors	tickloop	7
 mypy-errors	tickservice	4
 mypy-errors	timefmt	1
 mypy-errors	tools	54

@@ -146,13 +146,13 @@ def union_base(tree, members, base):
 
 def say_batch(d, lines, said):
     """The batch tick's lines: every one in processor.log, and in the reconciler's journal when they change (the
-    journal had no batch line at all; a repeated `waiting for a check tree` is said once; said: the lines last said,
+    journal had no batch line at all; a repeated `waiting for a check tree` is said once; said: "lines", the lines last said,
     Caches.batch_said)."""
     for x in lines:
         wlog(d, f"tick: {x}")
-    if lines and lines != said[0]:
+    if lines and lines != said.get("lines"):
         print_error("batch: " + "; ".join(lines))
-    said[0] = lines or said[0]
+    said["lines"] = lines or said.get("lines")
 
     return lines
 
@@ -270,7 +270,7 @@ def green_batch_depth(tree, it, kept, base, tip):
 # first and alone, and a batch is left to the changes that may wait. One the rule still holds is told what holds it
 # (`wait_rule` on its item: WR and the liveness line print it), the one escalation left.
 def release_red_fixes(repo: Any, d: Any, st: Any, reds: Any, waiting: Any, t: float, *, ctx: Context) -> list[str]:
-    facts = facts_for(reds, st)
+    facts = facts_for(reds, st, ctx.caches.tick_facts)
     out = []
     for e in waiting:
         k = classify_change(e, facts, t, ctx=ctx)

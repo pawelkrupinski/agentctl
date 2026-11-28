@@ -174,13 +174,13 @@ if __name__ == "__main__":
 class LoopCannotStallTest(unittest.TestCase):
     def test_a_hung_step_does_not_block_and_is_not_restarted(self):
         import threading
-        gate = threading.Event()
+        gate, threads = threading.Event(), {}
         self.addCleanup(gate.set)
-        self.assertFalse(A.run_bounded("t-hang", lambda: gate.wait(30), 0.2))
-        self.assertFalse(A.run_bounded("t-hang", lambda: None, 0.2), "still running: not started twice")
+        self.assertFalse(A.run_bounded("t-hang", lambda: gate.wait(30), 0.2, threads))
+        self.assertFalse(A.run_bounded("t-hang", lambda: None, 0.2, threads), "still running: not started twice")
         gate.set()
-        A._bounded["t-hang"].join(5)
-        self.assertTrue(A.run_bounded("t-hang", lambda: None, 1))
+        threads["t-hang"].join(5)
+        self.assertTrue(A.run_bounded("t-hang", lambda: None, 1, threads))
 
     def test_the_socket_is_served_while_the_loop_is_busy(self):
         base = tempfile.mkdtemp(dir=os.environ["AGENTCTL_TEST_RUN_SOCK"], prefix="s-")
@@ -368,9 +368,9 @@ class TokenSaidOnTransitionTest(unittest.TestCase):
     def test_a_step_without_token_is_quiet(self):
         def step():
             raise A.NoToken("agentctl: could not read the movies AGENTCTL_STORE_TOKEN (test)")
-        self.assertFalse(A.run_step("t-notoken", step))
+        self.assertFalse(A.run_step("t-notoken", step, {}, {}))
         self.assertEqual(self.lines(), [])
-        self.assertFalse(A.run_step("t-other", lambda: 1 / 0))
+        self.assertFalse(A.run_step("t-other", lambda: 1 / 0, {}, {}))
         self.assertEqual(len(self.lines()), 1)
         self.assertIn("t-other failed", self.lines()[0])
 

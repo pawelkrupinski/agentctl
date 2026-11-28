@@ -200,7 +200,7 @@ class ChangePush:
         commits = waiting_commits(self.tree, self.base, self.head)
         reds = gate_reds(self.repo, ctx=self.ctx) if waiting_supported(self.repo) else set()
         # a gate red's fix failing only as main fails lands: no wait
-        landing = may_land_on_red(facts_for(reds, self.st), self.e, self.repo, commits, self.st, ctx=self.ctx)
+        landing = may_land_on_red(facts_for(reds, self.st, self.ctx.caches.tick_facts), self.e, self.repo, commits, self.st, ctx=self.ctx)
         known = self.e.get("known_red")
         # policy: known-red-tools
         kr = None if landing.gate_fix or landing.tools_only_known_red else known
