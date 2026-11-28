@@ -14,8 +14,9 @@ from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
 from agentctl.redknobs import knob_drift_ci
 from agentctl.blameknobs import knob_blame_probe_wall
-from agentctl.core import attempt, print_error, git, remote
+from agentctl.core import attempt, git, print_error, remote
 from agentctl.repos import RED_PRIMARY, red_repo_short, scan_repo_for, slug
+from agentctl.paths import claude_session_id, reds_dir, tilde
 from agentctl.fixerrecords import agent_name, own_fixer_record_path
 from agentctl.forge import GH_JSON_TIMEOUT, forge_argv, forge_env
 from agentctl.owned import backoff, default_repo
@@ -37,8 +38,7 @@ from agentctl.ownerwrapper import red_owner
 from agentctl.offerdispatch import red_dispatcher
 from agentctl.redview import RED_STATUS_FRESH, red_status_snapshot_path, repo_dispatch_set
 from agentctl.redhold import red_fix_liveness
-from agentctl.status import status_data, status_store
-from agentctl.paths import claude_session_id, reds_dir, tilde
+from agentctl.status import status_data
 
 
 def red_am_fixer():
@@ -433,7 +433,7 @@ def red_status_text(store: Any, verbose: bool = False, *, ctx: Context) -> str:
 
 def write_red_status_snapshot(store: Any, *, ctx: Context) -> None:
     """The sync's step: the rendered red status, for `red status` to print at once."""
-    write_json(red_status_snapshot_path(), {"at": ctx.clock.time(), "text": red_status_text(store or status_store(), ctx=ctx)})
+    write_json(red_status_snapshot_path(), {"at": ctx.clock.time(), "text": red_status_text(store, ctx=ctx)})
 
 
 def red_status(store: Any, verbose: bool = False, live: bool = False, *, ctx: Context) -> int:

@@ -37,9 +37,14 @@ def land_cwds():
     return out
 
 
+def dispatch_off() -> bool:
+    """Whether the owner's DISPATCH_OFF flag file is there (`agentctl red auto off`)."""
+    return os.path.exists(reds_dir("DISPATCH_OFF"))
+
+
 def cached_dispatch_blocker(memo: dict[Any, Any], ttl: float = 60) -> str | None:
     """dispatch_blocker runs `claude --help`: once a minute per process is enough for a display (`memo`: Caches.status.blocker)."""
-    key = (reds_dir(), os.path.exists(reds_dir("DISPATCH_OFF")), knob_claude(),
+    key = (reds_dir(), dispatch_off(), knob_claude(),
            knob_claude_settings())
     hit = memo.get(key)
     if hit and epoch_now() - hit[0] < ttl:
@@ -56,7 +61,7 @@ def short_flow(name):
 
 def dispatch_blocker() -> str | None:
     """None when a headless fixer may be dispatched, else what stops it (and what the owner must run)."""
-    if os.path.exists(reds_dir("DISPATCH_OFF")):
+    if dispatch_off():
         return "dispatch is OFF (`~/bin/agentctl red auto on` turns it on)"
     cli = claude_cli()
     if not cli:

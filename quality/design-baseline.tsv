@@ -75,7 +75,7 @@ effect	lib/agentctl/eventprojection.py:files	1
 effect	lib/agentctl/explorer.py:files	2
 effect	lib/agentctl/filelock.py:files	4
 effect	lib/agentctl/filelog.py:files	7
-effect	lib/agentctl/fixerblockers.py:files	3
+effect	lib/agentctl/fixerblockers.py:files	2
 effect	lib/agentctl/fixerenv.py	1
 effect	lib/agentctl/fixerland.py	1
 effect	lib/agentctl/fixerland.py:files	18
@@ -212,7 +212,6 @@ effect	lib/agentctl/statefile.py:files	8
 effect	lib/agentctl/stats.py:files	1
 effect	lib/agentctl/stats.py:network	4
 effect	lib/agentctl/status.py	1
-effect	lib/agentctl/status.py:files	1
 effect	lib/agentctl/statusagents.py	2
 effect	lib/agentctl/statusagents.py:files	11
 effect	lib/agentctl/statusline.py	1
@@ -722,7 +721,7 @@ mixed	lib/agentctl/stats.py:stats_query	5
 mixed	lib/agentctl/statsepisodes.py:gate_run_record	8
 mixed	lib/agentctl/status.py:status_answers	8
 mixed	lib/agentctl/status.py:status_cached	3
-mixed	lib/agentctl/status.py:status_data	9
+mixed	lib/agentctl/status.py:status_data	8
 mixed	lib/agentctl/status.py:status_read	3
 mixed	lib/agentctl/status.py:status_sources	7
 mixed	lib/agentctl/status.py:status_store_probe	4
@@ -904,7 +903,6 @@ fanout	lib/agentctl/runsigs.py	10
 fanout	lib/agentctl/serverclone.py	11
 fanout	lib/agentctl/serversteps.py	27
 fanout	lib/agentctl/slots.py	28
-fanout	lib/agentctl/status.py	10
 fanout	lib/agentctl/statusagents.py	13
 fanout	lib/agentctl/statuspage.py	18
 fanout	lib/agentctl/storeapi.py	10

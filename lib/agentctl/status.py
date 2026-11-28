@@ -2,7 +2,6 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 from typing import Any
-import os
 import threading
 import time
 from agentctl.caches import StatusMemos
@@ -11,25 +10,13 @@ from agentctl.watchknobs import knob_status_bound
 from agentctl.core import HOME, SHORT
 from agentctl.cistate import state_read
 from agentctl.machine import MachineProbe
-from agentctl.store import Store
-from agentctl.paths import reds_dir
-from agentctl.remotestore import RemoteStore, store_url
 from agentctl.statussections import status_section_sources
+from agentctl.remotestore import RemoteStore
 from agentctl.statusmachine import status_dispatcher
+from agentctl.statusstore import open_status_store, status_error, status_store_failed
 
 
-STATUS_STORE_TIMEOUT = 5        # s per remote store call
 STATUS_CACHE = 5                # s an assembled status is served again
-
-
-def status_store():
-    """The store the page reads: the remote one with short timeouts when the laptop is the sync, else the local one."""
-    url = store_url()
-    return RemoteStore(url, timeout=STATUS_STORE_TIMEOUT) if url else Store()
-
-
-def status_error(e):
-    return {"error": f"{type(e).__name__}: {str(e).replace('agentctl: ', '')[:300]}"}
 
 
 def status_sources(sources, bound, memos: StatusMemos, keep=False):
@@ -95,16 +82,6 @@ def status_store_probe(st, t):
     return {"remote": None, "reachable": True, "ms": int((time.monotonic() - t0) * 1000)}  # wall: as above
 
 
-def open_status_store(store: Any, only: Any) -> tuple[Any, Any]:
-    """(the store the sections read, None) or (None, the error that kept it from opening); no store for a header-only read."""
-    if only and not set(only) - {"header"}:
-        return None, None
-    try:
-        return (store if store is not None else status_store()), None
-    except (Exception, SystemExit) as e:
-        return None, status_error(e)
-
-
 def status_data(store=None, now_=None, bound=None, keep=False, only=None, *, machine, memos):
     """THE STATUS MODEL (/api/status): every section from its own bounded source; a failing one is {"error": ...} in
     its place. only: just these sections (a renderer's). memos: the status reads' memory (StatusMemos)."""
@@ -119,11 +96,9 @@ def status_data(store=None, now_=None, bound=None, keep=False, only=None, *, mac
             raise RuntimeError(st_err["error"])
         return st
     sources = status_section_sources(t, repo, need, memos, store_probe=status_store_probe,
-                                       dispatcher=lambda st, now: status_dispatcher(st, now, machine, memos.blocker,
-                                                                           off_flag=os.path.exists(reds_dir("DISPATCH_OFF"))))
+                                       dispatcher=lambda st, now: status_dispatcher(st, now, machine, memos.blocker))
     res, meta = status_sources(tuple(x for x in sources if not only or x[0] in only), b, memos, keep=keep)
-    if "error" in res.get("store", {}):
-        res["store"] = {**res["store"], "remote": store_url(), "reachable": False}
+    res["store"] = status_store_failed(res.get("store", {}))
     return {"at": t, "repo": repo, "home": HOME, **res, **meta}
 
 

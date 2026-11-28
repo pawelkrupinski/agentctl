@@ -4,7 +4,7 @@
 from typing import Any
 from agentctl.machine import MachineProbe
 from agentctl.pressure import pressure_report
-from agentctl.fixerblockers import cached_dispatch_blocker
+from agentctl.fixerblockers import cached_dispatch_blocker, dispatch_off
 from agentctl.reddispatch import red_cap, red_fixers_alive, repo_dispatch_off_all
 from agentctl.inboxcli import escalated_now
 
@@ -18,9 +18,9 @@ def status_pressure(machine: MachineProbe) -> str:
     return f"UNDER PRESSURE: {why} [{summary}]" if why else summary
 
 
-def status_dispatcher(st: Any, t: float, machine: MachineProbe, blocker_memo: Any, *, off_flag: bool) -> dict[str, Any]:
-    """The dispatcher's section; off_flag: whether the DISPATCH_OFF file is there (read by the status model)."""
-    return {"blocker": cached_dispatch_blocker(blocker_memo), "off_flag": off_flag,
+def status_dispatcher(st: Any, t: float, machine: MachineProbe, blocker_memo: Any) -> dict[str, Any]:
+    """The dispatcher's section; off_flag: whether the DISPATCH_OFF file is there."""
+    return {"blocker": cached_dispatch_blocker(blocker_memo), "off_flag": dispatch_off(),
             "repos_off": repo_dispatch_off_all(st),
             "alive": len(red_fixers_alive(st, t)), "cap": red_cap(), "pressure": status_pressure(machine),
             "escalated": [{"type": typ, "id": it["id"], "words": words} for typ, it, words in escalated_now(st)]}

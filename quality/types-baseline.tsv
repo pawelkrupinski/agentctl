@@ -123,7 +123,7 @@ mypy-errors	redask	18
 mypy-errors	redauthors	9
 mypy-errors	redblock	15
 mypy-errors	redclaim	17
-mypy-errors	redcli	42
+mypy-errors	redcli	41
 mypy-errors	redcrash	39
 mypy-errors	reddispatch	31
 mypy-errors	redearly	8
@@ -159,7 +159,7 @@ mypy-errors	sessionpaths	8
 mypy-errors	slots	50
 mypy-errors	statemachines	23
 mypy-errors	stats	33
-mypy-errors	status	14
+mypy-errors	status	10
 mypy-errors	statusagents	32
 mypy-errors	statusfamilies	5
 mypy-errors	statusheader	7
