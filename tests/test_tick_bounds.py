@@ -106,3 +106,35 @@ class StoreDownNeverEndsTheLoopTest(unittest.TestCase):
         # execv (never execve with a filtered env): the new image inherits this environment, the token with it
         self.assertEqual(seen["tok"], "tok-handed-over")
         self.assertEqual(seen["argv"][-3:], ["waiting", "run", "--service"])
+
+
+class StopBetweenTicksTest(unittest.TestCase):
+    """2026-11-28 (the e2e red fixer flake: a sync with rc 0 and no fixer.json): the server's `agentctl tick` installs a
+    SIGTERM handler for a stop BETWEEN ticks (TICK_STOP), but the processor's ownership lock replaced it with its own,
+    which raises: a stop cut the tick inside a step -- red_offer had moved the red to `offered` and never wrote its offer,
+    so the laptop's dispatcher found nothing to take."""
+
+    def test_a_sigterm_inside_a_step_lets_the_step_and_its_round_finish_then_ends_the_loop(self):
+        import signal, tempfile
+        from test_agentctl import Repo
+        r = Repo(tempfile.mkdtemp())
+        done = []
+
+        def cut_inside():
+            os.kill(os.getpid(), signal.SIGTERM)  # systemd's stop, mid-step
+            time.sleep(0.3)  # the main thread meets the signal while the step is still at work
+            done.append("the step's second write")
+
+        saved = (A.server_steps, A.TokenDrop.nap, A.restart_if_changed, A.write_snapshot, signal.getsignal(signal.SIGTERM))
+        A.server_steps = lambda repo, d, shared, clock, store, registry, ctx=None: (("offer", cut_inside), ("after", lambda: done.append("the round's next step")))
+        A.TokenDrop.nap = lambda self, secs: None
+        A.restart_if_changed, A.write_snapshot = (lambda *a, **k: None), (lambda *a, **k: None)
+        signal.signal(signal.SIGTERM, lambda *_: A.TICK_STOP.__setitem__(0, True))  # as cmd_tick installs it on ci-runner
+        try:
+            self.assertEqual(A.waiting_run(r.path, *on_clock(FakeClock()), registry(A), ctx=case_context()), 0)
+        finally:
+            (A.server_steps, A.TokenDrop.nap, A.restart_if_changed, A.write_snapshot, old) = saved
+            signal.signal(signal.SIGTERM, old)
+            stopped, A.TICK_STOP[0] = A.TICK_STOP[0], False
+        self.assertEqual(done, ["the step's second write", "the round's next step"], "the round ran to its end, and no second one")
+        self.assertTrue(stopped, "the stop is TICK_STOP's: the loop returned between ticks")

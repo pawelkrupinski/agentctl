@@ -392,7 +392,7 @@ class World:
         return "\n".join(tail + self.store_and_reds_state())
 
     def store_and_reds_state(self):
-        """What the store holds (items and leases) and the laptop's reds directory (each file, the logs' tails): the
+        """What the store holds (items, leases and offers) and the laptop's reds directory (each file, the logs' tails): the
         state a wait that never saw its event was waiting on."""
         out = []
         try:
@@ -400,6 +400,9 @@ class World:
                                                   for r in self.db("SELECT type, id, state, data FROM items")))
             out.append("--- leases\n" + "\n".join(f"{r['name']} {r['holder']} {r['expires_at']}"
                                                   for r in self.db("SELECT name, holder, expires_at FROM leases")))
+            out.append("--- offers\n" + "\n".join(f"{r['id']} {r['kind']} {r['item']} {r['tier']} closed={r['closed_at']} "
+                                                  f"{r['closed_why']} by={r['taken_by']} reason={r['reason']}"
+                                                  for r in self.db("SELECT * FROM offers")))
         except Exception as e:  # a diagnosis never fails the failure it explains
             out.append(f"--- store unreadable: {e}")
         for dirpath, _dirs, files in os.walk(os.path.join(self.root, "laptop", "reds")):

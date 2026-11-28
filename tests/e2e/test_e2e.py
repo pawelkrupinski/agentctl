@@ -180,8 +180,13 @@ class RedFixerWorld(E2ETest):
     def archives(self):
         return glob.glob(os.path.join(self.w.root, "laptop", "state", "fixer-archive", "*", "untracked", "agent-notes.txt"))
 
+    def open_offers(self):
+        """The red offers the laptop's dispatcher takes from (red_offer moves the red to `offered`, THEN writes its offer)."""
+        return {r["item"].split(":", 1)[1] for r in self.w.db("SELECT item FROM offers WHERE kind='fixer' AND closed_at IS NULL")}
+
     def offered(self):
-        self.server_ticks_until(lambda: any(r["state"] == "offered" for r in self.reds().values()), "the red offered")
+        self.server_ticks_until(lambda: any(r["state"] == "offered" and k in self.open_offers() for k, r in self.reds().items()),
+                                "the red offered")
 
 
 class RedFixerLandedTest(RedFixerWorld):
@@ -223,7 +228,8 @@ class RedFixerContinuesTest(RedFixerWorld):
         first = self.dispatch_a_fixer(E2E_CLAUDE_VERDICT="GAVE UP: cannot reproduce", E2E_CLAUDE_COMMIT="work.txt=a fix in progress")
         for n, commit in ((2, "more.txt=more"), (3, "third.txt=third")):
             self.server_ticks_until(lambda: self.reds() and all(r["state"] == "offered" and r["data"]["attempts"] == n - 1
-                                                                for r in self.reds().values()), f"the red offered for fixer {n}")
+                                                                and k in self.open_offers() for k, r in self.reds().items()),
+                                    f"the red offered for fixer {n}")
             last = self.dispatch_a_fixer(n, E2E_CLAUDE_COMMIT=commit, E2E_CLAUDE_VERDICT="GAVE UP: still cannot reproduce")
         self.assertEqual(last["worktree"], first["worktree"], "the same tree, never a fresh one")
         self.assertEqual(last["continued_from"], first["worktree"], "a fresh fixer going on in the previous one's tree")

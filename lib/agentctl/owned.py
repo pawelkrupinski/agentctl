@@ -81,6 +81,11 @@ class Held(Exception):
         self.holder = holder
 
 
+def _process_handler(handler: Any) -> bool:
+    """A signal handler the process installed itself: not the default, ignoring, Python's SIGINT one or an owner's own."""
+    return callable(handler) and handler is not signal.default_int_handler and not getattr(handler, "owned_end", False)
+
+
 class Owned:
     """One long-running instance of (kind, key): see the section comment."""
 
@@ -116,9 +121,16 @@ class Owned:
         write_json(self.record, rec, indent=None)
 
     def _signals(self):
+        """A signal ends the owner (Terminated) -- unless the process installed its own handler for it first: that one
+        stands (2026-11-28: `agentctl tick`'s SIGTERM handler, a stop BETWEEN ticks, was replaced by this one, so a stop
+        cut the server's tick inside a step -- a red moved to `offered` with its offer never written, and the e2e red
+        fixer scenarios' sync found no offer to dispatch)."""
         def end(signum, frame):
             raise Terminated(128 + signum)
+        end.owned_end = True  # type: ignore[attr-defined]
         for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+            if _process_handler(signal.getsignal(s)):
+                continue
             try:
                 self._old[s] = signal.signal(s, end)
             except ValueError:  # not the main thread: the caller's own handling stands

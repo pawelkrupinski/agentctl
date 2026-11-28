@@ -121,6 +121,27 @@ class OwnedTest(unittest.TestCase):
         self.assertTrue(seen)
         self.assertFalse(any(seen[:3]), "a handler was installed after the record showed")
 
+    def test_a_handler_the_process_installed_stands_and_a_default_one_is_replaced(self):
+        """`agentctl tick` on ci-runner stops between ticks by its own SIGTERM handler; the processor's lock, taken after
+        it, replaced it with one that raised inside a step (2026-11-28). SIGHUP, left at its default, still ends the owner."""
+        own = lambda *_: None  # noqa: E731
+        saved = {s: A.signal.getsignal(s) for s in (A.signal.SIGTERM, A.signal.SIGHUP)}
+        A.signal.signal(A.signal.SIGTERM, own)
+        A.signal.signal(A.signal.SIGHUP, A.signal.SIG_DFL)
+        try:
+            with A.Owned("test", "k-handlers", argv=["x"]):
+                self.assertIs(A.signal.getsignal(A.signal.SIGTERM), own)
+                outer = A.signal.getsignal(A.signal.SIGHUP)
+                self.assertTrue(getattr(outer, "owned_end", False), "the default replaced by the owner's")
+                with A.Owned("test", "k-nested", argv=["x"]):  # an owner's own handler is no process handler
+                    self.assertIsNot(A.signal.getsignal(A.signal.SIGHUP), outer)
+                self.assertIs(A.signal.getsignal(A.signal.SIGHUP), outer)
+            self.assertIs(A.signal.getsignal(A.signal.SIGTERM), own)
+            self.assertIs(A.signal.getsignal(A.signal.SIGHUP), A.signal.SIG_DFL, "restored on release")
+        finally:
+            for s, h in saved.items():
+                A.signal.signal(s, h)
+
     def test_an_owner_in_a_removed_directory_still_records(self):
         """The owner string is the inbox's (caller_owner): a removed cwd (a watch closing its own worktree) reads as
         what it was, never an OSError out of the record (owned.py used os.getcwd() itself, inbox.py safe_cwd)."""
