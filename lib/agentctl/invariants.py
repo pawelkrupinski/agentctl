@@ -306,6 +306,9 @@ def inv_wb(clock: Clock, st: Any, *, machine: MachineProbe) -> Any:
 WF_VM = "com.apple.Virtualization"
 
 
+# What it frees: the guest's dentry/inode caches, so the virtiofs DESCRIPTORS the VM holds on the host. It frees no host
+# memory: a vz guest has no free-page reporting, so the host's footprint of the VM stays at the guest's size (measured
+# 2026-11-28).
 WF_VM_RELEASE = "~/.rd/bin/rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'"
 
 
@@ -340,7 +343,8 @@ def inv_wf(clock: Clock, st: Any, *, machine: MachineProbe) -> Any:
     detail = f"{said}, past {bound:g}%; top: " + \
         ", ".join(f"pid {p} {c} ({n})" for n, p, c in top)
     if top and top[0][2].startswith(WF_VM):
-        detail += f"; Rancher Desktop's VM caches every file a container saw: release it with {WF_VM_RELEASE}"
+        detail += ("; Rancher Desktop's VM holds a descriptor for every file a container saw: "
+                   f"{WF_VM_RELEASE} drops them (the file table only: it frees no host memory)")
     return False, detail
 
 

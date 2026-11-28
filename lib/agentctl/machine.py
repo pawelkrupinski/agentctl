@@ -4,6 +4,8 @@
 # passes it down as a parameter; nothing below it asks "am I in a test?".
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import ctypes
+import ctypes.util
 import json
 import os
 import re
@@ -52,6 +54,12 @@ class MachineProbe(ABC):
     @abstractmethod
     def process_rows(self, cols: tuple[str, ...], pids: tuple[int, ...] = (), wide: bool = False) -> list[PsRow]:
         """THE PROCESS TABLE: every process (or the `pids` asked for) with the ps `cols`; no rows when unreadable."""
+
+    @abstractmethod
+    def footprint_kb(self, pid: int) -> Optional[int]:
+        """The KB of the process's phys_footprint (what Activity Monitor and memory pressure charge the host; `footprint`),
+        or None where unreadable. ps's RSS overcounts a Virtualization.framework guest about 1.8x; this is bounded by its
+        guest memory."""
 
     @abstractmethod
     def process_cwds(self) -> dict[int, str]:
@@ -115,6 +123,21 @@ class MachineProbe(ABC):
         cpu = min(100.0, 100.0 * load1 / self.cores())
         m = self.memory()
         return load1, cpu, m["pressure"], m["swap_used_mb"]
+
+
+RUSAGE_INFO_V2 = 2
+PHYS_FOOTPRINT_OFFSET = 72  # rusage_info_v2: ri_uuid[16], then ri_phys_footprint is the 8th u64
+
+
+def process_footprint_kb(pid: int) -> Optional[int]:
+    """`pid`'s ri_phys_footprint in KB by proc_pid_rusage (libproc, macOS), None where it cannot be read."""
+    path = ctypes.util.find_library("proc")
+    if not path:
+        return None
+    buf = ctypes.create_string_buffer(512)
+    if ctypes.CDLL(path).proc_pid_rusage(pid, RUSAGE_INFO_V2, buf) != 0:
+        return None
+    return int.from_bytes(buf.raw[PHYS_FOOTPRINT_OFFSET:PHYS_FOOTPRINT_OFFSET + 8], "little") // 1024
 
 
 def disk_path(path: Optional[str]) -> str:
@@ -227,6 +250,9 @@ class HostMachine(MachineProbe):
     def process_rows(self, cols: tuple[str, ...], pids: tuple[int, ...] = (), wide: bool = False) -> list[PsRow]:
         return ps_rows(cols, pids, wide)
 
+    def footprint_kb(self, pid: int) -> Optional[int]:
+        return process_footprint_kb(pid)
+
     def process_cwds(self) -> dict[int, str]:
         return process_cwds()
 
@@ -270,7 +296,7 @@ class FixedMachine(MachineProbe):
     governor, check-cap and land tests that pass on the laptop and on ci-runner). Its fields: ram_gb, free_gb, pressure,
     swap_used_mb, swap_total_mb, load1, load5 (default load1), cores (default 12), busy (default load1; null with
     no load1: unreadable, read from its ps rows), free_pct, level, disk_free_gb (default 500, whatever the path), physical_ram_gb (default 36), ps (rows
-    of the columns ps_cols names), cwds ({pid: cwd}), kept_roots ([checkout]), listeners ([pid]), file_table ([open, most]), open_files (lsof's text), tmp_root,
+    of the columns ps_cols names), footprints ({pid: phys_footprint KB}), cwds ({pid: cwd}), kept_roots ([checkout]), listeners ([pid]), file_table ([open, most]), open_files (lsof's text), tmp_root,
     projects. `path`: a JSON file of them, read again at every reading (a test's other process changes it)."""
 
     PS_COLS = ("pid", "ppid", "rss", "pcpu", "comm")
@@ -321,6 +347,10 @@ class FixedMachine(MachineProbe):
         f = self.fields()
         rows = parse_ps(str(f.get("ps") or ""), tuple(f.get("ps_cols") or self.PS_COLS))
         return [r for r in rows if r.pid in pids] if pids else rows
+
+    def footprint_kb(self, pid: int) -> Optional[int]:
+        kb = (self.fields().get("footprints") or {}).get(str(pid))
+        return None if kb is None else int(kb)
 
     def process_cwds(self) -> dict[int, str]:
         return {int(pid): str(cwd) for pid, cwd in (self.fields().get("cwds") or {}).items()}

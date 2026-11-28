@@ -48,6 +48,7 @@ WP_GROWTH_MB = 500  # RSS growth over the kept window that is a trend (or WP_GRO
 WP_GROWTH_PCT = 5.0
 WP_CEILING_MARGIN = 0.25  # x a ceiling (-Xmx, a mongod's cache) its RSS may exceed it by, besides the headroom
 WP_CEILING_HEADROOM_GB = 1.0  # what lives beside it: a JVM's metaspace, code cache, threads; a mongod's connections
+WP_VM_SLACK_GB = 0.25  # a Linux VM's phys_footprint may exceed its guest memory by this (measured: guest + ~0.1 GB)
 WT_STALE_MAX = 10  # suite roots past twice the sweep's bound before WT is violated
 SPOTLIGHT_EXCLUDE = ("System Settings > Spotlight > Search Privacy: add ~/projects and /private/tmp (or `sudo mdutil "
                      "-i off /private/tmp`)")
@@ -62,13 +63,23 @@ XMX = re.compile(r"(?:^|\s)-Xmx(\d+)([kKmMgGtT]?)(?=\s|$)")
 MONGOD_CACHE_ARG = re.compile(r"--wiredTigerCacheSizeGB[=\s]+([\d.]+)")
 MONGOD_CONFIG_ARG = re.compile(r"(?:--config|-f)[=\s]+(\S+)")
 MONGOD_CACHE_CONF = re.compile(r"^\s*cacheSizeGB\s*:\s*([\d.]+)", re.M)
-ProcRow = tuple[int, int, int, float, str]  # (pid, ppid, rss KB, %cpu, command name)
+VM_PROCESS = re.compile(r"^(com\.apple\.Virtualization\.VirtualMachine|qemu-system-\w+|vfkit|krunkit)$")
+ProcRow = tuple[int, int, int, float, str]  # (pid, ppid, memory KB, %cpu, command name)
 
 
 def watched_process_rows(machine: MachineProbe) -> list[ProcRow]:
-    """[(pid, ppid, rss KB, %cpu, command name)] of every process of the machine."""
+    """[(pid, ppid, memory KB, %cpu, command name)] of every process of the machine. The memory is ps's RSS, except for
+    a VM's, which is its phys_footprint (2026-11-28, measured: ps RSS overcounts a vz guest ~1.8x, to ~11 GB for a 6 GB
+    guest, while the footprint -- what the host is charged -- stays at guest + ~0.1 GB); a VM whose footprint cannot be
+    read is left out rather than judged by the overcount."""
     found = machine.process_rows(("pid", "ppid", "rss", "pcpu", "comm"))
-    return [(r.pid, r.ppid, r.rss, r.pcpu, os.path.basename(r.comm)) for r in found]
+    rows = [(r.pid, r.ppid, r.rss, r.pcpu, os.path.basename(r.comm)) for r in found]
+    kept = []
+    for pid, ppid, rss, cpu, name in rows:
+        footprint = machine.footprint_kb(pid) if VM_PROCESS.match(name) else rss
+        if footprint is not None:
+            kept.append((pid, ppid, footprint, cpu, name))
+    return kept
 
 
 def jvm_xmx_kb(args: str) -> Optional[int]:
@@ -131,17 +142,21 @@ def _mongod_ceiling(args: str, ram: float, home: str) -> Optional[tuple[int, str
 
 def _vm_ceiling(args: str, ram: float, home: str) -> Optional[tuple[int, str]]:
     guest = vm_memory_kb(home)
-    return (guest, f"its guest memory {guest / 1024 / 1024:.1f} GB") if guest else None
+    if not guest:
+        return None
+    return (guest + int(WP_VM_SLACK_GB * 1024 * 1024),
+            f"its guest memory {guest / 1024 / 1024:.1f} GB + {WP_VM_SLACK_GB:g} GB")
 
 
 # The process kinds that set their own memory ceiling, and how to read it from a command line, the RAM GB and HOME:
 # a JVM's -Xmx, a mongod's WiredTiger cache, a Linux VM's configured guest memory (Docker / colima / Rancher Desktop's,
-# which `run-script-tests --linux` and the containers use: its RSS fills toward it as the guest touches pages). Any
+# which `run-script-tests --linux` and the containers use: its phys_footprint fills toward it as the guest touches
+# pages; its limit is the guest memory + WP_VM_SLACK_GB exactly, no margin or headroom). Any
 # other process is held to WP_RSS_GB.
 CEILINGS: tuple[tuple[re.Pattern[str], Callable[[str, float, str], Optional[tuple[int, str]]]], ...] = (
     (re.compile(r"^java$"), _jvm_ceiling),
     (re.compile(r"^mongod$"), _mongod_ceiling),
-    (re.compile(r"^(com\.apple\.Virtualization\.VirtualMachine|qemu-system-\w+|vfkit|krunkit)$"), _vm_ceiling),
+    (VM_PROCESS, _vm_ceiling),
 )
 
 
@@ -193,8 +208,12 @@ def _limits(p: dict[str, Any], ticket: Optional[dict[str, Any]]) -> tuple[float,
     """(RSS KB past which process record `p` may not grow, what that limit is, the %CPU it may hold)."""
     gb = 1024 * 1024
     ceiling = p.get("ceiling")
-    rss, said = (ceiling[0] * (1 + WP_CEILING_MARGIN) + WP_CEILING_HEADROOM_GB * gb, f"past {ceiling[1]} + margin") \
-        if ceiling else (wp_rss_gb(p["name"]) * gb, f"past {wp_rss_gb(p['name']):g} GB")
+    if ceiling and VM_PROCESS.match(p["name"]):
+        rss, said = ceiling[0], f"past {ceiling[1]}"
+    elif ceiling:
+        rss, said = ceiling[0] * (1 + WP_CEILING_MARGIN) + WP_CEILING_HEADROOM_GB * gb, f"past {ceiling[1]} + margin"
+    else:
+        rss, said = wp_rss_gb(p["name"]) * gb, f"past {wp_rss_gb(p['name']):g} GB"
     cpu = WP_CPU_PCT
     if ticket:
         charged = float(ticket.get("mem") or 0) * gb
@@ -221,12 +240,22 @@ def _process_finding(p: dict[str, Any], now_: float, ticket: Optional[dict[str, 
     hot = p.get("hot_since") is not None and now_ - p["hot_since"] >= WP_CPU_MIN * 60
     if not (big or hot):
         return None
-    gb = lambda kb: f"{kb / 1024 / 1024:.1f} GB"  # noqa: E731
-    said = [f"RSS {gb(rss[-1][1])} (from {gb(rss[0][1])} at {time.strftime('%H:%MZ', time.gmtime(rss[0][0]))}), "
-            f"{past} ({gb(limit)}), growing for {(rss[-1][0] - rss[0][0]) / 60:.0f} min"] if big else []
+    said = [_growth_words(p, limit, past)] if big else []
     if hot:
         said.append(f"CPU {p['cpu']:.0f}%, over {WP_CPU_PCT:g}% for {(now_ - p['hot_since']) / 60:.0f} min")
     return ", ".join(said)
+
+
+def _gigabytes(kb: float) -> str:
+    return f"{kb / 1024 / 1024:.1f} GB"
+
+
+def _growth_words(p: dict[str, Any], limit: float, past: str) -> str:
+    """How kept process record `p` grew past `limit`: its footprint (a VM) or RSS, from when, for how long."""
+    rss = p["rss"]
+    measure = "footprint" if VM_PROCESS.match(p["name"]) else "RSS"
+    return (f"{measure} {_gigabytes(rss[-1][1])} (from {_gigabytes(rss[0][1])} at {time.strftime('%H:%MZ', time.gmtime(rss[0][0]))}), "
+            f"{past} ({_gigabytes(limit)}), growing for {(rss[-1][0] - rss[0][0]) / 60:.0f} min")
 
 
 def _keep_rss(kept: list[list[float]], rss: int, now_: float) -> list[list[float]]:

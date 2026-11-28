@@ -308,6 +308,7 @@ class FileTableTest(unittest.TestCase):
     def test_the_vm_on_top_says_how_to_release_its_cache(self):
         _ok, detail = A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), machine=fixed_machine(file_table=list((400_000, 491_520)), open_files=self.LSOF))
         self.assertIn("rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'", detail)
+        self.assertIn("frees no host memory", detail)
         _ok, other = A.inv_wf(FakeClock(), A.CurrentStore(A.process_store), machine=fixed_machine(file_table=list((400_000, 491_520)), open_files="p7\ncjava\nf1\n"))
         self.assertNotIn("drop_caches", other)
 
@@ -394,19 +395,25 @@ class RunawayProcessTest(unittest.TestCase):
         self.d = tempfile.mkdtemp()
         self.state = os.path.join(self.d, "procwatch.json")
 
-    def ps(self, *rows, args_of=None, ram=None):
+    def ps(self, *rows, args_of=None, ram=None, footprints=None):
         """The machine whose processes are (pid, ppid, rss KB, %cpu, command) rows, each with the command line
         `args_of(pid)` gives (its name by default), and `ram` GB of RAM (the harness's 36 by default)."""
         text = "\n".join(f"{pid} {ppid} {rss_kb} {cpu} {name} {args_of(pid) if args_of else name}"
                          for pid, ppid, rss_kb, cpu, name in rows)
         return fixed_machine(ps=text, ps_cols=["pid", "ppid", "rss", "pcpu", "comm", "args"],
-                             **({"ram_gb": ram} if ram is not None else {}))
+                             **({"ram_gb": ram} if ram is not None else {}),
+                             **({"footprints": {str(p): int(gb * 1024 * 1024) for p, gb in footprints.items()}}
+                                if footprints else {}))
 
-    def run_passes(self, samples, pid=322, name="/usr/sbin/fseventsd", ppid=1, cpu=40.0, args_of=None, ram=None, **kw):
-        """One watchdog pass a minute over `samples` [(t, rss GB)]: [(t, ok, detail)]."""
+    def run_passes(self, samples, pid=322, name="/usr/sbin/fseventsd", ppid=1, cpu=40.0, args_of=None, ram=None,
+                   footprint=None, **kw):
+        """One watchdog pass a minute over `samples` [(t, rss GB)]: [(t, ok, detail)]. `footprint(rss GB)`: a VM's
+        phys_footprint GB, by the sample's RSS."""
         out = []
         for t, gb in samples:
-            ok, detail = A.inv_wp(self.ps((pid, ppid, int(gb * 1024 * 1024), cpu, name), args_of=args_of, ram=ram),
+            fp = {pid: footprint(gb)} if footprint else None
+            ok, detail = A.inv_wp(self.ps((pid, ppid, int(gb * 1024 * 1024), cpu, name), args_of=args_of, ram=ram,
+                                          footprints=fp),
                                   now_=float(t), state_path=self.state, **kw)
             out.append((t, ok, detail))
         return out
@@ -491,9 +498,32 @@ class RunawayProcessTest(unittest.TestCase):
     def test_a_vm_past_its_guest_memory_and_margin_still_climbing_is_a_runaway(self):
         self.lima_vm('"2GiB"')
         passes = self.run_passes(self.climb(3.0, 6.0, 40), pid=39093, name="com.apple.Virtualization.VirtualMachine",
-                                 cpu=20.0, home=self.d)
+                                 cpu=20.0, home=self.d, footprint=lambda gb: gb)
         self.assertFalse(passes[-1][1])
-        self.assertIn("past its guest memory 2.0 GB + margin", passes[-1][2])
+        self.assertIn("past its guest memory 2.0 GB + 0.25 GB", passes[-1][2])
+
+    VM = "com.apple.Virtualization.VirtualMachine"
+
+    def test_a_vm_at_11_gb_rss_but_6_1_gb_footprint_is_no_runaway(self):
+        """2026-11-28, measured: a 6 GB vz guest's ps RSS climbs to ~11.3 GB (1.8x overcount; the old limit 6 x 1.25 + 1
+        = 8.5 GB tripped every few days) while its phys_footprint, what the host is charged, stays at guest + 0.1 GB."""
+        self.lima_vm(6442450944)
+        passes = self.run_passes(self.climb(5.0, 11.0, 60), pid=39093, name=self.VM, cpu=20.0, home=self.d,
+                                 footprint=lambda gb: 6.1)
+        self.assertTrue(all(ok for _, ok, _ in passes), [d for _, ok, d in passes if not ok][:1])
+
+    def test_a_vm_whose_footprint_climbs_past_its_guest_and_slack_is_a_runaway(self):
+        self.lima_vm(6442450944)
+        passes = self.run_passes(self.climb(5.0, 11.0, 60), pid=39093, name=self.VM, cpu=20.0, home=self.d,
+                                 footprint=lambda gb: 5.2 + (gb - 5.0) * 1.4 / 6)  # 5.2 -> 6.6 GB
+        self.assertFalse(passes[-1][1])
+        self.assertIn("footprint 6.6 GB", passes[-1][2])
+        self.assertIn("past its guest memory 6.0 GB + 0.25 GB (6.2 GB)", passes[-1][2])
+
+    def test_a_vm_whose_footprint_is_unreadable_is_not_judged_by_its_rss(self):
+        self.lima_vm(6442450944)
+        passes = self.run_passes(self.climb(5.0, 11.0, 60), pid=39093, name=self.VM, cpu=20.0, home=self.d)
+        self.assertTrue(all(ok for _, ok, _ in passes))
 
     def test_idea_is_held_to_its_own_8_gb_limit_and_others_to_4(self):
         """2026-11-25: IntelliJ's `idea` JVM sits at 4.1-4.2 GB and WP escalated it; WP_RSS_BY_NAME gives it 8 GB."""

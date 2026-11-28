@@ -597,7 +597,6 @@ mixed	lib/agentctl/processorlink.py:offer_token	3
 mixed	lib/agentctl/processorlink.py:spawn_waiting_processor	3
 mixed	lib/agentctl/procs.py:lsof_cwds	9
 mixed	lib/agentctl/procs.py:safe_cwd	3
-mixed	lib/agentctl/procwatch.py:_process_finding	7
 mixed	lib/agentctl/procwatch.py:inv_wp	7
 mixed	lib/agentctl/procwatch.py:inv_wt	8
 mixed	lib/agentctl/procwatch.py:vm_memory_kb	5

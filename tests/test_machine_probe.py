@@ -57,6 +57,11 @@ class Contract:
         mine = p.process_rows(("pid", "ppid", "pcpu", "args"), pids=(os.getpid(),))
         self.assertEqual([r.pid for r in mine], [os.getpid()])
 
+    def test_a_footprint_is_a_positive_kb_count_or_unreadable(self):
+        kb = self.probe().footprint_kb(os.getpid())
+        self.assertTrue(kb is None or kb > 0)
+        self.assertIsNone(self.probe().footprint_kb(2 ** 30), "no such process")
+
     def test_cwds_file_table_open_files_disk_and_scratch_roots(self):
         p = self.probe()
         self.assertTrue(all(isinstance(k, int) and isinstance(v, str) for k, v in p.process_cwds().items()))
@@ -108,7 +113,7 @@ class FixedMachineTest(Contract, unittest.TestCase):
     def probe(self):
         return fixed_machine(ps=f"{os.getpid()} 1 0.5 python3 tests\n4242 1 12.0 java -jar sbt-launch.jar\n",
                              ps_cols=["pid", "ppid", "pcpu", "args"], cwds={str(os.getpid()): "/tmp"},
-                             kept_roots=["/tmp"], listeners=[4242],
+                             kept_roots=["/tmp"], listeners=[4242], footprints={str(os.getpid()): 7000},
                              file_table=[1000, 100000], open_files="p1\ncpython3\nf3\n")
 
     def test_ram_unread_is_the_page_count_not_a_fixed_36_gb(self):
@@ -116,6 +121,10 @@ class FixedMachineTest(Contract, unittest.TestCase):
         the shared rule's, the page count each machine answers."""
         self.assertEqual(machine.FixedMachine({"physical_ram_gb": 64}).ram_gb(), 64.0)
         self.assertEqual(machine.FixedMachine({"ram_gb": 18, "physical_ram_gb": 64}).ram_gb(), 18.0)
+
+    def test_a_footprint_is_the_one_the_fixture_names(self):
+        self.assertEqual(machine.FixedMachine({"footprints": {"7": 6_400_000}}).footprint_kb(7), 6_400_000)
+        self.assertIsNone(machine.FixedMachine({"footprints": {"7": 1}}).footprint_kb(8))
 
     def test_busy_cores_are_its_load_unless_named_and_a_load5_its_load1(self):
         self.assertEqual(machine.FixedMachine({"load1": 3.0}).tick_busy_cores(), 3.0)

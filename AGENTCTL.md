@@ -241,11 +241,11 @@ moves it forward; nothing is a detached process that can die with its state in i
   verification -- and none unlanded 40 min after it was queued unless its own check runs, or 2 h whatever), WB nobody leaves uncommitted edits in ~/bin's own checkout for over 10 min
   (it names the processes working there), WF the system-wide file table (kern.num_files) stays under 70% of
   kern.maxfiles (`$AGENTCTL_WF_PCT`; past it, it names the top three holders, and for Rancher Desktop's VM on top the
-  `rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'` that releases its virtiofs descriptors: on
+  `rdctl shell -- sudo sh -c 'sync; echo 2 > /proc/sys/vm/drop_caches'` that drops its virtiofs descriptors (the file table only: a vz guest has no free-page reporting, so it frees no host memory): on
   2026-11-20 ~200k of them, one per file a container had seen in ~25 worktrees, overflowed it, ENFILE everywhere), WP no
   process -- a system daemon too -- holds an RSS past its own limit (4 GB, `wp_rss_by_name` in agentctl.toml: `idea` 8 GB; a ceiling its kind sets itself + 25% + 1 GB, procwatch's
   CEILINGS table: a JVM's -Xmx, a mongod's WiredTiger cache -- cacheSizeGB, else 50% of (RAM - 1 GB) --, a Linux VM's
-  configured guest memory (Rancher Desktop / lima / colima / Docker Desktop); a live governor ticket's charged memory)
+  configured guest memory + 0.25 GB, judged by the VM's phys_footprint (`MachineProbe.footprint_kb`), NOT its ps RSS: measured 2026-11-28, a 6 GB vz guest's RSS overcounts ~1.8x (to ~11 GB, a false "growing" alarm every few days) while its footprint, what the host is charged, stays at guest + ~0.1 GB (Rancher Desktop / lima / colima / Docker Desktop); a live governor ticket's charged memory)
   that has kept growing for 30 min (both halves of its 2 h of 5-min samples grew, 500 MB or 5% in all: one jump, or a
   big server's creep, is no trend), or a CPU over 90% (a ticket's charged cores) for 20 min (lib/agentctl/procwatch.py: samples in procwatch.json; 2026-11-22 fseventsd at 21.5 GB and over
   100% for days); it names the process, its RSS and CPU trend and the fix -- a system daemon's is the OWNER's (`sudo
