@@ -141,18 +141,20 @@ def _own_rise(sha: str, path: str, rose: Callable[[str, str], List[str]], repo: 
 
 
 def unjustified_rises(rng: str, path: str, key: str, rose: Callable[[str, str], List[str]],
-                      repo: Optional[tool_git.GitRepo] = None) -> List[str]:
+                      repo: Optional[tool_git.GitRepo] = None, net_grew: bool = True) -> List[str]:
     """The commits of `rng` whose own change to `path` grows it (`rose(its parent's text, its text)`, the ratchet's growth,
     non-empty) and that carry no `key:` trailer, oldest first: `<sha9> <subject>: <its rise>` each (THE ATTRIBUTION RULE,
     above). A commit creating or deleting `path` is no step (the range's own check has no baseline to compare). When no
     single commit's step grows it although the range does (each step within its parent's limit), some commit of the
-    range changing `path` must carry the trailer. Empty when every rise is justified where it was made."""
+    range changing `path` must carry the trailer (only when `net_grew`: the range's own text grew). A step's rise counts
+    though a later commit of the push falls it back (net zero): the commit baked it in. Empty when every rise is
+    justified where it was made."""
     repo = repository(repo)
     changed = repo.commits(rng, [path], reverse=True)
     rises = {sha: _own_rise(sha, path, rose, repo) for sha in changed}
     refused = [f"{sha[:9]} {repo.subject(sha)}: " + "; ".join(own)
                for sha, own in rises.items() if own and not carries(sha, key, repo)]
-    if not any(rises.values()) and not any(carries(sha, key, repo) for sha in changed):
+    if net_grew and not any(rises.values()) and not any(carries(sha, key, repo) for sha in changed):
         refused.append(f"no commit of {rng} changing {path} carries `{key}:`")
     return refused
 

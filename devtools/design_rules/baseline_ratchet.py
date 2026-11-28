@@ -229,9 +229,8 @@ def unjustified_growth(spec: Spec, rng: str, baseline: Rows, renames: Renames) -
     for trailer, kinds in spec.trailers.items():
         def rose(a: str, b: str, kinds: Tuple[str, ...] = kinds) -> List[str]:
             return growth(spec, kinds, parse(a), parse(b), renames)
-        if not growth(spec, kinds, parse(old_text), baseline, renames):
-            continue
-        unjustified = trailers.unjustified_rises(rng, spec.baseline, trailer, rose)
+        net_grew = bool(growth(spec, kinds, parse(old_text), baseline, renames))  # a step's rise counts though a later step falls it
+        unjustified = trailers.unjustified_rises(rng, spec.baseline, trailer, rose, net_grew=net_grew)
         if unjustified:
             found = True
             print(f"THE {spec.title} BASELINE GREW in {rng} ({', '.join(kinds)}) with no `{trailer}: <why>` trailer"
