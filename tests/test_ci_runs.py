@@ -57,21 +57,21 @@ class CiRunsTest(Base):
         cleared, why = A.probe_quota_reset({"repo": "o/r", "workflow": "new.yml", "job": "preflight", "since": 0}, runs=case_context().runs)
         self.assertFalse(cleared)
         self.assertIn("no run of new.yml since", why)
-        self.assertEqual(A._own_runs("o/r", "new.yml", ctx=case_context()), [])
+        self.assertEqual(A._own_runs("o/r", "new.yml", case_context().runs), [])
 
     def test_a_workflow_not_on_main_is_said_once_never_as_an_unread_list(self):
         import contextlib, io
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             A.workflow_main_runs("o/r", "new.yml", case_context().runs)
-            A._own_runs("o/r", "new.yml", ctx=case_context())
+            A._own_runs("o/r", "new.yml", case_context().runs)
         self.assertNotIn("could not list", err.getvalue())
         self.assertEqual(err.getvalue().count("new.yml is not on main yet"), 1, err.getvalue())
 
     def test_a_kept_listing_is_kept_per_repository(self):
         self.gh.runs = {("o/a", "ci.yml"): [run(1)], ("o/b", "ci.yml"): [run(2)]}
-        self.assertEqual([r["databaseId"] for r in A._own_runs("o/a", "ci.yml", ctx=case_context())], [1])
-        self.assertEqual([r["databaseId"] for r in A._own_runs("o/b", "ci.yml", ctx=case_context())], [2])
+        self.assertEqual([r["databaseId"] for r in A._own_runs("o/a", "ci.yml", case_context().runs)], [1])
+        self.assertEqual([r["databaseId"] for r in A._own_runs("o/b", "ci.yml", case_context().runs)], [2])
 
     def test_a_decided_runs_jobs_are_read_once_a_running_ones_every_time(self):
         self.gh.jobs = {"7": [{"name": "test", "status": "completed", "conclusion": "failure"}],

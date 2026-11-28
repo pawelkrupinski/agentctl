@@ -37,14 +37,16 @@ CEILINGS = {
     "gatepublish": 2,
     "gov": 1,
     "invariants": 2,
+    "landawait": 2,
     "landdryrun": 5,
     "landprecheck": 3,
-    "landqueue": 4,
+    "landqueue": 2,
+    "landstatus": 1,
     "landsubmit": 1,
     "landuntil": 3,
     "landwatch": 6,
     "notifyurl": 4,
-    "outsideflows": 4,
+    "outsideflows": 2,
     "overlapcheck": 4,
     "processorsetup": 1,
     "queuecheck": 1,
@@ -102,7 +104,7 @@ CEILINGS = {
 
 # the SUM of the ceilings, 276 before 3eecdc3a split `cli` (its 2 became 6 module rows): a split moves ctx parameters
 # between modules, it never adds one, so the sum only falls (lower it with the ceilings it follows)
-TOTAL_CEILING = 270
+TOTAL_CEILING = 269
 
 
 def takes_ctx(fn):

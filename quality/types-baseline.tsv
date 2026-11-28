@@ -78,8 +78,9 @@ mypy-errors	landedchange	9
 mypy-errors	lander	30
 mypy-errors	landhold	4
 mypy-errors	landprecheck	4
-mypy-errors	landqueue	5
 mypy-errors	landrefusal	7
+mypy-errors	landstatusentry	2
+mypy-errors	landstatusline	1
 mypy-errors	landsteps	11
 mypy-errors	landsubmit	9
 mypy-errors	landsync	10
@@ -120,6 +121,7 @@ mypy-errors	queueenter	12
 mypy-errors	queuefailure	4
 mypy-errors	queuepush	41
 mypy-errors	queuerecheck	42
+mypy-errors	queuerepo	3
 mypy-errors	queueslots	14
 mypy-errors	queuesubmit	27
 mypy-errors	queueuntil	9

@@ -1,9 +1,9 @@
 # agentctl, part `landprecheck`: the fast precheck of a queued change, in the detached process or the foreground
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import argparse
 import os
 from typing import Any
-from agentctl.timefmt import argparse
 from agentctl.core import git, print_error
 from agentctl.paths import scratch
 from agentctl.inboxentry import inbox_write

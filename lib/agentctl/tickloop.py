@@ -12,8 +12,8 @@ from agentctl.waitingdir import waiting_state
 from agentctl.context import Context
 from agentctl.storetoken import _IN_PROCESSOR
 from agentctl.processorlink import TokenDrop, processor_owned
-from agentctl.landqueue import land_await, queue_checker, queue_command, waiting_repo
 from agentctl.processorsetup import processor_loop
+from agentctl.landqueue import waiting_command
 
 
 def waiting_run(repo: str, clock: Clock, store: Any, registry: ConditionRegistry, once: bool = False,
@@ -39,12 +39,6 @@ def waiting_run(repo: str, clock: Clock, store: Any, registry: ConditionRegistry
 
 
 def cmd_waiting(a: argparse.Namespace, clock: Clock, store: Any, registry: ConditionRegistry, *, ctx: Context) -> int:
-    if a.wcmd == "run":
-        return waiting_run(waiting_repo(a), clock, store, registry, once=a.once, service=getattr(a, "service", False), ctx=ctx)
-    if a.wcmd == "await":  # land's wait on its entry, resumed after a restart on new code
-        return land_await(a, waiting_repo(a), clock, store, ctx=ctx)
-    if a.wcmd in ("check", "check-batch"):
-        return queue_checker(a, clock, store, ctx=ctx)
-    return queue_command(a, store, ctx=ctx)
+    return waiting_command(a, clock, store, lambda repo, **how: waiting_run(repo, clock, store, registry, ctx=ctx, **how), ctx=ctx)
 
 

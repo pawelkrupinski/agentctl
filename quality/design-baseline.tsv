@@ -105,13 +105,13 @@ effect	lib/agentctl/jvmreap.py	3
 effect	lib/agentctl/jvmreap.py:files	7
 effect	lib/agentctl/land.py	2
 effect	lib/agentctl/land.py:files	6
+effect	lib/agentctl/landawait.py:files	1
 effect	lib/agentctl/landdryrun.py:files	6
 effect	lib/agentctl/landedchange.py:files	1
 effect	lib/agentctl/lander.py	1
 effect	lib/agentctl/lander.py:files	4
 effect	lib/agentctl/landhold.py	2
-effect	lib/agentctl/landqueue.py	1
-effect	lib/agentctl/landqueue.py:files	1
+effect	lib/agentctl/landholdcmd.py	1
 effect	lib/agentctl/landsync.py:files	1
 effect	lib/agentctl/landwatch.py:files	1
 effect	lib/agentctl/laptoprole.py	1
@@ -285,7 +285,6 @@ fanout	lib/agentctl/land.py	13
 fanout	lib/agentctl/landdryrun.py	26
 fanout	lib/agentctl/landedchange.py	13
 fanout	lib/agentctl/lander.py	13
-fanout	lib/agentctl/landqueue.py	28
 fanout	lib/agentctl/landwatch.py	10
 fanout	lib/agentctl/laptoprole.py	10
 fanout	lib/agentctl/localrecheck.py	18
@@ -567,6 +566,7 @@ mixed	lib/agentctl/jvmreap.py:end_process	5
 mixed	lib/agentctl/jvmreap.py:sbt_serving	4
 mixed	lib/agentctl/land.py:run_watched	10
 mixed	lib/agentctl/land.py:tool_env	8
+mixed	lib/agentctl/landawait.py:land_await	4
 mixed	lib/agentctl/landdryrun.py:DryRun._cleared	5
 mixed	lib/agentctl/landdryrun.py:DryRun.run	4
 mixed	lib/agentctl/landdryrun.py:_baseline_cached	5
@@ -582,8 +582,7 @@ mixed	lib/agentctl/landhold.py:hold_by	3
 mixed	lib/agentctl/landhold.py:hold_text	5
 mixed	lib/agentctl/landhold.py:land_hold	7
 mixed	lib/agentctl/landhold.py:land_hold_set	4
-mixed	lib/agentctl/landqueue.py:batch_status_line	3
-mixed	lib/agentctl/landqueue.py:land_await	4
+mixed	lib/agentctl/landstatusline.py:batch_status_line	3
 mixed	lib/agentctl/landsteps.py:land_before_queue	8
 mixed	lib/agentctl/landsync.py:rebase_in_progress	4
 mixed	lib/agentctl/landwatch.py:start_watch	6

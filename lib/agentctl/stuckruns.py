@@ -88,7 +88,7 @@ def stuck_runs(lists: dict[str, Any], now_: float | None = None, o_r: Any = None
     t = now_ if now_ is not None else ctx.clock.time()
     jobs_of = jobs_of or (lambda r: run_jobs(o_r, r, runs=ctx.runs))
     if history_of is None and o_r:
-        history_of = lambda name: stuck_history(o_r, name, ctx=ctx)  # noqa: E731
+        history_of = lambda name: stuck_history(o_r, name, ctx.runs)  # noqa: E731
     if timeout_of is None and o_r:
         timeout_of = lambda name: stuck_timeout(o_r, name, ctx.caches.flow_bounds)  # noqa: E731
     queued_of = lambda r: queue_full(o_r, r.get("number"), runner_queue(t) if queue is None else queue)  # noqa: E731
