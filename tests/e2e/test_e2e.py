@@ -117,6 +117,125 @@ class RedGateTest(E2ETest):
         self.assertEqual(self.w.states()[prod], "waiting", "the waiting change stays held until the gate is green")
 
 
+class RedFixerWorld(E2ETest):
+    """A RED FIXER IS DISPATCHED, ENDS AND LEAVES ITS WORKTREE (edbf355, 2026-11-28): Main goes red (the stub's failed
+    run), the server's tick loop opens the red and offers it, the laptop's sync dispatches a fixer -- a detached wrapper
+    (`red fixer`) that launches a STUB claude (claude_stub.py) in a fresh worktree off main -- and the wrapper judges the
+    session's final answer, releases the red's lease with it and ends the worktree (worktreelife.end_fixer_tree)."""
+
+    def setUp(self):
+        super().setUp()
+        w = self.w
+        w.write(".claude/settings.json", '{"permissions": {"defaultMode": "auto"}}', at=w.home)
+        w.write("families.json", '{"families": []}', at=w.root)  # a red in no family is its run's own: one short-lived fixer
+        self.claude = os.path.join(w.root, "claude")
+        w.extra_env.update(AGENTCTL_CLAUDE=os.path.join(H.HERE, "claude_stub.py"), E2E_CLAUDE_DIR=self.claude,
+                           AGENTCTL_RED_FAMILIES=os.path.join(w.root, "families.json"), AGENTCTL_RED_TICK="0")
+        # Main was green once (a red check is tracked), at a commit no clone holds (so there is no culprit to blame)
+        w.gh.add_run("main.yml", "0" * 40, jobs=[("test", "success")])
+        self.make_main_red()
+
+    def reds(self):
+        return {r["id"]: dict(r, data=json.loads(r["data"] or "{}")) for r in self.w.db("SELECT id, state, data FROM items WHERE type='red'")}
+
+    def server_ticks_until(self, cond, what):
+        """The server's tick loop (the reconciler as ci-runner runs it: it reads the gate and opens, offers and judges the reds) until cond()."""
+        loop = self.w.spawn("server-loop", [self.w.server_tool, "tick"], dict(self.w.server_env(), AGENTCTL_TICK="0.3"))
+        try:
+            return self.w.until(cond, what, 60)
+        finally:
+            loop.stop()
+            self.w.procs.remove(loop)
+
+    def fixers(self):
+        out = []
+        paths = [x for x in glob.glob(os.path.join(self.w.root, "laptop", "reds", "*", "fixer*.json")) if re.search(r"fixer(-\d+)?\.json$", x)]
+        for p in sorted(paths, key=lambda x: int((re.search(r"fixer-(\d+)", x) or [0, 1])[1])):  # fixer.json, fixer-2.json, ...
+            with open(p) as f:
+                out.append(json.load(f))
+        return out
+
+    def dispatch_a_fixer(self, n=1, **session):
+        """The laptop's sync dispatches fixer n of the red (the stub's session does `session`: E2E_CLAUDE_VERDICT / _COMMIT); its record once its wrapper has ended."""
+        self.w.extra_env.update(**session)
+        self.w.sync()
+        self.w.until(lambda: len(self.fixers()) >= n, f"fixer {n} dispatched")
+        self.w.until(lambda: self.fixers()[n - 1].get("ended") and not self.alive(self.fixers()[n - 1].get("pid")),
+                     f"fixer {n}'s wrapper ended")
+        return self.fixers()[n - 1]
+
+    @staticmethod
+    def alive(pid):
+        if not pid:
+            return False
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
+    def fixer_inbox(self):
+        return [str(e.get("verdict")) for e in self.w.inbox() if str(e.get("verdict")).startswith("RED FIXER ")]
+
+    def archives(self):
+        return glob.glob(os.path.join(self.w.root, "laptop", "state", "fixer-archive", "*", "untracked", "agent-notes.txt"))
+
+    def offered(self):
+        self.server_ticks_until(lambda: any(r["state"] == "offered" for r in self.reds().values()), "the red offered")
+
+
+class RedFixerLandedTest(RedFixerWorld):
+    def test_a_fixer_that_landed_ends_ok_and_its_worktree_is_not_archived_or_retired(self):
+        self.offered()
+        rec = self.dispatch_a_fixer(E2E_CLAUDE_VERDICT=f"LANDED {self.w.main_sha()[:10]}")
+        self.assertEqual((rec["rc"], rec["verdict"][:6]), (0, "LANDED"), rec)
+        self.assertEqual(self.fixer_inbox(), [f"RED FIXER Main #2: {rec['verdict']}"])
+        self.assertTrue(os.path.isdir(rec["worktree"]), "a landed fixer's worktree is no give-up's: not retired")
+        self.assertEqual(self.archives(), [])
+
+
+class RedFixerGaveUpTest(RedFixerWorld):
+    def test_a_fixer_that_gave_up_has_its_worktree_archived_and_retired_with_its_branch(self):
+        self.offered()
+        rec = self.dispatch_a_fixer(E2E_CLAUDE_VERDICT="GAVE UP: cannot reproduce")
+        self.assertEqual((rec["rc"], rec["verdict"]), (1, "GAVE UP: cannot reproduce"), rec)
+        self.assertEqual(self.fixer_inbox(), ["RED FIXER Main #2: GAVE UP: cannot reproduce"])
+        self.assertFalse(os.path.exists(rec["worktree"]), "its worktree is removed")
+        self.assertNotIn("red-2", H.sh(self.w.clone, "git", "branch", "--list"), "and its branch")
+        [archived] = self.archives()
+        self.assertEqual(open(archived).read(), "uncommitted notes\n", "its uncommitted work is archived first")
+
+
+class RedFixerUnlandedTest(RedFixerWorld):
+    def test_a_fixer_that_gave_up_with_unlanded_commits_keeps_its_worktree(self):
+        self.offered()
+        rec = self.dispatch_a_fixer(E2E_CLAUDE_VERDICT="GAVE UP: cannot reproduce", E2E_CLAUDE_COMMIT="work.txt=a fix in progress")
+        self.assertEqual(rec["rc"], 1)
+        self.assertTrue(os.path.exists(os.path.join(rec["worktree"], "work.txt")), "kept: it holds a commit not on main")
+        self.assertEqual(self.archives(), [], "nothing archived: the tree goes on")
+
+
+class RedFixerContinuesTest(RedFixerWorld):
+    def test_the_next_fixer_continues_in_the_worktree_holding_the_unlanded_commits(self):
+        """Fixer 2 is the ladder's RESUME (its session and tree); fixer 3 a FRESH one, which still goes on in the tree
+        that holds unlanded commits (FIXER CONTINUITY, fixerland.previous_fixer_tree) instead of starting off main."""
+        self.offered()
+        first = self.dispatch_a_fixer(E2E_CLAUDE_VERDICT="GAVE UP: cannot reproduce", E2E_CLAUDE_COMMIT="work.txt=a fix in progress")
+        for n, commit in ((2, "more.txt=more"), (3, "third.txt=third")):
+            self.server_ticks_until(lambda: self.reds() and all(r["state"] == "offered" and r["data"]["attempts"] == n - 1
+                                                                for r in self.reds().values()), f"the red offered for fixer {n}")
+            last = self.dispatch_a_fixer(n, E2E_CLAUDE_COMMIT=commit, E2E_CLAUDE_VERDICT="GAVE UP: still cannot reproduce")
+        self.assertEqual(last["worktree"], first["worktree"], "the same tree, never a fresh one")
+        self.assertEqual(last["continued_from"], first["worktree"], "a fresh fixer going on in the previous one's tree")
+        self.assertEqual([c["cwd"] for c in self.claude_calls("--bg")], [first["worktree"]] * 3)
+        for f in ("work.txt", "more.txt", "third.txt"):
+            self.assertTrue(os.path.exists(os.path.join(first["worktree"], f)), f"{f}: the commits pile up in one tree")
+
+    def claude_calls(self, verb):
+        with open(os.path.join(self.claude, "calls.jsonl")) as f:
+            return [c for c in map(json.loads, f) if c["argv"][:1] == [verb]]
+
+
 class StoreOutageTest(E2ETest):
     def test_a_change_queued_while_the_store_is_down_is_kept_resubmitted_and_lands_once(self):
         self.w.stop_store()

@@ -60,6 +60,26 @@ MUTATIONS = {
         'with urllib.request.urlopen(req, timeout=timeout or self.timeout) as r:\n'
         '                return json.loads(r.read() or b"null")',
         "a store call bounded per socket read, not in all"),
+    "RedFixerLandedTest": (
+        "lib/agentctl/fixerlife.py",
+        'rc = 0 if verdict.startswith("LANDED") else 1',
+        "rc = 1",
+        "a fixer that landed is judged a give-up: its worktree is archived and retired"),
+    "RedFixerGaveUpTest": (
+        "lib/agentctl/fixerlife.py",
+        "end_fixer_tree(self.wt, bool(rc), verdict[:200])",
+        "end_fixer_tree(self.wt, False, verdict[:200])",
+        "a fixer that gave up leaves its worktree behind, not archived and retired"),
+    "RedFixerUnlandedTest": (
+        "lib/agentctl/worktreelife.py",
+        "if state and not state.unmerged:",
+        "if state:",
+        "a give-up's worktree holding unlanded commits is retired with them"),
+    "RedFixerContinuesTest": (
+        "lib/agentctl/fixerland.py",
+        "self.cont = None if resume else previous_fixer_tree(self.u)",
+        "self.cont = None",
+        "a fresh fixer starts off main instead of going on in the tree holding the previous fixer's unlanded commits"),
 }
 
 
