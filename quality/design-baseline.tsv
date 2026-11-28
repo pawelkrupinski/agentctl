@@ -263,15 +263,12 @@ state	lib/agentctl/clones.py	1
 state	lib/agentctl/conditions.py	1
 state	lib/agentctl/configfile.py	2
 state	lib/agentctl/core.py	1
-state	lib/agentctl/fixerblockers.py	1
-state	lib/agentctl/fixersession.py	1
 state	lib/agentctl/forge.py	1
 state	lib/agentctl/gating.py	3
 state	lib/agentctl/generated.py	1
 state	lib/agentctl/gov.py	1
 state	lib/agentctl/hostsleep.py	1
 state	lib/agentctl/inboxentry.py	1
-state	lib/agentctl/landedtwin.py	2
 state	lib/agentctl/laptoprole.py	1
 state	lib/agentctl/leases.py	1
 state	lib/agentctl/onmain.py	3
@@ -418,7 +415,7 @@ mixed	lib/agentctl/fixersession.py:bg_resumable	10
 mixed	lib/agentctl/fixersession.py:bg_rows	4
 mixed	lib/agentctl/fixersession.py:bg_start	4
 mixed	lib/agentctl/fixersession.py:bg_stop	3
-mixed	lib/agentctl/fixersession.py:bg_turn	5
+mixed	lib/agentctl/fixersession.py:bg_turn	3
 mixed	lib/agentctl/fixersession.py:bg_turn_over	10
 mixed	lib/agentctl/fixersession.py:claude_trust_gap	8
 mixed	lib/agentctl/fixersession.py:store_reauth	5

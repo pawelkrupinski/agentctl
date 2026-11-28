@@ -22,7 +22,7 @@ from agentctl.owned import backoff, default_repo
 from agentctl.checkrunjobs import REMOTE_WORKFLOW
 from agentctl.context import Context
 from agentctl.worktrees import claimant
-from agentctl.fixerblockers import _blocker_cache, dispatch_blocker, in_fixer
+from agentctl.fixerblockers import dispatch_blocker, in_fixer
 from agentctl.redrecord import red_what
 from agentctl.red import red_put_offer
 from agentctl.reverts import revert_line
@@ -122,7 +122,6 @@ def red_cmd_auto(a: Any, st: Any, o_r: Any) -> Any:
         open(off, "w").write(ts() + "\n")
     elif a.state == "on" and os.path.exists(off):
         os.unlink(off)
-    _blocker_cache.clear()
     b = dispatch_blocker()
     print(f"automatic dispatch: {'ON' if not b else 'OFF -- ' + b}")
     return 0
@@ -154,7 +153,7 @@ def red_cmd_dispatch(a: Any, st: Any, o_r: Any, *, ctx: Context) -> Any:
     for it in items:
         offer_by_hand(st, it)
     repo = scan_repo_for(o_r, getattr(a, "repo", None) and os.path.abspath(a.repo))
-    lines = red_dispatcher(st, o_r, repo, st.clock())
+    lines = red_dispatcher(st, o_r, repo, st.clock(), ctx.caches.status.blocker)
     print("\n".join(lines) if lines else "NOT DISPATCHED: " + "; ".join(
         (st.offer_of(f"red:{it['id']}") or {}).get("reason") or it["state"] for it in items))
     return 0 if lines else 1

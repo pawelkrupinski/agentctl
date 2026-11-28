@@ -1,8 +1,9 @@
 # agentctl, part `landedtwin`: is a commit landed: patch-equivalence or a twin on main, one answer
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import functools
 import os
-from agentctl.core import git, process_cache, run_cmd
+from agentctl.core import git, run_cmd
 
 
 # IS IT LANDED: ONE ANSWER (2026-10-30: movies-wt-identity-impact's 67c68416e escalated UNLANDED ORPHAN three days
@@ -11,10 +12,6 @@ from agentctl.core import git, process_cache, run_cmd
 # when main has a patch-equivalent commit (git cherry's "-") OR a TWIN: the same subject, author and author date with
 # identical changed lines per file (context and line numbers left out). Every "is it landed" check asks this: the
 # orphans, the queue's entries and change items (W1 with them), the fixers' worktrees, the closers.
-_changed_lines_cache: dict[str, dict[str, list[str]]] = process_cache({})
-_main_index_cache: dict[tuple[str, str, str], dict[tuple[str, ...], list[str]]] = process_cache({})
-
-
 def file_change_lines(section: list[str]) -> list[str]:
     """The +/- lines of one file's section of a `git show -U0` text: its header keeps its modes and binary-ness (its
     index line is dropped, its blob id kept for a binary change), its hunks their +/- lines."""
@@ -46,20 +43,28 @@ def parse_changed_lines(diff: str) -> dict[str, list[str]]:
     return {header: file_change_lines(section) for header, section in sections.items()}
 
 
-def changed_lines(repo: str, c: str) -> dict[str, list[str]] | None:
-    """{file header: [the +/- lines, in order]} of commit c against its first parent: no context, no line numbers, no
-    blob ids of a text change (they name the whole file, context included); a binary change keeps its new blob id."""
-    if c in _changed_lines_cache:
-        return _changed_lines_cache[c]
+class CommitUnread(Exception):
+    """git could not show the commit: nothing is kept of it."""
+
+
+@functools.lru_cache(maxsize=4000)
+def _changed_lines_of(repo: str, c: str) -> dict[str, list[str]]:
+    """changed_lines of commit c, kept per (clone, commit): a commit's content never changes, so the memo is the
+    function's own (a pure memo holds no state a caller reaches). An unreadable commit raises, and is not kept."""
     r = run_cmd(["git", "-C", repo, "show", "--format=", "-U0", "--no-color", "--no-ext-diff", "--no-renames",
                  "--diff-merges=first-parent", c], timeout=120, text=False)
     if r.returncode != 0:
+        raise CommitUnread(c)
+    return parse_changed_lines(r.stdout.decode(errors="replace"))
+
+
+def changed_lines(repo: str, c: str) -> dict[str, list[str]] | None:
+    """{file header: [the +/- lines, in order]} of commit c against its first parent: no context, no line numbers, no
+    blob ids of a text change (they name the whole file, context included); a binary change keeps its new blob id."""
+    try:
+        return _changed_lines_of(repo, c)
+    except CommitUnread:
         return None
-    out = parse_changed_lines(r.stdout.decode(errors="replace"))
-    if len(_changed_lines_cache) > 4000:
-        _changed_lines_cache.clear()
-    _changed_lines_cache[c] = out
-    return out
 
 
 def _index_main_log(log: str) -> dict[tuple[str, ...], list[str]]:
@@ -73,15 +78,16 @@ def _index_main_log(log: str) -> dict[tuple[str, ...], list[str]]:
 
 
 def _main_index(repo: str, main: str, since: str) -> dict[tuple[str, ...], list[str]]:
-    """{(author name, email, author date, subject): [sha]} of main's commits since `since` (cached per main head)."""
-    key = (os.path.realpath(repo), main, since)
-    if key not in _main_index_cache:
-        rng = f"{since}..{main}" if since else main
-        r = git(repo, "log", "--no-merges", "-n", "20000", "--format=%H%x00%an%x00%ae%x00%at%x00%s", rng, check=False)
-        if len(_main_index_cache) > 32:
-            _main_index_cache.clear()
-        _main_index_cache[key] = _index_main_log(r.stdout if r.returncode == 0 else "")
-    return _main_index_cache[key]
+    """{(author name, email, author date, subject): [sha]} of main's commits since `since` (kept per main head)."""
+    return _main_index_of(os.path.realpath(repo), main, since)
+
+
+@functools.lru_cache(maxsize=32)
+def _main_index_of(repo: str, main: str, since: str) -> dict[tuple[str, ...], list[str]]:
+    """The index of the commits between `since` and `main`, a pure function of those commits: its memo is its own."""
+    rng = f"{since}..{main}" if since else main
+    r = git(repo, "log", "--no-merges", "-n", "20000", "--format=%H%x00%an%x00%ae%x00%at%x00%s", rng, check=False)
+    return _index_main_log(r.stdout if r.returncode == 0 else "")
 
 
 def content_twin(repo: str, c: str, main: str) -> str | None:

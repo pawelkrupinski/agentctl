@@ -73,7 +73,7 @@ class Base(unittest.TestCase):
         os.environ.pop("AGENTCTL_STORE_URL", None)
         os.makedirs(self.env["AGENTCTL_REDS_DIR"])
         self.patched = {n: getattr(A, n) for n in ("cached_dispatch_blocker", "port_open", "process_alive")}
-        A.cached_dispatch_blocker = lambda ttl=60: None
+        A.cached_dispatch_blocker = lambda memo, ttl=60: None
         A.port_open = lambda port, host="127.0.0.1", timeout=2.0: True
         A.process_alive = lambda pid, start=None: pid == 4242
         case_context().caches.status.clear()  # the status reads' memory (caches.StatusMemos)

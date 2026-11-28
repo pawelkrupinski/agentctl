@@ -2,6 +2,7 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
+from typing import Any
 import re
 import subprocess
 from agentctl.procrunner import process_runner
@@ -9,7 +10,7 @@ from agentctl.statefile import read_record
 from agentctl.clock import epoch_now
 from agentctl.redknobs import knob_red_fixer
 from agentctl.fixerknobs import knob_claude, knob_claude_settings
-from agentctl.core import HOME, process_cache
+from agentctl.core import HOME
 from agentctl.procs import lsof_cwds, ps
 from agentctl.fixerrecords import own_fixer_record_path
 from agentctl.worktrees import worktree_of
@@ -36,19 +37,16 @@ def land_cwds():
     return out
 
 
-_blocker_cache = process_cache({})
-
-
-def cached_dispatch_blocker(ttl: float = 60) -> str | None:
-    """dispatch_blocker runs `claude --help`: once a minute per process is enough for a display."""
+def cached_dispatch_blocker(memo: dict[Any, Any], ttl: float = 60) -> str | None:
+    """dispatch_blocker runs `claude --help`: once a minute per process is enough for a display (`memo`: Caches.status.blocker)."""
     key = (reds_dir(), os.path.exists(reds_dir("DISPATCH_OFF")), knob_claude(),
            knob_claude_settings())
-    hit = _blocker_cache.get(key)
+    hit = memo.get(key)
     if hit and epoch_now() - hit[0] < ttl:
         cached: str | None = hit[1]
         return cached
     v = dispatch_blocker()
-    _blocker_cache[key] = (epoch_now(), v)
+    memo[key] = (epoch_now(), v)
     return v
 
 

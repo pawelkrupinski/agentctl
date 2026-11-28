@@ -77,7 +77,7 @@ def red_tick(store, o_r, repo, snap, now_=None, dispatch=False, facts=None, sync
         # one-process stand-in for the two hosts. In production the laptop's sync runs these (sync_steps)
         acts += tick_stage("renewing the claims failed", lambda: renew_and_reap(store, t), [])
     if dispatch:  # fixers run on the laptop (owner decision 8): its sync dispatches
-        acts += tick_stage("the dispatcher failed", lambda: red_dispatcher(store, o_r, repo, t), [])
+        acts += tick_stage("the dispatcher failed", lambda: red_dispatcher(store, o_r, repo, t, ctx.caches.status.blocker), [])
     return acts
 
 

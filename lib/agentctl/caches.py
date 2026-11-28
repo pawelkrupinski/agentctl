@@ -20,6 +20,7 @@ class StatusMemos:
     registry: dict[str, Any] = field(default_factory=dict)  # "at", "reg": the live registry read last
     tails: dict[str, Any] = field(default_factory=dict)  # transcript -> ((size, mtime), its tail's info)
     metas: dict[str, Any] = field(default_factory=dict)  # a subagent's .meta.json -> (mtime, its JSON)
+    blocker: dict[Any, Any] = field(default_factory=dict)  # (dispatch flag, claude knobs) -> (when, what stops a fixer dispatch): a minute
 
     def clear(self) -> None:
         """Every memo emptied (a simulated seed's fresh process)."""

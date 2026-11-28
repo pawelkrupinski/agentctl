@@ -68,5 +68,18 @@ class LandedByContentTest(RedBase):
         self.assertEqual(list(A.changed_lines(wt, sha).values()), [["-line 5", "+line 5 changed"]])
 
 
+    def test_a_commit_is_shown_once_and_an_unreadable_one_is_never_kept(self):
+        wt, sha, _twin = self.drifted()
+        shown, run_cmd = [], A.run_cmd
+        A.run_cmd = lambda cmd, *a, **k: shown.append(cmd) or run_cmd(cmd, *a, **k)
+        self.addCleanup(setattr, A, "run_cmd", run_cmd)
+        self.assertEqual(A.changed_lines(wt, sha), A.changed_lines(wt, sha))
+        self.assertEqual(len(shown), 1, "the second ask answered from the commit's own memo")
+        bad = "0" * 40
+        self.assertIsNone(A.changed_lines(wt, bad))
+        self.assertIsNone(A.changed_lines(wt, bad))
+        self.assertEqual(len(shown), 3, "an unreadable commit is asked again")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -20,12 +20,15 @@ ESCALATION_LABEL = "escalation · "  # `claude agents` lists each session as `es
 class SessionLauncher:
     """The real launcher (escalations.py EscalationLauncher): what the red fixers launch with, for an escalation."""
 
+    def __init__(self, blocker_memo: dict[Any, Any]):
+        self.blocker_memo = blocker_memo  # Caches.status.blocker
+
     def host(self) -> str:
         return socket_host()
 
     def blocker(self) -> Optional[str]:
         """Dispatch OFF, no usable claude CLI, a permission mode a headless session cannot run in (the red's)."""
-        return cached_dispatch_blocker()
+        return cached_dispatch_blocker(self.blocker_memo)
 
     def repo_path(self, repo: str) -> Optional[str]:
         return escalation_repo_path(repo)
@@ -74,6 +77,6 @@ class SessionLauncher:
         return retire_worktree(worktree, why)
 
 
-def escalation_step(store: Any, t: float) -> list[str]:
+def escalation_step(store: Any, t: float, blocker_memo: dict[Any, Any]) -> list[str]:
     """The laptop sync's duty (syncsteps.py): one escalation dispatcher pass with the real launcher."""
-    return escalation_pass(store, t, SessionLauncher())
+    return escalation_pass(store, t, SessionLauncher(blocker_memo))

@@ -13,6 +13,7 @@ from agentctl.procs import process_alive
 from agentctl.inboxentry import inbox_write
 from agentctl.storetoken import no_vault, token, token_ns
 from agentctl.paths import state_root, tilde
+import functools
 import json
 import os
 import re
@@ -210,7 +211,6 @@ BG_TASK_STARTED = re.compile(r'"backgroundTaskId": ?"([\w-]+)"|Command running i
                              r'|"status": ?"async_launched", ?"agentId": ?"([\w-]+)"')
 BG_TASK_REPORTED = re.compile(r"<task-id>([\w-]+)</task-id>")  # a notification: a user entry or one absorbed mid-turn
 BG_TASK_STOPPED = re.compile(r'"(?:task_id|shell_id)": ?"([\w-]+)"')  # TaskStop / KillShell: stopped by the session
-_BG_TURN_CACHE: dict[str, tuple[tuple[int, float], dict[str, Any]]] = {}
 
 
 def user_texts(c: object) -> list[str]:
@@ -285,15 +285,17 @@ def bg_turn(path: str | None) -> dict[str, Any]:
         sig = (os.path.getsize(path), os.path.getmtime(path))
     except (OSError, TypeError):
         return empty
-    hit = _BG_TURN_CACHE.get(path)
-    if hit and hit[0] == sig:
-        return hit[1]
     try:
-        out = _scan_bg_turn(path)
+        return _bg_turn_at(path, sig)
     except OSError:
         return empty
-    _BG_TURN_CACHE[path] = (sig, out)
-    return out
+
+
+@functools.lru_cache(maxsize=256)
+def _bg_turn_at(path: str, signature: tuple[int, float]) -> dict[str, Any]:
+    """bg_turn's reading of the transcript as it was at `signature` (its size and mtime): a pure function of the file's
+    bytes, so the memo is its own and holds no state a caller could reach (an unreadable file raises, and is not kept)."""
+    return _scan_bg_turn(path)
 
 
 def bg_waiting(ent):

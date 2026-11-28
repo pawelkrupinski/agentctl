@@ -70,7 +70,6 @@ class RedsBase(RedBase):
         A.wire_clock(RealTimeClock())  # these tests make real git commits and run a real fixer: the wall's stamps
         self.t = [A.epoch_now()]
         self.st = A.process_store(clock=lambda: self.t[0])
-        A._blocker_cache.clear()
 
     def tearDown(self):
         if self.saved_root is None:

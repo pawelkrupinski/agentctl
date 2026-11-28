@@ -103,7 +103,7 @@ class StatusModelTest(unittest.TestCase):
         st.put_item("red", "k1", "offered", {"key": "k1", "workflow": "Main", "last_run": {"number": 20}, "jobs": ["test"],
                                              "gate": True})
         saved = A.cached_dispatch_blocker
-        A.cached_dispatch_blocker = lambda: None
+        A.cached_dispatch_blocker = lambda memo, ttl=60: None
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):

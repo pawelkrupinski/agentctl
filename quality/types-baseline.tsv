@@ -44,12 +44,12 @@ mypy-errors	culpritfix	29
 mypy-errors	entrychecks	13
 mypy-errors	eventprojection	11
 mypy-errors	explorer	15
-mypy-errors	fixerblockers	4
+mypy-errors	fixerblockers	3
 mypy-errors	fixerenv	3
 mypy-errors	fixerland	25
 mypy-errors	fixerlife	56
 mypy-errors	fixerprompt	15
-mypy-errors	fixersession	19
+mypy-errors	fixersession	17
 mypy-errors	forge	43
 mypy-errors	gatepublish	10
 mypy-errors	gatesummary	1

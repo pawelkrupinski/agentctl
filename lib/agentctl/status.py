@@ -264,8 +264,8 @@ def status_pressure(machine: MachineProbe):
     return f"UNDER PRESSURE: {why} [{summary}]" if why else summary
 
 
-def status_dispatcher(st, t, machine):
-    return {"blocker": cached_dispatch_blocker(), "off_flag": os.path.exists(reds_dir("DISPATCH_OFF")),
+def status_dispatcher(st, t, machine, blocker_memo):
+    return {"blocker": cached_dispatch_blocker(blocker_memo), "off_flag": os.path.exists(reds_dir("DISPATCH_OFF")),
             "repos_off": repo_dispatch_off_all(st),
             "alive": len(red_fixers_alive(st, t)), "cap": red_cap(), "pressure": status_pressure(machine),
             "escalated": [{"type": typ, "id": it["id"], "words": words} for typ, it, words in escalated_now(st)]}
@@ -386,7 +386,7 @@ def status_section_sources(t: float, repo: str, need: Any, machine: MachineProbe
     """The status model's sections: (name, producer, weight) each, every producer reading the store through `need`."""
     return (("header", lambda: status_header(t), 1),
                ("store", lambda: status_store_probe(need(), t), 1),
-               ("dispatcher", lambda: status_dispatcher(need(), t, machine), 1),
+               ("dispatcher", lambda: status_dispatcher(need(), t, machine, memos.blocker), 1),
                ("reds", lambda: status_reds(need(), t, repo), 1),
                ("families", lambda: status_families(need(), t), 1),
                ("untracked", lambda: [{"repo": o_r, **r} for o_r, r in red_untracked_list(need())], 1),

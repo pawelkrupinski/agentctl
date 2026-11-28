@@ -409,10 +409,10 @@ class DispatcherRemoteTest(Phase2Base):
         oid = self.st.offer("fixer", f"red:{it['id']}", A.red_lease("k1"), "fresh", 1, A.epoch_now() + 600, pic)
         spawned, saved = [], (A.red_spawn, A.cached_dispatch_blocker, A.fixer_records)
         A.red_spawn = lambda store, o_r, repo, off, took, extra=(): spawned.append((off["id"], took["epoch"])) or (True, "ok")
-        A.cached_dispatch_blocker = lambda: None
+        A.cached_dispatch_blocker = lambda memo, ttl=60: None
         A.fixer_records = lambda: []
         try:
-            acts = A.red_dispatcher(self.remote, "pawelkrupinski/movies", self.repo, A.epoch_now())
+            acts = A.red_dispatcher(self.remote, "pawelkrupinski/movies", self.repo, A.epoch_now(), {})
         finally:
             A.red_spawn, A.cached_dispatch_blocker, A.fixer_records = saved
         self.assertEqual(acts, ["ok"])
@@ -495,7 +495,7 @@ class RedFamilyTest(Phase2Base):
         seed_gating_checks()  # no clone, no forge: the gate's workflows as last read
         self.spawned, self.fns = [], (A.red_spawn, A.cached_dispatch_blocker)
         A.red_spawn = lambda store, o_r, repo, off, took, extra=(): self.spawned.append((off, extra)) or (True, "ok")
-        A.cached_dispatch_blocker = lambda: None
+        A.cached_dispatch_blocker = lambda memo, ttl=60: None
 
     def tearDown(self):
         A.red_spawn, A.cached_dispatch_blocker = self.fns
@@ -601,7 +601,7 @@ class RedFamilyTest(Phase2Base):
         owners = self.outside_gate_owned()
         claimer, wt = self.claimed_ablation()
         self.red("oi1", "Order independence", "scala (reverse)", 46)
-        acts = A.red_dispatcher(self.st, "o/r", self.repo, A.epoch_now())
+        acts = A.red_dispatcher(self.st, "o/r", self.repo, A.epoch_now(), {})
         self.assertFalse(any("joined" in a for a in acts), acts)
         self.assertEqual(len(owners), 1, "the family's owner takes the new red")
         self.assertNotEqual(self.st.get("red/oi1")["holder"], claimer)
@@ -616,7 +616,7 @@ class RedFamilyTest(Phase2Base):
         t = A.epoch_now()
         claimer, wt = self.claimed_ablation(fixer=os.path.join(self.tmp, "fixer-5.json"))
         self.red("oi1", "Order independence", "scala (reverse)", 46)
-        acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
+        acts = A.red_dispatcher(self.st, "o/r", self.repo, t, {})
         self.assertEqual((owners, self.spawned), ([], []), "no second session beside the live holder")
         self.assertTrue(any("joined its family outside-gate's fixer" in a for a in acts), acts)
         row = self.st.get("red/oi1")
@@ -631,7 +631,7 @@ class RedFamilyTest(Phase2Base):
         self.st.release("red/ab1", self.st.get("red/ab1")["epoch"], self.st.get("red/ab1")["secret"], outcome="RELEASED")
         self.st.release("red/oi1", row["epoch"], row["secret"], outcome="RELEASED")
         self.red("oi2", "Order independence", "scala (shuffled)", 47)
-        A.red_dispatcher(self.st, "o/r", self.repo, t)
+        A.red_dispatcher(self.st, "o/r", self.repo, t, {})
         self.assertEqual(len(owners), 1)
 
     def test_a_new_convergence_red_goes_under_the_live_family_fixers_lease_and_it_is_told(self):
@@ -643,7 +643,7 @@ class RedFamilyTest(Phase2Base):
         self.st.acquire("red/a07", "laptop:fixer:red-a07-5", 900, 3600, meta={"kind": "fixer", "worktree": wt})
         self.red("v1", "Verify scrape recording", "convergence (poland)", 2530)  # convergence work in another workflow
         self.red("v2", "Verify scrape recording", "verify (poland)", 2531)      # not convergence
-        acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
+        acts = A.red_dispatcher(self.st, "o/r", self.repo, t, {})
         self.assertTrue(any("joined its family convergence's fixer laptop:fixer:red-a07-5" in a for a in acts), acts)
         row = self.st.get("red/v1")
         self.assertEqual((row["holder"], A.lease_meta(row)["kind"], A.lease_meta(row)["family"]),
@@ -670,7 +670,7 @@ class RedFamilyTest(Phase2Base):
         self.st.acquire("red/a07", "laptop:fixer:red-a07-5", 900, 3600, meta={"kind": "fixer", "worktree": wt})
         self.red("v1", "Verify scrape recording", "convergence (poland)", 2530)
         self.st.update_item("red", "v1", self.st.item("red", "v1")["version"], {"runs": ["2530"]})
-        A.red_dispatcher(self.st, "o/r", self.repo, t)
+        A.red_dispatcher(self.st, "o/r", self.repo, t, {})
         row = self.st.get("red/v1")
         self.assertEqual(row["holder"], "laptop:fixer:red-a07-5")
         self.st.set_meta("red/v1", row["epoch"], row["secret"], {"joined_at": t - idle_min * 60})
@@ -690,7 +690,7 @@ class RedFamilyTest(Phase2Base):
         A.red_lease_ended(self.st, it, row, None, t, ctx=case_context())  # the tick: offered again, no attempt counted
         self.assertEqual(self.st.item("red", "v1")["data"]["attempts"], 0)
         self.spawned.clear()
-        acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
+        acts = A.red_dispatcher(self.st, "o/r", self.repo, t, {})
         self.assertFalse(any("joined" in a for a in acts), "never joined to the same holder again")
         self.assertEqual([o["picture"]["key"] for o, _x in self.spawned], ["v1"], "a fixer of its own")
 
@@ -790,7 +790,7 @@ class RedFamilyTest(Phase2Base):
         t = A.epoch_now()
         self.red("c1", "Identity model convergence", "leg (uk)", 2527)
         self.red("c2", "Verify scrape recording", "convergence (germany)", 2530)
-        A.red_dispatcher(self.st, "o/r", self.repo, t)
+        A.red_dispatcher(self.st, "o/r", self.repo, t, {})
         self.assertEqual(len(self.spawned), 1)
         off, extra = self.spawned[0]
         self.assertEqual(sorted([off["picture"]["key"]] + [x["picture"]["key"] for x in extra]), ["c1", "c2"])
@@ -816,7 +816,7 @@ class RedFamilyTest(Phase2Base):
         self.family_fixer()
         self.own_red()
         self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
-        A.red_dispatcher(self.st, "o/r", self.repo, A.epoch_now())
+        A.red_dispatcher(self.st, "o/r", self.repo, A.epoch_now(), {})
         self.assertEqual(len(self.spawned), 1)
 
     def test_a_family_fixer_with_a_live_lease_takes_a_new_red_of_its_family(self):
@@ -825,7 +825,7 @@ class RedFamilyTest(Phase2Base):
         self.st.acquire("red/c2527", "laptop:fixer:red-c2527-5", 900, 3600, meta={"kind": "fixer"})
         self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
         t = A.epoch_now()
-        acts = A.red_dispatcher(self.st, "o/r", self.repo, t)
+        acts = A.red_dispatcher(self.st, "o/r", self.repo, t, {})
         self.assertEqual(self.spawned, [])
         self.assertTrue(any("joined its family convergence's fixer" in a for a in acts), acts)
         self.assertEqual(A.lease_meta(self.st.get("red/c3"))["kind"], "sibling")
@@ -843,7 +843,7 @@ class RedFamilyTest(Phase2Base):
         self.family_fixer(alive=alive)  # its own red, c2527, is not open
         self.red("c3", "Verify scrape recording", "convergence (spain)", 2531)
         t = A.epoch_now()
-        A.red_dispatcher(self.st, "o/r", self.repo, t)
+        A.red_dispatcher(self.st, "o/r", self.repo, t, {})
         self.assertEqual([o["picture"]["key"] for o, _x in self.spawned], ["c3"])
 
     def test_invariant_an_offered_red_whose_stated_holder_has_no_live_lease_is_offered_again(self):

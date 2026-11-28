@@ -82,8 +82,10 @@ def flush_outbox(st: Any) -> int:
 class _SyncDuties:
     """The steps of the laptop's sync loop that keep state or wrap a collaborator: clock and store are the process's (cli's)."""
 
-    def __init__(self, repo: str, o_r: str, clock: Clock, store, ran_at: dict[str, float], threads: dict[str, Any]):
+    def __init__(self, repo: str, o_r: str, clock: Clock, store, ran_at: dict[str, float], threads: dict[str, Any],
+                 blocker_memo: dict[Any, Any]):
         self.repo, self.o_r, self.clock, self.store, self.ran_at = repo, o_r, clock, store, ran_at
+        self.blocker_memo = blocker_memo  # Caches.status.blocker
         self.threads = threads  # the process's bounded threads (Caches.bounded)
         self.last_mirror = 0.0
         self.role: bool | None = None  # None: not claimed in this loop yet (a step run on its own: a test)
@@ -114,10 +116,10 @@ class _SyncDuties:
     def dispatch(self):
         if os.path.exists(reds_dir("DISPATCH_OFF")):
             return []
-        return red_dispatcher(self.store, self.o_r, self.repo, self.clock.time())
+        return red_dispatcher(self.store, self.o_r, self.repo, self.clock.time(), self.blocker_memo)
 
     def escalations(self) -> None:
-        for x in escalation_step(self.store, self.clock.time()):
+        for x in escalation_step(self.store, self.clock.time(), self.blocker_memo):
             print_error(f"escalation: {x}")
 
     def claim_role(self) -> None:
@@ -140,7 +142,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
                registry: ConditionRegistry, *, ctx: Context) -> Sequence[tuple[str, Callable[[], Any]]]:
     """The laptop's loop once the store is remote: it never ticks. clock, store and registry (the conditions' probes and
     actions): the process's (cli's)."""
-    s = _SyncDuties(repo, o_r, clock, store, ctx.caches.ran_at, ctx.caches.bounded)
+    s = _SyncDuties(repo, o_r, clock, store, ctx.caches.ran_at, ctx.caches.bounded, ctx.caches.status.blocker)
     land_pace = LandWatchPace()  # the fixers' landing look is paced per loop, not per process
     duty = s.duty
     return (("laptop role", s.claim_role),

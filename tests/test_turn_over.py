@@ -53,6 +53,20 @@ class TurnTest(unittest.TestCase):
                    text("assistant", "x\nGAVE UP: new"))
         self.assertEqual(A.fixer_verdict(A.bg_turn(self.path)["final"]), "GAVE UP: new")
 
+    def test_an_unchanged_transcript_is_read_once_and_a_changed_one_again(self):
+        # the memo is the reading's own (keyed on the file's size and mtime), never a cell a caller or another test reaches
+        reads = []
+        scan = A._scan_bg_turn
+        A._scan_bg_turn = lambda path: reads.append(path) or scan(path)
+        self.addCleanup(setattr, A, "_scan_bg_turn", scan)
+        self.write(text("user", "turn 1"), text("assistant", "DIAGNOSED: one"))
+        first = A.bg_turn(self.path)
+        self.assertEqual(A.bg_turn(self.path), first)
+        self.assertEqual(len(reads), 1, "the second read answered from the memo")
+        self.write(text("user", "turn 1"), text("assistant", "DIAGNOSED: two"))
+        self.assertTrue(A.bg_turn(self.path)["final"].startswith("DIAGNOSED: two"))
+        self.assertEqual(len(reads), 2)
+
     def test_pending_tasks_are_this_turns_neither_reported_nor_stopped(self):
         self.write(text("user", "turn 1"), bg_started("bold1"), text("user", "turn 2"), bg_started("b1"),
                    bg_started("b2"), notified("b1"))

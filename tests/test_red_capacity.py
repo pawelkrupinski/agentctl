@@ -22,7 +22,7 @@ class CapacityBase(unittest.TestCase):
         self.saved = (A.red_spawn, A.cached_dispatch_blocker, A.fixer_records)
         self.spawned = []
         A.red_spawn = lambda store, o_r, repo, off, took, extra=(): self.spawned.append(off["picture"]["key"]) or (True, "ok")
-        A.cached_dispatch_blocker = lambda: None
+        A.cached_dispatch_blocker = lambda memo, ttl=60: None
         A.fixer_records = lambda: []
         self.envs = {}
         self.env(AGENTCTL_LAPTOP_PRESSURE="-")  # the laptop running the tests is never the one under test
@@ -52,7 +52,7 @@ class CapacityBase(unittest.TestCase):
 
     def dispatch(self, advance=0):
         self.t[0] += advance
-        return A.red_dispatcher(self.st, "o/r", None, self.t[0])
+        return A.red_dispatcher(self.st, "o/r", None, self.t[0], {})
 
     def reason(self, key):
         return (self.st.offer_of(f"red:{key}") or {}).get("reason") or ""
@@ -302,6 +302,22 @@ class SuiteGateTest(unittest.TestCase):
         t2 = A.gov_admit("suite", label="second", wait=False, machine=self.m)
         self.assertIsNotNone(t2)
         t2.release()
+
+
+class DispatchBlockerMemoTest(unittest.TestCase):
+    """The dispatch blocker is read once a minute per memo: the memo is the caller's (Caches.status.blocker), so a fresh
+    process or test never sees another's answer."""
+
+    def test_the_memo_given_keeps_the_answer_and_another_memo_reads_again(self):
+        reads, saved = [], A.dispatch_blocker
+        A.dispatch_blocker = lambda: reads.append(1) or "no claude"
+        self.addCleanup(setattr, A, "dispatch_blocker", saved)
+        memo, other = {}, {}
+        self.assertEqual(A.cached_dispatch_blocker(memo), "no claude")
+        self.assertEqual(A.cached_dispatch_blocker(memo), "no claude")
+        self.assertEqual(len(reads), 1)
+        A.cached_dispatch_blocker(other)
+        self.assertEqual(len(reads), 2, "another memo has not read it yet")
 
 
 if __name__ == "__main__":

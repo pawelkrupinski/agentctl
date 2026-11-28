@@ -396,7 +396,7 @@ class FailedLaunchWorktreeTest(unittest.TestCase):
         A.bg_start = lambda argv, wt, env: (None, "exit 1: this workspace is not trusted")
         A.retire_worktree = lambda wt, why: retired.append((wt, why)) or "removed"
         try:
-            session, why = A.SessionLauncher().start(A.escalation_route({"kind": "VENDOR_DRIFT"}), "VENDOR_DRIFT", {}, "brief", "/repo")
+            session, why = A.SessionLauncher({}).start(A.escalation_route({"kind": "VENDOR_DRIFT"}), "VENDOR_DRIFT", {}, "brief", "/repo")
         finally:
             for n, v in saved.items():
                 setattr(A, n, v)

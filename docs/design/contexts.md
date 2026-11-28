@@ -83,6 +83,32 @@ step and every store read); `leases._held_leases` (every LeaseHold's renewal, fr
 holder list); and small chains not reached yet (`clones`, `fixerblockers`, `fixersession`, `gov`, `hostsleep`,
 `redrecord.episode_unread`). `core.PROCESS_CACHES` goes with the last `process_cache`.
 
+### The rest, decided per memo (2026-11-28, second pass)
+
+A memo of a PURE function -- its answer depends only on its arguments, which name immutable content (a transcript's
+size and mtime, a commit's sha) -- is no process state: it is the function's own, a `functools.lru_cache` on the pure
+inner function (an unreadable input RAISES, so a failure is never kept). The design lint's `state` rule sees no
+module-level name a function writes, and no caller or test can reach the memo. The rule core has no "declared memo"
+category (an exemption row admits only a NEW row, never a frozen one), so this is the form. Moved so far:
+`fixersession._BG_TURN_CACHE` (`_bg_turn_at`), `landedtwin._changed_lines_cache` and `_main_index_cache`
+(`_changed_lines_of`, `_main_index_of`). A memo with a TTL, a "said once" or a clock is NOT pure and never takes this
+form.
+
+`fixerblockers._blocker_cache` is a 60 s TTL memo of `claude --help`: a field of `Caches` (`status.blocker`, the status
+page's own memos hold it already), handed as ONE parameter down the dispatcher's chain (`red_dispatcher(..., blocker_memo)`,
+`_SyncDuties`, `SessionLauncher`, `status_dispatcher`).
+
+Left, with the decision each takes when its callers are visited:
+
+| memo | decision |
+|---|---|
+| `onmain._carried`, `gating._gating_rows` (the `(repo, sha)` rows), `gating._flow_files` / `_flow_meta` | content-addressed: a pure memo (as above) once the function is split so the memo holds only the sha-keyed read; their other entries (`("api", o_r)`, `("names", o_r)`: a TTL; the single-slot `.clear()`) are not pure and stay with the commit-graph reader below |
+| `onmain._fetched`, `_api_seen` | a clock and a fetch's "when": the commit-graph reader object (`gitrepo.GitRepo`'s sibling, built once by cli), which owns the clone's fetch throttle |
+| `generated._generated_slugs`, `forge._workflow_names`, `repos._red_repos_cache`, `redrepos._families_cache`, `configfile` memos | config the process reads once (a repo's slug, the repos file, the config files, keyed by mtime): the honest home is a `Config` / repo-table reader object built once at cli; callers take it when visited. Not a pure memo: the file changes under the process (mtime key) and dropping the memo repeats the "unreadable" line on every call |
+| `allowedpaths._skipped_paths`, `laptoprole._laptop_role_seen`, `redrecord.episode_unread` | a "said once" / a result read back: `Caches` fields, once the call tree (`gate_red_units`, `queue_facts`: 18 test call sites, 40+ callers) takes the parameter |
+| `gov._gov_alive`, `hostsleep._SLEEP_CACHE` | a clock-bound probe of the machine (a pid's start time, `pmset`): `MachineProbe`'s |
+| `clones._clone_lock_depth`, `leases._held_leases` | a guard (a thread's re-entrancy depth) and a registry of the leases a process holds: `lock_beat`'s three callers (the land watcher, the governor's wait, the remote check's beat) hold no list; the lease's creator passes it when they take it |
+
 The store, the condition registry and an explicit `clock` stay their own parameters where they are already passed
 (830 functions take a store). Folding them into the context is a later cleanup, made where a function is changed
 anyway, never in a sweep.

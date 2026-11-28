@@ -21,7 +21,7 @@ from agentctl.owner import OWNER_MAX, owner_spawn, owner_still_ending
 from agentctl.paths import tilde
 
 
-def red_dispatcher(store: Any, o_r: str, repo: str, t: float) -> list[str]:
+def red_dispatcher(store: Any, o_r: str, repo: str, t: float, blocker_memo: dict[Any, Any]) -> list[str]:
     """THE QUEUE (see ONE RED MODEL above): the open fixer offers, highest priority first; per queue family exactly one
     fixer -- a new red of a family at work joins its fixer, a family with none is dispatched once (its other open
     offers taken with it) while a slot is free and dispatch can run. An offer that cannot be taken says why (its
@@ -31,7 +31,7 @@ def red_dispatcher(store: Any, o_r: str, repo: str, t: float) -> list[str]:
     if not offs:
         return acts
     offs.sort(key=lambda o: (o["priority"], KIND_ORDER.get(o["picture"].get("kind"), 1), o["opened_at"]))
-    blocker = cached_dispatch_blocker()
+    blocker = cached_dispatch_blocker(blocker_memo)
     gone: set[str] = set()
     for off in offs:
         if off["id"] not in gone:

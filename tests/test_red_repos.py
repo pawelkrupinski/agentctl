@@ -269,12 +269,12 @@ class DispatchTest(RedReposBase):
         spawned = []
         saved = A.red_spawn, A.cached_dispatch_blocker, A.red_capacity
         A.red_spawn = lambda store, o_r, repo, off, took, extra=(): spawned.append((o_r, repo)) or (True, "ok")
-        A.cached_dispatch_blocker = lambda: None
+        A.cached_dispatch_blocker = lambda memo, ttl=60: None
         A.red_capacity = lambda *a, **k: (True, None)
         try:
             self.tick()
             self.others()
-            A.red_dispatcher(self.st, MOVIES, self.r.path, self.t[0])
+            A.red_dispatcher(self.st, MOVIES, self.r.path, self.t[0], {})
         finally:
             A.red_spawn, A.cached_dispatch_blocker, A.red_capacity = saved
         self.assertEqual(sorted(spawned), sorted([(MOVIES, self.r.path), (INFRA, self.infra)]))
@@ -282,7 +282,7 @@ class DispatchTest(RedReposBase):
     def test_a_repo_with_no_clone_here_is_offered_with_the_reason(self):
         saved = A.red_spawn, A.cached_dispatch_blocker, A.red_capacity
         A.red_spawn = lambda *a, **k: self.fail("no clone: no spawn")
-        A.cached_dispatch_blocker = lambda: None
+        A.cached_dispatch_blocker = lambda memo, ttl=60: None
         A.red_capacity = lambda *a, **k: (True, None)
         try:
             self.infra_green(9002, 3456)
@@ -294,7 +294,7 @@ class DispatchTest(RedReposBase):
                                        "conclusion": "failure", "workflowName": "Main Pipeline"})
             self.put("run-9101.log", "test\tsbt test\t2026-10-28T07:14:00Z [info] - ApiSpec should x *** FAILED ***\n")
             self.others()
-            A.red_dispatcher(self.st, MOVIES, self.r.path, self.t[0])
+            A.red_dispatcher(self.st, MOVIES, self.r.path, self.t[0], {})
         finally:
             A.red_spawn, A.cached_dispatch_blocker, A.red_capacity = saved
         (it,) = self.by_repo()[CORE]
