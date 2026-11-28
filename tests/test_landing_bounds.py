@@ -278,7 +278,6 @@ class UnboundTest(unittest.TestCase):
             pid = int(open(os.path.join(d, "pid")).read())
             with self.assertRaises(ProcessLookupError):
                 os.killpg(pid, 0)
-            self.assertNotIn(pid, A.WATCHED_GROUPS)
 
     def test_the_ticks_push_never_waits_for_a_busy_landing_lease(self):
         with tempfile.TemporaryDirectory() as d:

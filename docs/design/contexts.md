@@ -61,9 +61,9 @@ fall into six families, each with ONE way out, not a thread per global:
    and store, the process's context), built once by `probe_invariant`; each INVARIANTS entry hands its invariant
    the dependencies it reads, one parameter each (W1 its landed look's memo, WB/WF/WP/WT the machine, W2/WR/WA the
    context). READS_CI and READS_MACHINE go; one commit changes the whole table.
-3. **A resource a collaborator started belongs to that collaborator**: the detached children (`core._DETACHED`) and
-   the watched process groups (`land.WATCHED_GROUPS`) are the `ProcessRunner`'s that started them; the leases a
-   process holds are kept by whoever holds them (`Caches.held_leases`, handed to `LeaseHold` at construction).
+3. **A resource a collaborator started belongs to that collaborator**: the detached children (`core._DETACHED`) are
+   the `ProcessRunner`'s that started them (`runner.detached`); the watched process groups (`land.WATCHED_GROUPS`) had
+   no reader left since b6ebb22d and go.
 4. **A memo with no need to exist** goes: the GitHub App tokens' in-memory layer (their on-disk record is the cache),
    the gh tally's thread-local kind (passed as the argument it is), the config files' mtime memos (`red_repos`,
    `red_families`: a re-read costs under 0.2 ms).

@@ -127,16 +127,14 @@ def git_ok(repo: str, *args: str) -> bool:
 # this process no longer knows (one started before an exec onto new code: the pid survives, the Popen objects do not)
 # once it has been a zombie at two looks in a row, so a child a subprocess.run in another thread is about to wait for is
 # never taken from it.
-_DETACHED = []
-
-
 def spawn_detached(argv: list[str], **kw: Any) -> "subprocess.Popen[Any]":
     """agentctl's own background process (a processor, executor, watch, fixer wrapper, owner): marked
     AGENTCTL_DETACHED, so it never runs `secrets` (interactive_foreground) -- its token comes in its environment or from
     the processor's socket."""
     kw["env"] = {**(kw.get("env") if kw.get("env") is not None else os.environ), "AGENTCTL_DETACHED": "1"}
-    p = process_runner().popen(argv, **kw)
-    _DETACHED.append(p)
+    runner = process_runner()
+    p = runner.popen(argv, **kw)
+    runner.detached.append(p)  # the runner that started it keeps it until a reap waits for it
     return p
 
 
@@ -150,15 +148,15 @@ def zombie_children(pid=None):
     return [r.pid for r in parse_ps(out, ("pid", "ppid", "stat")) if r.ppid == me and r.stat.startswith("Z")]
 
 
-def reap_children(zombies_seen: set[int]) -> int:
+def reap_children(zombies_seen: set[int], detached: "list[subprocess.Popen[Any]]") -> int:
     """Poll the detached children (a finished one is waited for and forgotten), then wait for each zombie child seen at
     the last look too (`zombies_seen`: the pids that look saw, the caller's memo). Returns how many were reaped."""
     n = 0
-    for p in list(_DETACHED):
+    for p in list(detached):
         if p.poll() is not None:
-            _DETACHED.remove(p)
+            detached.remove(p)
             n += 1
-    known = {p.pid for p in _DETACHED}
+    known = {p.pid for p in detached}
     now_z = set(zombie_children()) - known
     for pid in now_z & zombies_seen:
         try:

@@ -39,7 +39,7 @@ mypy-errors	conditions	2
 mypy-errors	config	17
 mypy-errors	configfile	8
 mypy-errors	conflicts	24
-mypy-errors	core	6
+mypy-errors	core	5
 mypy-errors	culpritfix	29
 mypy-errors	entrychecks	13
 mypy-errors	eventprojection	11
@@ -72,7 +72,7 @@ mypy-errors	invariants	18
 mypy-errors	issues	12
 mypy-errors	joblog	41
 mypy-errors	jvmreap	7
-mypy-errors	land	24
+mypy-errors	land	23
 mypy-errors	landdryrun	30
 mypy-errors	landedchange	9
 mypy-errors	lander	30

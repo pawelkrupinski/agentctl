@@ -81,9 +81,6 @@ def stall_clock():
     return time.monotonic()  # wall: waits on and times real processes and threads
 
 
-WATCHED_GROUPS = set()  # process groups run_watched started and that may still run: the watchdog ends them first
-
-
 def run_watched(argv, cwd, env, log_path, step, stall = None, sampler = None, cpu = None, clock = None, wall = None,
                 quiet_ok: bool = False, hook_stall = None, hooks = None):
     """Run argv (its own process group, stdin closed), its output into a file beside log_path. (returncode, output);
@@ -101,15 +98,12 @@ def run_watched(argv, cwd, env, log_path, step, stall = None, sampler = None, cp
     with open(out_path, "w") as out:
         p = process_runner().popen(argv, cwd=cwd, env=env, stdout=out, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                              start_new_session=True)
-    WATCHED_GROUPS.add(p.pid)
     try:
         stalled = _watch_group(p, out_path, step, stall, sampler, cpu_of, clock, wall, quiet_ok,
                                hook_stall, hooks)
     except BaseException:  # a store error, a signal: never a child group left running, untracked
         _end_group(p)
-        WATCHED_GROUPS.discard(p.pid)
         raise
-    WATCHED_GROUPS.discard(p.pid)
     with open(out_path, errors="replace") as f:
         output = f.read()
     with contextlib.suppress(OSError):

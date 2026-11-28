@@ -262,7 +262,7 @@ state	lib/agentctl/clock.py	1
 state	lib/agentctl/clones.py	1
 state	lib/agentctl/conditions.py	1
 state	lib/agentctl/configfile.py	2
-state	lib/agentctl/core.py	2
+state	lib/agentctl/core.py	1
 state	lib/agentctl/fixerblockers.py	1
 state	lib/agentctl/fixersession.py	1
 state	lib/agentctl/forge.py	1
@@ -271,7 +271,6 @@ state	lib/agentctl/generated.py	1
 state	lib/agentctl/gov.py	1
 state	lib/agentctl/hostsleep.py	1
 state	lib/agentctl/inboxentry.py	1
-state	lib/agentctl/land.py	1
 state	lib/agentctl/landedtwin.py	2
 state	lib/agentctl/laptoprole.py	1
 state	lib/agentctl/leases.py	1

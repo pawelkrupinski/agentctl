@@ -10,6 +10,7 @@ from agentctl.procrunner import ProcessRunner  # noqa: E402
 
 class FakeRunner(ProcessRunner):
     def __init__(self, run=None, popen=None):
+        super().__init__()
         self.fake_run, self.fake_popen = run, popen
 
     def run(self, argv, **kw):

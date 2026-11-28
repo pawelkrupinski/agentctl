@@ -26,7 +26,8 @@ def owned_memos():
     than the context it came from, so a digest reads the same as before the memo left its module."""
     caches = case_context().caches
     owned = {id(v) for name, v in vars(caches).items() if name not in ARGUMENT_MEMOS}
-    return owned | {id(v) for v in vars(caches.status).values()}  # the status reads' memory, and each of its memos
+    runner = sys.modules["agentctl.procrunner"].process_runner()  # the children it started: no more call data than it
+    return owned | {id(v) for v in vars(caches.status).values()} | {id(runner.detached)}  # and the status reads' memos
 
 
 DIGESTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "restructure4-digests.json")

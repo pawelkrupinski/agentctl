@@ -232,6 +232,10 @@ class WiredRunner:
     def popen(self, argv, **kw):
         return sys.modules["agentctl.procrunner"].process_runner().popen(argv, **kw)
 
+    @property
+    def detached(self):
+        return sys.modules["agentctl.procrunner"].process_runner().detached
+
 
 class WiredInbox:
     """The case's inbox writer: inboxentry's inbox_write, looked up at each call, so what a test wired or faked

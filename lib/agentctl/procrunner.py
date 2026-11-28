@@ -12,7 +12,11 @@ class ProcessRunner:
     """subprocess.run and Popen: THE PROCESS RUNNER IS PASSED IN (CLAUDE.md, "Design"). cli, the composition root, wires
     the one a process uses (wire_runner); core.git, run_cmd, git_ok, spawn_detached, netretry.net_run and every module
     starting a process go through process_runner(), so a test hands a fake one (tests/fake_runner.py FakeRunner)
-    instead of patching a module."""
+    instead of patching a module. It keeps the background children it started (spawn_detached) until a reap waits for
+    them: the runner the composition root made owns what it started."""
+
+    def __init__(self) -> None:
+        self.detached: list["subprocess.Popen[Any]"] = []  # spawn_detached's children no reap has waited for yet
 
     def run(self, argv: Sequence[str], **kw: Any) -> "subprocess.CompletedProcess[Any]":
         """subprocess.run, BOUNDED by default (RUN_TIMEOUT: a hung `ps` or `ssh` never blocks the watchdog); a command

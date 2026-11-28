@@ -144,7 +144,7 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
     land_pace = LandWatchPace()  # the fixers' landing look is paced per loop, not per process
     duty = s.duty
     return (("laptop role", s.claim_role),
-            ("outbox", lambda: flush_outbox(store)), ("file events", lambda: drain_event_log(store, refused=file_events_refused)), ("state mirror", s.mirror), ("children", lambda: reap_children(ctx.caches.zombies_seen)),
+            ("outbox", lambda: flush_outbox(store)), ("file events", lambda: drain_event_log(store, refused=file_events_refused)), ("state mirror", s.mirror), ("children", lambda: reap_children(ctx.caches.zombies_seen, ctx.runner.detached)),
             ("events", lambda: project_events(store)), ("notifier", duty(lambda: notify_escalations(store, ctx=ctx))),
             ("alerts", duty(lambda: reconcile_alerts(store))),
             ("workspace trust", lambda: [print_error(x) for x in trust_asks()]),
