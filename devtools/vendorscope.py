@@ -29,25 +29,39 @@ def vendored_only(changed, copies):
     return bool(changed) and set(changed) <= set(copies) | {vendor.TABLE}
 
 
-def imports_any(source, stems):
-    """The source imports one of the modules (`import x`, `from x import`) or names the vendored package."""
-    pattern = r"^\s*(?:import|from)\s+(?:" + "|".join(re.escape(s) for s in stems) + r")\b|\bdesign_rules\b"
-    return bool(re.search(pattern, source, re.M))
+def imports_any(source, stems, package=True):
+    """The source imports one of the modules (`import x`, `from x import`) or, with `package`, names the vendored package."""
+    pattern = r"^\s*(?:import|from)\s+(?:" + "|".join(re.escape(s) for s in stems) + r")\b"
+    return bool(re.search(pattern + (r"|\bdesign_rules\b" if package else ""), source, re.M))
+
+
+def reached_stems(stems, sources):
+    """The changed modules and every tool module (devtools/, quality/: not a test or the simulators) importing one of
+    them, again and again: a test importing `vendor` reaches `tool_git` through it."""
+    reached = set(stems)
+    while True:
+        more = {os.path.splitext(n)[0] for n, text in sources.items()
+                if not n.startswith("test_") and n not in SIMULATORS and imports_any(text, sorted(reached), False)}
+        if more <= reached:
+            return sorted(reached)
+        reached |= more
 
 
 def scope(changed, copies, sources):
-    """('full', ...) or ('scoped', simulator_reached, test modules): sources maps a tests/ file name to its text."""
-    if not vendored_only(changed, copies):
-        return ("full", False, [])
-    stems = sorted({os.path.splitext(os.path.basename(c))[0] for c in changed if c.endswith(".py")})
+    """('full', ...) or ('scoped', simulator_reached, test modules): sources maps a tests/, devtools/ or quality/ file
+    name to its text."""
+    if not vendored_only(changed, copies) or not any(n.startswith("test_") for n in sources):
+        return ("full", False, [])  # no tests read (git could not list them) is no scope to narrow to
+    stems = reached_stems({os.path.splitext(os.path.basename(c))[0] for c in changed if c.endswith(".py")}, sources)
     tests = {os.path.splitext(n)[0] for n, text in sources.items() if n.startswith("test_") and imports_any(text, stems)}
     sim = any(imports_any(sources.get(n, ""), stems) for n in SIMULATORS)
     return ("scoped", sim, sorted(tests | set(ALWAYS)))
 
 
 def read_tests(root):
-    """The text of each tracked tests/*.py by file name."""
-    names = tool_git.Git.here(root).lines("ls-files", "tests/*.py")
+    """The text of each tracked tests/*.py, and of the tool modules a test may reach a copy through (devtools/*.py,
+    quality/*.py), by file name."""
+    names = tool_git.Git.here(root).lines("ls-files", "tests/*.py", "devtools/*.py", "quality/*.py")
     return {os.path.basename(n): read_text_or(os.path.join(root, n), "") for n in names}
 
 

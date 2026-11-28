@@ -45,8 +45,9 @@ def run_command(argv, cwd):
 class VendorSync:
     """The steps, over `run(argv, cwd) -> (status, output)` and the paths: a test hands a fake runner."""
 
-    def __init__(self, run, root, tree, wait, read_tests=vendorscope.read_tests):
+    def __init__(self, run, root, tree, wait, read_tests=vendorscope.read_tests, movies_root=vendor.movies_root):
         self.run, self.root, self.tree, self.wait, self.read_tests = run, root, tree, wait, read_tests
+        self.movies_root = movies_root
 
     def step(self, what, argv, cwd=None):
         """The step's output, or raises Failed(why) with its tail."""
@@ -75,11 +76,27 @@ class VendorSync:
         self.step("the ratchets", [tools, "quality/ratchet.py", "selftest"])
         self.step("the ratchets", [tools, "quality/ratchet.py", "check"])
 
+    def unlanded(self):
+        """The movies checkout's vendored sources that are not origin/main's (an edit not landed, or a checkout behind
+        main): a sync copies the checkout's files, so it must push only what movies has landed."""
+        movies = self.movies_root()
+        if not movies:
+            return []
+        sources = [s for _c, s, _d in vendor.read_table(self.tree)]
+        self.step("git fetch movies", ["git", "fetch", "-q", "origin", "main"], movies)
+        status, out = self.run(["git", "diff", "--name-only", "origin/main", "--", *sources], movies)
+        if status:
+            raise Failed(f"git diff in the movies checkout (exit {status}): {out.strip()}")
+        return out.split()
+
     def execute(self):
         """('done', why) or raises Failed."""
         self.step("git fetch", ["git", "fetch", "-q", "origin", "main"], self.root)
         self.step("the worktree", ["git", "worktree", "add", "-q", "--detach", self.tree, "origin/main"], self.root)
         try:
+            behind = self.unlanded()
+            if behind:
+                return "waiting: the movies checkout's " + ", ".join(behind) + " is not origin/main's (landed) file"
             self.python("vendor.py sync", "devtools/vendor.py", "sync")
             changed = self.changed()
             if not changed:

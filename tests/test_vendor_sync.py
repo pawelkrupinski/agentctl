@@ -37,6 +37,25 @@ class ScopeTest(unittest.TestCase):
         self.assertFalse(vendorscope.scope(["devtools/design_rules/naming.py"], self.copies, sources)[1])
 
 
+class ReachTest(unittest.TestCase):
+    """A changed copy reaches a test through a tool module importing it (vendor.py imports tool_git; tests import vendor)."""
+    GIT = "devtools/lib/tool_git.py"
+
+    def test_a_test_importing_a_tool_module_that_imports_a_changed_copy_runs(self):
+        sources = {"vendor.py": "import tool_git\n", "test_uses_vendor.py": "import vendor\n", "test_other.py": "import os\n"}
+        kind, _sim, tests = vendorscope.scope([self.GIT], [self.GIT], sources)
+        self.assertEqual(kind, "scoped")
+        self.assertIn("test_uses_vendor", tests)
+        self.assertNotIn("test_other", tests)
+
+    def test_the_reach_follows_a_chain_of_tool_modules(self):
+        sources = {"a.py": "import tool_git\n", "b.py": "from a import x\n", "test_b.py": "import b\n"}
+        self.assertIn("test_b", vendorscope.scope([self.GIT], [self.GIT], sources)[2])
+
+    def test_no_test_read_is_no_scope_to_narrow_to(self):
+        self.assertEqual(vendorscope.scope([self.GIT], [self.GIT], {})[0], "full")
+
+
 class FakeRunner:
     """Answers each command from `plan` (a substring of its argv -> (status, output)), records them all."""
 
@@ -64,7 +83,16 @@ class VendorSyncTest(unittest.TestCase):
 
     def sync(self, plan):
         run = FakeRunner(plan)
-        return vendorsync.VendorSync(run, "/root", self.tree, 60, lambda tree: SOURCES), run
+        return vendorsync.VendorSync(run, "/root", self.tree, 60, lambda tree: SOURCES, lambda: "/movies"), run
+
+    def test_a_movies_file_that_is_not_origin_mains_is_never_pushed(self):
+        """A sync copies the movies checkout's working files: an unlanded edit (or a checkout behind main) is no sync."""
+        sync, run = self.sync({"diff --name-only origin/main": (0, "scripts/design-rules/model.py\n")})
+        self.assertTrue(sync.execute().startswith("waiting:"))
+        text = "\n".join(run.calls)
+        for step in ("vendor.py sync", "git commit", "selfpush"):
+            self.assertNotIn(step, text)
+        self.assertTrue(run.calls[-1].startswith("git worktree remove"))
 
     def test_a_clean_sync_runs_the_scoped_tests_commits_pushes_and_removes_the_worktree(self):
         sync, run = self.sync({"git status": (0, f" M {MODEL}\n M {TABLE}\n"), "quality/tools.py": (0, "/venv/python\n")})
