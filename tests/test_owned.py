@@ -105,6 +105,9 @@ class OwnedTest(unittest.TestCase):
         holder (orphans, cleanup) met the same window."""
         seen = []
         real = A.signal.signal
+        kept = {s: A.signal.getsignal(s) for s in (A.signal.SIGTERM, A.signal.SIGHUP, A.signal.SIGINT)}
+        for s in kept:  # a handler another test left in this worker's process makes Owned keep it: start from the default
+            real(s, A.signal.SIG_DFL)
 
         def spy(sig, handler):
             seen.append(os.path.exists(rec))
@@ -118,6 +121,8 @@ class OwnedTest(unittest.TestCase):
                 pass
         finally:
             A.signal.signal = real
+            for s, h in kept.items():
+                real(s, h)
         self.assertTrue(seen)
         self.assertFalse(any(seen[:3]), "a handler was installed after the record showed")
 
