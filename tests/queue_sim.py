@@ -1478,7 +1478,7 @@ class Sim:
         before = {e["id"]: dict(e) for e in self.records() if e.get("status") in A.QUEUED}
         self.open_before = set(self.reds) | set(self.outside)
         reds = set(self.reds)
-        A.close_landed_changes(self.repo, self.sim_clock, self.store, self.d)
+        A.close_landed_changes(self.repo, self.sim_clock, self.store, self.d, looked=case_context().caches.landed_looked)
         for x in A.tick_changes(self.repo, self.d, *on_clock(self.sim_clock), ctx=case_context()):
             A.wlog(self.d, f"tick {self.tick}: {x}")
         for x in A.tick_batch(self.repo, self.d, *on_clock(self.sim_clock), ctx=case_context()):

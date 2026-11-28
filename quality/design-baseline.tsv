@@ -272,7 +272,6 @@ state	lib/agentctl/gov.py	1
 state	lib/agentctl/hostsleep.py	1
 state	lib/agentctl/inboxentry.py	1
 state	lib/agentctl/land.py	1
-state	lib/agentctl/landedchange.py	1
 state	lib/agentctl/landedtwin.py	2
 state	lib/agentctl/laptoprole.py	1
 state	lib/agentctl/leases.py	1

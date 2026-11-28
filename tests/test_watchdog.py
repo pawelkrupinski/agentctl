@@ -164,7 +164,7 @@ class WatchdogTest(unittest.TestCase):
         st_ = A.process_store()
         st_.put_item("change", "old-1", "checking", {"head": "0" * 40, "submitted_at": A.epoch_now() - 5 * 3600})
         st_.put_item("change", "old-2", "queued", {"head": "1" * 40, "submitted_at": A.epoch_now() - 4 * 3600})
-        self.assertIs(A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))[0], False, "a green main's W1 is violated, never 0.0 (neither held nor violated)")
+        self.assertIs(A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)[0], False, "a green main's W1 is violated, never 0.0 (neither held nor violated)")
         self.run_wd()
         [c] = [c for c in A.open_conditions(A.CurrentStore(A.process_store)) if c["key"] == "invariant-W1"]
         self.assertIn("old-1", c["text"])
@@ -194,15 +194,15 @@ class WatchdogTest(unittest.TestCase):
         real = A.state_read
         self.addCleanup(setattr, A, "state_read", real)
         A.state_read = lambda: snap(7 * 3600)
-        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertTrue(ok, "a change waiting behind a 7-h red is within the red's own start + its bound: " + detail)
         A.state_read = lambda: snap(3600)  # red for 1 h, the change 4 h old: past red + bound, named with its row
-        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertFalse(ok)
         self.assertNotIn("main is green", detail)
         self.assertIn("held by the red gate: Identity takes #349 since", detail)
         A.state_read = lambda: {}
-        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertIn("the gate unread", detail)
 
     def test_a_waiting_change_its_batch_carries_is_the_batchs_within_the_batchs_deadline(self):
@@ -211,11 +211,11 @@ class WatchdogTest(unittest.TestCase):
         st_ = A.process_store()
         st_.put_item("change", "impact", "waiting", {"head": "0" * 40, "submitted_at": A.epoch_now() - 9 * 3600})
         st_.put_item("batch", "movies#94", "checking", {"members": ["impact", "codec"], "tip": "2d1beab02b"})
-        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertTrue(ok, detail)
         b = st_.item("batch", "movies#94")  # its batch past ITS deadline: named, never "waiting for green"
         st_.transition("batch", "movies#94", "checking", b["version"], deadline_s=-60, event={"cause": "agent"})
-        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertFalse(ok)
         self.assertIn("carried by batch movies#94 (checking, past its deadline)", detail)
 
@@ -227,11 +227,11 @@ class WatchdogTest(unittest.TestCase):
         st_ = A.process_store()
         st_.put_item("change", "scope", "checking", {"head": "0" * 40, "submitted_at": A.epoch_now() - 3 * 3600})
         st_.put_item("batch", "movies#107", "checking", {"members": ["scope", "other"], "tip": "bdfcdb5142"})
-        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertTrue(ok, detail)
         b = st_.item("batch", "movies#107")
         st_.transition("batch", "movies#107", "checking", b["version"], deadline_s=-60, event={"cause": "agent"})
-        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertFalse(ok)
         self.assertIn("carried by batch movies#107 (checking, past its deadline)", detail)
         self.assertNotIn("no live checker", detail)
@@ -246,28 +246,28 @@ class WatchdogTest(unittest.TestCase):
         it outlives the grace a tick needs to push it or record what holds it (UNHELD_GRACE); then it is named."""
         st_ = A.process_store()
         st_.put_item("change", "corpus", "checked", {"head": "0" * 40, "submitted_at": A.epoch_now() - 4 * 3600})
-        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertTrue(ok, detail)
-        ok, detail = A.inv_w1(FakeClock(A.epoch_now() + A.UNHELD_GRACE + 60), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w1(FakeClock(A.epoch_now() + A.UNHELD_GRACE + 60), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertFalse(ok)
         self.assertIn("corpus (checked: nothing holds it, yet it has not pushed", detail)
 
     def test_a_lone_checking_change_with_no_live_checker_is_still_named(self):
         st_ = A.process_store()
         st_.put_item("change", "lone", "checking", {"head": "0" * 40, "submitted_at": A.epoch_now() - 3 * 3600})
-        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertFalse(ok)
         self.assertIn("its checks run with no live checker", detail)
 
     def test_w1_from_the_store_and_w2_from_the_store(self):
         st_ = A.process_store()  # W1: the one queue, the store's open change items, by their submission time
         st_.put_item("change", "e1", "waiting", {"head": "0" * 40, "submitted_at": A.epoch_now() - 3 * 3600})
-        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertFalse(ok)
         self.assertIn("e1 (waiting: waiting for green", detail)
         it = st_.item("change", "e1")
         st_.transition("change", "e1", "landed", it["version"], event={"cause": "agent"})
-        self.assertTrue(A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))[0])  # W2 (step 10): a red with no live lease, open offer, fix or block -- read from the store
+        self.assertTrue(A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)[0])  # W2 (step 10): a red with no live lease, open offer, fix or block -- read from the store
         st_.put_item("red", "k9", "leased", {"key": "k9", "workflow": "Main", "last_run": {"number": 9}, "runs": ["9"]})
         self.assertTrue(A.inv_w2(FakeClock(), A.CurrentStore(A.process_store), ctx=case_context())[0])  # first seen now
         st = A.watchdog_state()
@@ -344,17 +344,17 @@ class TableJudgedInvariantsTest(unittest.TestCase):
     def test_a_long_check_with_a_live_checker_is_no_w1_violation_until_the_hard_bound(self):
         self.st.put_item("change", "long-1", "checking", {"head": "0" * 40, "submitted_at": A.epoch_now() - 3 * 3600})
         self.checker("long-1")
-        ok, why = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, why = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertTrue(ok, why)
         it = self.st.item("change", "long-1")
         self.st.update_item("change", "long-1", it["version"], {"submitted_at": A.epoch_now() - 7 * 3600})
-        ok, why = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, why = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertFalse(ok, why)
         self.assertIn("past 3 x its bound", why)
 
     def test_a_check_with_no_live_checker_violates_w1(self):
         self.st.put_item("change", "dead-1", "checking", {"head": "1" * 40, "submitted_at": A.epoch_now() - 3 * 3600})
-        ok, why = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, why = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertFalse(ok, why)
         self.assertIn("no live checker", why)
 
@@ -366,7 +366,7 @@ class TableJudgedInvariantsTest(unittest.TestCase):
             "hold": {"kind": "overlap", "why": "its check waits for older", "blocker": "older", "since": A.epoch_now() - 600}})
         it = self.st.item("change", "held-1")
         self.st.transition("change", "held-1", "queued", it["version"], event={"cause": "agent"})  # entered now: the 6-h cap is not hit
-        ok, why = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+        ok, why = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
         self.assertTrue(ok, why)
 
     def test_wr_a_red_fix_whose_own_check_runs_is_no_wait_but_one_held_behind_work_is(self):

@@ -78,7 +78,7 @@ class WiredRegistryTest(unittest.TestCase):
 
     def test_the_invariant_probe_checks_with_mains_clock_and_store(self):
         clock, store, seen = A.Clock(), object(), []
-        A.INVARIANTS["WX"] = lambda c, st: seen.append((c, st)) or (True, "held")
+        A.INVARIANTS["WX"] = lambda i: seen.append((i.clock, i.store)) or (True, "held")
         try:
             self.assertTrue(A.run_probe(registry(A, clock, store).check("invariant"), {"id": "WX"}).ok)
         finally:

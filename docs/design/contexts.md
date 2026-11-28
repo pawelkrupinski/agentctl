@@ -57,9 +57,10 @@ fall into six families, each with ONE way out, not a thread per global:
    the dict itself. The tick's steps (`server_steps`, `sync_steps`, `ProcessorLoop`), the status server and the
    commands hold `ctx` already, so most chains are 1-3 functions. The throttles share one field, `ran_at` (step ->
    when it last ran).
-2. **The invariants** keep a FIXED signature, now `fn(inputs)`: `invariants.InvariantInputs` (clock, store, machine,
-   caches, and the context for the three that read CI), built once by `probe_invariant`; READS_CI and READS_MACHINE
-   go. One commit changes every invariant.
+2. **The invariants** keep a FIXED signature, now `fn(inputs)`: `invariants.InvariantInputs` (the watchdog's clock
+   and store, the process's context), built once by `probe_invariant`; each INVARIANTS entry hands its invariant
+   the dependencies it reads, one parameter each (W1 its landed look's memo, WB/WF/WP/WT the machine, W2/WR/WA the
+   context). READS_CI and READS_MACHINE go; one commit changes the whole table.
 3. **A resource a collaborator started belongs to that collaborator**: the detached children (`core._DETACHED`) and
    the watched process groups (`land.WATCHED_GROUPS`) are the `ProcessRunner`'s that started them; the leases a
    process holds are kept by whoever holds them (`Caches.held_leases`, handed to `LeaseHold` at construction).
@@ -93,8 +94,8 @@ the value, not the context.
   another process's reads.
 - An untyped function takes `ctx` unannotated, like its other parameters. A typed one annotates it `Context`
   (`from agentctl.context import Context`).
-- A table of callbacks keeps its contract and binds the context where it is called: the watchdog's invariants
-  (`invariants.READS_CI`: `fn(clock, st, ctx=ctx)`), the red holds (`redhold.RED_STATE_HOLDS`:
+- A table of callbacks keeps ONE contract and binds each entry's dependencies where it is called: the watchdog's
+  invariants (`invariants.INVARIANTS`: `fn(InvariantInputs)`, each entry handing its invariant what it reads), the red holds (`redhold.RED_STATE_HOLDS`:
   `(store, it, t, facts, ctx)`), the `red` subcommands (`functools.partial(..., ctx=ctx)`).
 - The golden digests record what was asked, not who asked it. `tests/golden_cases.py` drops `ctx` from a faked call's
   arguments, so every digest reads as it did before the context was passed.

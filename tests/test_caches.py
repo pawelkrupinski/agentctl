@@ -100,7 +100,7 @@ class OwnedCachesTest(unittest.TestCase):
                      "_tick_memo", "_status_wt", "_status_wt_reads", "_status_said", "_status_last", "_status_reading",
                      "_status_cache", "_live_leased", "_live_info", "_live_metas", "_live_reg", "_ghapp_tokens",
                      "_gh_tally_kind", "_overlap_known", "_behind_said", "_retire_cache", "_clone_repair_at",
-                     "_unapproved_said", "_notify_cause"):
+                     "_unapproved_said", "_notify_cause", "_landed_looked", "READS_CI", "READS_MACHINE"):
 
             self.assertFalse(hasattr(A, name), name)
 

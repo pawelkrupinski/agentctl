@@ -19,7 +19,7 @@ class OneQueueBase(Base):
         super().setUp()
         self.saved_dir = A.WAITING_DIR
         A.WAITING_DIR = os.path.join(self.tmp.name, "waiting-state")
-        A._landed_looked.clear()
+        case_context().caches.landed_looked.clear()
         self.d = A.waiting_state(self.r.path)[0]
         self.st = A.process_store()
 
@@ -57,7 +57,7 @@ class LandedByContentTest(OneQueueBase):
         wt, head = self.change("proxy-park", "a\n")
         self.entry("20261028-162641-movies-wt-proxy-park-92", wt, head)
         via = self.land_rebased(head)
-        did = A.close_landed_changes(self.r.path, A.Clock(), self.st, self.d)
+        did = A.close_landed_changes(self.r.path, A.Clock(), self.st, self.d, looked=case_context().caches.landed_looked)
         self.assertEqual(len(did), 1, did)
         e = A.ChangeRecords(self.st, self.d).get("20261028-162641-movies-wt-proxy-park-92")
         self.assertEqual((e["status"], e["landed_sha"]), ("landed", via))
@@ -69,7 +69,7 @@ class LandedByContentTest(OneQueueBase):
         wt, head = self.change("proxy-park", "b\n")
         self.st.put_item("change", "x-95", "waiting", {"worktree": wt, "head": head})
         via = self.land_rebased(head)
-        did = A.close_landed_changes(self.r.path, A.Clock(), store=self.st)  # the laptop's look: no entries of its own
+        did = A.close_landed_changes(self.r.path, A.Clock(), store=self.st, looked=case_context().caches.landed_looked)  # the laptop's look: no entries of its own
         self.assertEqual(did, ["x-95: its commits are on main (by content): landed"])
         it = self.st.item("change", "x-95")
         self.assertEqual(it["state"], "landed")
@@ -81,7 +81,7 @@ class LandedByContentTest(OneQueueBase):
         wt, head = self.change("open", "c\n")
         self.entry("open-1", wt, head, status="queued")
         self.st.put_item("change", "far-1", "waiting", {"head": "1" * 40})
-        self.assertEqual(A.close_landed_changes(self.r.path, A.Clock(), self.st, self.d), [])
+        self.assertEqual(A.close_landed_changes(self.r.path, A.Clock(), self.st, self.d, looked=case_context().caches.landed_looked), [])
         self.assertTrue(A.change_state(self.r.path, "1" * 40).unknown)
         self.assertEqual(A.change_state(self.r.path, head).state, A.NOT_LANDED)
 
@@ -89,10 +89,10 @@ class LandedByContentTest(OneQueueBase):
         wt, head = self.change("later", "d\n")
         self.entry("later-1", wt, head)
         t = A.epoch_now()
-        self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t), self.st, self.d), [])
+        self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t), self.st, self.d, looked=case_context().caches.landed_looked), [])
         self.land_rebased(head)
-        self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t + 5), self.st, self.d), [])
-        self.assertEqual(len(A.close_landed_changes(self.r.path, FakeClock(t + A.LANDED_LOOK_EVERY), self.st, self.d)), 1)
+        self.assertEqual(A.close_landed_changes(self.r.path, FakeClock(t + 5), self.st, self.d, looked=case_context().caches.landed_looked), [])
+        self.assertEqual(len(A.close_landed_changes(self.r.path, FakeClock(t + A.LANDED_LOOK_EVERY), self.st, self.d, looked=case_context().caches.landed_looked)), 1)
 
 
 class FakeRemote:
@@ -212,12 +212,12 @@ class OneViewTest(OneQueueBase):
         saved = os.environ.get("AGENTCTL_MOVIES_REPO")
         os.environ["AGENTCTL_MOVIES_REPO"] = self.r.path
         try:
-            ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))
+            ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)
             self.assertFalse(ok)
             self.assertIn("x-92 (waiting: waiting for green, the gate unread (no CI snapshot)) is 11 h old", detail)
             self.land_rebased(head)
-            A._landed_looked.clear()
-            ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store))  # its own landed look closes x-92 before it counts
+            case_context().caches.landed_looked.clear()
+            ok, detail = A.inv_w1(FakeClock(), A.CurrentStore(A.process_store), case_context().caches.landed_looked)  # its own landed look closes x-92 before it counts
         finally:
             os.environ["AGENTCTL_MOVIES_REPO"] = saved
         self.assertTrue(ok, detail)

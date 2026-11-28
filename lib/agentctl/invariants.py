@@ -2,7 +2,8 @@
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
 import os
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
 from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import change_exits_unannounced
 from agentctl.clock import Clock
@@ -143,13 +144,14 @@ class W1Judge:
         return age, off or f"past {W1_HARD_FACTOR} x its bound, though its state still says it progresses"
 
 
-def inv_w1(clock: Clock, st: Any) -> tuple[bool, str]:
+def inv_w1(clock: Clock, st: Any, looked: dict[str, float]) -> tuple[bool, str]:
     """W1: no UNLANDED change of the one queue (the store's open items, after the landed-by-content look) older than
     W1_MAX (while main is red: past the red's own start) is outside what its state's table allows (change_progress);
-    none at all older than W1_HARD_FACTOR x that. Names the change and why it has not landed."""
+    none at all older than W1_HARD_FACTOR x that. Names the change and why it has not landed. looked: when each change
+    was last looked for on main (Caches.landed_looked: the landed look's throttle)."""
     repo = movies_repo_path()
     if os.path.isdir(repo):
-        close_landed_changes(repo, clock, store=st)
+        close_landed_changes(repo, clock, store=st, looked=looked)
     open_ = [r for r in change_rows(st) if r["state"] in ("queued", "checking", "checked", "waiting")]
     if not open_:
         return True, "no change waits"
@@ -168,7 +170,7 @@ def inv_w1(clock: Clock, st: Any) -> tuple[bool, str]:
                   "within what its state's table allows")
 
 
-def inv_w2(clock, st, *, ctx):
+def inv_w2(clock: Clock, st: Any, *, ctx: Context) -> Any:
     """W2: every red has a live lease, an open offer, a fix on its way or an owner block -- for no red is that missing
     for W2_MAX (read from the store)."""
     try:
@@ -190,7 +192,7 @@ def inv_w2(clock, st, *, ctx):
         f"{red_what(it['data'])} ({it['state']}) has no lease, offer, fix or block for {fmt_age(now_ - first)}"
 
 
-def inv_w5(clock, st):
+def inv_w5(clock: Clock, st: Any) -> Any:
     """W5: the processor's duties beat within W5_MAX (only where the processor service is installed)."""
     if not os.path.exists(os.path.join(launch_agents_dir(), f"{SERVICE_LABEL}.plist")):
         return True, "no processor service here"
@@ -200,7 +202,7 @@ def inv_w5(clock, st):
     return age < knob_w5_max(), f"the processor's duties beat {int(age)} s ago"
 
 
-def inv_wn(clock, st):
+def inv_wn(clock: Clock, st: Any) -> Any:
     """WN: the owner's notifications get through -- the notifier's last delivery did not fail on both channels
     (terminal-notifier and the osascript fallback). Raised once, naming the cause and the owner's fix for the channel
     that failed (notify_fix: a timeout is the load's, not a permission); cleared by the notifier's next delivery that
@@ -215,7 +217,7 @@ def inv_wn(clock, st):
                    f"{f.get('fix') or 'see the cause'}")
 
 
-def inv_w6(clock, st):
+def inv_w6(clock: Clock, st: Any) -> Any:
     """W6: no escalation event left unnotified for over W6_MAX (the notifier's delivery, from the store). While the
     delivery itself is broken (WN) that is WN's one condition, not a count of every escalation waiting behind it."""
     try:
@@ -230,7 +232,7 @@ def inv_w6(clock, st):
                       else "every escalation was notified")
 
 
-def inv_w7(clock, st):
+def inv_w7(clock: Clock, st: Any) -> Any:
     """W7 (phase 2, the sync role only): the laptop's sync keeps up with ci-runner's events -- no event older than
     W7_MAX is still past its projector cursor (meta projector_seq). The store not answering is no verdict (the tunnel
     and ci-runner have their own conditions). Raised and cleared by this same check, as an INVARIANT condition."""
@@ -247,7 +249,7 @@ def inv_w7(clock, st):
         f"the sync is behind ci-runner's events: #{behind[0]['seq']} unprojected for {fmt_age(age)}"
 
 
-def inv_w8(clock, st):
+def inv_w8(clock: Clock, st: Any) -> Any:
     """W8: no change item left the queue (landed, rejected, superseded, cancelled) without an event addressed to its
     author's inbox -- Store.transition completes every such event (change_exit_event); this catches a writer around it.
     Looks at the items closed within W8_WINDOW, so it clears itself once a stray one ages out (and the fix lands)."""
@@ -259,7 +261,7 @@ def inv_w8(clock, st):
                         if silent else "every change that left the queue told its author")
 
 
-def inv_wm(clock, st):
+def inv_wm(clock: Clock, st: Any) -> Any:
     """WM: maintain (the reaper; the watchdog's own watcher) ran within WM_MAX."""
     if not os.path.exists(os.path.join(launch_agents_dir(), "net.bitcashier.agentctl-maintain.plist")):
         return True, "no maintain service here"
@@ -282,7 +284,7 @@ def _pids_working_in(br: Any, machine: MachineProbe) -> Any:
         return []
 
 
-def inv_wb(clock, st, *, machine):
+def inv_wb(clock: Clock, st: Any, *, machine: MachineProbe) -> Any:
     """WB: ~/bin's own checkout carries no uncommitted edit older than WB_MAX (work goes in worktrees: an edit there
     blocks every other agent's merge). Names the processes working in it."""
     br = bin_repo()
@@ -321,7 +323,7 @@ def file_holders(lsof_out):
     return sorted(((n, p, names.get(p, "?")) for p, n in counts.items()), key=lambda x: (-x[0], x[1]))
 
 
-def inv_wf(clock, st, *, machine):
+def inv_wf(clock: Clock, st: Any, *, machine: MachineProbe) -> Any:
     """WF: the system-wide file table under WF_PCT of kern.maxfiles. 2026-11-20 it overflowed (ENFILE: no process
     could open a file): Rancher Desktop's VM held ~200k virtiofs descriptors, one for every file and directory a
     container had seen in ~25 worktrees (`run-script-tests --linux` mounted each; it now mounts fixed copies). Past the
@@ -342,20 +344,32 @@ def inv_wf(clock, st, *, machine):
     return False, detail
 
 
-# EVERY INVARIANT IS CHECKED AS fn(clock, st): the watchdog's clock and store, from cli (the composition root); one
-# that reads CI runs (READS_CI) as fn(clock, st, ctx=ctx), with the process's context too; one that reads the machine
-# (READS_MACHINE) as fn(clock, st, machine=machine), with the context's machine probe
-INVARIANTS = {"WB": inv_wb, "W1": inv_w1, "WR": inv_wr, "W2": inv_w2, "W5": inv_w5, "W6": inv_w6, "W7": inv_w7,
-              "W8": inv_w8, "WA": inv_wa, "WM": inv_wm, "WN": inv_wn, "WF": inv_wf, "WU": inv_wu,
-              "WP": lambda clock, st, machine: inv_wp_live(machine, now_=clock.time()),
-              "WT": lambda clock, st, machine: inv_wt(machine, now_=clock.time())}
-READS_CI = frozenset({"WR", "W2", "WA"})
-READS_MACHINE = frozenset({"WB", "WF", "WP", "WT"})
+@dataclass(frozen=True)
+class InvariantInputs:
+    """What every invariant is checked with, built once per check by probe_invariant: the watchdog's clock and store
+    and the process's context (cli's, the composition root). Each INVARIANTS entry hands its invariant the
+    dependencies it reads, one parameter each: the machine probe, a memo of the context's caches, the context itself
+    for the three that read CI (W2, WR, WA)."""
+    clock: Clock
+    store: Any
+    ctx: Context
+
+
+# EVERY INVARIANT IS CHECKED AS fn(inputs) (InvariantInputs): ONE signature for the table, each invariant's own
+# parameters bound here
+INVARIANTS: dict[str, Callable[[InvariantInputs], Any]] = {
+    "WB": lambda i: inv_wb(i.clock, i.store, machine=i.ctx.machine),
+    "W1": lambda i: inv_w1(i.clock, i.store, i.ctx.caches.landed_looked),
+    "WR": lambda i: inv_wr(i.clock, i.store, ctx=i.ctx), "W2": lambda i: inv_w2(i.clock, i.store, ctx=i.ctx),
+    "W5": lambda i: inv_w5(i.clock, i.store), "W6": lambda i: inv_w6(i.clock, i.store),
+    "W7": lambda i: inv_w7(i.clock, i.store), "W8": lambda i: inv_w8(i.clock, i.store),
+    "WA": lambda i: inv_wa(i.clock, i.store, ctx=i.ctx), "WM": lambda i: inv_wm(i.clock, i.store),
+    "WN": lambda i: inv_wn(i.clock, i.store), "WF": lambda i: inv_wf(i.clock, i.store, machine=i.ctx.machine),
+    "WU": lambda i: inv_wu(i.clock, i.store),
+    "WP": lambda i: inv_wp_live(i.ctx.machine, now_=i.clock.time()),
+    "WT": lambda i: inv_wt(i.ctx.machine, now_=i.clock.time())}
 
 
 def probe_invariant(a: dict[str, Any], clock: Clock, st: Any, *, ctx: Context) -> Any:
     """The `invariant` probe (cli wires it with the process's clock, store and context): invariant a["id"] checked."""
-    check = INVARIANTS[a["id"]]
-    if a["id"] in READS_CI:
-        return check(clock, st, ctx=ctx)
-    return check(clock, st, machine=ctx.machine) if a["id"] in READS_MACHINE else check(clock, st)
+    return INVARIANTS[a["id"]](InvariantInputs(clock, st, ctx))

@@ -2096,7 +2096,7 @@ entry's own id, in its author's worktree."""
         wt, head = self.agent("a", "web/src/main/A.scala", "a\n", msg="a: by hand")
         eid, _ = self.queued(wt)
         sh(wt, "git", "push", "-q", "origin", "HEAD:main")  # landed meanwhile by hand
-        A._landed_looked.clear()
+        case_context().caches.landed_looked.clear()
         self.drive()
         self.assertEqual(self.entries()[eid.rsplit("-", 1)[-1]]["status"], "landed")
         self.assert_told_once(eid, wt)
@@ -2107,8 +2107,8 @@ entry's own id, in its author's worktree."""
         st = A.process_store()
         st.put_item("change", "x-95", "waiting", {"worktree": wt, "head": head})
         sh(wt, "git", "push", "-q", "origin", "HEAD:main")
-        A._landed_looked.clear()
-        self.assertEqual(A.close_landed_changes(self.r.path, A.Clock(), store=st),
+        case_context().caches.landed_looked.clear()
+        self.assertEqual(A.close_landed_changes(self.r.path, A.Clock(), store=st, looked=case_context().caches.landed_looked),
                          ["x-95: its commits are on main (by content): landed"])
         self.assert_told_once("x-95", wt)
 

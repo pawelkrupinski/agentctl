@@ -8,7 +8,7 @@ from agentctl.statemachines import StaleVersion, TerminalState, machine_state, o
 from agentctl.clock import epoch_now
 from agentctl.timefmt import ts
 from agentctl.queueknobs import knob_landed_look
-from agentctl.core import host_role, process_cache, remote
+from agentctl.core import host_role, remote
 from agentctl.repos import movies_repo_path
 from agentctl.procs import safe_cwd
 from agentctl.waitingdir import ChangeRecords, drop_entry, entry_final, waiting_state
@@ -20,9 +20,6 @@ from agentctl.queuesubmit import SUBMIT_FIELDS, submit_ref
 from agentctl.gitrepo import commit_known
 
 
-_landed_looked = process_cache({})
-
-
 def change_state(repo, head, commits = None):
     """The LandState of the change at head against origin's main: its commits (the entry's, when it lists them) count
     from the first one's parent, and `via` is the main commit carrying it. A change without a head is UNKNOWN."""
@@ -32,10 +29,11 @@ def change_state(repo, head, commits = None):
     return landed_state(repo, f"refs/remotes/{remote()}/main", head, after=after, with_via=True)
 
 
-def landed_look_due(cid, t) -> bool:
-    if t - _landed_looked.get(cid, 0) < knob_landed_look():
+def landed_look_due(cid, t, looked) -> bool:
+    """Whether change cid is due a look on main at t (marked looked: `looked`, the process's Caches.landed_looked)."""
+    if t - looked.get(cid, 0) < knob_landed_look():
         return False
-    _landed_looked[cid] = t
+    looked[cid] = t
     return True
 
 
@@ -53,7 +51,7 @@ def close_item_landed(st, cid, why, via = None) -> bool:
         return False
 
 
-def _close_landed_entries(repo: Any, st: Any, d: Any, t: Any, did: list[str]) -> set[str]:
+def _close_landed_entries(repo: Any, st: Any, d: Any, t: Any, did: list[str], looked: dict[str, float]) -> set[str]:
     """The queue entries of d on main by content close as LANDED (lines to did); the ids of the open ones the entries
     cover, whose store items are not looked at again."""
     carried: set[str] = set()
@@ -61,7 +59,7 @@ def _close_landed_entries(repo: Any, st: Any, d: Any, t: Any, did: list[str]) ->
         if entry_final(e.get("status")) or e.get("status") == "pushing":
             continue
         carried.add(e["id"])
-        state = change_state(repo, e.get("head"), e.get("commits")) if landed_look_due(e["id"], t) else None
+        state = change_state(repo, e.get("head"), e.get("commits")) if landed_look_due(e["id"], t, looked) else None
         if state and state.landed:  # unknown (this clone lacks the head): stays open, looked at again next interval
             already_landed(st, d, e, state.via)
             did.append(f"{e['id']}: its commits are on main (by content): landed")
@@ -69,16 +67,16 @@ def _close_landed_entries(repo: Any, st: Any, d: Any, t: Any, did: list[str]) ->
     return carried
 
 
-def close_landed_changes(repo: Any, clock: Any, store: Any, d: Any = None) -> Any:
+def close_landed_changes(repo: Any, clock: Any, store: Any, d: Any = None, *, looked: dict[str, float]) -> Any:
     """Every open change whose commits are on main by content closes as LANDED: the queue entries of d (with their
     items), then the store's other open items (by their head). Returns what it did."""
     st, t = store, clock.time()
     did: list[str] = []
-    carried = _close_landed_entries(repo, st, d, t, did)
+    carried = _close_landed_entries(repo, st, d, t, did, looked)
     for it in open_items(st, "change"):
         if it["state"] == "pushing" or it["id"] in carried:
             continue
-        if not landed_look_due(it["id"], t):
+        if not landed_look_due(it["id"], t, looked):
             continue
         state = change_state(repo, (it.get("data") or {}).get("head"))
         if state.landed and close_item_landed(st, it["id"], "its commits are on main (by content)", state.via):

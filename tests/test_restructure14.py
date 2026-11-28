@@ -183,7 +183,7 @@ class CloseLandedChangesTest(unittest.TestCase):
         return ("/repo", clock, st, r.choice([None, "/d", ""]))
 
     def test_close_landed_changes(self):
-        check(self, "close_landed_changes", self.build, lambda A: A.close_landed_changes, 8000)
+        check(self, "close_landed_changes", self.build, lambda A: partial(A.close_landed_changes, looked=case_context().caches.landed_looked), 8000)
 
 
 def an_entry(r, i=0):

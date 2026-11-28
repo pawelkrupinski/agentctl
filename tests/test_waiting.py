@@ -106,7 +106,7 @@ class WaitingTest(Base):
         out = []
         try:
             for _ in range(n):
-                did = A.close_landed_changes(self.r.path, self.clock, A.CurrentStore(A.process_store), d) + A.tick_batch(self.r.path, d, *on_clock(self.clock), ctx=case_context())  # the server's order
+                did = A.close_landed_changes(self.r.path, self.clock, A.CurrentStore(A.process_store), d, looked=case_context().caches.landed_looked) + A.tick_batch(self.r.path, d, *on_clock(self.clock), ctx=case_context())  # the server's order
                 out += did
                 if not did or did == ["held"]:
                     break

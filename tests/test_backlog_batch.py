@@ -302,7 +302,7 @@ class PushBatchTest(test_queue.QueueTest):
         """The processor's ticks (the change tick, then the batch tick) until every change in eids is decided."""
         out = []
         for _ in range(n):
-            out += A.tick_changes(self.r.path, self.d, *on_clock(self.clock), ctx=case_context()) + A.close_landed_changes(self.r.path, self.clock, A.CurrentStore(A.process_store), self.d) \
+            out += A.tick_changes(self.r.path, self.d, *on_clock(self.clock), ctx=case_context()) + A.close_landed_changes(self.r.path, self.clock, A.CurrentStore(A.process_store), self.d, looked=case_context().caches.landed_looked) \
                 + A.tick_batch(self.r.path, self.d, *on_clock(self.clock), ctx=case_context())
             if all(A.entry_final(self.entry(e)["status"]) for e in eids):
                 break

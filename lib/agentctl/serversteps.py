@@ -108,8 +108,8 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
     fixers, upkeep): those are sync_steps. clock, store and registry (the conditions' probes and actions): the process's
     (cli's), every step's time, store and registry."""
     return (("clone health", lambda: logged(d, clone_health_lines(repo, store, registry, ctx.caches.ran_at))),
-            ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, clock, store,
-                                                                                                  d)])),
+            ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(
+                repo, clock, store, d, looked=ctx.caches.landed_looked)])),
             ("stranded changes", lambda: stranded_changes(repo, d, store)),
             ("change tick", shared(lambda: [wlog(d, f"tick: {x}") for x in tick_changes(repo, d, clock, store, ctx=ctx)])),
             ("land hold", lambda: tick_land_hold(store)),
