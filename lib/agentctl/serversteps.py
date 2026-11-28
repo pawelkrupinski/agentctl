@@ -25,12 +25,12 @@ from agentctl.checkrun import remote_run_jobs
 from agentctl.crashloop import crash_loop_step
 from agentctl.watchtick import tick_watches
 from agentctl.recovery import maybe_recovery_tick
-from agentctl.redtick import maybe_red_tick
-from agentctl.gatepublish import maybe_publish_gate
 from agentctl.landedchange import close_landed_changes, stranded_changes
 from agentctl.batch import say_batch
 from agentctl.queuepush import tick_changes
 from agentctl.batchtick import tick_batch
+from agentctl.gatepublish import maybe_publish_gate
+from agentctl.redtickrun import maybe_red_tick
 
 
 def gate_is_red_now() -> bool:

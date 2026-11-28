@@ -661,7 +661,6 @@ mixed	lib/agentctl/redrepos.py:red_families	5
 mixed	lib/agentctl/redretired.py:_retire_get	5
 mixed	lib/agentctl/redseen.py:convergence_relevant	7
 mixed	lib/agentctl/redseen.py:unkicked_unit	8
-mixed	lib/agentctl/redtick.py:red_others_skipped	7
 mixed	lib/agentctl/redvault.py:block_meta	4
 mixed	lib/agentctl/redvault.py:open_block	7
 mixed	lib/agentctl/redverify.py:run_workflows	5
@@ -886,7 +885,6 @@ fanout	lib/agentctl/redpending.py	19
 fanout	lib/agentctl/redrecord.py	12
 fanout	lib/agentctl/redseen.py	18
 fanout	lib/agentctl/redstep.py	21
-fanout	lib/agentctl/redtick.py	30
 fanout	lib/agentctl/redvault.py	19
 fanout	lib/agentctl/redverify.py	17
 fanout	lib/agentctl/redview.py	19

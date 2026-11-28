@@ -15,7 +15,7 @@ from agentctl.context import Context
 from agentctl.recordingpins import refresh_pinned_recording
 from agentctl.branches import route_branch_reds, settle_branch_reds
 from agentctl.cireport import ci_state_refresh, ci_why
-from agentctl.redtick import red_tick_repo
+from agentctl.redtickrun import red_tick_repo
 
 
 def gate_publish_cycle(repo: str, store: Any, registry: ConditionRegistry, *, ctx: Context) -> None:
