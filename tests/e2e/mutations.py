@@ -25,8 +25,8 @@ MUTATIONS = {
         "kr = None if landing.gate_fix else known",
         "known-red-tools off: a tools-only change failing as main fails waits behind the red"),
     "StoreOutageTest": (
-        "lib/agentctl/syncsteps.py",
-        "        try:\n            st.submit(e)\n        except StoreUnavailable:\n            break",
+        "lib/agentctl/outboxflush.py",
+        "        try:\n            submit(e)\n        except StoreUnavailable:\n            break",
         "        try:\n            continue\n        except StoreUnavailable:\n            break",
         "the sync never re-submits the outbox"),
     "SkewOldClientTest": (
