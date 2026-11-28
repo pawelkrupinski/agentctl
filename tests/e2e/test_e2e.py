@@ -618,6 +618,40 @@ class VendorFallLockTest(VendorDriftWorld):
         self.assertIn(vendor_table(), changed)
 
 
+class VendorSharedRowsTest(VendorDriftWorld):
+    """2026-11-28, condition vendor-drift.5: movies 0f0f0d430c added `limit run-lines 15 sh` to its design-rules table,
+    whose limits, suffixes, abbreviations and idioms agentctl's quality/design-rules.tsv shares. Only an unconditional
+    test compared them -- `vendor.py drift` never saw it, the automatic sync never wrote it and failed on it, an agent
+    was dispatched and every agentctl push was refused. Now the rows are on the one sync path: a movies change adding a
+    row alone is synced, committed and pushed by the laptop's script, with no condition and no agent."""
+    OURS, THEIRS = "quality/design-rules.tsv", "test/resources/design-rules.tsv"
+    ROW = "limit\trun-lines\t15\tsh"
+
+    def test_a_movies_design_rules_row_is_synced_with_no_agent(self):
+        w, movies = self.w, self.w.extra_env["MOVIES_ROOT"]
+        with open(os.path.join(H.BIN, "devtools", "design_rules", "VENDORED.tsv")) as f:
+            copy, source, _ = next(x for x in f if x.strip() and not x.startswith("#")).rstrip("\n").split("\t")
+        with open(os.path.join(H.BIN, copy)) as f:
+            w.write(source, f.read(), at=movies)  # the copy equal again: the row is the only drift
+        w.write(self.THEIRS, "# movies\nlimit\tshell-nesting\t4\tsh\n" + self.ROW + "\nsuffix\tImpl\n", at=movies)
+        w.commit("movies adds a design-rules row", at=movies)
+        H.sh(movies, "git", "push", "-q", "origin", "HEAD:main")
+        w.write(self.OURS, "# agentctl\nlimit\tshell-nesting\t4\tsh\nsuffix\tImpl\nlayer\tpy\tlib\t0\tmodules\n", at=self.bin)
+        self.toy_suite(True)
+        self.sync()
+        self.until_autosync("done")
+        self.assertIsNone(self.condition(), self.w.diagnosis())
+        self.assertEqual(self.claude_calls("--bg"), [], "no agent is dispatched")
+        git_dir = os.path.join(w.root, "github", "bin.git")
+        self.assertEqual(H.sh(w.root, "git", "--git-dir", git_dir, "show", f"main:{self.OURS}").strip(),
+                         "# agentctl\nlimit\tshell-nesting\t4\tsh\n" + self.ROW + "\nsuffix\tImpl\nlayer\tpy\tlib\t0\tmodules",
+                         "movies' row reached origin/main beside its neighbour, agentctl's own rows kept")
+        self.assertEqual(H.sh(w.root, "git", "--git-dir", git_dir, "show", "--name-only", "--format=", "main").split(),
+                         [self.OURS], "the sync's own commit")
+        self.assertEqual(w.tick().returncode, 0)
+        self.assertEqual(self.owner_escalations(), [])
+
+
 class SlowLinkTest(E2ETest):
     STATUS_BOUND = 25  # s: the store call's own bound (remotestore STORE_WAITED_TIMEOUT, 15 s) and the CLI's start
 

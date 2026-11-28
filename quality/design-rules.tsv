@@ -1,7 +1,7 @@
 # agentctl's DESIGN RULES TABLE (quality/design.py reads it; CLAUDE.md, "Design"): the movies repository's rules for
 # every language, stated once. The limits, suffixes, abbreviations and idioms below are the movies table's own rows,
-# copied (tests/test_design_rules.py fails when they differ from ~/projects/movies/test/resources/design-rules.tsv,
-# where that checkout exists); the adapters, distance rows and layers after them are agentctl's. Loosening a row -- a
+# synced (devtools/vendor.py SHARED_ROWS: `vendor.py sync` merges ~/projects/movies/test/resources/design-rules.tsv's
+# rows in, `drift` names a difference, where that checkout exists); the adapters, distance rows and layers after them are agentctl's. Loosening a row -- a
 # limit raised, an adapter or an allowed idiom added, a layer moved up -- lands only with the kind's trailer
 # (`Complexity:`, `Length:`, `Duplication:`, `Coupling:`, `Design:`, `Naming: <why>`).
 #

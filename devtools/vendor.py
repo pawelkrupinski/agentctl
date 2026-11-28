@@ -13,7 +13,15 @@ first (a movies lane), then `sync` here; an agentctl-side improvement is written
                                      VENDOR_DRIFT condition's probe asks)
   python3 devtools/vendor.py signature   one digest of the movies files the copies follow: a new one is a new movies
                                      state to sync (a failed automatic sync is retried for it, lib/agentctl/vendordrift.py)
-Without the movies checkout `check` reads the digests only: agentctl's CI stays standalone."""
+Without the movies checkout `check` reads the digests only: agentctl's CI stays standalone.
+
+THE SHARED ROWS (SHARED_ROWS; 2026-11-28, condition vendor-drift.5): a table agentctl shares only some ROWS of -- the
+limits, suffixes, abbreviations and idioms of movies' design-rules table, in quality/design-rules.tsv beside agentctl's
+own adapters and layers -- is a vendored artifact on the same path: `drift`, `check`, `signature` and `touched` read its
+shared rows, `sync` merges movies' rows in (each new one beside its neighbour, agentctl's own rows and comments kept).
+Before, an unconditional test compared them: no sync wrote them, the automatic sync failed on them and every push was
+refused."""
+import difflib
 import hashlib
 import os
 import pwd
@@ -26,6 +34,8 @@ import tool_git  # noqa: E402
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TABLE = os.path.join("devtools", "design_rules", "VENDORED.tsv")
 DEFAULT_MOVIES = os.path.join(pwd.getpwuid(os.getuid()).pw_dir, "projects", "movies")  # the account's, not a test's $HOME
+# (agentctl's table, movies' table, the row kinds the two share)
+SHARED_ROWS = (("quality/design-rules.tsv", "test/resources/design-rules.tsv", ("limit", "suffix", "abbreviation", "idiom")),)
 
 
 def digest(path):
@@ -64,7 +74,12 @@ def touched(root=ROOT, base="origin/main"):
     if not fork:
         return None
     changed = set(git.lines("diff", "--name-only", fork, "HEAD"))
-    return sorted(changed & ({copy for copy, _s, _d in read_table(root)} | {TABLE}))
+    return sorted(changed & set(synced_paths(root)))
+
+
+def synced_paths(root=ROOT):
+    """Every file a sync writes: the copies, their table and the shared-rows tables."""
+    return [copy for copy, _s, _d in read_table(root)] + [TABLE] + [ours for ours, _t, _k in SHARED_ROWS]
 
 
 def drift_verdict(root=ROOT, movies=None, base="origin/main"):
@@ -90,14 +105,60 @@ def problems(root=ROOT, movies=None):
         if movies_digest(movies, source) not in ("-", digest(path)):
             out.append(f"{copy}: {DRIFTED}' {source}: `python3 devtools/vendor.py sync`, or write down the "
                        "change for a movies lane")
-    return out
+    return out + shared_problems(root, movies)
+
+
+def shared_problems(root, movies):
+    """A shared-rows table whose rows differ from movies' (with a movies table to compare to)."""
+    return [f"{ours}: {DRIFTED}' {theirs} (its shared {', '.join(kinds)} rows): `python3 devtools/vendor.py sync`"
+            for ours, theirs, kinds, mine, wanted in shared_tables(root, movies) if shared_rows(mine, kinds) != shared_rows(wanted, kinds)]
+
+
+def shared_tables(root, movies):
+    """(ours, theirs, kinds, our text, movies' text) of each SHARED_ROWS table the movies checkout has."""
+    return [(ours, theirs, kinds, read_text_or(os.path.join(root, ours), ""), read_text_or(movies_path(movies, theirs), ""))
+            for ours, theirs, kinds in SHARED_ROWS if movies_digest(movies, theirs) != "-"]
+
+
+def write_text(path, text):
+    with open(path, "w") as f:
+        f.write(text)
+
+
+def shared_rows(text, kinds):
+    return [line for line in text.splitlines() if line.split("\t")[0] in kinds]
+
+
+def merge_shared(ours, theirs, kinds):
+    """`ours` with its shared rows made movies' (`theirs`'): a changed or dropped row replaced in place, a new one put
+    after the shared row before it; every other line of `ours` kept. Equal rows return `ours` itself."""
+    lines = ours.splitlines(keepends=True)
+    at = [i for i, line in enumerate(lines) if line.split("\t")[0] in kinds]
+    mine, wanted = [lines[i].rstrip("\n") for i in at], shared_rows(theirs, kinds)
+    if mine == wanted:
+        return ours
+    if not at:
+        return ours + ("" if not ours or ours.endswith("\n") else "\n") + "".join(r + "\n" for r in wanted)
+    before, dropped = {}, set()
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(a=mine, b=wanted, autojunk=False).get_opcodes():
+        if tag != "equal":
+            dropped |= set(at[i1:i2])
+            slot = at[i1] if i1 < i2 or i1 == 0 else at[i1 - 1] + 1  # a replaced row's place; an insert after its neighbour
+            before.setdefault(slot, []).extend(wanted[j1:j2])
+    out = []
+    for i, line in enumerate(lines + [""]):
+        out.extend(r + "\n" for r in before.get(i, []))
+        if i not in dropped:
+            out.append(line)
+    return "".join(out)
 
 
 def signature(root=ROOT, movies=None):
     """One digest over the movies files the copies follow (`-` for one missing): it changes whenever movies moves a
     vendored file again, so a sync that failed for one state of movies is tried again for the next."""
     movies = movies_root() if movies is None else movies
-    parts = [f"{source}\t{movies_digest(movies, source)}\n" for _copy, source, _recorded in read_table(root)]
+    sources = [source for _copy, source, _recorded in read_table(root)] + [theirs for _o, theirs, _k in SHARED_ROWS]
+    parts = [f"{source}\t{movies_digest(movies, source)}\n" for source in sources]
     return hashlib.sha256("".join(parts).encode()).hexdigest()
 
 
@@ -117,16 +178,45 @@ def sync(root=ROOT, movies=None):
     if not movies:
         print("vendor: no movies checkout (MOVIES_ROOT or ~/projects/movies)", file=sys.stderr)
         return 2
+    rows = copy_files(root, movies)
+    write_text(os.path.join(root, TABLE), table_header(root) + "".join("\t".join(r) + "\n" for r in rows))
+    merged = merged_tables(root, movies)
+    write_texts(root, merged)
+    print(f"vendor: {len(rows)} copies synced from {movies}" + "".join(f", the shared rows of {ours}" for ours, _t in merged))
+    return 0
+
+
+def copy_files(root, movies):
+    """Copy every vendored file from movies over its copy; the table's new rows."""
     rows = []
     for copy, source, _ in read_table(root):
         shutil.copyfile(os.path.join(movies, source), os.path.join(root, copy))
         rows.append((copy, source, digest(os.path.join(root, copy))))
-    with open(os.path.join(root, TABLE)) as f:
-        header = "".join(line for line in f if line.startswith("#"))
-    with open(os.path.join(root, TABLE), "w") as f:
-        f.write(header + "".join("\t".join(r) + "\n" for r in rows))
-    print(f"vendor: {len(rows)} copies synced from {movies}")
-    return 0
+    return rows
+
+
+def table_header(root):
+    return "".join(line for line in read_text_or(os.path.join(root, TABLE), "").splitlines(keepends=True) if line.startswith("#"))
+
+
+def write_texts(root, texts):
+    for rel, text in texts:
+        write_text(os.path.join(root, rel), text)
+
+
+def read_text_or(path, default):
+    """The text at path, or default when it cannot be read (agentctl.statefile's own rule: vendor.py stands alone)."""
+    try:
+        with open(path) as f:
+            return f.read()
+    except OSError:
+        return default
+
+
+def merged_tables(root, movies):
+    """(table, its new text) of each shared-rows table whose rows movies changed."""
+    merged = [(ours, mine, merge_shared(mine, wanted, kinds)) for ours, _t, kinds, mine, wanted in shared_tables(root, movies)]
+    return [(ours, text) for ours, mine, text in merged if text != mine]
 
 
 def main(argv):

@@ -59,6 +59,11 @@ MUTATIONS = {
         '            self.record_falls(tools, f"the ratchets (exit {status}): {out.strip()}")',
         '            raise Failed(f"the ratchets (exit {status}): {out.strip()}")',
         "a vendored rule refusing unrecorded falls sends a mechanical sync to an agent"),
+    "VendorSharedRowsTest": (
+        "devtools/vendor.py",
+        'SHARED_ROWS = (("quality/design-rules.tsv", "test/resources/design-rules.tsv", ("limit", "suffix", "abbreviation", "idiom")),)',
+        "SHARED_ROWS = ()",
+        "the shared design rows are off the sync path again: a movies design-rules row waits for an agent"),
     "SlowLinkTest": (
         "lib/agentctl/remotestore.py",
         'return json.loads(open_within(req, timeout or self.timeout) or b"null")',

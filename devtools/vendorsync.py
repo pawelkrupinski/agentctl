@@ -69,9 +69,9 @@ class VendorSync:
 
     def verify(self, changed):
         """The scoped tests, the simulator gate when reached, the ratchets: raises Failed on the first that fails."""
-        copies = [c for c, _s, _d in vendor.read_table(self.tree)]
-        kind, sim, tests = vendorscope.scope(changed, copies, self.read_tests(self.tree))
-        if kind != "scoped" or not set(changed) <= set(copies) | {vendor.TABLE}:
+        synced = vendor.synced_paths(self.tree)
+        kind, sim, tests = vendorscope.scope(changed, synced, self.read_tests(self.tree))
+        if kind != "scoped" or not set(changed) <= set(synced):
             raise Failed(f"the sync changed more than the vendored copies: {changed}")
         self.python("the scoped tests", "tests/run.py", "-j", TEST_JOBS, *tests)
         if sim:
@@ -102,7 +102,7 @@ class VendorSync:
         movies = self.movies_root()
         if not movies:
             return []
-        sources = [s for _c, s, _d in vendor.read_table(self.tree)]
+        sources = [s for _c, s, _d in vendor.read_table(self.tree)] + [theirs for _o, theirs, _k in vendor.SHARED_ROWS]
         self.step("git fetch movies", ["git", "fetch", "-q", "origin", "main"], movies)
         status, out = self.run(["git", "diff", "--name-only", "origin/main", "--", *sources], movies)
         if status:

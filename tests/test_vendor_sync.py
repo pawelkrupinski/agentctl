@@ -36,6 +36,16 @@ class ScopeTest(unittest.TestCase):
         self.assertEqual(vendorscope.scope(["quality/design-baseline.tsv"], self.copies, SOURCES)[0], "full",
                          "a baseline alone is no sync")
 
+    def test_the_shared_design_rows_table_is_a_vendored_file_too(self):
+        """2026-11-28, vendor-drift.5: a movies design-rules row reaches agentctl's quality/design-rules.tsv through the
+        sync (vendor.SHARED_ROWS); a push of it with the copies is a sync, scoped like one."""
+        [(ours, _theirs, _kinds)] = vendor.SHARED_ROWS
+        synced = self.copies + [ours]
+        kind, _sim, tests = vendorscope.scope([MODEL, TABLE, ours], synced, SOURCES)
+        self.assertEqual(kind, "scoped")
+        self.assertIn("test_design_rules", tests)
+        self.assertEqual(vendorscope.scope([ours], synced, SOURCES)[0], "scoped", "the rows alone are a sync")
+
     def test_any_other_file_makes_the_push_full(self):
         self.assertEqual(vendorscope.scope([MODEL, "lib/agentctl/core.py"], self.copies, SOURCES)[0], "full")
         self.assertEqual(vendorscope.scope([], self.copies, SOURCES)[0], "full")
@@ -163,6 +173,17 @@ class VendorSyncTest(unittest.TestCase):
         self.assertEqual(order, sorted(order))
         self.assertTrue(run.calls[-1].startswith("git worktree remove"))
         self.assertTrue(any("selfpush.py --wait 60" in c for c in run.calls))
+
+    def test_a_sync_of_the_shared_design_rows_is_pushed_with_no_agent(self):
+        """vendor-drift.5: the sync wrote movies' new `limit run-lines` row into quality/design-rules.tsv; that is the
+        sync's own change, committed and pushed, not "more than the vendored copies" for an agent."""
+        [(ours, theirs, _kinds)] = vendor.SHARED_ROWS
+        sync, run = self.sync({"git status": (0, f" M {ours}\n"), "quality/tools.py": (0, "/venv/python\n")})
+        self.assertEqual(sync.execute(), f"synced: {ours}")
+        self.assertIn(f"git add -- {ours}", run.calls)
+        self.assertTrue(any("selfpush.py" in c for c in run.calls))
+        self.assertTrue(any(c.startswith("git diff --name-only origin/main") and theirs in c for c in run.calls),
+                        "only a landed movies table is synced")
 
     def test_nothing_to_sync_pushes_nothing(self):
         sync, run = self.sync({})

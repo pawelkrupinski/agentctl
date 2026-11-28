@@ -105,7 +105,8 @@ for unrecorded FALLS alone is answered by `ratchet.py update`, the baselines com
 change to adapt) does the sync open a `VENDOR_DRIFT` condition, which the escalation table routes to a Sonnet agent that adapts
 agentctl's code, freezes any new ratchet rows with the right trailer and pushes. Never edit a copy: change it in movies, then sync; an improvement made here is written down
 for a movies lane. `quality/design.py` is agentctl's extractor over the core (the Python modules, `agentctl.<part>` imports),
-`quality/design-rules.tsv` its table (the limits, suffixes, abbreviations and idioms equal movies' own; the adapters,
+`quality/design-rules.tsv` its table (the limits, suffixes, abbreviations and idioms are movies' own rows, on the SAME sync
+path as the copies: `vendor.py` SHARED_ROWS, merged in by `sync`, named by `drift`; the adapters,
 distance and layers agentctl's), `quality/design-baseline.tsv` what is past a rule today, frozen (rows only fall;
 a rise needs `Naming:` / `Design:` / `Coupling:`), `quality/design-exemptions.tsv` a NEW row admitted with a dated,
 specific why. The rules: no `Impl` / `Manager` / `Helper` / `Util` / `Processor` name, no abbreviation (idioms allowed),

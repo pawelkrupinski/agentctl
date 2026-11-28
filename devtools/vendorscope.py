@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """devtools/vendorscope.py RANGE: which tests a push must run, decided from its own diff (hooks/pre-push reads it).
 
-A push that changes ONLY vendored copies (devtools/design_rules/*, devtools/lib/*) and their table VENDORED.tsv is a
+A push that changes ONLY vendored copies (devtools/design_rules/*, devtools/lib/*), their table VENDORED.tsv and the
+shared design rows (quality/design-rules.tsv: vendor.synced_paths) is a
 mechanical sync (devtools/vendorsync.py): the copies are byte-equal to movies' files, so what can break is what imports
 them. Its scope is `test_vendored` and the tests that import a changed module, plus the simulator gate only when the
 simulator imports one (2026-11-28: a full pre-push suite at load 25-45 timed out twice on a correct 5-file sync and the
@@ -78,8 +79,7 @@ def main(argv):
     if not rng or rng.startswith("0000000"):
         print("full")
         return 0
-    copies = [c for c, _s, _d in vendor.read_table(ROOT)]
-    kind, sim, tests = scope(changed_files(ROOT, rng), copies, read_tests(ROOT))
+    kind, sim, tests = scope(changed_files(ROOT, rng), vendor.synced_paths(ROOT), read_tests(ROOT))
     print("full" if kind == "full" else f"scoped sim={int(sim)} " + " ".join(tests))
     return 0
 

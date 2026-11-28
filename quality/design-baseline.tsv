@@ -291,7 +291,6 @@ mixed	devtools/stats.py:side	20
 mixed	devtools/vendor.py:movies_root	3
 mixed	devtools/vendor.py:problems	6
 mixed	devtools/vendor.py:read_table	4
-mixed	devtools/vendor.py:sync	7
 mixed	lib/agentctl/actors.py:_named_actor	4
 mixed	lib/agentctl/actors.py:process_actor	9
 mixed	lib/agentctl/alertclear.py:AlertClearing.orphan_landed	6
