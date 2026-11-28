@@ -3,6 +3,7 @@
 
 import re
 from agentctl.core import git
+from agentctl.gitrepo import commit_message
 
 
 # ONE TRAILER PARSER (changekind.py, 2026-11-19): a `Fixes-Red:` value list -- git's %(trailers:...,valueonly) of one
@@ -89,7 +90,7 @@ def do_not_land(repo, commits, branch=""):
     if DO_NOT_LAND_BRANCH.match(branch or ""):
         return f"branch {branch} is throwaway work (measure/* and experiment/* never land)"
     for c in commits or []:
-        msg = git(repo, "log", "-1", "--format=%B", c, check=False).stdout
+        msg = commit_message(repo, c)
         subject = msg.strip().splitlines()[0] if msg.strip() else ""
         if DO_NOT_LAND_SUBJECT.match(subject):
             return f"commit {c[:10]} is marked not for landing (subject: {subject[:80]!r})"
@@ -104,7 +105,7 @@ HOLD_TRAILER = re.compile(r"^Hold:\s*(\S.*)$", re.I)
 def held_commit(repo, commits):
     """`commit <sha> carries Hold: <why>` for the first commit with a Hold: trailer, or None."""
     for c in commits or []:
-        msg = git(repo, "log", "-1", "--format=%B", c, check=False).stdout
+        msg = commit_message(repo, c)
         for ln in commit_trailers(msg):
             m = HOLD_TRAILER.match(ln)
             if m:

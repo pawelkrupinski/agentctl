@@ -97,6 +97,15 @@ class SubprocessGitRepoTest(Contract, unittest.TestCase):
         self.assertTrue(gitrepo.commit_known(path, a))
         self.assertFalse(gitrepo.commit_known(path, UNKNOWN))
         self.assertFalse(gitrepo.commit_known(path, None))
+        self.assertEqual(gitrepo.commit_message(path, a).strip(), "c1")
+        self.assertEqual(gitrepo.commit_message(path, UNKNOWN), "")
+        self.assertEqual(gitrepo.commit_files(path, a), [])
+        self.assertIsNone(gitrepo.commit_files(path, UNKNOWN), "a commit this clone lacks reads as None, never raises")
+        with open(os.path.join(path, "x.txt"), "w") as f:
+            f.write("x\n")
+        for args in (("add", "x.txt"), ("commit", "-q", "-m", "adds x")):
+            subprocess.run(["git", "-C", path, "-c", "commit.gpgsign=false", *args], check=True, capture_output=True)
+        self.assertEqual(gitrepo.commit_files(path, "HEAD"), ["x.txt"])
         self.assertTrue(gitrepo.is_ancestor(path, c, m))
         self.assertFalse(gitrepo.is_ancestor(path, m, c))
         self.assertFalse(gitrepo.is_ancestor(path, None, m))

@@ -16,7 +16,7 @@ from agentctl.redfixread import (
     fix_show_many, fix_step_failed, fix_tree_files, red_failed_steps, red_failing_jobs, red_job_reads,
     red_workflow_file)
 from agentctl.redrecord import red_names, red_what
-from agentctl.gitrepo import commit_known
+from agentctl.gitrepo import commit_files, commit_known
 from agentctl.paths import reds_dir
 
 
@@ -64,8 +64,7 @@ FIX_RULES = 3  # the reading rules' version (2: per red, per failing step; 3: wh
 
 
 def fix_changed(repo: str, sha: str) -> list[str]:
-    r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", sha, check=False)
-    return [p for p in (r.stdout if r.returncode == 0 else "").splitlines() if p]
+    return commit_files(repo, sha) or []
 
 
 def fix_red_verdict(repo, sha, d, changed, *, ctx):

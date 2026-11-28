@@ -11,7 +11,7 @@ import re
 import subprocess
 from typing import Any, Optional, Protocol
 from agentctl.procrunner import ProcessRunner
-from agentctl.core import git_ok
+from agentctl.core import git, git_ok
 
 
 def is_ancestor(repo: str, ancestor: str | None, descendant: str | None) -> bool:
@@ -22,6 +22,18 @@ def is_ancestor(repo: str, ancestor: str | None, descendant: str | None) -> bool
 def commit_known(repo: str, rev: str | None) -> bool:
     """Whether `rev` names a commit this clone holds (ONE existence check: no fetch)."""
     return git_ok(repo, "cat-file", "-e", f"{rev}^{{commit}}")
+
+
+def commit_files(repo: str, sha: str) -> list[str] | None:
+    """The paths commit `sha` changes (a merge's and a root commit's too: `-m --root`), None when this clone cannot read it
+    (a commit it lacks: never raises). ONE reader of a commit's files."""
+    r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", sha, check=False)
+    return [p for p in r.stdout.splitlines() if p] if r.returncode == 0 else None
+
+
+def commit_message(repo: str, sha: str) -> str:
+    """Commit `sha`'s whole message ('' when this clone cannot read it): ONE reader of a commit's message."""
+    return str(git(repo, "log", "-1", "--format=%B", sha, check=False).stdout)
 
 
 class GitRepo(Protocol):

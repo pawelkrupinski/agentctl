@@ -4,7 +4,8 @@
 import fnmatch
 from typing import Any
 from agentctl.statefile import read_text_or
-from agentctl.core import git, process_cache
+from agentctl.core import process_cache
+from agentctl.gitrepo import commit_files
 from agentctl.repos import precheck_hook
 from agentctl.trailers import commit_trailer_values
 from agentctl.queue import hook_query
@@ -22,10 +23,10 @@ def change_paths_of(repo: Any, e: Any, commits: Any = None) -> list[str] | None:
     fetch_entry_commits(repo, e)
     paths: set[str] = set()
     for c in (e.get("commits") or []) if commits is None else commits:
-        r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c, check=False)
-        if r.returncode != 0:
+        files = commit_files(repo, c)
+        if files is None:
             return None
-        paths |= {p for p in r.stdout.splitlines() if p}
+        paths |= set(files)
     return sorted(paths)
 
 
@@ -91,8 +92,6 @@ def identity_model_commits(repo, commits):
     """The commits among `commits` that touch the identity model."""
     out = []
     for c in commits:
-        r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c, check=False)
-        if any(fnmatch.fnmatch(p, g) for p in (r.stdout if r.returncode == 0 else "").splitlines() if p
-               for g in IDENTITY_MODEL_GLOBS):
+        if any(fnmatch.fnmatch(p, g) for p in commit_files(repo, c) or () for g in IDENTITY_MODEL_GLOBS):
             out.append(c)
     return out

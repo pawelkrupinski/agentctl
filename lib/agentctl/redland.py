@@ -23,7 +23,7 @@ from agentctl.fixerenv import BRIEF
 from agentctl.redrecord import red_names, red_what
 from agentctl.land import tool_env
 from agentctl.redfixes import commit_fixes
-from agentctl.gitrepo import commit_known
+from agentctl.gitrepo import commit_files, commit_known, commit_message
 from agentctl.paths import state_root
 
 
@@ -65,10 +65,10 @@ def touches_production(repo: str, c: str) -> bool | None:
     16:47Z-18:5xZ every change tick and batch tick on ci-runner died on `git diff-tree <sha>: bad object` for one
     change's commit its clone lacked, and nothing landed)."""
     if c not in _production:
-        r = git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", "-m", c, check=False)
-        if r.returncode != 0:
+        files = commit_files(repo, c)
+        if files is None:
             return None
-        _production[c] = any(p and is_production_path(p) for p in r.stdout.split("\n"))
+        _production[c] = any(is_production_path(p) for p in files)
     return bool(_production[c])
 
 
@@ -292,7 +292,7 @@ def fix_replay_trailers(repo, commits):
     reasons]) over commits' trailers."""
     found = _ReplayTrailers()
     for c in commits or []:
-        found.read(git(repo, "log", "-1", "--format=%B", c, check=False).stdout)
+        found.read(commit_message(repo, c))
     return found.named, found.claimed, found.bare, found.nones
 
 
