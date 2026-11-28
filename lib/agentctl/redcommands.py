@@ -7,10 +7,12 @@ from agentctl.context import Context
 from agentctl.redvault import red_block
 from agentctl.fixerlife import red_fixer
 from agentctl.ownerwrapper import red_owner
-from agentctl.redcli import cmd_red_probe, red_cmd_auto
+from agentctl.redcli import red_cmd_auto
 from agentctl.redstatus import red_status
-from agentctl.redleasecmds import red_am_fixer, red_cmd_lease, red_cmd_owner_push, red_cmd_unblame, red_cmd_unblock, red_command_repo
+from agentctl.redleasecmds import (
+    red_am_fixer, red_cmd_lease, red_cmd_owner_push, red_cmd_unblame, red_cmd_unblock, red_command_repo)
 from agentctl.reddispatchcmd import red_cmd_dispatch
+from agentctl.redprobe import cmd_red_probe
 
 
 def cmd_red(a: Any, clock: Any, st: Any, registry: Any, *, ctx: Context) -> Any:

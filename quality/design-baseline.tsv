@@ -162,8 +162,7 @@ effect	lib/agentctl/red.py:files	5
 effect	lib/agentctl/redauthors.py:files	1
 effect	lib/agentctl/redclaim.py	1
 effect	lib/agentctl/redclaim.py:files	2
-effect	lib/agentctl/redcli.py	1
-effect	lib/agentctl/redcli.py:files	6
+effect	lib/agentctl/redcli.py:files	4
 effect	lib/agentctl/redcrash.py:files	2
 effect	lib/agentctl/reddispatch.py	1
 effect	lib/agentctl/reddispatch.py:files	1
@@ -173,6 +172,8 @@ effect	lib/agentctl/redfixread.py:files	1
 effect	lib/agentctl/redland.py:files	4
 effect	lib/agentctl/redlease.py:files	1
 effect	lib/agentctl/redopen.py:files	2
+effect	lib/agentctl/redprobe.py	1
+effect	lib/agentctl/redprobe.py:files	2
 effect	lib/agentctl/redrepos.py:files	1
 effect	lib/agentctl/redseen.py:files	2
 effect	lib/agentctl/redverify.py:files	1
@@ -309,7 +310,6 @@ fanout	lib/agentctl/recovery.py	14
 fanout	lib/agentctl/redauthors.py	10
 fanout	lib/agentctl/redblock.py	14
 fanout	lib/agentctl/redclaim.py	19
-fanout	lib/agentctl/redcli.py	16
 fanout	lib/agentctl/redcrash.py	20
 fanout	lib/agentctl/reddispatch.py	21
 fanout	lib/agentctl/redearly.py	14
@@ -718,9 +718,6 @@ mixed	lib/agentctl/redblock.py:gate_unread_spell	4
 mixed	lib/agentctl/redclaim.py:_claim_one	6
 mixed	lib/agentctl/redclaim.py:_unfileable_worktree	6
 mixed	lib/agentctl/redclaim.py:red_claim	10
-mixed	lib/agentctl/redcli.py:drift_overlay	8
-mixed	lib/agentctl/redcli.py:probe_checks	10
-mixed	lib/agentctl/redcli.py:probe_drift	7
 mixed	lib/agentctl/redcli.py:red_cmd_auto	8
 mixed	lib/agentctl/redcrash.py:_crash_evidence	5
 mixed	lib/agentctl/redcrash.py:red_crash_cmd	3
@@ -737,6 +734,9 @@ mixed	lib/agentctl/redfixread.py:red_main_current	8
 mixed	lib/agentctl/redland.py:fix_replay_once	3
 mixed	lib/agentctl/redlease.py:LeaseEnd.prior_work	6
 mixed	lib/agentctl/redopen.py:red_family_tell	4
+mixed	lib/agentctl/redprobe.py:drift_overlay	8
+mixed	lib/agentctl/redprobe.py:probe_drift	7
+mixed	lib/agentctl/redprobechecks.py:probe_checks	10
 mixed	lib/agentctl/redrepos.py:red_families	5
 mixed	lib/agentctl/redretired.py:_retire_get	5
 mixed	lib/agentctl/redseen.py:convergence_relevant	7

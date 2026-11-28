@@ -129,7 +129,7 @@ mypy-errors	redask	18
 mypy-errors	redauthors	9
 mypy-errors	redblock	15
 mypy-errors	redclaim	17
-mypy-errors	redcli	23
+mypy-errors	redcli	2
 mypy-errors	redcommands	3
 mypy-errors	redcrash	39
 mypy-errors	reddispatch	30
@@ -145,6 +145,8 @@ mypy-errors	redlease	24
 mypy-errors	redleasecmds	8
 mypy-errors	redopen	33
 mypy-errors	redpending	34
+mypy-errors	redprobe	17
+mypy-errors	redprobechecks	4
 mypy-errors	redrecord	9
 mypy-errors	redrepos	17
 mypy-errors	redretired	43
