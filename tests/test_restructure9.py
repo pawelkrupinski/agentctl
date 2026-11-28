@@ -172,7 +172,7 @@ class AwaitEntryTest(unittest.TestCase):
         def run(A):
             def inner(packed):
                 args, holder = packed
-                return captured(holder, A._await_entry)(*args)
+                return captured(holder, A._await_entry)(*args, case_context().caches.code_restart)
             return inner
         check(self, "_await_entry", lambda case: (self.build(case),), run, 1500)
 

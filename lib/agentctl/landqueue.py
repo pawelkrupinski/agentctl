@@ -78,7 +78,7 @@ def land_await(a: argparse.Namespace, repo: str, clock: Clock, store: Any, *, ct
     a.inbox_cwd = a.close or a.repo
     repo = main_clone(repo)
     os.chdir(repo)
-    rc, sha, pushed_at = await_entry(repo, a.entry, clock, store)
+    rc, sha, pushed_at = await_entry(repo, a.entry, clock, store, ctx.caches.code_restart)
     return watch_landed(repo, sha, pushed_at, clock, store, close=a.close, ctx=ctx) if rc == 0 and sha else rc
 
 

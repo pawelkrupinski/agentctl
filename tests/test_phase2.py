@@ -968,7 +968,7 @@ class LandHoldTest(Phase2Base):
             self.assertEqual(A.tick_batch(self.repo, d, *on_clock(A.Clock()), ctx=case_context()), ["held"])
         finally:
             A.ChangeRecords, A.current_batch = saved
-        A.write_snapshot(d, A.CurrentStore(A.process_store))
+        A.write_snapshot(d, A.CurrentStore(A.process_store), {})
         self.sync()
         st = A.state_read()
         self.assertEqual(st["hold"]["why"], "infra deploy")

@@ -291,7 +291,7 @@ class WatchLoop:
                     return rc
             if self.claim:
                 self.claim.renew()
-            restart_if_changed([self.own])
+            restart_if_changed(self.ctx.caches.code_restart, [self.own])
             self.clock.sleep(next(self.err_delays) if self.unreachable is not None else next(self.delays))
 
 

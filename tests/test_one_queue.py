@@ -226,7 +226,7 @@ class OneViewTest(OneQueueBase):
     def test_the_status_snapshot_counts_the_stores_items_never_a_hosts_entry_files(self):
         self.st.put_item("change", "x-95", "waiting", {"worktree": "/h/movies-wt-proxy-park"})
         self.st.put_item("change", "x-96", "checking", {"worktree": "/h/movies-wt-b"})
-        A.write_snapshot(self.d, self.st)
+        A.write_snapshot(self.d, self.st, {})
         snap = A.state_read()
         self.assertEqual((snap["waiting"], snap["queued"]), (["/h/movies-wt-proxy-park"], ["/h/movies-wt-b"]))
 

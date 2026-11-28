@@ -275,7 +275,6 @@ state	lib/agentctl/landedtwin.py	2
 state	lib/agentctl/laptoprole.py	1
 state	lib/agentctl/leases.py	1
 state	lib/agentctl/onmain.py	3
-state	lib/agentctl/owned.py	4
 state	lib/agentctl/procrunner.py	1
 state	lib/agentctl/redrecord.py	1
 state	lib/agentctl/redrepos.py	1

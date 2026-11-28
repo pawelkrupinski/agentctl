@@ -143,7 +143,8 @@ def offer_token(repo: str) -> bool:
         return False
 
 
-def await_entry(repo: str, eid: str, clock: Clock, store: Any, close: str | None = None) -> tuple[int, str | None, float | None]:
+def await_entry(repo: str, eid: str, clock: Clock, store: Any, restarts: dict[str, Any],
+                close: str | None = None) -> tuple[int, str | None, float | None]:
     """Block until the entry lands or is rejected: (rc, landed sha, pushed_at). Restarts a dead processor. OWNED (one
     awaiter per entry; on agentctl's new code it re-execs as `agentctl waiting await <entry>`, which then watches)."""
     own = Owned("await", eid, ["waiting", "await", eid, "--repo", repo] + (["--close", close] if close else []))
@@ -152,7 +153,7 @@ def await_entry(repo: str, eid: str, clock: Clock, store: Any, close: str | None
         print(f"NOT LANDED (still waiting): entry {eid} is already awaited by pid {h.get('pid')} ({h.get('owner')})")
         return 2, None, None
     try:
-        return _await_entry(repo, eid, own, clock, store)
+        return _await_entry(repo, eid, own, clock, store, restarts)
     finally:
         own.release()
 
@@ -199,7 +200,8 @@ def _settled(it: dict[str, Any]) -> tuple[int, str | None, float | None] | None:
     return _rejected_outcome(state, data) if machine_state("change", state).terminal else None
 
 
-def _await_entry(repo: str, eid: str, own: Owned, clock: Clock, store: Any) -> tuple[int, str | None, float | None]:
+def _await_entry(repo: str, eid: str, own: Owned, clock: Clock, store: Any,
+                 restarts: dict[str, Any]) -> tuple[int, str | None, float | None]:
     """The change's STORE ITEM decides (a RemoteStore on the laptop): an entry's JSON is only on the host whose queue
     runs it -- ci-runner's for every change since ONE QUEUE (2026-11-16: `waiting await` on the laptop crashed with
     FileNotFoundError on one)."""
@@ -219,5 +221,5 @@ def _await_entry(repo: str, eid: str, own: Owned, clock: Clock, store: Any) -> t
                   "`agentctl land status`")
             return 2, None, None
         spawn_waiting_processor(repo)
-        restart_if_changed([own])
+        restart_if_changed(restarts, [own])
         clock.sleep(next(delays))

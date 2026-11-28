@@ -230,14 +230,12 @@ class RestartGateTest(unittest.TestCase):
         sh(self.d, "git", "config", "user.name", "a")
         self.good = "import sys\nsys.exit(0 if sys.argv[1:] == ['--selftest'] else 0)\n"
         self.commit(self.good)
-        self.saved = A.TOOL_PATH, dict(A._smoked)
+        self.saved = A.TOOL_PATH
         A.TOOL_PATH = self.tool
-        A._smoked.clear()
+        self.smoked: dict = {}  # commit -> its smoke check (Caches.code_restart's "smoked")
 
     def tearDown(self):
-        A.TOOL_PATH, smoked = self.saved
-        A._smoked.clear()
-        A._smoked.update(smoked)
+        A.TOOL_PATH = self.saved
         self.tmp.cleanup()
 
     def commit(self, text):
@@ -247,12 +245,12 @@ class RestartGateTest(unittest.TestCase):
         sh(self.d, "git", "commit", "-q", "-m", "x")
 
     def test_committed_code_that_passes_is_picked_up(self):
-        self.assertEqual(A.restart_gate(), (True, ""))
+        self.assertEqual(A.restart_gate(self.smoked), (True, ""))
 
     def test_a_dirty_edit_is_not_picked_up(self):
         with open(self.tool, "a") as f:
             f.write("# half-finished edit\n")
-        ok, why = A.restart_gate()
+        ok, why = A.restart_gate(self.smoked)
         self.assertFalse(ok)
         self.assertIn("uncommitted", why)
 
@@ -260,17 +258,17 @@ class RestartGateTest(unittest.TestCase):
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(self.d, "inbox-dir")
         self.addCleanup(os.environ.pop, "AGENTCTL_INBOX_DIR", None)
         self.commit("import sys\nsys.exit(3 if sys.argv[1:] == ['--selftest'] else 0)\n")
-        ok, why = A.restart_gate()
+        ok, why = A.restart_gate(self.smoked)
         self.assertFalse(ok)
         self.assertIn("smoke check", why)
-        A.restart_gate()
+        A.restart_gate(self.smoked)
         self.assertEqual(len([e for e in A.inbox_entries() if "CODE REFUSED" in e["verdict"]]), 1)
 
     def test_a_syntax_error_fails_py_compile(self):
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(self.d, "inbox-dir")
         self.addCleanup(os.environ.pop, "AGENTCTL_INBOX_DIR", None)
         self.commit("def (:\n")
-        self.assertIn("py_compile", A.restart_gate()[1])
+        self.assertIn("py_compile", A.restart_gate(self.smoked)[1])
 
     def part(self, text, commit=True):
         lib = os.path.join(self.d, "lib", "agentctl")
@@ -288,9 +286,9 @@ class RestartGateTest(unittest.TestCase):
         before = A.code_version(self.tool)
         self.part("import sys\nsys.exit(0)\n")
         self.assertNotEqual(A.code_version(self.tool), before)
-        self.assertEqual(A.restart_gate(), (True, ""))
+        self.assertEqual(A.restart_gate(self.smoked), (True, ""))
         self.part("import sys\nsys.exit(0)  # dirty\n", commit=False)
-        ok, why = A.restart_gate()
+        ok, why = A.restart_gate(self.smoked)
         self.assertFalse(ok)
         self.assertIn("lib/agentctl/part.py", why)
 

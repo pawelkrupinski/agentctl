@@ -93,11 +93,10 @@ class StoreDownNeverEndsTheLoopTest(unittest.TestCase):
         seen = {}
         saved = (A.os.execv, A.START_CODE, A.restart_gate, A.code_version, os.environ.get("AGENTCTL_STORE_TOKEN"))
         A.os.execv = lambda exe, argv: seen.update(argv=argv, tok=os.environ.get("AGENTCTL_STORE_TOKEN"))
-        A.START_CODE, A.restart_gate, A.code_version = "old", (lambda: (True, "")), (lambda *a: "new")
-        A._last_code_check[0] = 0
+        A.START_CODE, A.restart_gate, A.code_version = "old", (lambda smoked: (True, "")), (lambda *a: "new")
         os.environ["AGENTCTL_STORE_TOKEN"] = "tok-handed-over"
         try:
-            A.restart_if_changed(argv=["waiting", "run", "--service"])
+            A.restart_if_changed({}, argv=["waiting", "run", "--service"])
         finally:
             A.os.execv, A.START_CODE, A.restart_gate, A.code_version, tok = saved
             if tok is None:

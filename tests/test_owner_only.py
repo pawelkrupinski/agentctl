@@ -148,13 +148,13 @@ class OwnerAsksSnapshotTest(OwnerOnlyBase):
     def test_a_told_owner_ask_is_in_the_snapshot_with_its_category_and_command(self):
         it, _acts = self.launch(self.core_red(), outcome="BLOCKED ON OWNER: ! secrets unlock bitcashier")
         A.red_owner_reminders(self.st, self.t[0])
-        A.write_snapshot({}, self.st)
+        A.write_snapshot({}, self.st, {})
         asks = A.state_read()["asks"]
         self.assertEqual(len(asks), 1, asks)
         self.assertEqual((asks[0]["category"], asks[0]["keys"]), ("vault", [it["data"]["key"]]))
         self.assertIn("decide vault-bitcashier", asks[0]["how"])
         self.st.revoke("block/cause/vault-bitcashier", "LIFTED")
-        A.write_snapshot({}, self.st)
+        A.write_snapshot({}, self.st, {})
         self.assertEqual(A.state_read()["asks"], [], "a lapsed block is no pending decision")
 
     def test_an_issue_quoting_waiting_on_you_and_an_uncategorised_block_are_no_asks(self):
@@ -166,7 +166,7 @@ class OwnerAsksSnapshotTest(OwnerOnlyBase):
                               "decision": True, "cause": A.DECISION_CAUSE, "decide": "x?"})
         A.red_move(self.st, it, "blocked-external", "blocked", data={"block": A.block_lease("old-decision"),
                                                                      "ask": {"q": "x?", "n": 1}})
-        A.write_snapshot({}, self.st)
+        A.write_snapshot({}, self.st, {})
         self.assertEqual(A.state_read()["asks"], [])
 
     def test_a_held_question_is_not_the_owners_yet(self):
@@ -177,10 +177,10 @@ class OwnerAsksSnapshotTest(OwnerOnlyBase):
                               "decide": "force-push main?"})
         it = A.red_move(self.st, it, "blocked-external", "blocked", data={"block": A.block_lease("held")})
         A.red_ask_mark(self.st, self.st.item("red", it["id"]), self.t[0], told=False)
-        A.write_snapshot({}, self.st)
+        A.write_snapshot({}, self.st, {})
         self.assertEqual(A.state_read()["asks"], [])
         A.red_ask_mark(self.st, self.st.item("red", it["id"]), self.t[0], told=True)
-        A.write_snapshot({}, self.st)
+        A.write_snapshot({}, self.st, {})
         self.assertEqual([a["category"] for a in A.state_read()["asks"]], ["irreversible"])
 
 

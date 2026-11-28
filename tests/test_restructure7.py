@@ -6,6 +6,7 @@ import contextlib, io, os, sys, types, unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from test_agentctl import A  # noqa: E402
+from harness import case_context  # noqa: E402
 from golden_cases import Probe, check as _check  # noqa: E402
 
 DIGESTS = os.path.join(HERE, "fixtures", "restructure7-digests.json")
@@ -70,7 +71,7 @@ class OwnedTest(unittest.TestCase):
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
                     try:
-                        rc = A.wait_all(*args)
+                        rc = A.wait_all(*args, case_context().caches.code_restart)
                     except BaseException as e:
                         rc = type(e).__name__
                 return rc, out.getvalue()

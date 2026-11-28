@@ -329,7 +329,7 @@ class WriteSnapshotTest(unittest.TestCase):
         case.fake("machine_state", lambda rng, typ, s: NS(terminal=s in ("done", "dead")))
         case.fake("epoch_now", lambda rng: NOW)
         case.fake("code_version", lambda rng: "v1")
-        case.fake("start_rev", lambda rng: "rev")
+        case.fake("start_rev", lambda rng, *memo: "rev")
         case.fake("revert_brief", lambda rng, i: {"rb": i["id"]})
         case.put("HOLD_SHOWN", ("hold", "waiting"))
         case.fake("hold_row", lambda rng, h: {"h": h})
@@ -346,7 +346,7 @@ class WriteSnapshotTest(unittest.TestCase):
         return ("/d", st)
 
     def test_write_snapshot(self):
-        check(self, "write_snapshot", self.build, lambda A: A.write_snapshot, 4000)
+        check(self, "write_snapshot", self.build, lambda A: partial(A.write_snapshot, restarts=case_context().caches.code_restart), 4000)
 
 
 # ------------------------------------------------------------------------------------------------ workflow job scanners

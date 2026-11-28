@@ -43,7 +43,7 @@ class WaitingTest(Base):
         self.saved_inbox = os.environ.get("AGENTCTL_INBOX_DIR")
         os.environ["AGENTCTL_INBOX_DIR"] = os.path.join(t, "inbox")
         self.awaited = []
-        A.await_entry = lambda repo, eid, clock, store, close=None: (self.awaited.append(eid), (9, None, None))[1]
+        A.await_entry = lambda repo, eid, clock, store, restarts, close=None: (self.awaited.append(eid), (9, None, None))[1]
         A.watch_landed = lambda repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=(), ctx=None: 0
         os.environ.pop("PREPUSH_SKIP", None)
         self.calls, self.pushes = os.path.join(t, "hook-calls"), os.path.join(t, "pushes")
@@ -393,7 +393,7 @@ class WaitingTest(Base):
             A.gate_reds = saved
 
     def test_land_follow_still_waits_and_watches(self):
-        A.await_entry = lambda repo, eid, clock, store, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
+        A.await_entry = lambda repo, eid, clock, store, restarts, close=None: (print("LANDED abc (with …)"), (0, "abc", 1.0))[1]
         watched = []
         A.watch_landed = lambda repo, sha, pushed_at, clock, store, o_r=None, close=None, fixes=(), ctx=None: (watched.append(sha), 3)[1]
         wt, _ = self.agent("a", "web/src/main/A.scala", "a\n")
@@ -428,7 +428,7 @@ class WaitingTest(Base):
         self.assertEqual(h["data"]["why"], "infra deploy")
         self.assertAlmostEqual(h["deadline"] - self.clock.time(), 30 * 60, delta=60)  # land's clock
         self.assertEqual(self.drive(), ["held"])
-        A.write_snapshot(d, A.CurrentStore(A.process_store))
+        A.write_snapshot(d, A.CurrentStore(A.process_store), {})
         line = status_line()
         self.assertIn("LAND HELD until", line)
         self.assertIn("infra deploy", line)
@@ -442,7 +442,7 @@ class WaitingTest(Base):
         self.assertEqual(A.process_store().items("hold", ["held"]), [])
         self.assertTrue([e for e in A.process_store().events() if e["kind"] == "hold.expired"])
         self.assertNotEqual(self.drive(), ["held"])
-        A.write_snapshot(d, A.CurrentStore(A.process_store))
+        A.write_snapshot(d, A.CurrentStore(A.process_store), {})
         self.assertNotIn("HELD", status_line())
 
     def test_an_unread_gate_holds_the_batch_and_says_so_once(self):
@@ -625,7 +625,7 @@ class WaitingTest(Base):
             self.clock.on_sleep = decide
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                got = await_entry(self.r.path, eid, *on_clock(self.clock))
+                got = await_entry(self.r.path, eid, *on_clock(self.clock), {})
             self.assertEqual(ticks, [1])
             if status == "landed":
                 self.assertEqual(got, (0, "abc123", 1234.5))
@@ -648,7 +648,7 @@ class WaitingTest(Base):
         try:
             buf = io.StringIO()
             with contextlib.redirect_stdout(buf):
-                got = await_entry(self.r.path, "e-old", *on_clock(self.clock))
+                got = await_entry(self.r.path, "e-old", *on_clock(self.clock), {})
         finally:
             A.cancel_entry_remote = saved
         self.assertEqual(got, (0, None, None))
@@ -687,7 +687,7 @@ class WaitingTest(Base):
         self.clock.on_sleep = tick
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
-            got = await_entry(self.r.path, "e-blip", self.clock, Flaky(A.process_store()))
+            got = await_entry(self.r.path, "e-blip", self.clock, Flaky(A.process_store()), {})
         self.assertEqual(got, (0, "abc123", 1.0))
         out = buf.getvalue()
         self.assertEqual(out.count("the store did not answer"), 1, out)

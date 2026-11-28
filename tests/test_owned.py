@@ -197,17 +197,16 @@ class OwnedTest(unittest.TestCase):
         execs = []
         saved = A.os.execv, A.START_CODE, A.sys.argv
         A.os.execv = lambda exe, args: execs.append(args)
-        gate, A.restart_gate = A.restart_gate, lambda: (True, "")
+        gate, A.restart_gate = A.restart_gate, lambda smoked: (True, "")
         self.addCleanup(setattr, A, "restart_gate", gate)
         A.START_CODE, A.sys.argv = "an-older-agentctl", ["agentctl", "land"]
-        A._last_code_check[0] = 0.0
+        restarts: dict = {}  # the process's restart memo (Caches.code_restart): never checked
         try:
             o = A.Owned("watch", "o_r-sha", ["watch", "--sha", "abc"])
             self.assertTrue(o.acquire())
-            A.restart_if_changed([o])
+            A.restart_if_changed(restarts, [o])
         finally:
             A.os.execv, A.START_CODE, A.sys.argv = saved
-            A._last_code_check[0] = 0.0
             o.release()
         self.assertEqual(len(execs), 1)
         self.assertEqual(execs[0][2:], ["watch", "--sha", "abc"])

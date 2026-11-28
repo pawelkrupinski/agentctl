@@ -57,5 +57,6 @@ class Caches:
     retired: dict[Any, Any] = field(default_factory=dict)  # a retired-check read (main, a file, the flows, a run) -> (when, answer)
     policy_said: dict[Any, Any] = field(default_factory=dict)  # (policy id, subject) -> True: its unapproved warning recorded
     landed_looked: dict[str, float] = field(default_factory=dict)  # change id -> when it was last looked for on main
+    code_restart: dict[str, Any] = field(default_factory=dict)  # "checked_at", "refused", "smoked": the re-exec check's memo
 
 

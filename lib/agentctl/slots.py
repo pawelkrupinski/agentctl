@@ -288,7 +288,8 @@ def land_followed(repo: str, a: Any, rc: Any, clock: Any, store: Any, *, ctx: Co
         if not follow:
             return 0  # the processor lands it; LANDED / NOT LANDED and the WATCH verdict go to `agentctl inbox`
         keep = getattr(a, "keep_worktree", False)  # --follow: wait here for the batch, then watch
-        rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"], clock, store, close=None if keep else repo)
+        rc, a.landed_sha, a.pushed_at = await_entry(repo, a.waiting["id"], clock, store, ctx.caches.code_restart,
+                                                  close=None if keep else repo)
     if rc != 0 or not a.landed_sha or getattr(a, "no_watch", False):
         return rc
     return land_watched(repo, a, clock, store, ctx=ctx)

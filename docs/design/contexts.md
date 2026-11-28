@@ -65,12 +65,23 @@ fall into six families, each with ONE way out, not a thread per global:
    the `ProcessRunner`'s that started them (`runner.detached`); the watched process groups (`land.WATCHED_GROUPS`) had
    no reader left since b6ebb22d and go.
 4. **A memo with no need to exist** goes: the GitHub App tokens' in-memory layer (their on-disk record is the cache),
-   the gh tally's thread-local kind (passed as the argument it is), the config files' mtime memos (`red_repos`,
-   `red_families`: a re-read costs under 0.2 ms).
+   the gh tally's thread-local kind (passed as the argument it is); a result read back from a cell is returned
+   (notify's `Delivery`).
 5. **A guard flag** belongs to the object it guards: the condition rule's "opening" depth is the guarded inbox writer's.
 6. **The three locators** (`clock._PROCESS_CLOCK`, `procrunner._runner`, `inboxentry._process_inbox`) stay until
    their readers take the collaborator as a parameter (`tests/test_no_service_locators.py`'s ceilings, falling on
    visit): over 900 functions each, never a sweep.
+
+Done by 2026-11-28 evening: families 1-4 for 37 names (67 -> 30 in the baseline's count). Left, each with why:
+the locators (6); the leaves reached from paths with no context, where a thread would cross 50-400 functions and the
+memo's owner is a design of its own -- the content-addressed git memos (`landedtwin`, `onmain`, `gating`,
+`generated`, `forge._workflow_names`: a commit-graph reader object, as `gitrepo.GitRepo`), the config files' mtime
+memos (`repos`, `redrepos`, `configfile`: a config reader cli builds; dropping them repeats their "unreadable" line on
+every call), `allowedpaths`' said-once and `laptoprole.machine_id` (the machine probe's); the guard flags (5:
+`conditions._OPENING`, `storetoken._NO_VAULT`) and the token notes (`storetoken._token_missing`, read by the recovery
+step and every store read); `leases._held_leases` (every LeaseHold's renewal, from `lock_beat` callers without a
+holder list); and small chains not reached yet (`clones`, `fixerblockers`, `fixersession`, `gov`, `hostsleep`,
+`redrecord.episode_unread`). `core.PROCESS_CACHES` goes with the last `process_cache`.
 
 The store, the condition registry and an explicit `clock` stay their own parameters where they are already passed
 (830 functions take a store). Folding them into the context is a later cleanup, made where a function is changed

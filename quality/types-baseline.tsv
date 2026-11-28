@@ -97,7 +97,7 @@ mypy-errors	orphanreap	26
 mypy-errors	orphans	15
 mypy-errors	outsideflows	11
 mypy-errors	overlapcheck	22
-mypy-errors	owned	38
+mypy-errors	owned	34
 mypy-errors	owner	24
 mypy-errors	ownerleases	23
 mypy-errors	owners	3
@@ -174,7 +174,7 @@ mypy-errors	storetoken	46
 mypy-errors	stuckruns	4
 mypy-errors	superseded	20
 mypy-errors	syncsteps	28
-mypy-errors	tickloop	7
+mypy-errors	tickloop	6
 mypy-errors	tickservice	4
 mypy-errors	timefmt	1
 mypy-errors	tools	54

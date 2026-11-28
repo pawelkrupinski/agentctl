@@ -18,7 +18,7 @@ from agentctl.filelock import FileLock, lock_held
 from agentctl.timefmt import ts
 from agentctl.tickknobs import knob_attach_poll, knob_min_interval, knob_restart_check
 from agentctl.fixerknobs import knob_owners_dir
-from agentctl.core import SHORT, print_error, git, process_cache, run_cmd
+from agentctl.core import SHORT, print_error, git, run_cmd
 from agentctl.repos import slug
 from agentctl.procs import Terminated, process_start, safe_cwd
 from agentctl.forge import forge_argv, forge_env
@@ -54,14 +54,11 @@ def code_rev(path=TOOL_PATH):
         return ""
 
 
-_start_rev = process_cache([])
-
-
-def start_rev():
-    """code_rev() of the code this process started on (read once, at its first ask)."""
-    if not _start_rev:
-        _start_rev.append(code_rev() if code_version() == START_CODE else "")
-    return _start_rev[0]
+def start_rev(memo: dict[str, Any]):
+    """code_rev() of the code this process started on (read once, at its first ask, into memo: Caches.code_restart)."""
+    if "start_rev" not in memo:
+        memo["start_rev"] = code_rev() if code_version() == START_CODE else ""
+    return memo["start_rev"]
 
 
 def cancel_run(o_r, rid, why):
@@ -157,13 +154,6 @@ class Owned:
         return False
 
 
-_last_code_check = [0.0]
-
-
-_restart_refused = [None]
-_smoked = process_cache({})
-
-
 def smoke_check(path):
     """(ok, why): the code compiles (the entry and its package's parts) and `--selftest` (import, parser, fixture
     reads) passes, in a process of its own."""
@@ -190,7 +180,7 @@ def _file_holds(path: Any, data: Any) -> Any:
         return False
 
 
-def _smoke_committed(head: Any, shown: Any) -> None:
+def _smoke_committed(head: Any, shown: Any, smoked: dict[str, Any]) -> None:
     """Smoke-check the committed code (shown: part -> bytes) in a tree of its own, once per commit: a failing commit is
     refused with one inbox entry naming it."""
     import tempfile
@@ -199,16 +189,17 @@ def _smoke_committed(head: Any, shown: Any) -> None:
             os.makedirs(os.path.dirname(os.path.join(t, rel)), exist_ok=True)
             with open(os.path.join(t, rel), "wb") as f:
                 f.write(data)
-        _smoked[head] = smoke_check(os.path.join(t, "agentctl"))
-    if not _smoked[head][0]:
-        line = f"CODE REFUSED: agentctl commit {head[:9]} fails its smoke check ({_smoked[head][1]}); services keep running the old code"
+        smoked[head] = smoke_check(os.path.join(t, "agentctl"))
+    if not smoked[head][0]:
+        line = f"CODE REFUSED: agentctl commit {head[:9]} fails its smoke check ({smoked[head][1]}); services keep running the old code"
         inbox_write("code", line, [line], [], 1)
 
 
-def restart_gate():
+def restart_gate(smoked: dict[str, Any]):
     """(ok, why) for a re-exec onto the code on disk: only COMMITTED code (the file equals ~/bin's HEAD version) that
     passes the smoke check. A dirty working-tree edit is never picked up; a commit that fails the smoke check is refused
-    once, with one inbox entry naming it. Not a git checkout: allowed (nothing to judge by)."""
+    once, with one inbox entry naming it (smoked: commit -> its smoke check, the process's restart memo's). Not a git
+    checkout: allowed (nothing to judge by)."""
     d = os.path.dirname(TOOL_PATH)
     head = git(d, "rev-parse", "--verify", "-q", "HEAD", check=False)
     if head.returncode:
@@ -220,33 +211,34 @@ def restart_gate():
         if not (r.returncode == 0 and _file_holds(p, r.stdout)):
             return False, f"the working-tree {rel} is not ~/bin's HEAD {head[:9]} (uncommitted edit)"
         shown[rel] = r.stdout
-    if head not in _smoked:
-        _smoke_committed(head, shown)
-    ok, why = _smoked[head]
+    if head not in smoked:
+        _smoke_committed(head, shown, smoked)
+    ok, why = smoked[head]
     return ok, ("" if ok else f"commit {head[:9]} fails its smoke check ({why})")
 
 
-def _note_restart_refused(why: Any) -> None:
-    """Say once per reason why the new code is not picked up."""
-    if why and why != _restart_refused[0]:
-        _restart_refused[0] = why
+def _note_restart_refused(why: Any, memo: dict[str, Any]) -> None:
+    """Say once per reason why the new code is not picked up (memo["refused"]: the reason said last)."""
+    if why and why != memo.get("refused"):
+        memo["refused"] = why
         print_error(f"agentctl changed on disk but not restarted: {why}")
 
 
-def restart_if_changed(owned: Sequence["Owned"] = (), argv: list[str] | None = None) -> None:
+def restart_if_changed(memo: dict[str, Any], owned: Sequence["Owned"] = (), argv: list[str] | None = None) -> None:
     """Re-exec this process on agentctl's new code (same pid; argv: given, else the first owner's, else this process's)
-    once the file on disk changed.
+    once the file on disk changed. memo: the process's restart memo (Caches.code_restart: when the code was last
+    checked, the refusal said last, each commit's smoke check).
     The owned locks are released with their records kept: the new process takes them back."""
     every = knob_restart_check()
-    if epoch_now() - _last_code_check[0] < every:
+    if epoch_now() - memo.get("checked_at", 0.0) < every:
         return
-    _last_code_check[0] = epoch_now()
+    memo["checked_at"] = epoch_now()
     now_code = code_version()
     if not now_code or now_code == START_CODE:
         return
-    ok, why = restart_gate()
+    ok, why = restart_gate(memo.setdefault("smoked", {}))
     if not ok:  # a dirty edit, or a commit that fails the smoke check: the old code keeps running
-        _note_restart_refused(why)
+        _note_restart_refused(why, memo)
         return
     print_error(f"agentctl changed on disk ({START_CODE[:8]} -> {now_code[:8]}): restarting on the new code, pid {os.getpid()}")
     for o in owned:
@@ -338,8 +330,8 @@ class WaitLoop:
     the attached ones' reads of their owner's verdict, the end (every verdict in, or the timeout), the pause. Each verdict
     is printed as it lands."""
 
-    def __init__(self, waiters: list[Any], timeout: float, floor: float, cap: float) -> None:
-        self.waiters, self.timeout = waiters, timeout
+    def __init__(self, waiters: list[Any], timeout: float, floor: float, cap: float, restarts: dict[str, Any]) -> None:
+        self.waiters, self.timeout, self.restarts = waiters, timeout, restarts  # restarts: Caches.code_restart
         self.deadline = wall_epoch() + timeout
         self.attach_poll = knob_attach_poll()
         self.delays = backoff(floor, cap)
@@ -404,7 +396,7 @@ class WaitLoop:
                 pending = self.pending()
                 if not pending:
                     return self.verdict()
-                restart_if_changed([w.own for w in self.waiters if w.owned])
+                restart_if_changed(self.restarts, [w.own for w in self.waiters if w.owned])
                 if wall_epoch() >= self.deadline:
                     return self.timeout_report(pending)
                 self.pause(pending)
@@ -413,9 +405,10 @@ class WaitLoop:
                 w.release()
 
 
-def wait_all(waiters: list[Any], timeout: float, floor: float, cap: float) -> int:
-    """Block until every waiter has a verdict. Prints each verdict as it lands. Exit 0 all ok, 1 any failed, 2 timeout."""
-    return WaitLoop(waiters, timeout, floor, cap).run()
+def wait_all(waiters: list[Any], timeout: float, floor: float, cap: float, restarts: dict[str, Any]) -> int:
+    """Block until every waiter has a verdict. Prints each verdict as it lands. Exit 0 all ok, 1 any failed, 2 timeout.
+    restarts: the process's restart memo (Caches.code_restart)."""
+    return WaitLoop(waiters, timeout, floor, cap, restarts).run()
 
 
 def run_ids_of(a: Any) -> tuple[Any, list[str]]:
@@ -429,7 +422,7 @@ def run_ids_of(a: Any) -> tuple[Any, list[str]]:
     return repo, ids
 
 
-def wait_run(a: Any, floor: float, cap: float) -> Any:
+def wait_run(a: Any, floor: float, cap: float, restarts: dict[str, Any]) -> Any:
     """`wait run`: one waiter per run id, each its own verdict, all waited on together."""
     repo, ids = run_ids_of(a)
     o_r = slug(repo) if repo else default_repo()
@@ -440,14 +433,15 @@ def wait_run(a: Any, floor: float, cap: float) -> Any:
             print_error(f"note: other loops already poll run {i}: pids {others} (see `agentctl orphans`)")
         key = f"run-{o_r.replace('/', '_')}-{i}" + ("-landable" if a.until == "landable" else "")
         waiters.append(Waiter(key, (lambda i=i: run_verdict(o_r, int(i), a.until, a.tail))))
-    return wait_all(waiters, a.timeout, floor, cap)
+    return wait_all(waiters, a.timeout, floor, cap, restarts)
 
 
-def cmd_wait(a):
+def cmd_wait(a: Any, restarts: dict[str, Any]) -> Any:
     floor = knob_min_interval()
     cap = max(floor, min(300, a.interval))
     if a.kind == "run":
-        return wait_run(a, floor, cap)
+        return wait_run(a, floor, cap, restarts)
     path = os.path.abspath(a.target)
     key = "file-" + re.sub(r"[^\w.-]", "_", path)[-150:]
-    return wait_all([Waiter(key, lambda: file_verdict(path, a.contains))], a.timeout, min(floor, a.interval), max(min(floor, a.interval), min(300, a.interval)))
+    return wait_all([Waiter(key, lambda: file_verdict(path, a.contains))], a.timeout, min(floor, a.interval),
+                    max(min(floor, a.interval), min(300, a.interval)), restarts)

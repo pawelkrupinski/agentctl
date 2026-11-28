@@ -300,7 +300,7 @@ class QueueTest(WaitingTest):
             ids.append(eid)
         rows = A.change_rows(A.CurrentStore(A.process_store))
         self.assertEqual([(r["id"], r["state"]) for r in rows], [(i, "waiting") for i in ids], "one item per change")
-        A.write_snapshot(d, A.CurrentStore(A.process_store))
+        A.write_snapshot(d, A.CurrentStore(A.process_store), {})
         line = status_line()
         self.assertIn("waiting: 3 — ", line)
         for wt in wts:

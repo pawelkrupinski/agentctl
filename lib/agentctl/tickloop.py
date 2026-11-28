@@ -44,17 +44,19 @@ class ProcessorLoop:
     steps, the stall note, the round's files, the pause."""
 
     def __init__(self, repo: str, d: str, clock: Clock, store: Any, own: Any, drop: Any, steps: Sequence[Any],
-                 role: str, once: bool, argv: list[str], threads: dict[str, Any], errors: dict[str, Any]) -> None:
+                 role: str, once: bool, argv: list[str], threads: dict[str, Any], errors: dict[str, Any],
+                 restarts: dict[str, Any]) -> None:
         self.repo, self.d, self.clock, self.store, self.own, self.drop = repo, d, clock, store, own, drop
         self.steps, self.role, self.once, self.argv = steps, role, once, argv
         self.threads, self.step_errors = threads, errors  # the process's bounded threads and steps' errors (Caches)
+        self.restarts = restarts  # its restart memo (Caches.code_restart)
         self.errors, self.stalled_noted = 0, False
 
     def run_steps(self) -> bool:
         """Every step of the round, bounded; whether any failed."""
         write_beat("processor")
         if not any(t.is_alive() for k, t in self.threads.items() if k.startswith("step:")):
-            restart_if_changed([self.own], self.argv)  # never under a step still at work in its thread (a push, say)
+            restart_if_changed(self.restarts, [self.own], self.argv)  # never under a step still at work in its thread (a push, say)
         failed = False
         for name, step in self.steps:
             failed = run_step(name, step, self.threads, self.step_errors) is False or failed
@@ -87,7 +89,7 @@ class ProcessorLoop:
             write_json(os.path.join(self.d, "round-ok.json"), {"at": self.clock.time()})
         if self.role != "sync":  # the sync's state.json is ci-runner's, mirrored
             try:
-                write_snapshot(self.d, self.store)
+                write_snapshot(self.d, self.store, self.restarts)
             except Exception as e:
                 print_error(f"the snapshot could not be written: {e}")
         sd_notify("WATCHDOG=1")
@@ -136,7 +138,7 @@ def waiting_run(repo: str, clock: Clock, store: Any, registry: ConditionRegistry
         steps = (sync_steps(repo, d, o_r, clock, store, registry, ctx=ctx) if role == "sync"
                  else server_steps(repo, d, shared, clock, store, registry, ctx=ctx))
         return ProcessorLoop(repo, d, clock, store, own, drop, steps, role, once, argv, ctx.caches.bounded,
-                             ctx.caches.step_errors).run()
+                             ctx.caches.step_errors, ctx.caches.code_restart).run()
 
 
 TICK_STOP = [False]  # set by SIGTERM in `agentctl tick`: the loop returns between ticks
@@ -230,11 +232,11 @@ def _briefs(st: Any, typ: str, brief: Any = _brief) -> list[Any]:
     return [brief(i) for i in _open_items(st, typ)] if typ in MACHINES else []
 
 
-def write_snapshot(d: str, store: Any) -> None:
+def write_snapshot(d: str, store: Any, restarts: dict[str, Any]) -> None:
     """The tick's part of state.json: the open items and the tick's own time and code version."""
     st = store
     rows = change_rows(st)  # ONE QUEUE: the store's items, never a host's entry files
-    state_update(tick_at=epoch_now(), version=code_version(), rev=start_rev(),
+    state_update(tick_at=epoch_now(), version=code_version(), rev=start_rev(restarts),
                  changes=[_brief(i) for i in _open_items(st, "change")], batch=[_brief(i) for i in _open_items(st, "batch")],
                  reds=_briefs(st, "red"), conditions=_briefs(st, "condition"),
                  reverts=_briefs(st, "revert", revert_brief),
