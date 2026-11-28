@@ -408,7 +408,7 @@ def sweep_repo(repo: str, idle_days: float, dry: bool, out: list[str], store: An
     sweep.orphans()
 
 
-def cmd_sweep(a, store):
+def cmd_sweep(a, store, machine):
     repos = [os.path.abspath(os.path.expanduser(r)) for r in (a.repo or SWEEP_REPOS)]
     out = [f"agentctl sweep {ts()}{' (DRY RUN)' if a.dry_run else ''}: unmerged and idle > {a.idle_days} d is listed, "
            "never deleted; remote branches proven merged into main are deleted (standing OK)"]
@@ -422,7 +422,7 @@ def cmd_sweep(a, store):
     reaped = io.StringIO()
     if knob_sbt_reap() != "0":  # the tests never reap this machine's servers
         with contextlib.redirect_stdout(reaped):
-            cmd_orphans(argparse.Namespace(kill=not a.dry_run, sbt_only=True))
+            cmd_orphans(argparse.Namespace(kill=not a.dry_run, sbt_only=True), machine)
     out.append("== sbt servers (a gone worktree, an orphaned serving command, a running command with no CPU for "
                f"{SBT_STALL_MIN} min){'' if not a.dry_run else ': not reaped (DRY RUN)'}")
     out += ["  " + l for l in reaped.getvalue().splitlines()]

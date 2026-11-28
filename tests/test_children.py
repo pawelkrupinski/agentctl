@@ -12,7 +12,7 @@ from fake_clock import on_clock  # noqa: E402
 class ReapTest(unittest.TestCase):
     def setUp(self):
         A._DETACHED.clear()
-        A._zombies_seen.clear()
+        self.seen: set[int] = set()
 
     def wait_zombie(self, pid):
         t0 = time.time()
@@ -23,16 +23,16 @@ class ReapTest(unittest.TestCase):
     def test_a_detached_child_is_reaped_at_the_next_look(self):
         p = A.spawn_detached([sys.executable, "-c", "pass"], stdin=subprocess.DEVNULL, start_new_session=True)
         self.assertTrue(self.wait_zombie(p.pid))
-        self.assertGreaterEqual(A.reap_children(), 1)
+        self.assertGreaterEqual(A.reap_children(self.seen), 1)
         self.assertNotIn(p.pid, A.zombie_children())
         self.assertEqual(A._DETACHED, [])
 
     def test_a_zombie_nobody_knows_is_reaped_at_its_second_look_only(self):
         p = subprocess.Popen([sys.executable, "-c", "pass"], stdin=subprocess.DEVNULL)  # a Popen lost (an exec since)
         self.assertTrue(self.wait_zombie(p.pid))
-        A.reap_children()
+        A.reap_children(self.seen)
         self.assertIn(p.pid, A.zombie_children())  # first look: maybe a subprocess.run's, about to be waited for
-        A.reap_children()
+        A.reap_children(self.seen)
         self.assertNotIn(p.pid, A.zombie_children())
         p.returncode = 0  # (this test's own Popen: its wait would find nothing now)
 

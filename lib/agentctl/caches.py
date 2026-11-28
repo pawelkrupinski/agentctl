@@ -15,3 +15,10 @@ class Caches:
     link_reads: dict[Any, Any] = field(default_factory=dict)  # (red key, sha) -> red_link_reads' answer
     never_green_at: dict[Any, Any] = field(default_factory=dict)  # (repo, workflow[, job]) -> when GitHub last said never green
     others_said: dict[Any, Any] = field(default_factory=dict)  # repo -> (why, when said): a skipped repo's line
+    zombies_seen: set[int] = field(default_factory=set)  # the zombie children the last reap saw (waited for at a second look)
+    main_fetched: dict[Any, Any] = field(default_factory=dict)  # (clone, missing heads) -> when main was last fetched for them
+    lander_landed_at: dict[Any, Any] = field(default_factory=dict)  # repo -> when its landed changes were last noted
+    regen_answered: dict[Any, Any] = field(default_factory=dict)  # (change id, head, round) -> True: its `agentctl land` started
+    missing_row_said: set[str] = field(default_factory=set)  # a red gate run whose failed job has no registry row: said once per run
+    kept_known: dict[Any, Any] = field(default_factory=dict)  # (entry id, tip, checked base, main) -> verdict_kept's answer
+    production: dict[str, bool] = field(default_factory=dict)  # sha -> whether it touches a production path (a commit never changes)

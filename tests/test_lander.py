@@ -158,7 +158,7 @@ class CommitKeysTest(Base):
         st.transition("change", "e-b", "pushing", st.item("change", "e-b")["version"], event={"cause": "agent"})
         st.transition("change", "e-b", "landed", st.item("change", "e-b")["version"], event={"cause": "agent"})
         self.r.push(at=wt)
-        acts = A.lander_note_landed(st, self.r.path, "pawelkrupinski/movies", A.epoch_now(), force=True)
+        acts = A.lander_note_landed(st, self.r.path, "pawelkrupinski/movies", A.epoch_now(), {}, force=True)
         self.assertTrue(acts, acts)
         self.assertEqual(st.item("change", "e-b")["data"]["landed_commits"], {sha: fields["commit_keys"][0]["patch_id"]})
         recs = A.lander_records(st)

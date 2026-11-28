@@ -16,7 +16,7 @@ from agentctl.psparse import PsRow, parse_ps
 from agentctl.cpu import machine_busy_cores
 from agentctl.core import HOME, run_cmd
 from agentctl.govknobs import knob_disk_path, knob_machine
-from agentctl.procs import process_cwds, ps_rows
+from agentctl.procs import lsof_cwds, process_cwds, ps_rows
 
 MEMORY_FIELDS = ("ram_gb", "free_gb", "pressure", "swap_used_mb", "swap_total_mb")
 
@@ -56,6 +56,18 @@ class MachineProbe(ABC):
     @abstractmethod
     def process_cwds(self) -> dict[int, str]:
         """{pid: cwd} of the processes worth asking (procs.cwd_candidates), allowed paths only."""
+
+    @abstractmethod
+    def cwds_of(self, pids: Sequence[int]) -> dict[int, str]:
+        """{pid: cwd} of the `pids` asked for, allowed paths only (pid-scoped: never a machine-wide lsof)."""
+
+    @abstractmethod
+    def kept_roots(self, pids: Sequence[int]) -> set[str]:
+        """The checkouts the `sbt-warm --keep` processes `pids` keep a server in."""
+
+    @abstractmethod
+    def listening_pids(self, ports: Sequence[str]) -> set[int]:
+        """The pids listening on any of the TCP `ports`."""
 
     @abstractmethod
     def file_table(self) -> Optional[tuple[int, int]]:
@@ -218,6 +230,19 @@ class HostMachine(MachineProbe):
     def process_cwds(self) -> dict[int, str]:
         return process_cwds()
 
+    def cwds_of(self, pids: Sequence[int]) -> dict[int, str]:
+        return lsof_cwds(pids) if pids else {}
+
+    def kept_roots(self, pids: Sequence[int]) -> set[str]:
+        return set(lsof_cwds(pids).values()) if pids else set()
+
+    def listening_pids(self, ports: Sequence[str]) -> set[int]:
+        found: set[int] = set()
+        for port in ports:
+            r = run_cmd(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"])
+            found |= {int(x) for x in r.stdout.split() if x.isdigit()}
+        return found
+
     def file_table(self) -> Optional[tuple[int, int]]:
         try:
             r = run_cmd(["sysctl", "-n", "kern.num_files", "kern.maxfiles"], timeout=10)
@@ -245,7 +270,7 @@ class FixedMachine(MachineProbe):
     governor, check-cap and land tests that pass on the laptop and on ci-runner). Its fields: ram_gb, free_gb, pressure,
     swap_used_mb, swap_total_mb, load1, load5 (default load1), cores (default 12), busy (default load1; null with
     no load1: unreadable, read from its ps rows), free_pct, level, disk_free_gb (default 500, whatever the path), physical_ram_gb (default 36), ps (rows
-    of the columns ps_cols names), cwds ({pid: cwd}), file_table ([open, most]), open_files (lsof's text), tmp_root,
+    of the columns ps_cols names), cwds ({pid: cwd}), kept_roots ([checkout]), listeners ([pid]), file_table ([open, most]), open_files (lsof's text), tmp_root,
     projects. `path`: a JSON file of them, read again at every reading (a test's other process changes it)."""
 
     PS_COLS = ("pid", "ppid", "rss", "pcpu", "comm")
@@ -299,6 +324,15 @@ class FixedMachine(MachineProbe):
 
     def process_cwds(self) -> dict[int, str]:
         return {int(pid): str(cwd) for pid, cwd in (self.fields().get("cwds") or {}).items()}
+
+    def cwds_of(self, pids: Sequence[int]) -> dict[int, str]:
+        return self.process_cwds() if pids else {}  # the fixture's table, whichever pids are asked
+
+    def kept_roots(self, pids: Sequence[int]) -> set[str]:
+        return {str(root) for root in self.fields().get("kept_roots") or ()}
+
+    def listening_pids(self, ports: Sequence[str]) -> set[int]:
+        return {int(pid) for pid in self.fields().get("listeners") or ()}
 
     def file_table(self) -> Optional[tuple[int, int]]:
         table: Sequence[int] = self.fields().get("file_table") or ()

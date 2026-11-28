@@ -134,18 +134,6 @@ def knob_gov_poll() -> float:
     return env_num("AGENTCTL_GOV_POLL", GOV_POLL)
 
 
-def knob_jvm_ps() -> str:
-    return env_text("AGENTCTL_JVM_PS")  # a fixture file of ps rows standing for the process table (tests)
-
-
-def knob_jvm_cwd() -> str:
-    return env_text("AGENTCTL_JVM_CWD")  # a fixture file of `pid cwd` rows (tests)
-
-
-def knob_jvm_kept() -> str:
-    return env_text("AGENTCTL_JVM_KEPT")  # a fixture file of kept checkouts (tests)
-
-
 def knob_sbt_reap() -> str:
     return os.environ.get("AGENTCTL_SBT_REAP", "")  # 0: never reap this machine's sbt servers (tests)
 

@@ -40,6 +40,8 @@ class PsRow:
     pcpu: float = 0.0
     cpu_seconds: float = 0.0
     etime: str = ""
+    tty: str = ""
+    cputime: str = ""  # ps's own text of the CPU time (`cpu_seconds` is the number)
     stat: str = ""
     comm: str = ""
     args: str = ""  # `command` and `args` alike
@@ -48,7 +50,7 @@ class PsRow:
 # ps column -> (PsRow field, converter). A converter raising ValueError skips the row.
 COLUMNS: dict[str, tuple[str, Callable[[str], Any]]] = {
     "pid": ("pid", int), "ppid": ("ppid", int), "pgid": ("pgid", int), "rss": ("rss", int), "pcpu": ("pcpu", float),
-    "%cpu": ("pcpu", float), "time": ("cpu_seconds", tosec), "etime": ("etime", str), "stat": ("stat", str),
+    "%cpu": ("pcpu", float), "time": ("cpu_seconds", tosec), "etime": ("etime", str), "tty": ("tty", str), "cputime": ("cputime", str), "stat": ("stat", str),
     "comm": ("comm", str), "command": ("args", str), "args": ("args", str)}
 FREE_TEXT = ("comm", "command", "args")  # a last column that may hold spaces
 SPACE_FREE = re.compile(r"\s+")

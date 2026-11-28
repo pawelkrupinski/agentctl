@@ -11,7 +11,7 @@ from agentctl.procrunner import process_runner
 from agentctl.statefile import read_record, write_json
 from agentctl.statemachines import open_states
 from agentctl.clock import epoch_now
-from agentctl.core import err, git, git_ok, process_cache, remote
+from agentctl.core import err, git, git_ok, remote
 from agentctl.workflows import fix_workflow_jobs
 from agentctl.trailers import commit_trailer_values
 from agentctl.gitrepo import commit_known
@@ -29,7 +29,6 @@ FIX_OPEN = tuple(open_states("change"))  # an entry of any other status (an old 
 # own clone fetched main only to check or push a change, so a fix pushed from elsewhere -- 548dfb3c76, `Fixes-Red: 181`,
 # landed from the laptop -- was never in it: the red was re-offered after each LANDED and put on the owner. A head of
 # main the snapshot names that the clone has not got is fetched once, before the fixes are read.
-_main_fetched = process_cache({})
 
 
 def _snapshot_heads(snap: Any) -> Any:
@@ -44,18 +43,19 @@ def _missing_heads(repo: Any, snap: Any) -> Any:
     return frozenset(h for h in heads if h and not commit_known(repo, h))
 
 
-def red_main_current(repo, snap):
-    """Fetch main into repo when the snapshot's main runs name a head commit it lacks. Returns True when it fetched."""
+def red_main_current(repo, snap, main_fetched):
+    """Fetch main into repo when the snapshot's main runs name a head commit it lacks. Returns True when it fetched. `main_fetched`: the caller's memo of
+    when it last fetched for the same missing heads."""
     if not repo or not snap or not git_ok(repo, "rev-parse", "--verify", "-q", f"refs/remotes/{remote()}/main"):
         return False  # no clone, or one that never fetched main (nothing of main's to keep up to date)
     missing = _missing_heads(repo, snap)
     if not missing:
         return False
-    at = _main_fetched.get((repo, missing))
+    at = main_fetched.get((repo, missing))
     if at and epoch_now() - at < RED_MAIN_REFETCH:  # a head main never had (a run of a commit since gone): not every tick
         return False
-    _main_fetched.clear()
-    _main_fetched[(repo, missing)] = epoch_now()
+    main_fetched.clear()
+    main_fetched[(repo, missing)] = epoch_now()
     ok, why = fetch_main(repo)
     if not ok:
         err(f"red tick: main moved past the clone and could not be fetched ({why[-160:]}): fixes read from the old main")

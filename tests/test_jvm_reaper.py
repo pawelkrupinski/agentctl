@@ -80,23 +80,16 @@ class JvmRulesTest(unittest.TestCase):
         """Review 2026-11-26 (D A2): the three reapers disagreed on a warm server mid-call. maintain's sbt rules and the
         governor's eviction spare a server whose sbt-warm `.serving` command and its owner live; the JVM scan's rule B
         (hog: 90 min old, 5% lifetime CPU) killed it unless `sbt-warm --keep` kept it. It now spares it too."""
-        ps, cwds = os.path.join(self.t, "ps"), os.path.join(self.t, "cwd")
-        with open(ps, "w") as f:
-            f.write(f" 301 1 ?? 02:00:00 00:40:00 {SERVER}\n 302 1 ?? 02:00:00 00:40:00 {SERVER}\n")
-        with open(cwds, "w") as f:
-            f.write(f"301 {self.p('kept')}\n302 {self.p('unkept')}\n")
-        open(os.path.join(self.t, "keptfile"), "w").close()
-        env = {"AGENTCTL_JVM_PS": ps, "AGENTCTL_JVM_CWD": cwds, "AGENTCTL_JVM_KEPT": os.path.join(self.t, "keptfile")}
-        os.environ.update(env)
+        machine = A.FixedMachine({"ps": f" 301 1 ?? 02:00:00 00:40:00 {SERVER}\n 302 1 ?? 02:00:00 00:40:00 {SERVER}\n",
+                                  "ps_cols": list(A.JVM_COLS), "cwds": {"301": self.p("kept"), "302": self.p("unkept")},
+                                  "kept_roots": []})
         saved = A.sbt_serving, A.allowed_path
         A.sbt_serving = lambda: {self.p("kept"): (os.getpid(), os.getpid(), "testOnly x")}
         A.allowed_path = lambda p: True
         try:
-            got = {c[0]: c[5] for c in A.stale_jvms([])}
+            got = {c[0]: c[5] for c in A.stale_jvms([], machine)}
         finally:
             A.sbt_serving, A.allowed_path = saved
-            for k in env:
-                os.environ.pop(k)
         self.assertEqual(got, {302: "hog"})
 
     def test_an_orphan_ignoring_sigterm_is_killed_and_the_log_says_how(self):
@@ -121,26 +114,17 @@ class JvmRulesTest(unittest.TestCase):
         self.assertRegex(logged[0], rf"^killed fixture pid {p.pid} \(SIGKILL after 1s\): stale")
 
     def test_orphans_lists_the_jvms_and_a_dry_run_kills_nothing(self):
-        ps = os.path.join(self.t, "ps")
-        with open(ps, "w") as f:
-            f.write(f" 99999 1 ?? 11:00 0:00.5 {WORKER}\n")
-        open(os.path.join(self.t, "cwd"), "w").close()
-        open(os.path.join(self.t, "keptfile"), "w").close()
-        env = {"AGENTCTL_JVM_PS": ps, "AGENTCTL_JVM_CWD": os.path.join(self.t, "cwd"),
-               "AGENTCTL_JVM_KEPT": os.path.join(self.t, "keptfile")}
-        os.environ.update(env)
         # the fixture's table only: the live machine's processes (busy under load, other agents' loops and servers,
         # some ending mid-scan) decide nothing here
-        saved = (A.ps, A.process_cwds, A.owner_orphans, A.sbt_serving)
-        A.ps, A.process_cwds, A.owner_orphans, A.sbt_serving = (lambda: []), (lambda: {}), (lambda kill: []), (lambda: {})
+        machine = A.FixedMachine({"ps": f" 99999 1 ?? 11:00 0:00.5 {WORKER}\n", "ps_cols": list(A.JVM_COLS)})
+        saved = (A.owner_orphans, A.sbt_serving)
+        A.owner_orphans, A.sbt_serving = (lambda kill: []), (lambda: {})
         out = io.StringIO()
         try:
             with contextlib.redirect_stdout(out):
-                A.cmd_orphans(argparse.Namespace(kill=False, safe=True))
+                A.cmd_orphans(argparse.Namespace(kill=False, safe=True), machine)
         finally:
-            A.ps, A.process_cwds, A.owner_orphans, A.sbt_serving = saved
-            for k in env:
-                os.environ.pop(k)
+            A.owner_orphans, A.sbt_serving = saved
         self.assertIn("jvm       pid=99999 ppid=1 rule=orphan", out.getvalue())
         self.assertNotIn("killed", out.getvalue())
 
@@ -149,14 +133,14 @@ class MaintainTest(unittest.TestCase):
     def test_the_sweep_runs_once_a_day_from_its_hour(self):
         runs, saved = [], (A.cmd_orphans, A.cmd_sweep, A.HOME)
         tmp = tempfile.mkdtemp()
-        A.cmd_orphans = lambda a: runs.append(("reap", a.kill, a.safe)) or 0
-        A.cmd_sweep = lambda a, st: runs.append(("sweep", a.dry_run)) or 0
+        A.cmd_orphans = lambda a, machine: runs.append(("reap", a.kill, a.safe)) or 0
+        A.cmd_sweep = lambda a, st, machine: runs.append(("sweep", a.dry_run)) or 0
         A.HOME = tmp
         os.environ["AGENTCTL_SWEEP_HOUR"] = "0"
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 for _ in range(3):
-                    A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False), A.CurrentStore(A.process_store))
+                    A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False), A.CurrentStore(A.process_store), A.FixedMachine())
         finally:
             A.cmd_orphans, A.cmd_sweep, A.HOME = saved
             os.environ.pop("AGENTCTL_SWEEP_HOUR")

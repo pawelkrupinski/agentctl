@@ -53,7 +53,7 @@ def fake_commits(test, commits):
     shas = [f"c{i}" for i in range(len(commits))]
     prod = {s: p for s, (p, _f) in zip(shas, commits)}
     fixes = {s: set(f) for s, (_p, f) in zip(shas, commits)}
-    for name, fake in (("touches_production", lambda repo, c: prod[c]),
+    for name, fake in (("touches_production", lambda repo, c, known: prod[c]),
                        ("commit_fixes", lambda repo, c, store, ctx=None: set(fixes[c]))):
         test.addCleanup(setattr, A, name, getattr(A, name))
         setattr(A, name, fake)
@@ -347,7 +347,7 @@ class UnfetchedCommitTest(unittest.TestCase):
 
     def test_a_commit_nowhere_to_be_read_leaves_the_change_unread_never_raises(self):
         gone = "0" * 40
-        self.assertIsNone(A.touches_production(self.server, gone))
+        self.assertIsNone(A.touches_production(self.server, gone, {}))
         self.assertIsNone(A.commit_rows({"id": "c-2", "head": gone, "commits": [gone]}, self.server, None, self.st, ctx=case_context()))
         v = A.may_land_on_red({"gate": set(), "open": {}}, {"id": "c-2", "head": gone, "commits": [gone]}, self.server,
                               store=self.st, ctx=case_context())

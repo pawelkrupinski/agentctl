@@ -139,7 +139,7 @@ effect	lib/agentctl/inboxwait.py	1
 effect	lib/agentctl/inboxwait.py:files	4
 effect	lib/agentctl/invariants.py:files	5
 effect	lib/agentctl/jvmreap.py	3
-effect	lib/agentctl/jvmreap.py:files	8
+effect	lib/agentctl/jvmreap.py:files	7
 effect	lib/agentctl/land.py	2
 effect	lib/agentctl/land.py:files	6
 effect	lib/agentctl/landdryrun.py:files	6
@@ -286,12 +286,11 @@ effect	quality/typecheck.py:files	3
 state	lib/agentctl/allowedpaths.py	1
 state	lib/agentctl/batch.py	1
 state	lib/agentctl/changekind.py	1
-state	lib/agentctl/ciwhy.py	1
 state	lib/agentctl/clock.py	1
 state	lib/agentctl/clones.py	1
 state	lib/agentctl/conditions.py	1
 state	lib/agentctl/configfile.py	2
-state	lib/agentctl/core.py	4
+state	lib/agentctl/core.py	3
 state	lib/agentctl/fixerblockers.py	1
 state	lib/agentctl/fixersession.py	1
 state	lib/agentctl/forge.py	1
@@ -305,7 +304,6 @@ state	lib/agentctl/inboxentry.py	1
 state	lib/agentctl/land.py	1
 state	lib/agentctl/landedchange.py	1
 state	lib/agentctl/landedtwin.py	2
-state	lib/agentctl/lander.py	1
 state	lib/agentctl/laptoprole.py	1
 state	lib/agentctl/leases.py	1
 state	lib/agentctl/live.py	4
@@ -319,12 +317,9 @@ state	lib/agentctl/policy.py	1
 state	lib/agentctl/processor.py	1
 state	lib/agentctl/procrunner.py	1
 state	lib/agentctl/queueenter.py	1
-state	lib/agentctl/queuerecheck.py	1
 state	lib/agentctl/queuesubmit.py	1
 state	lib/agentctl/recordingpins.py	1
 state	lib/agentctl/recovery.py	1
-state	lib/agentctl/redfixread.py	1
-state	lib/agentctl/redland.py	1
 state	lib/agentctl/redrecord.py	1
 state	lib/agentctl/redrepos.py	1
 state	lib/agentctl/redretired.py	1
@@ -335,7 +330,6 @@ state	lib/agentctl/status.py	3
 state	lib/agentctl/statusagents.py	3
 state	lib/agentctl/statuspage.py	1
 state	lib/agentctl/storetoken.py	2
-state	lib/agentctl/syncsteps.py	1
 state	lib/agentctl/upkeep.py	1
 import-io	devtools/mkmodule.py	6
 import-io	devtools/movedefs.py	5
@@ -923,7 +917,7 @@ fanout	lib/agentctl/landwatch.py	10
 fanout	lib/agentctl/laptoprole.py	10
 fanout	lib/agentctl/localrecheck.py	18
 fanout	lib/agentctl/maint.py	10
-fanout	lib/agentctl/maintain.py	17
+fanout	lib/agentctl/maintain.py	18
 fanout	lib/agentctl/netwatch.py	12
 fanout	lib/agentctl/offerdispatch.py	15
 fanout	lib/agentctl/orphanpass.py	17

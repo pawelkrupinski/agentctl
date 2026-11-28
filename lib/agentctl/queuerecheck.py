@@ -5,7 +5,7 @@ import os
 import subprocess
 from typing import Any
 from agentctl.procrunner import process_runner
-from agentctl.core import err, git, process_cache
+from agentctl.core import err, git
 from agentctl.repos import batching, precheck_hook
 from agentctl.buildview import BUILD_VIEW_PATHS, build_view_change, read_build
 from agentctl.queue import (
@@ -330,23 +330,21 @@ def recheck_logged(e, kind, why, main, at):
             + [{"at": int(at), "kind": kind, "main": (main or "")[:10], "why": str(why)[:300]}])
 
 
-_kept_known = process_cache({})  # (entry id, tip, checked base, main) -> verdict_kept's answer
-
-
-def verdict_kept(repo, e, main):
+def verdict_kept(repo, e, main, known):
     """Whether checked change e would keep its verdict on main (MINIMAL RECHECKS) as the repo reads it now -- no
     shared file, no forcing path, no check reading what landed -- so it pushes alone rather than waiting for a push
-    batch's verify round. Its push decides again, at its rebased tip (_push_change)."""
+    batch's verify round. Its push decides again, at its rebased tip (_push_change). `known`: the caller's memo,
+    (entry id, tip, checked base, main) -> this answer."""
     base, tip = e.get("checked_base"), e.get("tip")
     if not base or not tip or not main or base == main:
         return False
     key = (e["id"], tip, base, main)
-    if key not in _kept_known:
+    if key not in known:
         landed, mine = range_paths(repo, base, main), range_paths(repo, base, tip)
-        _kept_known[key] = bool(landed) and not any(forces_full_recheck(p) for p in landed) \
+        known[key] = bool(landed) and not any(forces_full_recheck(p) for p in landed) \
             and not without_generated(repo, sorted(set(landed) & set(mine))) \
             and read_overlap(repo, landed, mine) is None
-    return _kept_known[key]
+    return known[key]
 
 
 def same_change_source(e, worktree, branch):

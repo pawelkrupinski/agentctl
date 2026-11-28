@@ -128,7 +128,6 @@ def git_ok(repo: str, *args: str) -> bool:
 # once it has been a zombie at two looks in a row, so a child a subprocess.run in another thread is about to wait for is
 # never taken from it.
 _DETACHED = []
-_zombies_seen = process_cache(set())
 
 
 def spawn_detached(argv: list[str], **kw: Any) -> "subprocess.Popen[Any]":
@@ -151,9 +150,9 @@ def zombie_children(pid=None):
     return [r.pid for r in parse_ps(out, ("pid", "ppid", "stat")) if r.ppid == me and r.stat.startswith("Z")]
 
 
-def reap_children():
+def reap_children(zombies_seen: set[int]) -> int:
     """Poll the detached children (a finished one is waited for and forgotten), then wait for each zombie child seen at
-    the last look too. Returns how many were reaped."""
+    the last look too (`zombies_seen`: the pids that look saw, the caller's memo). Returns how many were reaped."""
     n = 0
     for p in list(_DETACHED):
         if p.poll() is not None:
@@ -161,14 +160,14 @@ def reap_children():
             n += 1
     known = {p.pid for p in _DETACHED}
     now_z = set(zombie_children()) - known
-    for pid in now_z & _zombies_seen:
+    for pid in now_z & zombies_seen:
         try:
             if os.waitpid(pid, os.WNOHANG)[0] == pid:
                 n += 1
         except ChildProcessError:
             pass
-    _zombies_seen.clear()
-    _zombies_seen.update(now_z)
+    zombies_seen.clear()
+    zombies_seen.update(now_z)
     return n
 
 

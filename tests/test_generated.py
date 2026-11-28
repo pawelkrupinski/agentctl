@@ -161,6 +161,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         os.environ["AGENTCTL_RED_REPOS"] = repos
         for c in A.PROCESS_CACHES:
             c.clear()
+        self.answered = {}
 
     def tearDown(self):
         if self.saved_repos is None:
@@ -357,9 +358,9 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         saved = A.spawn_detached
         A.spawn_detached = lambda argv, **kw: started.append((argv[-1], kw.get("cwd")))
         try:
-            self.assertEqual(len(A.answer_regen_holds(self.d, A.CurrentStore(A.process_store))), 1)
+            self.assertEqual(len(A.answer_regen_holds(self.d, A.CurrentStore(A.process_store), self.answered)), 1)
             self.assertEqual(started, [("land", wt)])
-            self.assertEqual(A.answer_regen_holds(self.d, A.CurrentStore(A.process_store)), [], "once per change and head")
+            self.assertEqual(A.answer_regen_holds(self.d, A.CurrentStore(A.process_store), self.answered), [], "once per change and head")
         finally:
             A.spawn_detached = saved
         later = self.change("later", files={"web/src/main/L.scala": "l\n"})
@@ -394,7 +395,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         A.spawn_detached = lambda argv, **kw: started.append((argv[-1], kw.get("cwd")))
         self.addCleanup(setattr, A, "spawn_detached", saved)
         A.tick_changes(self.r.path, self.d, *on_clock(A.Clock()), ctx=case_context())
-        A.answer_regen_holds(self.d, A.CurrentStore(A.process_store))
+        A.answer_regen_holds(self.d, A.CurrentStore(A.process_store), self.answered)
         self.assertEqual(started, [("land", wt)], "the laptop answers it once")
         t0 = time.time() + A.CONFLICT_PLACE_KEPT + 60
         for t in (t0, t0 + 60):  # overdue: recovered, once, never rejected
@@ -404,7 +405,7 @@ class GeneratedQueueTest(test_backlog_batch.BacklogBatchTest):
         self.assertEqual(len([ev for ev in evs if ev["kind"] == "regen.recover"]), 1, [ev["kind"] for ev in evs])
         self.assertFalse(any("NOT LANDED" in (ev.get("text") or "") for ev in evs))
         self.assertEqual(A.process_store().item("change", eid)["data"]["regen_round"], 1)
-        A.answer_regen_holds(self.d, A.CurrentStore(A.process_store))
+        A.answer_regen_holds(self.d, A.CurrentStore(A.process_store), self.answered)
         self.assertEqual(started, [("land", wt), ("land", wt)], "the regeneration is run again")
         self.assertEqual(A.process_store().item("change", eid)["data"]["regen_answered"], 1, "the laptop says it answered")
         later = t0 + A.REGEN_RECOVERY_WAIT + 60

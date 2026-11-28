@@ -12,6 +12,7 @@ from agentctl.notifier import notify
 from agentctl.launchd import launch_agents_dir
 from agentctl.beats import beat_age, write_beat
 from agentctl.inboxentry import inbox_write
+from agentctl.machine import MachineProbe
 from agentctl.maint import cmd_orphans, spotlight_exclude
 from agentctl.logrotate import rotate_logs
 from agentctl.cleanup import SWEEP_IDLE_DAYS, cmd_sweep
@@ -92,32 +93,32 @@ def _watchdog_watch(a: Any) -> None:
         print(f"== the watchdog last ran {fmt_age(wd) + ' ago' if wd else 'never'}: notified")
 
 
-def _reap_section(a: Any, store: Any) -> None:
+def _reap_section(a: Any, store: Any, machine: MachineProbe) -> None:
     print("== reap")
-    cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True))
+    cmd_orphans(argparse.Namespace(kill=not a.dry_run, safe=True), machine)
 
 
-def _logs_section(a: Any, store: Any) -> None:
+def _logs_section(a: Any, store: Any, machine: MachineProbe) -> None:
     print("== logs")
     rotated = [] if a.dry_run else rotate_logs()
     for line in rotated or ["(dry run)" if a.dry_run else "none over the size"]:
         print(f"  {line}")
 
 
-def _spotlight_section(a: Any, store: Any) -> None:
+def _spotlight_section(a: Any, store: Any, machine: MachineProbe) -> None:
     def mark() -> None:
-        marked = [] if a.dry_run else spotlight_exclude()
+        marked = [] if a.dry_run else spotlight_exclude(None, machine.process_cwds)
         print(f"  marked {len(marked)} tree(s) never to index" if marked else "  every worktree marked")
     print("== spotlight")
     _guarded("mark", mark)
 
 
-def _ios_section(a: Any, store: Any) -> None:
+def _ios_section(a: Any, store: Any, machine: MachineProbe) -> None:
     print("== ios simulators")
     _guarded("sweep", lambda: ios_simulator_sweep(dry_run=a.dry_run))
 
 
-def _sweep_section(a: Any, store: Any) -> None:
+def _sweep_section(a: Any, store: Any, machine: MachineProbe) -> None:
     """The daily sweep: forced, or at the first pass from the sweep hour when today's has not run."""
     path = state_root("maintain.json")
     st = read_record(path) or {}
@@ -125,7 +126,7 @@ def _sweep_section(a: Any, store: Any) -> None:
     today, hour = local.date().isoformat(), local.hour
     if a.sweep or (st.get("sweep") != today and hour >= int(knob_sweep_hour())):
         print("== sweep (daily)")
-        rc = cmd_sweep(argparse.Namespace(repo=None, idle_days=SWEEP_IDLE_DAYS, dry_run=a.dry_run, no_report=a.dry_run), store)
+        rc = cmd_sweep(argparse.Namespace(repo=None, idle_days=SWEEP_IDLE_DAYS, dry_run=a.dry_run, no_report=a.dry_run), store, machine)
         if not a.dry_run:
             write_json(path, {**st, "sweep": today, "sweep_rc": rc, "sweep_at": ts()})
     else:
@@ -133,7 +134,7 @@ def _sweep_section(a: Any, store: Any) -> None:
               f"== sweep: from {MAINTAIN_SWEEP_HOUR:02d}:00")
 
 
-def _orphans_section(a: Any, store: Any) -> None:
+def _orphans_section(a: Any, store: Any, machine: MachineProbe) -> None:
     def duty() -> None:
         for line in orphan_duty(store, dry_run=a.dry_run) or ["  none"]:
             print(f"  {line}")
@@ -141,7 +142,7 @@ def _orphans_section(a: Any, store: Any) -> None:
     _guarded("look", duty)
 
 
-def _cache_section(a: Any, store: Any) -> None:
+def _cache_section(a: Any, store: Any, machine: MachineProbe) -> None:
     def expire() -> None:
         gone = expire_cache(dry_run=a.dry_run, store=store)
         print(f"  {'would remove' if a.dry_run else 'removed'} {len(gone)} cache entr{'y' if len(gone) == 1 else 'ies'} older "
@@ -154,7 +155,7 @@ MAINTAIN_SECTIONS = (_reap_section, _logs_section, _spotlight_section, _ios_sect
                      _cache_section)  # in the order of the pass
 
 
-def cmd_maintain(a: Any, store: Any) -> int:
+def cmd_maintain(a: Any, store: Any, machine: MachineProbe) -> int:
     """THE reaper (the owner, 2026-10-27: one service, not three): launchd net.bitcashier.agentctl-maintain runs it every
     15 min. Each pass: the reap (`orphans --kill --safe`: dead owners, stray wait loops, stuck sbt servers, stale JVMs);
     once a day, at the first pass from 09:00 local, the sweep. --dry-run lists and kills nothing."""
@@ -164,7 +165,7 @@ def cmd_maintain(a: Any, store: Any) -> int:
     if not a.dry_run:
         _watchdog_watch(a)
     for section in MAINTAIN_SECTIONS:
-        section(a, store)
+        section(a, store, machine)
     return 0
 
 

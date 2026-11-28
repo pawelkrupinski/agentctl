@@ -25,6 +25,7 @@ def run(module, script):
 
     def rec(name, ret=None):
         def fake(*a, **k):
+            a = tuple("M" if isinstance(getattr(x, "__self__", x), A.MachineProbe) else x for x in a)  # the machine, or its method
             log.append(f"{name} {a} {sorted(k.items())}")
             if isinstance(ret, BaseException):
                 raise ret
@@ -50,7 +51,7 @@ def run(module, script):
             stack.enter_context(mock.patch.object(module, name, fake))
         out = io.StringIO()
         with contextlib.redirect_stdout(out):
-            rc = module.cmd_maintain(argparse.Namespace(dry_run=script.get("dry", False), sweep=script.get("force", False)), "ST")
+            rc = module.cmd_maintain(argparse.Namespace(dry_run=script.get("dry", False), sweep=script.get("force", False)), "ST", A.FixedMachine())
         return rc, out.getvalue(), log
 
 
@@ -233,11 +234,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                          '== cache expiry\n'
                          '  removed 0 cache entries older than 7 days\n',
                          ["write_beat ('maintain',) []",
-                          'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                          "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                           'rotate_logs () []',
-                          'spotlight_exclude () []',
+                          "spotlight_exclude (None, 'M') []",
                           "ios_simulator_sweep () [('dry_run', False)]",
-                          "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') []",
+                          "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') []",
                           "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': 'TS'}) "
                           '[]',
                           "orphan_duty ('ST',) [('dry_run', False)]",
@@ -255,9 +256,9 @@ EXPECTED = {'pass': {'quiet pass': (0,
                       '    none\n'
                       '== cache expiry\n'
                       '  would remove 0 cache entries older than 7 days\n',
-                      ['cmd_orphans (Namespace(kill=False, safe=True),) []',
+                      ["cmd_orphans (Namespace(kill=False, safe=True), 'M') []",
                        "ios_simulator_sweep () [('dry_run', True)]",
-                       "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=True, no_report=True), 'ST') []",
+                       "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=True, no_report=True), 'ST', 'M') []",
                        "orphan_duty ('ST',) [('dry_run', True)]",
                        "expire_cache () [('dry_run', True), ('store', 'ST')]"]),
           'watchdog never ran': (0,
@@ -276,12 +277,12 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                  '  removed 0 cache entries older than 7 days\n',
                                  ["write_beat ('maintain',) []",
                                   "notify ('agentctl: the watchdog is not running', 'last ran never') []",
-                                  'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                                  "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                                   'rotate_logs () []',
-                                  'spotlight_exclude () []',
+                                  "spotlight_exclude (None, 'M') []",
                                   "ios_simulator_sweep () [('dry_run', False)]",
                                   'cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), '
-                                  "'ST') []",
+                                  "'ST', 'M') []",
                                   "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, "
                                   "'sweep_at': 'TS'}) []",
                                   "orphan_duty ('ST',) [('dry_run', False)]",
@@ -302,11 +303,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                              '  removed 0 cache entries older than 7 days\n',
                              ["write_beat ('maintain',) []",
                               "notify ('agentctl: the watchdog is not running', 'last ran 15 min ago') []",
-                              'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                              "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                               'rotate_logs () []',
-                              'spotlight_exclude () []',
+                              "spotlight_exclude (None, 'M') []",
                               "ios_simulator_sweep () [('dry_run', False)]",
-                              "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') "
+                              "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') "
                               '[]',
                               "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                               "'TS'}) []",
@@ -326,11 +327,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                              '== cache expiry\n'
                              '  removed 0 cache entries older than 7 days\n',
                              ["write_beat ('maintain',) []",
-                              'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                              "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                               'rotate_logs () []',
-                              'spotlight_exclude () []',
+                              "spotlight_exclude (None, 'M') []",
                               "ios_simulator_sweep () [('dry_run', False)]",
-                              "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') "
+                              "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') "
                               '[]',
                               "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                               "'TS'}) []",
@@ -350,12 +351,12 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                   '== cache expiry\n'
                                   '  removed 0 cache entries older than 7 days\n',
                                   ["write_beat ('maintain',) []",
-                                   'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                                   "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                                    'rotate_logs () []',
-                                   'spotlight_exclude () []',
+                                   "spotlight_exclude (None, 'M') []",
                                    "ios_simulator_sweep () [('dry_run', False)]",
                                    'cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), '
-                                   "'ST') []",
+                                   "'ST', 'M') []",
                                    "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, "
                                    "'sweep_at': 'TS'}) []",
                                    "orphan_duty ('ST',) [('dry_run', False)]",
@@ -375,11 +376,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                            '== cache expiry\n'
                            '  removed 0 cache entries older than 7 days\n',
                            ["write_beat ('maintain',) []",
-                            'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                            "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                             'rotate_logs () []',
-                            'spotlight_exclude () []',
+                            "spotlight_exclude (None, 'M') []",
                             "ios_simulator_sweep () [('dry_run', False)]",
-                            "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') []",
+                            "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') []",
                             "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                             "'TS'}) []",
                             "orphan_duty ('ST',) [('dry_run', False)]",
@@ -398,11 +399,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                            '== cache expiry\n'
                            '  removed 0 cache entries older than 7 days\n',
                            ["write_beat ('maintain',) []",
-                            'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                            "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                             'rotate_logs () []',
-                            'spotlight_exclude () []',
+                            "spotlight_exclude (None, 'M') []",
                             "ios_simulator_sweep () [('dry_run', False)]",
-                            "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') []",
+                            "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') []",
                             "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                             "'TS'}) []",
                             "orphan_duty ('ST',) [('dry_run', False)]",
@@ -421,11 +422,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                               '== cache expiry\n'
                               '  removed 0 cache entries older than 7 days\n',
                               ["write_beat ('maintain',) []",
-                               'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                               "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                                'rotate_logs () []',
-                               'spotlight_exclude () []',
+                               "spotlight_exclude (None, 'M') []",
                                "ios_simulator_sweep () [('dry_run', False)]",
-                               "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') "
+                               "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') "
                                '[]',
                                "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                                "'TS'}) []",
@@ -445,11 +446,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                               '== cache expiry\n'
                               '  removed 0 cache entries older than 7 days\n',
                               ["write_beat ('maintain',) []",
-                               'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                               "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                                'rotate_logs () []',
-                               'spotlight_exclude () []',
+                               "spotlight_exclude (None, 'M') []",
                                "ios_simulator_sweep () [('dry_run', False)]",
-                               "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') "
+                               "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') "
                                '[]',
                                "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                                "'TS'}) []",
@@ -470,11 +471,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                         '== cache expiry\n'
                         '  removed 0 cache entries older than 7 days\n',
                         ["write_beat ('maintain',) []",
-                         'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                         "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                          'rotate_logs () []',
-                         'spotlight_exclude () []',
+                         "spotlight_exclude (None, 'M') []",
                          "ios_simulator_sweep () [('dry_run', False)]",
-                         "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') []",
+                         "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') []",
                          "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': 'TS'}) "
                          '[]',
                          "orphan_duty ('ST',) [('dry_run', False)]",
@@ -493,9 +494,9 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                     '== cache expiry\n'
                                     '  removed 0 cache entries older than 7 days\n',
                                     ["write_beat ('maintain',) []",
-                                     'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                                     "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                                      'rotate_logs () []',
-                                     'spotlight_exclude () []',
+                                     "spotlight_exclude (None, 'M') []",
                                      "ios_simulator_sweep () [('dry_run', False)]",
                                      "orphan_duty ('ST',) [('dry_run', False)]",
                                      "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
@@ -513,12 +514,12 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                 '== cache expiry\n'
                                 '  removed 0 cache entries older than 7 days\n',
                                 ["write_beat ('maintain',) []",
-                                 'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                                 "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                                  'rotate_logs () []',
-                                 'spotlight_exclude () []',
+                                 "spotlight_exclude (None, 'M') []",
                                  "ios_simulator_sweep () [('dry_run', False)]",
                                  'cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), '
-                                 "'ST') []",
+                                 "'ST', 'M') []",
                                  "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                                  "'TS'}) []",
                                  "orphan_duty ('ST',) [('dry_run', False)]",
@@ -537,9 +538,9 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                '== cache expiry\n'
                                '  removed 0 cache entries older than 7 days\n',
                                ["write_beat ('maintain',) []",
-                                'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                                "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                                 'rotate_logs () []',
-                                'spotlight_exclude () []',
+                                "spotlight_exclude (None, 'M') []",
                                 "ios_simulator_sweep () [('dry_run', False)]",
                                 "orphan_duty ('ST',) [('dry_run', False)]",
                                 "expire_cache () [('dry_run', False), ('store', 'ST')]"]),
@@ -557,12 +558,12 @@ EXPECTED = {'pass': {'quiet pass': (0,
                                    '== cache expiry\n'
                                    '  removed 0 cache entries older than 7 days\n',
                                    ["write_beat ('maintain',) []",
-                                    'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                                    "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                                     'rotate_logs () []',
-                                    'spotlight_exclude () []',
+                                    "spotlight_exclude (None, 'M') []",
                                     "ios_simulator_sweep () [('dry_run', False)]",
                                     'cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), '
-                                    "'ST') []",
+                                    "'ST', 'M') []",
                                     "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'x': 1, 'sweep_rc': 3, "
                                     "'sweep_at': 'TS'}) []",
                                     "orphan_duty ('ST',) [('dry_run', False)]",
@@ -581,11 +582,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                            '== cache expiry\n'
                            '  removed 0 cache entries older than 7 days\n',
                            ["write_beat ('maintain',) []",
-                            'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                            "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                             'rotate_logs () []',
-                            'spotlight_exclude () []',
+                            "spotlight_exclude (None, 'M') []",
                             "ios_simulator_sweep () [('dry_run', False)]",
-                            "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') []",
+                            "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') []",
                             "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_at': 'TS', 'sweep_rc': "
                             '0}) []',
                             "orphan_duty ('ST',) [('dry_run', False)]",
@@ -603,9 +604,9 @@ EXPECTED = {'pass': {'quiet pass': (0,
                         '    none\n'
                         '== cache expiry\n'
                         '  would remove 0 cache entries older than 7 days\n',
-                        ['cmd_orphans (Namespace(kill=False, safe=True),) []',
+                        ["cmd_orphans (Namespace(kill=False, safe=True), 'M') []",
                          "ios_simulator_sweep () [('dry_run', True)]",
-                         "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=True, no_report=True), 'ST') []",
+                         "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=True, no_report=True), 'ST', 'M') []",
                          "orphan_duty ('ST',) [('dry_run', True)]",
                          "expire_cache () [('dry_run', True), ('store', 'ST')]"]),
           'orphans listed': (0,
@@ -623,11 +624,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                              '== cache expiry\n'
                              '  removed 0 cache entries older than 7 days\n',
                              ["write_beat ('maintain',) []",
-                              'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                              "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                               'rotate_logs () []',
-                              'spotlight_exclude () []',
+                              "spotlight_exclude (None, 'M') []",
                               "ios_simulator_sweep () [('dry_run', False)]",
-                              "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') "
+                              "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') "
                               '[]',
                               "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                               "'TS'}) []",
@@ -647,11 +648,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                            '== cache expiry\n'
                            '  removed 0 cache entries older than 7 days\n',
                            ["write_beat ('maintain',) []",
-                            'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                            "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                             'rotate_logs () []',
-                            'spotlight_exclude () []',
+                            "spotlight_exclude (None, 'M') []",
                             "ios_simulator_sweep () [('dry_run', False)]",
-                            "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') []",
+                            "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') []",
                             "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                             "'TS'}) []",
                             "orphan_duty ('ST',) [('dry_run', False)]",
@@ -670,11 +671,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                          '== cache expiry\n'
                          '  removed 1 cache entry older than 7 days\n',
                          ["write_beat ('maintain',) []",
-                          'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                          "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                           'rotate_logs () []',
-                          'spotlight_exclude () []',
+                          "spotlight_exclude (None, 'M') []",
                           "ios_simulator_sweep () [('dry_run', False)]",
-                          "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') []",
+                          "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') []",
                           "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': 'TS'}) "
                           '[]',
                           "orphan_duty ('ST',) [('dry_run', False)]",
@@ -693,11 +694,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                              '== cache expiry\n'
                              '  removed 2 cache entries older than 7 days\n',
                              ["write_beat ('maintain',) []",
-                              'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                              "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                               'rotate_logs () []',
-                              'spotlight_exclude () []',
+                              "spotlight_exclude (None, 'M') []",
                               "ios_simulator_sweep () [('dry_run', False)]",
-                              "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') "
+                              "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') "
                               '[]',
                               "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                               "'TS'}) []",
@@ -717,11 +718,11 @@ EXPECTED = {'pass': {'quiet pass': (0,
                            '== cache expiry\n'
                            '  could not expire (no)\n',
                            ["write_beat ('maintain',) []",
-                            'cmd_orphans (Namespace(kill=True, safe=True),) []',
+                            "cmd_orphans (Namespace(kill=True, safe=True), 'M') []",
                             'rotate_logs () []',
-                            'spotlight_exclude () []',
+                            "spotlight_exclude (None, 'M') []",
                             "ios_simulator_sweep () [('dry_run', False)]",
-                            "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST') []",
+                            "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=False, no_report=False), 'ST', 'M') []",
                             "write_json ('/S/maintain.json', {'sweep': '2026-11-25', 'sweep_rc': 0, 'sweep_at': "
                             "'TS'}) []",
                             "orphan_duty ('ST',) [('dry_run', False)]",
@@ -739,9 +740,9 @@ EXPECTED = {'pass': {'quiet pass': (0,
                          '    none\n'
                          '== cache expiry\n'
                          '  would remove 1 cache entry older than 7 days\n',
-                         ['cmd_orphans (Namespace(kill=False, safe=True),) []',
+                         ["cmd_orphans (Namespace(kill=False, safe=True), 'M') []",
                           "ios_simulator_sweep () [('dry_run', True)]",
-                          "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=True, no_report=True), 'ST') []",
+                          "cmd_sweep (Namespace(repo=None, idle_days=3, dry_run=True, no_report=True), 'ST', 'M') []",
                           "orphan_duty ('ST',) [('dry_run', True)]",
                           "expire_cache () [('dry_run', True), ('store', 'ST')]"])},
  'expiry': {'empty root': ([], []),

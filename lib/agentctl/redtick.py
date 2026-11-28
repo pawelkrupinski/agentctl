@@ -109,10 +109,10 @@ def tick_prelude(store: Any, o_r: Any, repo: Any, snap: Any, t: Any, primary: An
         if n:
             acts.append(f"red model {RED_MODEL}: {n} open red(s) migrated in place")
         if facts is None:
-            tick_stage("could not bring main up to date", lambda: red_main_current(repo, snap))
+            tick_stage("could not bring main up to date", lambda: red_main_current(repo, snap, ctx.caches.main_fetched))
     facts = facts if facts is not None else red_fix_facts(repo, store, ctx=ctx)
     if primary:
-        acts += tick_stage("noting the landed changes' commits failed", lambda: lander_note_landed(store, repo, o_r, t), [])
+        acts += tick_stage("noting the landed changes' commits failed", lambda: lander_note_landed(store, repo, o_r, t, ctx.caches.lander_landed_at), [])
     return acts, facts
 
 

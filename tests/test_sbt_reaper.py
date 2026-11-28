@@ -115,17 +115,17 @@ class SbtReaperTest(unittest.TestCase):
     # busy command's minute of CPU spread over 26 min reads as no CPU for 26 min, over the 20-min stall limit. The
     # reaper's clock is the awake one (CLOCK_UPTIME_RAW stops while the laptop sleeps), so on wake one minute passed.
     def orphans_pass(self, wt, awake, cpu):
-        procs = [(7, 1, "1:00:00", "/usr/bin/java -jar sbt-launch.jar"), (8, 99, "1:00", "sbtn compile")]
-        saved = {k: getattr(A, k) for k in ("ps", "process_cwds", "sbt_serving", "run_cmd", "awake_now")}
-        A.ps, A.process_cwds, A.sbt_serving = (lambda: procs), (lambda: {7: wt, 8: wt}), (lambda: {})
-        A.run_cmd = lambda args, **kw: types.SimpleNamespace(
-            returncode=0, stdout=f"7 1 {int(cpu // 60)}:{cpu % 60:05.2f}\n" if args[0] == "ps" else "")
+        machine = A.FixedMachine({"ps_cols": ["pid", "ppid", "etime", "time", "args"], "cwds": {"7": wt, "8": wt},
+                                  "ps": f"7 1 1:00:00 {int(cpu // 60)}:{cpu % 60:05.2f} /usr/bin/java -jar sbt-launch.jar\n"
+                                        "8 99 1:00 0:00 sbtn compile\n"})
+        saved = {k: getattr(A, k) for k in ("sbt_serving", "awake_now")}
+        A.sbt_serving = lambda: {}
         A.awake_now = lambda: awake  # the reaper's only clock: the wall's is never read
         os.environ["AGENTCTL_SBT_REAP"] = "1"
         out = io.StringIO()
         try:
             with contextlib.redirect_stdout(out):
-                A.cmd_orphans(argparse.Namespace(kill=False, safe=True, sbt_only=True))
+                A.cmd_orphans(argparse.Namespace(kill=False, safe=True, sbt_only=True), machine)
         finally:
             os.environ["AGENTCTL_SBT_REAP"] = "0"
             for k, v in saved.items():

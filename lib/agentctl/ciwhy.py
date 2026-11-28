@@ -8,7 +8,7 @@ import time
 from typing import Any, Callable
 from contextlib import suppress
 from agentctl.statefile import read_record, write_json
-from agentctl.core import attempt, err, git, process_cache
+from agentctl.core import attempt, err, git
 from agentctl.repos import gated_repo, repo_path_for
 from agentctl.workflows import STEP_TIMED_OUT
 from agentctl.classify import SETUP_STEP
@@ -21,7 +21,6 @@ from agentctl.gitrepo import commit_known
 from agentctl.paths import state_root
 
 
-_missing_row_said = process_cache(set())  # a red gate run whose failed job has no registry row: said once per run
 
 
 def registry_name(name):
@@ -85,14 +84,14 @@ def gate_report_only(o_r, name, run, *, ctx):
         jobs = ctx.runs.run_jobs(o_r, rid)
     except (Exception, SystemExit) as e:  # SystemExit: NoToken
         return False, f"unread ({str(e)[:120]}): it gates"
-    return remember_report_only(name, rid, gate_report_only_jobs(rows, wfile, jobs))
+    return remember_report_only(name, rid, gate_report_only_jobs(rows, wfile, jobs), ctx.caches.missing_row_said)
 
 
-def remember_report_only(name: str, rid: str, out: tuple[bool, str]) -> tuple[bool, str]:
-    """out; a missing registry row is said once per run: every gate job should have one."""
-    if "no row in" in out[1] and rid not in _missing_row_said:
+def remember_report_only(name: str, rid: str, out: tuple[bool, str], said: set[str]) -> tuple[bool, str]:
+    """out; a missing registry row is said once per run: every gate job should have one (`said`: the runs it said so of)."""
+    if "no row in" in out[1] and rid not in said:
         err(f"{name} run {rid}: {out[1].split('; ', 1)[-1]}")
-        _missing_row_said.add(rid)
+        said.add(rid)
     return out
 
 

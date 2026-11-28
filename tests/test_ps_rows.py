@@ -35,8 +35,7 @@ class PsReadingsTest(unittest.TestCase):
 
     def test_the_cpu_tree_sums_each_process_and_groups_children_by_parent(self):
         text = "  10 1 1:00\n  11 10 0:02.5\n  12 10 1-00:00:00\nbad row\n  13 1\n  x 1 0:01\n"
-        with mock.patch.object(A, "run_cmd", ran(text)):
-            cpu, kids = A.ps_cpu_tree()
+        cpu, kids = A.ps_cpu_tree(A.FixedMachine({"ps": text, "ps_cols": ["pid", "ppid", "time"]}))
         self.assertEqual(cpu, {10: 60.0, 11: 2.5, 12: 86400.0})
         self.assertEqual(kids, {1: [10], 10: [11, 12]})
 
@@ -58,12 +57,11 @@ class PsReadingsTest(unittest.TestCase):
         self.assertEqual(got[-1], (12, 10, "5-01:02:03", "sbt a b"))
 
     def test_a_busy_duplicate_reads_one_pids_cpu_percent(self):
-        with mock.patch.object(A, "run_cmd", ran(" 12.5\n")):
-            self.assertIn("busy now", A._busy_duplicate(5, "dup-sbt-server"))
-        with mock.patch.object(A, "run_cmd", ran(" 1.0\n")):
-            self.assertIsNone(A._busy_duplicate(5, "dup-sbt-server"))
-        with mock.patch.object(A, "run_cmd", ran("garbage\n")):
-            self.assertIsNone(A._busy_duplicate(5, "dup-sbt-server"))
+        def machine(text):
+            return A.FixedMachine({"ps": text, "ps_cols": ["pid", "pcpu"]})
+        self.assertIn("busy now", A._busy_duplicate(5, "dup-sbt-server", machine("5 12.5\n")))
+        self.assertIsNone(A._busy_duplicate(5, "dup-sbt-server", machine("5 1.0\n")))
+        self.assertIsNone(A._busy_duplicate(5, "dup-sbt-server", machine("garbage\n")))
 
     def test_zombie_children_are_this_processes_children_in_state_z(self):
         text = "  20 7 Z\n  21 7 S\n  22 8 Z+\n  23 7 Z+\n  24 7\n"

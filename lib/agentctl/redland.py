@@ -12,7 +12,7 @@ from typing import Iterator
 from agentctl.procrunner import process_runner
 from agentctl.statemachines import is_terminal
 from agentctl.redknobs import knob_brief, knob_fix_replay_timeout
-from agentctl.core import err, git, process_cache, remote
+from agentctl.core import err, git, remote
 from agentctl.repos import red_repo_conf, red_repo_of
 from agentctl.trailers import commit_trailers, trailer_values
 from agentctl.redrepos import RED_WORKFLOWS_FILE, red_workflow_policy, red_workflows_on_main
@@ -51,25 +51,22 @@ def is_production_path(p: str) -> bool:
     return any(fnmatch.fnmatch(p, g) for g in PRODUCTION_GLOBS)
 
 
-_production: dict[str, bool] = process_cache({})  # sha -> whether it touches a production path (a commit never changes)
-
-
 def fetch_entry_commits(repo: str, e: dict[str, Any], want: str | None = None) -> None:
     """The entry's commits into this clone, fetched from refs/heads/land/<id> when it has not `want` (its head)."""
     if not commit_known(repo, want or e.get('head')):
         git(repo, "fetch", "--quiet", remote(), f"refs/heads/land/{e['id']}", check=False)
 
 
-def touches_production(repo: str, c: str) -> bool | None:
+def touches_production(repo: str, c: str, known: dict[str, bool]) -> bool | None:
     """Whether commit c touches a production path; None when this clone cannot read it (never raises: 2026-11-26
     16:47Z-18:5xZ every change tick and batch tick on ci-runner died on `git diff-tree <sha>: bad object` for one
-    change's commit its clone lacked, and nothing landed)."""
-    if c not in _production:
+    change's commit its clone lacked, and nothing landed). `known`: the caller's memo, sha -> its answer (a commit never changes)."""
+    if c not in known:
         files = commit_files(repo, c)
         if files is None:
             return None
-        _production[c] = any(is_production_path(p) for p in files)
-    return bool(_production[c])
+        known[c] = any(is_production_path(p) for p in files)
+    return bool(known[c])
 
 
 def red_kind_of(d: dict[str, Any]) -> str:
@@ -132,19 +129,19 @@ def commit_rows(entry: dict[str, Any] | None, repo: str | None, commits: list[st
         return None
     rows = []
     for c in commits:
-        prod = entry_commit_production(repo, entry, c)
+        prod = entry_commit_production(repo, entry, c, ctx.caches.production)
         if prod is None:
             return None  # unread: the change is judged by its recorded names, never a dead tick
         rows.append((c, prod, set(commit_fixes(repo, c, store, ctx=ctx))))
     return rows
 
 
-def entry_commit_production(repo: str, entry: dict[str, Any] | None, c: str) -> bool | None:
+def entry_commit_production(repo: str, entry: dict[str, Any] | None, c: str, known: dict[str, bool]) -> bool | None:
     """touches_production of the entry's commit c, fetched from its land ref first when the clone lacks it."""
-    prod = touches_production(repo, c)
+    prod = touches_production(repo, c, known)
     if prod is None and entry and entry.get("id"):
         fetch_entry_commits(repo, entry, c)
-        prod = touches_production(repo, c)
+        prod = touches_production(repo, c, known)
     return prod
 
 

@@ -854,6 +854,8 @@ class Sim:
         A.WAITING_DIR = os.path.join(self.tmp, "waiting")
         for c in A.PROCESS_CACHES:
             c.clear()
+        for memo in vars(case_context().caches).values():  # the process's owned memos (caches.Caches): a seed starts empty
+            memo.clear()
         clock = self.clock = [1_800_000_000.0]
         self.sim_clock = SimClock(clock)
         # the store's clock is the simulation's, as cli hands the process's store its clock (THE CLOCK IS PASSED IN:

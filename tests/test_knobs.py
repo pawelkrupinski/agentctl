@@ -135,7 +135,7 @@ class KnobTest(unittest.TestCase):
                 self.assertEqual(acc(), 5.0, name + ": the environment wins over the file")
 
     def test_every_text_knob_has_its_default_its_env_override_and_its_file_value(self):
-        self.assertGreater(len(TEXT), 55)
+        self.assertGreater(len(TEXT), 50)
         for fn, name, default in TEXT:
             if name in SKIP_TEXT:
                 continue

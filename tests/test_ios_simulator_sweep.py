@@ -93,10 +93,10 @@ class IosSimulatorSweepTest(unittest.TestCase):
         calls = []
         saved = {k: getattr(A, k) for k in ("cmd_orphans", "orphan_duty", "write_beat", "cmd_sweep", "expire_cache",
                                             "ios_simulator_sweep")}
-        A.cmd_orphans = lambda a: 0
+        A.cmd_orphans = lambda a, machine: 0
         A.orphan_duty = lambda store, dry_run=False: []
         A.write_beat = lambda name: None
-        A.cmd_sweep = lambda a, st: 0
+        A.cmd_sweep = lambda a, st, machine: 0
         A.expire_cache = lambda dry_run=False, store=None: []
         A.ios_simulator_sweep = lambda root=None, dry_run=False: calls.append(dry_run) or print("SIMSWEEP")
         saved_root = os.environ.get("AGENTCTL_STATE_ROOT")
@@ -104,7 +104,7 @@ class IosSimulatorSweepTest(unittest.TestCase):
         try:
             out = io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-                A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False), A.CurrentStore(A.process_store))
+                A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False), A.CurrentStore(A.process_store), A.FixedMachine())
         finally:
             for k, v in saved.items():
                 setattr(A, k, v)

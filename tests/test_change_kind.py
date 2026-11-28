@@ -147,7 +147,7 @@ class ChangeKindTest(unittest.TestCase):
         self.red("r-out", ["6"])
         saved = A.commit_fixes, A.touches_production
         A.commit_fixes = lambda repo, c, store, ctx=None: {"6"}
-        A.touches_production = lambda repo, c: True
+        A.touches_production = lambda repo, c, known: True
         try:
             self.assertEqual(A.gov_class_of("/nonexistent", ["c1"], set(), self.st, ctx=case_context()), "red")
             self.assertEqual(A.gov_class_of("/nonexistent", [], set(), self.st, ctx=case_context()), "check")

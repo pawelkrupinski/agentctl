@@ -67,6 +67,13 @@ class Contract:
         tmp, projects = p.scratch_roots()
         self.assertTrue(isinstance(tmp, str) and isinstance(projects, str))
 
+    def test_the_jvm_scans_reads_are_the_cwds_kept_roots_and_listeners_of_the_pids_asked(self):
+        p = self.probe()
+        self.assertTrue(all(isinstance(k, int) and isinstance(v, str) for k, v in p.cwds_of([os.getpid()]).items()))
+        self.assertEqual(p.cwds_of([]), {})
+        self.assertTrue(all(isinstance(d, str) for d in p.kept_roots([os.getpid()])))
+        self.assertTrue(all(isinstance(x, int) for x in p.listening_pids(["9"])))
+
 
 class HostMachineTest(Contract, unittest.TestCase):
     def probe(self):
@@ -101,6 +108,7 @@ class FixedMachineTest(Contract, unittest.TestCase):
     def probe(self):
         return fixed_machine(ps=f"{os.getpid()} 1 0.5 python3 tests\n4242 1 12.0 java -jar sbt-launch.jar\n",
                              ps_cols=["pid", "ppid", "pcpu", "args"], cwds={str(os.getpid()): "/tmp"},
+                             kept_roots=["/tmp"], listeners=[4242],
                              file_table=[1000, 100000], open_files="p1\ncpython3\nf3\n")
 
     def test_ram_unread_is_the_page_count_not_a_fixed_36_gb(self):

@@ -13,7 +13,7 @@ from agentctl.statefile import read_record, write_json
 from agentctl.selfcode import TOOL_PATH
 from agentctl.clock import Clock
 from agentctl.tickknobs import knob_step_bound, knob_sync_mirror
-from agentctl.core import err, git, process_cache, reap_children, remote, run_bounded, spawn_detached
+from agentctl.core import err, git, reap_children, remote, run_bounded, spawn_detached
 from agentctl.tokenerrors import NoToken
 from agentctl.procs import safe_cwd
 from agentctl.filelog import drain_event_log
@@ -143,14 +143,14 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
     land_pace = LandWatchPace()  # the fixers' landing look is paced per loop, not per process
     duty = s.duty
     return (("laptop role", s.claim_role),
-            ("outbox", lambda: flush_outbox(store)), ("file events", lambda: drain_event_log(store, refused=file_events_refused)), ("state mirror", s.mirror), ("children", reap_children),
+            ("outbox", lambda: flush_outbox(store)), ("file events", lambda: drain_event_log(store, refused=file_events_refused)), ("state mirror", s.mirror), ("children", lambda: reap_children(ctx.caches.zombies_seen)),
             ("events", lambda: project_events(store)), ("notifier", duty(lambda: notify_escalations(store, ctx=ctx))),
             ("alerts", duty(lambda: reconcile_alerts(store))),
             ("workspace trust", lambda: [err(x) for x in trust_asks()]),
             ("landed worktrees", lambda: [err(x) for x in close_landed_worktrees(store)]),
             ("local queue", lambda: [err(f"land: {x}") for x in migrate_local_queue(repo, store)]),
             ("landed changes", lambda: [err(f"land: {x}") for x in close_landed_changes(repo, clock, store=store)]),
-            ("regen holds", duty(lambda: [err(f"land: {x}") for x in answer_regen_holds(d, store)])),
+            ("regen holds", duty(lambda: [err(f"land: {x}") for x in answer_regen_holds(d, store, ctx.caches.regen_answered)])),
             ("claims", duty(s.sync_claims)),
             ("dispatcher", duty(s.dispatch)),
             ("escalation dispatcher", duty(s.escalations)),
@@ -173,8 +173,6 @@ def sync_steps(repo: str, d: str, o_r: str, clock: Clock, store: Any,
 # change and head (it queues the change again in the held entry's place). A dirty worktree, or one moved on, is its
 # agent's: left to it, as before. AN OVERDUE HOLD'S RECOVERY (changelap.py regen_hold_overdue) is a new `regen_round` on
 # the item: answered once more, and `regen_answered` says the round the laptop started (the owner's escalation reads it).
-_regen_answered = process_cache({})  # (change id, head, round) -> True: its `agentctl land` started
-
 
 def _regen_held(it: Any) -> Any:
     dd = it.get("data") or {}
@@ -183,13 +181,14 @@ def _regen_held(it: Any) -> Any:
     return dd.get("worktree"), dd.get("head"), int(dd.get("regen_round") or 0)
 
 
-def _regen_answerable(it: Any) -> Any:
-    """(worktree, head, round) of a queued regen-held change this laptop can answer now, else None."""
+def _regen_answerable(it: Any, answered: dict[tuple[str, str, int], bool]) -> Any:
+    """(worktree, head, round) of a queued regen-held change this laptop can answer now (`answered`: the caller's memo of
+    (change id, head, round) -> True, its `agentctl land` started), else None."""
     held = _regen_held(it)
     if not held:
         return None
     wt, head, rnd = held
-    if not wt or not head or (it["id"], head, rnd) in _regen_answered or not os.path.isdir(wt):
+    if not wt or not head or (it["id"], head, rnd) in answered or not os.path.isdir(wt):
         return None
     if git(wt, "rev-parse", "HEAD", check=False).stdout.strip() != head \
             or git(wt, "status", "--porcelain", check=False).stdout.strip():
@@ -197,16 +196,16 @@ def _regen_answerable(it: Any) -> Any:
     return wt, head, rnd
 
 
-def answer_regen_holds(d: str, st: Any) -> list[str]:
+def answer_regen_holds(d: str, st: Any, answered: dict[tuple[str, str, int], bool]) -> list[str]:
     """The laptop's step (above): `agentctl land` started in the worktree of each regen-held change it can answer; its
     lines."""
     out = []
     for it in st.items("change", ["queued"]):  # only a queued change is held for its regeneration (_regen_held)
-        target = _regen_answerable(it)
+        target = _regen_answerable(it, answered)
         if not target:
             continue
         wt, head, rnd = target
-        _regen_answered[(it["id"], head, rnd)] = True
+        answered[(it["id"], head, rnd)] = True
         with suppress(Exception):  # said for the owner's escalation only; the land runs all the same
             st.update_item("change", it["id"], it["version"], {"regen_answered": rnd})
         with open(os.path.join(d, f"regen-land-{it['id']}.log"), "a") as logf:

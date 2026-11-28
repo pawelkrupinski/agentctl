@@ -118,7 +118,7 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
             ("land refs", shared(lambda: [wlog(d, f"tick: {x}") for x in sweep_land_refs(repo, d, store=store)])),
             ("lease archive", lambda: archive_leases_step(d, store)),
             ("entry files", lambda: expire_entry_files_step(d, clock, store)),
-            ("children", reap_children),
+            ("children", lambda: reap_children(ctx.caches.zombies_seen)),
             ("gate summary", lambda: maybe_publish_gate(repo, store, registry, ctx=ctx)),
             ("red time", lambda: track_red_time(store, gate_is_red_now())),
             ("red tick", lambda: maybe_red_tick(repo, store, registry, ctx=ctx)),

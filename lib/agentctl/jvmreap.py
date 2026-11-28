@@ -14,11 +14,11 @@ from agentctl.psparse import tosec
 from agentctl.ids import stamp
 from agentctl.timefmt import ts
 from agentctl.govknobs import (
-    knob_jvm_cwd, knob_jvm_kept, knob_jvm_ps, knob_sbt_idle_min, knob_sbt_idle_pressure_min,
+    knob_sbt_idle_min, knob_sbt_idle_pressure_min,
     knob_sbt_progress_cpu_per_min, knob_sbt_stall_min, knob_swap_free_floor_mb)
-from agentctl.core import HOME, pid_alive, probe_output, run_cmd
+from agentctl.core import HOME, pid_alive, run_cmd
 from agentctl.allowedpaths import allowed_path
-from agentctl.procs import lsof_cwds, ps_rows
+from agentctl.machine import MachineProbe
 from agentctl.paths import state_root
 
 
@@ -315,59 +315,34 @@ def jvm_candidates(rows: list[tuple[int, int, str, str, str, str]], cwd: dict[in
     return JvmRules().candidates(rows, cwd, kept, port_pids, self_pid, isdir)
 
 
-def _scan_read(fixture: str, cmd: str) -> str:
-    """The fixture file `fixture` names (a test's), else cmd's output."""
-    if fixture:
-        with open(fixture) as f:
-            return f.read()
-    return probe_output(cmd)
+JVM_COLS = ("pid", "ppid", "tty", "etime", "cputime", "args")
 
 
-def _scan_rows() -> list[tuple[int, int, str, str, str, str]]:
-    rows = []
-    for line in _scan_read(knob_jvm_ps(), "ps -Ao pid=,ppid=,tty=,etime=,cputime=,args=").splitlines():
-        f = line.split(None, 5)
-        if len(f) == 6 and f[0].isdigit() and f[1].isdigit():
-            rows.append((int(f[0]), int(f[1]), f[2], f[3], f[4], f[5]))
-    return rows
+def _scan_rows(machine: MachineProbe) -> list[tuple[int, int, str, str, str, str]]:
+    return [(r.pid, r.ppid, r.tty, r.etime, r.cputime, r.args) for r in machine.process_rows(JVM_COLS)]
 
 
-def _scan_cwds(rows: list[tuple[int, int, str, str, str, str]]) -> dict[int, str]:
-    if knob_jvm_cwd():
-        read_cwd = _scan_read(knob_jvm_cwd(), "").splitlines()
-    else:  # pid-scoped: the java processes of the ps rows above, never a machine-wide lsof
-        jp = [r_[0] for r_ in rows if re.search(r"(^|/)java(\s|$)", r_[5].split(" ", 1)[0] if r_[5] else "")]
-        read_cwd = [f"{p_} {d_}" for p_, d_ in lsof_cwds(jp).items()] if jp else []
-    cwd = {}
-    for line in read_cwd:
-        p, _, d = line.partition(" ")
-        if p.isdigit() and allowed_path(d):
-            cwd[int(p)] = d
-    return cwd
+def _scan_cwds(rows: list[tuple[int, int, str, str, str, str]], machine: MachineProbe) -> dict[int, str]:
+    """The cwds of the java processes of `rows` (pid-scoped, never a machine-wide lsof), allowed paths only."""
+    jp = [r_[0] for r_ in rows if re.search(r"(^|/)java(\s|$)", r_[5].split(" ", 1)[0] if r_[5] else "")]
+    return {p: d for p, d in machine.cwds_of(jp).items() if allowed_path(d)}
 
 
-def _scan_kept(rows: list[tuple[int, int, str, str, str, str]]) -> set[str]:
+def _scan_kept(rows: list[tuple[int, int, str, str, str, str]], machine: MachineProbe) -> set[str]:
     """The checkouts a live `sbt-warm --keep` keeps a server in."""
-    if knob_jvm_kept():
-        return {l.strip() for l in _scan_read(knob_jvm_kept(), "").splitlines() if l.strip() and allowed_path(l.strip())}
     kp = [r_[0] for r_ in rows if "sbt-warm --keep" in r_[5]]
-    return set(lsof_cwds(kp).values()) if kp else set()
+    return {d for d in sorted(machine.kept_roots(kp)) if allowed_path(d)} if kp else set()
 
 
-def _scan_ports() -> set[int]:
-    """The pids listening on a protected port (none under the tests' fixture table)."""
-    ports: set[int] = set()
-    if not knob_jvm_ps():
-        for port in str(jvm_knob("PROTECTED_PORTS", "9000")).split():
-            r = run_cmd(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"])
-            ports |= {int(x) for x in r.stdout.split() if x.isdigit()}
-    return ports
+def _scan_ports(machine: MachineProbe) -> set[int]:
+    """The pids listening on a protected port."""
+    return machine.listening_pids(str(jvm_knob("PROTECTED_PORTS", "9000")).split())
 
 
-def jvm_scan() -> tuple[list[tuple[int, int, str, str, str, str]], dict[int, str], set[str], set[int]]:
-    """The live process table for jvm_candidates ($AGENTCTL_JVM_PS / _CWD / _KEPT: fixture files for the tests)."""
-    rows = _scan_rows()
-    return rows, _scan_cwds(rows), _scan_kept(rows) | serving_roots(), _scan_ports()
+def jvm_scan(machine: MachineProbe) -> tuple[list[tuple[int, int, str, str, str, str]], dict[int, str], set[str], set[int]]:
+    """The live process table for jvm_candidates, read through the machine."""
+    rows = _scan_rows(machine)
+    return rows, _scan_cwds(rows, machine), _scan_kept(rows, machine) | serving_roots(), _scan_ports(machine)
 
 
 def serving_roots() -> set[str]:
@@ -389,11 +364,11 @@ def agent_work(pid: int, procs: Any) -> str | None:
     return None
 
 
-def _busy_duplicate(pid: int, rule: str) -> str | None:
+def _busy_duplicate(pid: int, rule: str, machine: MachineProbe) -> str | None:
     """Why a dup-sbt-server is not reaped: it is busy now (recent CPU above DUP_MAX_RECENT_CPU_PERCENT)."""
     if rule != "dup-sbt-server":
         return None
-    for row in ps_rows(("pcpu",), pids=(pid,)):
+    for row in machine.process_rows(("pcpu",), pids=(pid,)):
         if row.pcpu > float(jvm_knob("DUP_MAX_RECENT_CPU_PERCENT", 5)):
             return f"busy now ({row.pcpu}% CPU), not idle"
     return None
@@ -406,9 +381,9 @@ def _own_group(pid: int, own_pgid: int) -> str | None:
         return "already gone"
 
 
-def _reap_guard(pid: int, rule: str, own_pgid: int, procs: Any) -> str | None:
+def _reap_guard(pid: int, rule: str, own_pgid: int, procs: Any, machine: MachineProbe) -> str | None:
     """Why the candidate is spared: a busy duplicate, gone, this group's, or another agent's working process."""
-    why = _busy_duplicate(pid, rule) or ("already gone" if not pid_alive(pid) else None) or _own_group(pid, own_pgid)
+    why = _busy_duplicate(pid, rule, machine) or ("already gone" if not pid_alive(pid) else None) or _own_group(pid, own_pgid)
     if why:
         return why
     w = agent_work(pid, procs)
@@ -451,7 +426,7 @@ def _jvm_line(cand: tuple[Any, ...]) -> str:
     return f"jvm       pid={pid} ppid={ppid} rule={rule} age={int(age // 3600)}h{int(age % 3600 // 60)}m cpu={pct:.1f}%-of-a-core cmd=[{short}]"
 
 
-def jvm_reap(cands: list[tuple[Any, ...]], kill: bool, procs: Any) -> list[str]:
+def jvm_reap(cands: list[tuple[Any, ...]], kill: bool, procs: Any, machine: MachineProbe) -> list[str]:
     """List the candidates; with kill, end them under the guards (idle duplicate, alive, not this group, no agent's
     work), sbt servers after a thread dump, TERM then KILL. Returns the lines printed."""
     grace = term_grace()
@@ -462,7 +437,7 @@ def jvm_reap(cands: list[tuple[Any, ...]], kill: bool, procs: Any) -> list[str]:
     if not kill:
         return lines
     for pid, _ppid, _age, _cpu, _pct, rule, args in cands:
-        why = _reap_guard(pid, rule, own_pgid, procs)
+        why = _reap_guard(pid, rule, own_pgid, procs, machine)
         if why:
             print(f"skip jvm pid {pid} ({rule}): {why}")
             reap_log(f"skip jvm pid {pid} ({rule}): {why}")

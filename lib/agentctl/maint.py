@@ -1,6 +1,7 @@
 # agentctl, part `maint`: orphans and stale JVMs.
 # A real module (lib/agentctl/__init__.py MODULES): its own imports, the standard library's and MODULES' only.
 
+import argparse
 import os
 import re
 import signal
@@ -11,10 +12,10 @@ from contextlib import suppress
 from agentctl.psparse import tosec
 from agentctl.statefile import note_failure, read_record, write_json
 from agentctl.selfcode import code_version
-from agentctl.govknobs import knob_jvm_ps, knob_sbt_reap
+from agentctl.govknobs import knob_sbt_reap
 from agentctl.core import HOME, REPOS, git, pid_alive, run_cmd
 from agentctl.repos import slug
-from agentctl.procs import process_cwds, ps, ps_rows
+from agentctl.machine import MachineProbe
 from agentctl.jvmreap import (
     awake_now, end_process, is_sbt, jvm_candidates, jvm_reap, jvm_scan, reap_log, sbt_serving, sbt_stuck_reasons,
     swap_free_mb, term_grace, thread_dump, tree_cpu)
@@ -184,7 +185,7 @@ def _once(read: Callable[[], list[str]]) -> Callable[[], list[str]]:
     return get
 
 
-def spotlight_exclude(repos: list[str] | None = None, cwds: Callable[[], dict[int, str]] = process_cwds) -> list[str]:
+def spotlight_exclude(repos: list[str] | None, cwds: Callable[[], dict[int, str]]) -> list[str]:
     """Markers into every worktree (and its target/) of the repos that no process works in (cwds: {pid: cwd}, read
     once, only when some tree lacks its marker); returns the paths it marked."""
     marked: list[str] = []
@@ -216,21 +217,21 @@ def fixture_reason(cmd, ppid, etime, isdir = os.path.isdir):
     return None
 
 
-def cmd_orphans(a):
+def cmd_orphans(a: argparse.Namespace, machine: MachineProbe) -> int:
     sbt_only = getattr(a, "sbt_only", False)  # the daily sweep: stuck sbt servers only
     owners = [] if sbt_only else cmd_owner_orphans(a)
-    procs = ps()
-    cwds = process_cwds()
+    procs = [(r.pid, r.ppid, r.etime, r.args) for r in machine.process_rows(("pid", "ppid", "etime", "command"))]
+    cwds = machine.process_cwds()
     me = {os.getpid(), os.getppid()}
     found = [] if sbt_only else wait_loop_orphans(procs, cwds, me)
-    found += sbt_orphans(procs, cwds, me)
+    found += sbt_orphans(procs, cwds, me, machine)
     found += fixture_orphans(procs, me)
-    jvms = [] if sbt_only else stale_jvms(found)
+    jvms = [] if sbt_only else stale_jvms(found, machine)
     for kind, pid, why, what in owners:
         print(f"{kind:9} pid {pid!s:<6}  {why}\n          {what}")
     reap_found(a.kill, found, procs, cwds)
     if jvms:
-        jvm_reap(jvms, a.kill, procs)
+        jvm_reap(jvms, a.kill, procs, machine)
     elif not found and not owners:
         print("no orphans")
     return 0
@@ -297,10 +298,10 @@ def wait_loop_target_reasons(pid: Any, body: Any, status_cache: Any, seen_target
     return reasons
 
 
-def ps_cpu_tree() -> Any:
+def ps_cpu_tree(machine: MachineProbe) -> Any:
     """({pid: cpu seconds}, {ppid: [child pids]}) of every process."""
     procs_cpu, children = {}, {}
-    for row in ps_rows(("pid", "ppid", "time")):
+    for row in machine.process_rows(("pid", "ppid", "time")):
         procs_cpu[row.pid] = row.cpu_seconds
         children.setdefault(row.ppid, []).append(row.pid)
     return procs_cpu, children
@@ -320,8 +321,8 @@ class SbtView:
     swap_free: Any
 
 
-def sbt_view(procs: Any, cwds: Any, cpu_state: Any) -> Any:
-    procs_cpu, children = ps_cpu_tree()
+def sbt_view(procs: Any, cwds: Any, cpu_state: Any, machine: MachineProbe) -> Any:
+    procs_cpu, children = ps_cpu_tree(machine)
     clients: dict[str, list[int]] = {}
     for pid, _ppid, _etime, cmd in procs:
         if "sbtn" in cmd.split(" ", 1)[0] and cwds.get(pid):
@@ -335,10 +336,10 @@ def sbt_reaping() -> Any:
     return knob_sbt_reap() != "0"  # tests: "0"
 
 
-def sbt_orphans(procs: Any, cwds: Any, me: Any) -> Any:
+def sbt_orphans(procs: Any, cwds: Any, me: Any, machine: MachineProbe) -> Any:
     """Stuck sbt servers, and sbt processes whose directory is gone, no longer a checkout or whose worktree is missing."""
     cpu_path = state_root("sbt-cpu.json")
-    view = sbt_view(procs, cwds, read_record(cpu_path, {}))
+    view = sbt_view(procs, cwds, read_record(cpu_path, {}), machine)
     found, live = [], set()
     for pid, ppid, etime, cmd in procs:
         if pid in me or not is_sbt(cmd):
@@ -397,12 +398,10 @@ def fixture_orphans(procs: Any, me: Any) -> Any:
     return out
 
 
-def stale_jvms(found: Any) -> Any:
+def stale_jvms(found: Any, machine: MachineProbe) -> Any:
     """The stale JVMs the scan finds, the ones already found as sbt orphans left out."""
-    if not (knob_sbt_reap() != "0" or knob_jvm_ps()):
-        return []
     try:
-        rows, jcwd, kept, ports = jvm_scan()
+        rows, jcwd, kept, ports = jvm_scan(machine)
         taken = {f[1] for f in found}
         return [c for c in jvm_candidates(rows, jcwd, kept, ports, os.getpid()) if c[0] not in taken]
     except (OSError, ValueError) as e:

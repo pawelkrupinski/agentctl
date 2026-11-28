@@ -15,7 +15,7 @@ from agentctl.ids import stamp
 from agentctl.timefmt import ts
 from agentctl.redknobs import knob_red_fixer
 from agentctl.queueknobs import knob_lander_landed_every
-from agentctl.core import branch_of, err, git, git_ok, process_cache, remote
+from agentctl.core import branch_of, err, git, git_ok, remote
 from agentctl.claudefiles import claude_projects_root
 from agentctl.procs import ps_rows
 from agentctl.onmain import patch_ids
@@ -284,9 +284,6 @@ def lander_of_commit(idx, key):
     return None
 
 
-_lander_landed_at = process_cache({})  # repo -> when its landed changes were last noted
-
-
 def _landed_unnoted(it: Any, t: Any) -> Any:
     """Whether a change item landed in the last day with commit keys and no `landed_commits` noted yet."""
     return bool(it["state"] == "landed" and (it["data"] or {}).get("commit_keys")
@@ -306,12 +303,13 @@ def _note_landed_commits(store: Any, it: Any, keys: Any) -> Any:
     return None
 
 
-def lander_note_landed(store, repo, o_r, t, force=False):
+def lander_note_landed(store, repo, o_r, t, landed_at, force=False):
     """Every LANDER_LANDED_EVERY s: each change landed in the last day whose commits on main are not noted yet gets them
-    (`landed_commits`: main sha -> patch-id), found by the keys it recorded at submission. Returns what it noted."""
-    if not force and t - _lander_landed_at.get(repo, 0) < knob_lander_landed_every():
+    (`landed_commits`: main sha -> patch-id), found by the keys it recorded at submission. Returns what it noted.
+    `landed_at`: the caller's memo, repo -> when it last noted."""
+    if not force and t - landed_at.get(repo, 0) < knob_lander_landed_every():
         return []
-    _lander_landed_at[repo] = t
+    landed_at[repo] = t
     todo = [it for it in store.items("change") if _landed_unnoted(it, t)]
     if not todo or not repo:
         return []

@@ -54,7 +54,7 @@ class ToolsKnownRedTest(test_queue.QueueTest):
             shas = ["c0"]
             self.addCleanup(setattr, A, "touches_production", A.touches_production)
             self.addCleanup(setattr, A, "commit_fixes", A.commit_fixes)
-            A.touches_production = lambda repo, c, p=prod: p
+            A.touches_production = lambda repo, c, known, p=prod: p
             A.commit_fixes = lambda repo, c, store, ctx=None: set()
             v = A.may_land_on_red(facts, dict(entry, commits=shas), "/repo", store=None, ctx=case_context())
             self.assertEqual(v.tools_only_known_red, lands, f"production={prod}")

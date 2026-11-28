@@ -84,7 +84,7 @@ def push_batchable(st, repo, d, e, t, main, facts=None, *, ctx):
             or kind_of(st, repo, e, facts, t, ctx=ctx)["push_batch"] is not None):
         return False
     if e.get("status") == "checked":  # one keeping its verdict on main (MINIMAL RECHECKS) owes no verify round
-        return bool(e.get("checked_base")) and e["checked_base"] != main and not verdict_kept(repo, e, main)
+        return bool(e.get("checked_base")) and e["checked_base"] != main and not verdict_kept(repo, e, main, ctx.caches.kept_known)
     return e.get("status") == "queued" and _queued_owes_verify_round(st, e)
 
 

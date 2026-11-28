@@ -120,14 +120,14 @@ class CacheExpiryTest(unittest.TestCase):
         saved = {k: getattr(A, k) for k in ("cmd_orphans", "orphan_duty", "write_beat", "cmd_sweep")}
         saved_root = os.environ.get("AGENTCTL_STATE_ROOT")
         os.environ["AGENTCTL_STATE_ROOT"] = self.root
-        A.cmd_orphans = lambda a: 0
+        A.cmd_orphans = lambda a, machine: 0
         A.orphan_duty = lambda store, dry_run=False: []
         A.write_beat = lambda name: None
-        A.cmd_sweep = lambda a, st: 0
+        A.cmd_sweep = lambda a, st, machine: 0
         try:
             out = io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
-                A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False), A.CurrentStore(A.process_store))
+                A.cmd_maintain(argparse.Namespace(dry_run=False, sweep=False), A.CurrentStore(A.process_store), A.FixedMachine())
         finally:
             for k, v in saved.items():
                 setattr(A, k, v)
