@@ -57,8 +57,9 @@ movies model (movies "Code quality ratchets" and "Coupling"), on the movies repo
 | | | effect / state / import-io 0 | `Design:` |
 | | | fanout 9 (COLLABORATORS a part imports), distance 0.2, layer, databag, datafanout | `Coupling:` |
 
-- A NEW row past a limit or a frozen row RISING refuses the push; a fall passes and is recorded with
-  `"$(python3 quality/tools.py)" quality/ratchet.py update` (commit the baseline). A rise lands only with the kind's
+- A NEW row past a limit or a frozen row RISING refuses the push, and so does a fall the baseline
+  does not record (THE FALL LOCK): `"$(python3 quality/tools.py)" quality/ratchet.py update` records it (commit the
+  baseline with the change; a fall needs no trailer). A rise lands only with the kind's
   trailer in the commit's FINAL trailer block, beside `Co-Authored-By:`; each commit growing a baseline is judged by its
   own step (one commit's trailer never excuses another's).
 - A function is keyed by its qualified name, so moving it to another part keeps its row; a new part split off a big

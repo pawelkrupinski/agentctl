@@ -130,8 +130,8 @@ FIXER_LAND_WATCH_EVERY = 60
 #   baseline commit changed, and ci-runner's reconciler, the server role, has no JVM: a rebase by hand and a new place
 #   at the back of the queue, for a file no agent edits by hand): a row both sides changed keeps the side already in
 #   the tree (main's, or the earlier batch members'), every other row merged as above; the files are named
-#   (`provisional`) and the checks judge the combined tree -- the ratchet passes a fall not yet recorded and fails a
-#   rise, naming the rows, and a failure is reported as the change's own with the regen command to run;
+#   (`provisional`) and the checks judge the combined tree -- the ratchet fails a rise and a fall not yet recorded,
+#   naming the rows, and a failure is reported as the change's own with the regen command to run;
 # - a SET table (a key on many lines: coupling-fanout-refs.tsv's `<class><TAB><target>`) is merged line by line;
 # - else, the merge and the regen failing (a side not a table, the command's exit, its timeout), the member
 #   is left out of the batch and checked alone (batch_alone `regen`, the files and why in the log), held as before

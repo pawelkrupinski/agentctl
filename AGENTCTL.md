@@ -23,7 +23,8 @@ calls.
   SOLID, one source of truth per concept, cleanup). THE RATCHETS: `hooks/pre-push` runs `quality/ratchet.py` after the
   suite -- the quality baseline (`quality/quality-baseline.tsv`: cognitive / cyclomatic 10, inner defs 2, function 50
   lines, part 500, 50-token clones, reference cycles) and the design baseline (`quality/design-baseline.tsv`: the movies design rules, CLAUDE.md "Design") and the types baseline (`quality/types-baseline.tsv`:
-  `mypy --strict` errors per part). Rows only fall (`ratchet.py update`); a rise needs a `Complexity:` / `Length:` /
+  `mypy --strict` errors per part). Rows only fall, and an unrecorded fall refuses the push too (`ratchet.py update`
+  records it); a rise needs a `Complexity:` / `Length:` /
   `Duplication:` / `Coupling:` / `Typing:` / `Naming:` / `Design:` trailer. Tools pinned in `quality/tools.lock`, installed by the hook
   (`quality/tools.py`); a missing tool blocks the push.
 - The design behind it: `~/bin/docs/landing-reconciler-design.md`. Phase 2 (the store and the reconciler on
@@ -1922,8 +1923,8 @@ The reconciler then takes it, a step per tick:
   baseline commit changed and coupling-fanout-refs.tsv was unregistered: a rebase by hand and the back of the
   queue).** Where no regen command runs (ci-runner's reconciler, the server role: no JVM), a row both sides changed
   keeps the tree's side (main's, or an earlier batch member's), every other row merged, the files kept on the entry
-  (`provisional`); the hook's ratchet judges the combined tree as it judges any baseline (a fall not yet recorded
-  passes, a rise fails), and a change failing its checks so is held for its agent's regen (above), never bounced. The push's own rebase (under the
+  (`provisional`); the hook's ratchet judges the combined tree as it judges any baseline (a rise fails, and so
+  does a fall not yet recorded), and a change failing its checks so is held for its agent's regen (above), never bounced. The push's own rebase (under the
   landing lock) never runs a regen command: a generated-only conflict there is a new verify round. A failed resolution
   (no JVM where the queue runs, the command's exit, its timeout) leaves the member out of the batch (`batch_alone`
   `regen`, why in the log) and holds it behind the change it overlaps, as before; a member resolved in a batch that

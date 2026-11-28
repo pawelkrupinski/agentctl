@@ -12,8 +12,8 @@
 Run it with the tools' python (quality/tools.py prints it; hooks/pre-push installs it). The engine is the movies
 repository's baseline ratchet (devtools/design_rules/baseline_ratchet.py, vendored byte-equal): a baseline holds a
 `limit<TAB>kind<TAB>N` row per kind and a `kind<TAB>key<TAB>value` row per measured row past it; a NEW row past a
-limit or a RISING one refuses the push, a fall is said and passes (`update` records it), and the baseline may grow only
-in a commit carrying the kind's trailer in its final trailer block (THE ATTRIBUTION RULE, devtools/design_rules/trailers.py:
+limit or a RISING one refuses the push, and so does a fall the baseline does not record (THE FALL LOCK: `update`
+records it, no trailer needed); the baseline may grow only in a commit carrying the kind's trailer in its final trailer block (THE ATTRIBUTION RULE, devtools/design_rules/trailers.py:
 each commit of a range is judged by its own step; one commit's trailer never excuses another's).
 
   quality     quality/quality-baseline.tsv   cognitive, cyclomatic, inner-defs   Complexity:

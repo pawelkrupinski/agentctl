@@ -120,7 +120,7 @@ except Exception: print(0)' 2>/dev/null)
         rc=1
       # shellcheck disable=SC2086
       elif ! (cd "$tmp/tree" && "$py" quality/ratchet.py selftest && "$py" quality/ratchet.py check $range) >"$tmp/ratchet" 2>&1; then
-        grep -v '^quality: fell\|^types: fell' "$tmp/ratchet" | tail -40 >&2
+        tail -40 "$tmp/ratchet" >&2
         echo "pre-push: REFUSED -- a ratchet refuses $lsha (quality/ratchet.py; fix forward)" >&2
         rc=1
       else

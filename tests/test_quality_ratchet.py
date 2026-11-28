@@ -83,7 +83,7 @@ class ImportGraphTest(unittest.TestCase):
 
 
 class FrozenRowsOnlyFallTest(unittest.TestCase):
-    def test_rise_refuses_fall_passes_and_update_records_the_fall(self):
+    def test_rise_refuses_an_unrecorded_fall_refuses_and_update_records_the_fall(self):
         root = tree({"a": LONG})
         with contextlib.redirect_stdout(io.StringIO()):
             ratchet.update(root, which=WHICH, analysers={}, type_rows=[])
@@ -99,9 +99,13 @@ class FrozenRowsOnlyFallTest(unittest.TestCase):
         self.assertIn("method-lines long_one: 58, past its baseline 57", out)
         with open(path, "w") as f:
             f.write("def long_one():\n    return 0\n")
-        rc, out = quiet_check(root)
-        self.assertEqual(rc, 0)
+        rc, out = quiet_check(root)  # THE FALL LOCK (movies 2a65c3fb37): an unrecorded fall is headroom to creep back
+        self.assertEqual(rc, 1)
+        self.assertIn("FELL BELOW quality/quality-baseline.tsv, UNRECORDED", out)
         self.assertIn("method-lines long_one 57 -> within the limit", out)
+        with contextlib.redirect_stdout(io.StringIO()):
+            ratchet.update(root, which=WHICH, analysers={}, type_rows=[])
+        self.assertEqual(quiet_check(root)[0], 0)
 
     def test_a_moved_function_keeps_its_row(self):
         root = tree({"a": LONG, "b": "y = 1\n"})
