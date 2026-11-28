@@ -389,7 +389,25 @@ class World:
         if os.path.exists(steps):
             with open(steps, errors="replace") as f:
                 tail.append("--- steps.log\n" + f.read()[-5000:])
-        return "\n".join(tail)
+        return "\n".join(tail + self.store_and_reds_state())
+
+    def store_and_reds_state(self):
+        """What the store holds (items and leases) and the laptop's reds directory (each file, the logs' tails): the
+        state a wait that never saw its event was waiting on."""
+        out = []
+        try:
+            out.append("--- items\n" + "\n".join(f"{r['type']} {r['id']} {r['state']} {str(r['data'])[:500]}"
+                                                  for r in self.db("SELECT type, id, state, data FROM items")))
+            out.append("--- leases\n" + "\n".join(f"{r['name']} {r['holder']} {r['expires_at']}"
+                                                  for r in self.db("SELECT name, holder, expires_at FROM leases")))
+        except Exception as e:  # a diagnosis never fails the failure it explains
+            out.append(f"--- store unreadable: {e}")
+        for dirpath, _dirs, files in os.walk(os.path.join(self.root, "laptop", "reds")):
+            for f in sorted(files):
+                path = os.path.join(dirpath, f)
+                with open(path, errors="replace") as fh:
+                    out.append(f"--- {os.path.relpath(path, self.root)}\n{fh.read()[-800:]}")
+        return out
 
     def close(self):
         for p in reversed(self.procs):
