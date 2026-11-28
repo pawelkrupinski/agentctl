@@ -17,6 +17,9 @@ jobs:
   # TWO SHARDS (2026-11-19): one 4-cpu runner took 290-420 s for the whole suite against its 420 s bound, and two of
   # eight runs on main ended SUITE TIMEOUT with no test failed. Each shard runs a disjoint half (tests/run.py --shard);
   # the run is green only when both are, which is what the auto-pin reads.
+  # THREE SHARDS (2026-11-28, run 46175752683): the halves had grown back to 418-420 s on a slow runner (the same half
+  # took 246 s on a fast one) and one ended SUITE TIMEOUT with no test failed. tests/test_annotations.py SuiteShardsTest
+  # holds a shard to 1000 tests (~290 s on a slow runner) and says when to add the next one.
   # ON CI-RUNNER'S PYTHON TOO (2026-11-25): 328e158 and 1d742c3 passed here on 3.14 and crashed at import on ci-runner's
   # 3.13 (an un-imported `Any` in an annotation, evaluated at `def` before PEP 649), so ci-runner sat on 68f0e4e for two
   # days. Every shard runs on both; tests/test_annotations.py SERVER_PYTHON names ci-runner's version.
@@ -26,18 +29,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1]
+        shard: [0, 1, 2]
         python: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Suite shard ${{ matrix.shard }}/2 on Python ${{ matrix.python }} (parallel, 60 s per test)
+      - name: Suite shard ${{ matrix.shard }}/3 on Python ${{ matrix.python }} (parallel, 60 s per test)
         run: |
           python3 --version
           timeout -s KILL 480 python3 tests/run.py -j 4 --timeout 60 --suite-timeout 420 --durations 15 \
-            --shard ${{ matrix.shard }}/2
+            --shard ${{ matrix.shard }}/3
   # THE END-TO-END LAYER (tests/e2e/run.py, 2026-11-27): the real store server, reconciler, sync and CLI together, a
   # stub GitHub; the skew scenarios unpack older revisions from the history (fetch-depth 0)
   e2e:

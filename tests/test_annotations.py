@@ -5,6 +5,7 @@ marked 328e158 and 1d742c3 bad, and ci-runner stayed on 68f0e4e for two days wit
 module's functions' and classes' annotations are evaluated here as an eager interpreter evaluates them."""
 import ast
 import os
+import sys
 import unittest
 
 LIB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib", "agentctl")
@@ -91,6 +92,37 @@ class AnnotationsTest(unittest.TestCase):
 
 
 SERVER_PYTHON = "3.13"   # ci-runner's interpreter (`ssh ci-runner python3 --version`, 2026-11-25: 3.13.17)
+
+
+class SuiteShardsTest(unittest.TestCase):
+    """EACH CI SHARD FITS ITS BOUND (2026-11-28, tests.yml run 46175752683 on 6d9edb0: shard 1/2 on 3.14 ended SUITE TIMEOUT
+    at 420 s with no test failed; the two green runs before it took 418.0 s and 418.6 s). A hosted runner's pace is
+    bimodal -- the same half took 246 s on one and 420 s on another, ~0.29 s a test at 4 workers on the slow ones -- so
+    a shard holds at most SHARD_TESTS_MAX tests (~290 s there, a third under the 420 s bound); past it, add a shard."""
+    SHARD_TESTS_MAX = 1000
+
+    def workflow(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, ".github", "workflows", "tests.yml")) as f:
+            return f.read().split("\n  suite:", 1)[1].split("\n  sim-gate:", 1)[0]
+
+    def test_the_matrix_and_the_shard_argument_agree(self):
+        import re
+        suite = self.workflow()
+        shards = [int(x) for x in re.search(r"shard:\s*\[([^\]]*)\]", suite).group(1).split(",")]
+        counts = set(re.findall(r"\$\{\{ matrix\.shard \}\}/(\d+)", suite))
+        self.assertEqual(counts, {str(len(shards))}, "every `K/N` names the matrix's own shard count")
+        self.assertEqual(shards, list(range(len(shards))))
+
+    def test_no_shard_holds_more_tests_than_a_slow_runner_finishes_in_its_bound(self):
+        import re, subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        n = len(re.search(r"shard:\s*\[([^\]]*)\]", self.workflow()).group(1).split(","))
+        listing = subprocess.run([sys.executable, os.path.join(here, "run.py"), "--list"], capture_output=True, text=True,
+                                 timeout=120, check=True)
+        tests = len(listing.stdout.split())
+        self.assertLessEqual(-(-tests // n), self.SHARD_TESTS_MAX,
+                             f"{tests} tests over {n} shards: add a shard to tests.yml's suite matrix")
 
 
 class ServerPythonInCiTest(unittest.TestCase):
