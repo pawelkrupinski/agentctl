@@ -35,6 +35,10 @@ limit	data-methods	4	scala py
 limit	data-decisions	9	scala py
 limit	databag	9	scala py
 limit	datafanout	15	scala py
+limit	shell-lines	150	sh
+limit	shell-decisions	10	sh
+limit	shell-function-lines	50	sh
+limit	shell-nesting	4	sh
 #
 # Naming (CLAUDE.md: "Never suffix a class with Impl"; Manager/Handler/Util/Helper/Processor are a smell; "no
 # abbreviations in names").

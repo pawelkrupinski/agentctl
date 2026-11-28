@@ -319,7 +319,7 @@ EXPECTED = {'not the owner': (0, False, ['own acquire']),
                              'TokenDrop D SLUG',
                              'drop open',
                              'keep_awake () []',
-                             'status_page_start ({}, StatusMemos(assembled={}, last={}, reading={}, worktrees={}, worktree_reads={}, said={}, leased={}, registry={}, tails={}, metas={})) []',  # the process's served page and status memos (Caches)
+                             'status_page_start ({}, StatusMemos(assembled={}, last={}, reading={}, worktrees={}, worktree_reads={}, said={}, leased={}, registry={}, tails={}, metas={}, blocker={})) []',  # the process's served page and status memos (Caches)
                              "write_beat ('processor',) []",
                              "restart_if_changed ({}, [OWN], ['waiting', 'run', '--repo', 'REPO', '--service']) []",
                              'run_step alpha',
