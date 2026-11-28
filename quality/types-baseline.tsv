@@ -19,6 +19,7 @@ mypy-errors	blameopen	11
 mypy-errors	blamerecords	17
 mypy-errors	branches	66
 mypy-errors	buildview	16
+mypy-errors	changefields	7
 mypy-errors	changekind	19
 mypy-errors	changelap	2
 mypy-errors	changerows	1
@@ -76,7 +77,13 @@ mypy-errors	landdryrun	30
 mypy-errors	landedchange	9
 mypy-errors	lander	30
 mypy-errors	landhold	4
+mypy-errors	landprecheck	4
 mypy-errors	landqueue	5
+mypy-errors	landrefusal	7
+mypy-errors	landsteps	11
+mypy-errors	landsubmit	9
+mypy-errors	landsync	10
+mypy-errors	landuntil	11
 mypy-errors	landwatch	18
 mypy-errors	laptoprole	42
 mypy-errors	launchd	1
@@ -108,7 +115,7 @@ mypy-errors	processorlink	16
 mypy-errors	queue	21
 mypy-errors	queuecheck	21
 mypy-errors	queuediff	29
-mypy-errors	queueenter	71
+mypy-errors	queueenter	12
 mypy-errors	queuefailure	4
 mypy-errors	queuepush	41
 mypy-errors	queuerecheck	42

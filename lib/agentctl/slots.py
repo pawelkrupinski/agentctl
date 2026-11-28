@@ -14,7 +14,7 @@ from typing import Any
 from agentctl.clock import epoch_now
 from agentctl.ids import stamp
 from agentctl.timefmt import ts
-from agentctl.core import branch_of, print_error, git, remote
+from agentctl.core import branch_of, git, print_error, remote
 from agentctl.networksignatures import TRANSIENT_PUSH, is_transient_network
 from agentctl.netretry import net_run
 from agentctl.repos import precheck_hook, slug, waiting_supported
@@ -39,8 +39,10 @@ from agentctl.gov import gov_class_of
 from agentctl.redseen import gate_reds
 from agentctl.watchtick import watch_landed
 from agentctl.landqueue import queue_command
-from agentctl.queueenter import enqueue, land_until_done, sync
+from agentctl.queueenter import enqueue
 from agentctl.landdryrun import dry_run, precheck, refused, stalled
+from agentctl.landsync import sync
+from agentctl.landuntil import land_until_done
 
 
 class Interrupted(BaseException):
