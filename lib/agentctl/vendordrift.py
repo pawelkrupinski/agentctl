@@ -14,6 +14,11 @@
 # sync and hit their wall time without pushing (the full pre-push suite timed out at load 25-45). Now the step first runs
 # devtools/vendorsync.py, detached (copy, scoped tests, selfpush: a vendored-only push runs a scoped suite), and opens the
 # condition only when that FAILED -- a real API change to adapt -- so the agent's brief carries why it failed.
+#
+# 2026-11-28, condition vendor-drift.3: the one sync of a drift failed because movies landed a newer vendored file while it
+# waited for the push lock (the hook's drift check read it), and none ran again for 3 h: agents were dispatched for a
+# mechanical sync. A failure belongs to the MOVIES STATE it synced (`vendor.py signature`, kept in `.started`): when
+# movies moves a vendored file again -- the race's newer file, or the movies fix the failure asked for -- it is retried.
 
 import os
 import subprocess
@@ -42,23 +47,38 @@ def probe_vendor_drift(a: dict[str, Any]) -> tuple[bool | None, str]:
     return r.returncode == 0, "; ".join(x.strip() for x in r.stdout.splitlines() if x.strip())[:280]
 
 
+def movies_signature(root: str) -> str:
+    """`devtools/vendor.py signature` of the agentctl checkout `root`: one digest of the movies files its copies follow,
+    "" when it cannot say."""
+    r = run_cmd(["python3", os.path.join(root, "devtools", "vendor.py"), "signature"], timeout=60, cwd=root)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
 class AutoSync:
-    """The deterministic sync's detached process: `<path>.started` ({at, pid}) says one was launched, `<path>` is the verdict
-    it writes last ({state: done|failed, why, at}). spawn(argv) returns the process (its pid is kept to tell a dead one)."""
+    """The deterministic sync's detached process: `<path>.started` ({at, pid, signature}) says one was launched for that
+    movies state, `<path>` is the verdict it writes last ({state: done|failed, why, at}). spawn(argv) returns the process
+    (its pid is kept to tell a dead one); signature() is the movies state now (movies_signature)."""
 
     def __init__(self, root: str, result_path: str, clock: Callable[[], float],
                  spawn: Callable[[list[str]], Any] = lambda argv: spawn_detached(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True),
-                 alive: Callable[[int], bool] = lambda pid: pid_alive(pid)) -> None:
+                 alive: Callable[[int], bool] = lambda pid: pid_alive(pid),
+                 signature: Callable[[str], str] = movies_signature) -> None:
         self.root, self.path, self.clock, self.spawn, self.alive = root, result_path, clock, spawn, alive
+        self.signature = signature
 
     def state(self) -> tuple[str, str]:
-        """idle (none run since the last drift ended), running, done or failed, with its why."""
+        """idle (none run since the last drift ended, or the one that failed synced another movies state), running, done
+        or failed, with its why."""
         started, verdict = read_json_file(self.path + ".started"), read_json_file(self.path)
         if not started:
             return "idle", ""
         if verdict.get("state") and verdict.get("at", 0) >= started.get("at", 0):
-            return self.judged(verdict)
-        return self.running(started)
+            state, why = self.judged(verdict)
+        else:
+            state, why = self.running(started)
+        if state == "failed" and started.get("signature") != self.signature(self.root):
+            return "idle", ""  # movies moved a vendored file since that sync started: this state gets its own
+        return state, why
 
     def judged(self, verdict: dict[str, Any]) -> tuple[str, str]:
         """The script's verdict; a pushed one whose drift still shows after DONE_GRACE is a failure (the push did not close it)."""
@@ -77,7 +97,7 @@ class AutoSync:
 
     def start(self) -> None:
         proc = self.spawn(["python3", os.path.join(self.root, "devtools", "vendorsync.py"), "--result", self.path])
-        write_json(self.path + ".started", {"at": self.clock(), "pid": getattr(proc, "pid", 0)})
+        write_json(self.path + ".started", {"at": self.clock(), "pid": getattr(proc, "pid", 0), "signature": self.signature(self.root)})
 
     def reset(self) -> None:
         for path in (self.path, self.path + ".started"):

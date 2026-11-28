@@ -125,6 +125,35 @@ class VendorDriftTest(unittest.TestCase):
         for words in ("vendor.py sync", "ratchet.py update", "trailer", "selfpush.py"):
             self.assertIn(words, brief)
 
+    def test_a_failed_sync_is_tried_again_once_movies_moves_a_vendored_file_again(self):
+        """2026-11-28, condition vendor-drift.3: the one automatic sync failed because movies landed 2a65c3fb37 while it
+        waited for the push lock (the hook's drift check read the newer file), and no sync ran again for 3 h: two agents
+        were dispatched for what the script could do. A failure belongs to the movies state it synced; a new one is retried."""
+        self.drift()
+        self.step()
+        self.finish("failed", "selfpush (exit 1): drifted from movies")
+        self.t[0] += A.CHECK_EVERY
+        self.assertEqual(len(self.step()), 1)  # the condition, for the agent
+        self.t[0] += A.CHECK_EVERY
+        self.step()
+        self.assertEqual(len(self.spawned), 1, "the same movies state is not synced again")
+        self.drift()  # movies moved again (here: the race's newer file, or the movies fix the failure asked for)
+        self.t[0] += A.CHECK_EVERY
+        self.step()
+        self.assertEqual(len(self.spawned), 2, "a new movies state gets its own automatic sync")
+        self.assertEqual(len(self.loops()), 1, "the condition stays the one, until its probe closes it")
+
+    def test_a_failed_sync_recorded_with_no_movies_state_is_tried_again(self):
+        """The verdict of a sync started before the state was recorded (the live one when this landed) is no known state."""
+        self.drift()
+        self.step()
+        self.finish("failed", "x")
+        with open(self.result + ".started", "w") as f:
+            json.dump({"at": self.t[0] - 1, "pid": 1}, f)
+        self.t[0] += A.CHECK_EVERY
+        self.step()
+        self.assertEqual(len(self.spawned), 2)
+
     def test_it_is_looked_at_every_few_minutes_and_stays_one_condition(self):
         self.drift()
         self.step()

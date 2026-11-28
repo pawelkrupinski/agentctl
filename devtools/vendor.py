@@ -11,6 +11,8 @@ VENDORED.tsv: `<copy, relative to the checkout><TAB><movies path><TAB><sha256>`.
 first (a movies lane), then `sync` here; an agentctl-side improvement is written down for movies, never edited in place.
   python3 devtools/vendor.py drift   only the drift: exit 1 while the movies checkout is ahead of a copy (what the
                                      VENDOR_DRIFT condition's probe asks)
+  python3 devtools/vendor.py signature   one digest of the movies files the copies follow: a new one is a new movies
+                                     state to sync (a failed automatic sync is retried for it, lib/agentctl/vendordrift.py)
 Without the movies checkout `check` reads the digests only: agentctl's CI stays standalone."""
 import hashlib
 import os
@@ -92,6 +94,17 @@ def problems(root=ROOT, movies=None):
     return out
 
 
+def signature(root=ROOT, movies=None):
+    """One digest over the movies files the copies follow (`-` for one missing): it changes whenever movies moves a
+    vendored file again, so a sync that failed for one state of movies is tried again for the next."""
+    movies = movies_root() if movies is None else movies
+    parts = []
+    for _copy, source, _recorded in read_table(root):
+        theirs = os.path.join(movies, source) if movies else ""
+        parts.append(f"{source}\t{digest(theirs) if theirs and os.path.isfile(theirs) else '-'}\n")
+    return hashlib.sha256("".join(parts).encode()).hexdigest()
+
+
 def sync(root=ROOT, movies=None):
     movies = movies or movies_root()
     if not movies:
@@ -120,6 +133,9 @@ def main(argv):
         found = drifted()
         print("\n".join(found) or "vendor: no copy drifted from movies")
         return 1 if found else 0
+    if argv[:1] == ["signature"]:
+        print(signature())
+        return 0
     print(__doc__)
     return 2
 
