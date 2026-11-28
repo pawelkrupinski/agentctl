@@ -40,9 +40,9 @@ MUTATIONS = {
         "    except KeyError:  # a store before the call: its whole feed and backfill, merged here",
         "history no longer falls back for a store that lacks trace_events"),
     "MissingCommitTest": (
-        "lib/agentctl/redland.py",
-        "        if r.returncode != 0:\n            return None\n        _production[c]",
-        "        if r.returncode != 0:\n            raise RuntimeError(r.stderr)\n        _production[c]",
+        "lib/agentctl/gitrepo.py",
+        "    return [p for p in r.stdout.splitlines() if p] if r.returncode == 0 else None\n\n\ndef commit_message",
+        "    if r.returncode != 0:\n        raise RuntimeError(r.stderr)\n    return [p for p in r.stdout.splitlines() if p]\n\n\ndef commit_message",
         "the red rule raises on a commit the clone lacks (the 2026-11-26 dead tick)"),
     "EscalationTest": (
         "lib/agentctl/conditions.py",
@@ -83,6 +83,18 @@ MUTATIONS = {
 }
 
 
+def stale_patterns(mutations=None, root=BIN):
+    """Every mutation whose text does not match EXACTLY ONCE in its file, as (scenario, file, match count): a stale
+    pattern would prove nothing, so the runner refuses to run while there is one."""
+    stale = []
+    for name, (rel, old, _new, _why) in (mutations or MUTATIONS).items():
+        with open(os.path.join(root, rel)) as f:
+            count = f.read().count(old)
+        if count != 1:
+            stale.append((name, rel, count))
+    return stale
+
+
 def mutated_tree(rel, old, new):
     """A copy of this tree (no .git) with `old` replaced by `new` in rel: its root."""
     root = tempfile.mkdtemp(prefix="agentctl-e2e-mut-")
@@ -91,8 +103,6 @@ def mutated_tree(rel, old, new):
     p = os.path.join(tree, rel)
     with open(p) as f:
         text = f.read()
-    if text.count(old) != 1:
-        raise SystemExit(f"mutation of {rel}: its text matches {text.count(old)} times, not once (update MUTATIONS)")
     with open(p, "w") as f:
         f.write(text.replace(old, new))
     return root, tree
@@ -100,6 +110,11 @@ def mutated_tree(rel, old, new):
 
 def main(argv):
     names = argv or list(MUTATIONS)
+    stale = stale_patterns({n: MUTATIONS[n] for n in names})
+    for name, rel, count in stale:
+        print(f"STALE {name}: its text matches {count} times in {rel}, not once (update MUTATIONS)")
+    if stale:
+        return 1
     caught = {}
     for name in names:
         rel, old, new, why = MUTATIONS[name]
