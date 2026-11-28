@@ -126,7 +126,7 @@ def _backlog_barrier(e: dict[str, Any], red_fix: bool, repo: Any, identity_known
     why = _batch_barrier(e, red_fix)
     if why is not None or repo is None or not e.get("id") or e.get("status") != "queued":
         return why, None
-    identity = identity_change(repo, e, identity_known)
+    identity = identity_change(repo, e, known=identity_known)
     # EVERY CHANGE IS A MEMBER (2026-11-20, batch.py): an identity change joins a backlog batch, its identity area
     # in the batch's union; only one whose kind cannot be told stays out
     return ("identity-unknown" if identity is None else None), identity

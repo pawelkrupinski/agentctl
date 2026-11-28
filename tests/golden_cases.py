@@ -61,6 +61,7 @@ class Case:
             # before the context was passed (docs/design/contexts.md); nor is the machine probe a call reads
             # (lib/agentctl/machine.py), by keyword or by position
             k.pop("ctx", None)
+            k.pop("known", None)  # a memo the context owns (caches.py): no more call data than the context
             probe = (sys.modules["agentctl.machine"].MachineProbe, WiredMachine)
             if issubclass(type(k.get("machine")), probe):
                 del k["machine"]
