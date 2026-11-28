@@ -21,4 +21,6 @@ class Caches:
     regen_answered: dict[Any, Any] = field(default_factory=dict)  # (change id, head, round) -> True: its `agentctl land` started
     missing_row_said: set[str] = field(default_factory=set)  # a red gate run whose failed job has no registry row: said once per run
     kept_known: dict[Any, Any] = field(default_factory=dict)  # (entry id, tip, checked base, main) -> verdict_kept's answer
+    fix_replay_proofs: dict[Any, Any] = field(default_factory=dict)  # (base, head) -> the replays' proofs, run once per base and head
+    flow_bounds: dict[Any, Any] = field(default_factory=dict)  # (main sha, workflow path) -> the workflow's timeout bound
     production: dict[str, bool] = field(default_factory=dict)  # sha -> whether it touches a production path (a commit never changes)

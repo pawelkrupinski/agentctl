@@ -285,7 +285,7 @@ class SyncOntoMainTest(unittest.TestCase):
                           ("held_commit", lambda rng, repo, commits: maybe(rng, "held", 0.1)),
                           ("blame_land_refusal", lambda rng, *a, **k: maybe(rng, "dead blame", 0.1)),
                           ("conflict_resolve", lambda rng, repo: rng.random() < 0.6),
-                          ("fix_replay_blocks", lambda rng, repo, head, store: rng.random() < 0.1),
+                          ("fix_replay_blocks", lambda rng, repo, head, store, known: rng.random() < 0.1),
                           ("check_range", lambda rng, *a: rng.choice([[], [], ["p1"], ["p1", "p2"]]))):
             case.fake(name, gen)
         case.fake("git", lambda rng, repo, *a, **k: proc(rng, 0, rng.choice(["f.py g.py", "f.py", ""]) if "diff" in a else "h" + str(rng.randint(1, 3)) + "\n")
@@ -295,7 +295,7 @@ class SyncOntoMainTest(unittest.TestCase):
         def sh(*argv, **k):
             return proc(r, 1 if r.random() < bad else 0, "", r.choice(["", "fatal: x", "e" * 400]))
         sh_probe = Named(case, "sh", lambda rng, *a, **k: sh(*a, **k))
-        return ((r.choice(["/repo"]), "origin/main", sh_probe, Probe(case, "clock"), Probe(case, "store"), r.choice([False, True])), holder)
+        return ((r.choice(["/repo"]), "origin/main", sh_probe, Probe(case, "clock"), Probe(case, "store"), {}, r.choice([False, True])), holder)
 
     def test_sync_onto_main(self):
         def run(A):

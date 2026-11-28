@@ -10,7 +10,7 @@ from agentctl.procrunner import process_runner
 from agentctl.statemachines import machine_state
 from agentctl.ids import stamp
 from agentctl.queueknobs import knob_land_before_queue_seconds, knob_max_foreign, knob_until_done_deadline
-from agentctl.core import NO_SIGN, branch_of, print_error, git, git_ok, host_role, process_cache, remote
+from agentctl.core import NO_SIGN, branch_of, print_error, git, git_ok, host_role, remote
 from agentctl.trailers import do_not_land, held_commit
 from agentctl.policy import policy_blocks
 from agentctl.agewords import fmt_age
@@ -55,7 +55,7 @@ def change_fields(repo, main_ref, head, a, store, *, ctx):
             # THE LANDER (lander.py): who landed it, and each commit's keys to find it on main after the rebase
             "lander": lander_record(repo), "commit_keys": commit_keys(repo, main_ref, head),
             # FIX REPLAY (redland.py): agentctl's own replays of the push, for the server's check
-            "replays": fix_replay_proofs(repo, head) or None}
+            "replays": fix_replay_proofs(repo, head, ctx.caches.fix_replay_proofs) or None}
 
 
 def submit_to_server(repo, d, fields, store, note="", after_queued=None, waits=False):
@@ -157,7 +157,7 @@ def queue_here(repo: Any, main_ref: Any, head: Any, d: Any, a: Any, store: Any, 
 def enqueue(repo, main_ref, sh, a, clock, store, *, ctx):
     """Rebase, squash guard, then the change becomes a queued entry: prints QUEUED and starts the processor. A red
     fixer's land then waits for the verdict (fixer_land)."""
-    rc, head = sync(repo, main_ref, sh, clock, store, getattr(a, "release_hold", False))
+    rc, head = sync(repo, main_ref, sh, clock, store, a, ctx.caches.fix_replay_proofs)
     if rc is not None:
         return rc
     d, _clone, _wt = waiting_state(repo)
@@ -285,8 +285,9 @@ def rebase_in_progress(repo):
 # the next land's `rebase --abort` reset the branch to the pre-rebase commit, dropping them). A land that finds a rebase
 # already in progress refuses -- it is the agent's to finish or abort, never land's to discard -- and a rebase land
 # started is aborted on whatever path land leaves it unfinished.
-def sync(repo, main_ref, sh, clock, store, release_hold=False):
-    """sync_onto_main, never leaving a rebase it started in progress; refused when one is in progress already."""
+def sync(repo, main_ref, sh, clock, store, a, proofs):
+    """sync_onto_main (land's --release-hold is a's), never leaving a rebase it started in progress; refused when one is in
+    progress already."""
     pending = rebase_in_progress(repo)
     if pending:
         print(f"NOT LANDED: a rebase is in progress in this worktree ({pending}): finish it (`git rebase --continue`) "
@@ -294,7 +295,7 @@ def sync(repo, main_ref, sh, clock, store, release_hold=False):
               "and an abort resets the branch -- then land again")
         return 1, None
     with WorktreeGuard(repo):
-        return sync_onto_main(repo, main_ref, sh, clock, store, release_hold)
+        return sync_onto_main(repo, main_ref, sh, clock, store, proofs, getattr(a, "release_hold", False))
 
 
 def fetch_for_land(sh: Any, clock: Any) -> Any:
@@ -348,9 +349,10 @@ def rebase_onto_main(repo: Any, sh: Any) -> Any:
     return f"NOT LANDED: rebase onto {remote()}/main failed (no conflict): {r.stderr.strip()[:300]}"
 
 
-def sync_onto_main(repo, main_ref, sh, clock, store, release_hold=False):
+def sync_onto_main(repo, main_ref, sh, clock, store, proofs, release_hold=False):
     """Fetch, rebase onto origin/main, the squash guard: (rc, None) when land is decided here, else (None, head).
-    A commit with a `Hold: <why>` trailer is refused unless release_hold (`land --release-hold`: the owner's go)."""
+    A commit with a `Hold: <why>` trailer is refused unless release_hold (`land --release-hold`: the owner's go).
+    proofs: the process's memo of the fix replays (caches.Caches.fix_replay_proofs)."""
     failed = fetch_for_land(sh, clock)
     if failed:
         print(failed)
@@ -368,7 +370,7 @@ def sync_onto_main(repo, main_ref, sh, clock, store, release_hold=False):
         print(f"LANDED {head} (the rebase left nothing: already on {remote()}/main)")
         return 0, None
     head = land_before_queue(repo, head)
-    if fix_replay_blocks(repo, head, store):
+    if fix_replay_blocks(repo, head, store, proofs):
         return 1, None
     problems = check_range(repo, f"{remote()}/main", head, [], int(knob_max_foreign()))
     if problems:
@@ -415,21 +417,19 @@ def land_before_queue(repo, head):
 # FIX REPLAY at land (redland.py): on the rebased head, agentctl runs each bare `Fix-Replay: <command>` of a Fixes-Red push
 # at origin/main and at head (once per base, head and command), keeps the proof for the submission (change_fields'
 # `replays`), and refuses a gate red's fix it does not prove; a red outside the gate only warns.
-_fix_replay_proofs = process_cache({})  # (base, head) -> [proof]
-
-
-def fix_replay_proofs(repo, head):
-    """agentctl's replays of the push origin/main..head (run_fix_replays), run once per base and head."""
+def fix_replay_proofs(repo, head, known):
+    """agentctl's replays of the push origin/main..head (run_fix_replays), run once per base and head (`known`: the
+    process's memo of them, caches.Caches.fix_replay_proofs)."""
     base = git(repo, "rev-parse", f"{remote()}/main").strip()
-    if (base, head) not in _fix_replay_proofs:
-        _fix_replay_proofs[(base, head)] = run_fix_replays(repo, base, head, waiting_commits(repo, base, head))
-    return _fix_replay_proofs[(base, head)]
+    if (base, head) not in known:
+        known[(base, head)] = run_fix_replays(repo, base, head, waiting_commits(repo, base, head))
+    return known[(base, head)]
 
 
-def fix_replay_blocks(repo, head, store):
+def fix_replay_blocks(repo, head, store, known):
     """True (its NOT LANDED printed) when FIX REPLAY refuses the push origin/main..head."""
     commits = waiting_commits(repo, f"{remote()}/main", head)
-    verdict = fix_replay_refusal(repo, commits, store, proofs=fix_replay_proofs(repo, head))
+    verdict = fix_replay_refusal(repo, commits, store, proofs=fix_replay_proofs(repo, head, known))
     if not verdict:
         return False
     pid, why = verdict

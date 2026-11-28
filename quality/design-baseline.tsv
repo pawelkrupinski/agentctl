@@ -284,12 +284,10 @@ state	lib/agentctl/live.py	4
 state	lib/agentctl/netwatch.py	1
 state	lib/agentctl/notifier.py	1
 state	lib/agentctl/onmain.py	3
-state	lib/agentctl/outsideflows.py	1
 state	lib/agentctl/overlapcheck.py	2
 state	lib/agentctl/owned.py	4
 state	lib/agentctl/policy.py	1
 state	lib/agentctl/procrunner.py	1
-state	lib/agentctl/queueenter.py	1
 state	lib/agentctl/queuesubmit.py	1
 state	lib/agentctl/recordingpins.py	1
 state	lib/agentctl/recovery.py	1

@@ -5,7 +5,7 @@ import re
 import time
 from typing import Any
 from agentctl.context import Context
-from agentctl.core import print_error, git, process_cache, remote
+from agentctl.core import print_error, git, remote
 from agentctl.forge import RED_CONCLUSIONS
 from agentctl.repos import scan_repo_for
 from agentctl.workflows import BOUND_JOBS, GITHUB_JOB_TIMEOUT, JobBlock, scan_jobs
@@ -18,7 +18,6 @@ from agentctl.ciwhy import red_streak
 OUTSIDE_FLOW_RECHECK = 1800  # a workflow outside the newest-200 window is listed on its own this often (audit #7)
 
 
-_flow_bounds = process_cache({})
 
 
 def stuck_history(o_r, name, *, ctx):
@@ -62,19 +61,20 @@ def workflow_timeout_bound(txt: str) -> Any:
     return sum(map(_job_bound, jobs)) or GITHUB_JOB_TIMEOUT
 
 
-def stuck_timeout(o_r, name):
-    """workflow_timeout_bound of the workflow's file on origin/main (cached per main sha), or None."""
+def stuck_timeout(o_r, name, bounds):
+    """workflow_timeout_bound of the workflow's file on origin/main (`bounds`: the process's memo per main sha and path,
+    caches.Caches.flow_bounds), or None."""
     repo = scan_repo_for(o_r)
     path = main_flow_meta(o_r)["paths"].get(name)
     if not repo or not path:
         return None
     main = git(repo, "rev-parse", f"refs/remotes/{remote()}/main", check=False).stdout.strip()
-    if (main, path) not in _flow_bounds:
-        if len(_flow_bounds) > 200:
-            _flow_bounds.clear()
+    if (main, path) not in bounds:
+        if len(bounds) > 200:
+            bounds.clear()
         txt = git(repo, "show", f"{main}:{path}", check=False).stdout
-        _flow_bounds[(main, path)] = workflow_timeout_bound(txt) if txt else None
-    return _flow_bounds[(main, path)]
+        bounds[(main, path)] = workflow_timeout_bound(txt) if txt else None
+    return bounds[(main, path)]
 
 
 def main_flow_meta(o_r):

@@ -239,7 +239,7 @@ def judge_against_baseline(repo, hook, head, out, log_path, *, machine):
 def precheck(repo, main_ref, sh, log_path, a, clock, store, *, ctx):
     """Before the lock: sync and the hook's dry run (the long part). None when land goes on to the lock (with
     a.prechecked = (head, base) when the dry run passed there), else land's rc."""
-    rc, head = sync(repo, main_ref, sh, clock, store, getattr(a, "release_hold", False))
+    rc, head = sync(repo, main_ref, sh, clock, store, a, ctx.caches.fix_replay_proofs)
     if rc is not None:
         return rc
     hook = precheck_hook(repo)

@@ -354,7 +354,7 @@ def land_synced(repo: str, main_ref: Any, sh: Any, a: Any, clock: Any, store: An
     """(land's exit code or None, the head synced onto main, the gate's reds): the sync's NOT LANDED, or the change joined
     to `waiting` while main is red, decide here; else the push goes on."""
     lock_note("fetch and rebase")
-    rc, head = sync(repo, main_ref, sh, clock, store, getattr(a, "release_hold", False))
+    rc, head = sync(repo, main_ref, sh, clock, store, a, ctx.caches.fix_replay_proofs)
     if rc is not None:
         return rc, head, set()
     reds = gate_reds(repo, ctx=ctx) if waiting_supported(repo) else set()

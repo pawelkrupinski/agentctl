@@ -95,7 +95,7 @@ mypy-errors	offerdispatch	17
 mypy-errors	orphanpass	5
 mypy-errors	orphanreap	26
 mypy-errors	orphans	15
-mypy-errors	outsideflows	12
+mypy-errors	outsideflows	11
 mypy-errors	overlapcheck	24
 mypy-errors	owned	38
 mypy-errors	owner	24
@@ -110,7 +110,7 @@ mypy-errors	procwatch	2
 mypy-errors	queue	21
 mypy-errors	queuecheck	21
 mypy-errors	queuediff	29
-mypy-errors	queueenter	72
+mypy-errors	queueenter	71
 mypy-errors	queuefailure	4
 mypy-errors	queuepush	41
 mypy-errors	queuerecheck	42
