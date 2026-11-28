@@ -5,7 +5,7 @@ from typing import Any, Optional
 from agentctl.context import Context
 from agentctl.statemachines import StaleVersion, machine_state
 from agentctl.holdgraph import HOLDER_IN_FLIGHT, as_own, dependency_between
-from agentctl.core import git, process_cache, remote
+from agentctl.core import git, remote
 from agentctl.generated import generated_entry, order_sensitive, without_derived, without_generated
 from agentctl.waitingdir import ChangeRecords, wlog
 from agentctl.conflicts import conflict_hunks, hunks_resolve, own_commits_conflict, union_safe
@@ -43,7 +43,6 @@ from agentctl.redseen import gate_reds
 OVERLAP_OLDER = ("queued", "checking", "checked", "pushing", "waiting")
 
 
-_overlap_known = process_cache({})  # (older id, head, younger id, head) -> (shared files, conflicting files or None)
 
 
 def pair_conflict(repo, older, younger):
@@ -97,20 +96,20 @@ def conflicting(repo: Optional[str], files: Optional[list[str]], strict: bool) -
     return (without_derived(repo, files) if strict else without_generated(repo, files)) or None
 
 
-def overlap_of(repo, older, younger, strict=False):
+def overlap_of(repo, older, younger, known, strict=False):
     """(the files both change, the files they conflict in or None, the conflicting files the batch resolves), per pair
-    of heads (cached in the process); the repo's generated files are neither (GENERATED FILES ARE NO OVERLAP,
+    of heads (known: the process's Caches.overlap_known); the repo's generated files are neither (GENERATED FILES ARE NO OVERLAP,
     waiting.py) unless strict (a change whose generated files or source conflict could not be resolved in a batch):
     then its order-sensitive generated files are shared ones, and every textual conflict but a derived file's is one."""
     key = (*overlap_key(older), *overlap_key(younger), strict)
-    if key not in _overlap_known:
+    if key not in known:
         shared = shared_paths(repo, older, younger)
         shared = held_files(repo, shared, strict)
         conflict = conflicting(repo, pair_conflict(repo, older, younger), strict) if shared else None
         resolvable = [] if strict or not conflict else pair_resolvable(repo, older, younger, conflict)
         conflict = [f for f in conflict or [] if f not in resolvable] or None
-        _overlap_known[key] = (shared, conflict, resolvable)
-    return _overlap_known[key]
+        known[key] = (shared, conflict, resolvable)
+    return known[key]
 
 
 # ONLY A VOIDED CHECK HOLDS (2026-11-25; generated.py). A change sharing only generated files with one queued before
@@ -129,20 +128,20 @@ def ordered_overlap(repo: Optional[str], older: dict[str, Any], younger: dict[st
     return [f for f in both if order_sensitive(repo, f)]
 
 
-def main_conflict(repo, e):
+def main_conflict(repo, e, known):
     """(main, the files) when queued change e no longer applies on the current main (main moved since its base and
-    they conflict: git merge-tree), else None; asked once per main and head."""
+    they conflict: git merge-tree), else None; asked once per main and head (known: Caches.overlap_known)."""
     main = git(repo, "rev-parse", f"{remote()}/main", check=False).stdout.strip()
     if not main or main == e.get("base") or not e.get("head"):
         return None
     key = ("main", main, e["id"], e.get("head"))
-    if key not in _overlap_known:
+    if key not in known:
         files = pair_conflict(repo, {"id": "main", "head": main}, e)
         files = without_generated(repo, files) if files else files  # regenerated in its rebase
         # the heads' merge sees commits main carries under other shas (a stacked change's landed parent): judged again
         # as its rebase picks it (conflicts.py A CHANGE RE-APPLIED ONTO MAIN IS JUDGED BY ITS OWN COMMITS)
-        _overlap_known[key] = own_commits_conflict(repo, main, e.get("commits") or []) if files else files
-    files = _overlap_known[key]
+        known[key] = own_commits_conflict(repo, main, e.get("commits") or []) if files else files
+    files = known[key]
     return (main, files) if files else None
 
 
@@ -189,7 +188,7 @@ class OverlapScan:
         """The hold to return at once when entry o overlaps the change and cannot be assembled with it, else None (`first`
         notes the overlap that merely holds)."""
         theirs = as_own(o, self.stacks)
-        shared, conflict, resolvable = overlap_of(self.repo, theirs, self.mine,
+        shared, conflict, resolvable = overlap_of(self.repo, theirs, self.mine, self.ctx.caches.overlap_known,
                                                   strict=self.e.get("batch_alone") in ("regen", "resolve"))
         if not shared:
             self.note_ordered(o, theirs)
@@ -264,7 +263,7 @@ def tell_conflict(st: Any, d: Any, e: Any, o: Any, conflict: Any, waits: bool, r
     return text
 
 
-def hold_for_overlap(st, d, e, o, shared, conflict, waits=True, repo=None):
+def hold_for_overlap(st, d, e, o, shared, conflict, said, waits=True, repo=None):
     """The change tick's lines for a change held behind an older one it overlaps (waits; a red fix's: not held); its
     author told once of a conflict."""
     did = []
@@ -273,8 +272,8 @@ def hold_for_overlap(st, d, e, o, shared, conflict, waits=True, repo=None):
         if text is None:
             return did
         did.append(text)
-    if waits and _behind_said.get((e["id"], "overlap")) != o["id"]:
-        _behind_said[(e["id"], "overlap")] = o["id"]
+    if waits and said.get((e["id"], "overlap")) != o["id"]:
+        said[(e["id"], "overlap")] = o["id"]
         did.append(f"{e['id']}: its check waits for {o['id']} ({o.get('status')}): both change {shared[0]}"
                    + (f" (+{len(shared) - 1} more)" if len(shared) > 1 else ""))
     return did
@@ -300,4 +299,3 @@ def kind_of(st, repo, e, facts, t, *, ctx):
     return classify_change(e, facts if facts is not None else facts_for(gate_reds(repo, ctx=ctx), st, ctx.caches.tick_facts), t, repo, ctx=ctx)
 
 
-_behind_said = process_cache({})  # (entry id, what) -> batch id: said once per batch

@@ -395,7 +395,7 @@ class OverlapHoldTest(unittest.TestCase):
 class HoldForOverlapTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
-        case.put("_behind_said", A.process_cache({}) if r.random() < 0.5 else {("e9", "overlap"): r.choice(["e1", "e2"])})
+        said = {} if r.random() < 0.5 else {("e9", "overlap"): r.choice(["e1", "e2"])}
         case.fake("remote", lambda rng: "origin")
         case.fake("conflict_hunks", lambda rng, repo, o, e, conflict: rng.choice([[], ["h1 a.py:3"], ["h1", "h2"]]))
         case.fake("machine_state", lambda rng, typ, state: types.SimpleNamespace(terminal=state in ("done", "landed")))
@@ -410,13 +410,13 @@ class HoldForOverlapTest(unittest.TestCase):
         st = Probe(case, "st", item=lambda rng, typ, eid: maybe(rng, {"id": eid, "state": rng.choice(["queued", "done", "waiting"]), "version": 3}, 0.8),
                    transition=transition)
         return (st, "/d", e, o, r.choice([["a.tsv"], ["a.tsv", "b.tsv"], ["x"]]), r.choice([None, None, ["c.py"], ["c.py", "d.py", "e.py", "f.py"]]),
-                r.choice([True, False]), r.choice([None, "/repo"]))
+                said, r.choice([True, False]), r.choice([None, "/repo"]))
 
     def test_hold_for_overlap(self):
         def run(A):
             def go(*args):
                 result = A.hold_for_overlap(*args)
-                return result, args[2], dict(A._behind_said)
+                return result, args[2], dict(args[6])
             return go
         check(self, "hold_for_overlap", self.build, run, 6000)
 

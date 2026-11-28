@@ -470,7 +470,8 @@ MUTATIONS = {
     "ee7b744 (the batch keeps its age-order place)": (
         'if not fix and self.batch_seq is not None and self.batch_seq < e["seq"] \\\n'
         '                and not check_tree_slot_free(st, self.repo, self.d) \\\n'
-        '                and policy_blocks("older-batch", st, e["id"], "the last free check tree kept for the older batch"):',
+        '                and policy_blocks("older-batch", st, e["id"], "the last free check tree kept for the older batch",\n'
+        '                                  said=self.ctx.caches.policy_said):',
         "if False:  # MUTATION", "loadlone"),
     "pushes first, then the holds": (
         '    for phase in ("push", "check"):\n'

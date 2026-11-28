@@ -16,7 +16,7 @@
 
 from typing import Any
 from contextlib import suppress
-from agentctl.core import print_error, process_cache
+from agentctl.core import print_error
 from agentctl.statemachines import machine_state
 
 
@@ -108,19 +108,16 @@ def policy(pid):
                          "decided it, before it may hold or reject a change") from None
 
 
-_unapproved_said = process_cache({})  # (policy id, subject) -> True: its warning recorded
-
-
-def policy_blocks(pid, st, subject=None, what=None):
+def policy_blocks(pid, st, subject=None, what=None, *, said):
     """Whether the rule `pid` may hold or reject: True for a mechanism or an owner-approved rule; False for an
     unapproved one, which only WARNS -- one `policy.unapproved` event per (rule, subject), on the subject's change item
-    when it has one (`what`: what it would have done)."""
+    when it has one (`what`: what it would have done; said: the warnings recorded, Caches.policy_said)."""
     p = policy(pid)
     if p.approved:
         return True
     key = (pid, subject)
-    if not _unapproved_said.get(key):
-        _unapproved_said[key] = True
+    if not said.get(key):
+        said[key] = True
         line = (f"POLICY UNAPPROVED {pid}: would {p.effect} {subject or 'a change'}"
                 + (f" ({what})" if what else "") + f" -- {p.rule}; agent-proposed, never decided by the owner, so it "
                 "only warns (policy.py POLICIES)")

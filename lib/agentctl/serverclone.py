@@ -17,7 +17,7 @@ from agentctl.clock import epoch_now, stopwatch
 from agentctl.ids import stamp
 from agentctl.storeknobs import knob_clone_lock_wait, knob_clone_repair_retry, knob_clone_timeout, knob_movies_remote
 from agentctl.govknobs import knob_clone_keepalive
-from agentctl.core import print_error, git, git_ok, pid_alive, process_cache, remote
+from agentctl.core import print_error, git, git_ok, pid_alive, remote
 from agentctl.sdnotify import SD_READY, sd_notify
 from agentctl.repos import server_repo
 from agentctl.clones import CORRUPT_GIT, clone_gated, clone_shared, clone_side, heal_enabled
@@ -137,19 +137,19 @@ def _clone_server_repo(repo: str) -> None:
     os.rename(tmp, repo)
 
 
-def _verify_server_clone(repo: str, store: Any, registry: ConditionRegistry) -> None:
+def _verify_server_clone(repo: str, store: Any, registry: ConditionRegistry, ran_at: dict[str, float]) -> None:
     server_clone_remote(repo)
     if heal_enabled(repo):  # at startup: a clone that does not verify is repaired before the first tick
         ok, detail = clone_verify(repo)
         if not ok:
-            repair_clone(repo, f"at startup the clone did not verify: {detail}", store, registry)
+            repair_clone(repo, f"at startup the clone did not verify: {detail}", store, registry, ran_at)
 
 
-def ensure_server_clone(repo: str | None, store: Any, registry: ConditionRegistry) -> str:
+def ensure_server_clone(repo: str | None, store: Any, registry: ConditionRegistry, ran_at: dict[str, float]) -> str:
     repo = repo or server_repo()
     clean_clone_tmps(repo)
     if os.path.isdir(os.path.join(repo, ".git")):
-        _verify_server_clone(repo, store, registry)
+        _verify_server_clone(repo, store, registry, ran_at)
     else:
         _clone_server_repo(repo)
     return repo
@@ -170,9 +170,6 @@ def server_clone_remote(repo):
 
 
 _clone_repairing = threading.Lock()
-
-
-_clone_repair_at = process_cache({})
 
 
 @contextlib.contextmanager
@@ -274,7 +271,7 @@ def clone_condition(repo, text, probe, store, tail=()):
                           command="tick", tail=list(tail), store=store)
 
 
-def repair_clone(repo, why, store, registry: ConditionRegistry):
+def repair_clone(repo, why, store, registry: ConditionRegistry, ran_at):
     """Clone afresh into a temp directory, swap it in under the clone lock, keep the broken copy (one only), re-link the
     worktrees. Opens the CLONE condition (with git's error) first; its probe, passing after the swap, closes it.
     Returns what it did, or None when another repair runs or the users never let go (tried again next tick)."""
@@ -282,7 +279,7 @@ def repair_clone(repo, why, store, registry: ConditionRegistry):
     if not _clone_repairing.acquire(blocking=False):
         return None
     try:
-        _clone_repair_at[os.path.realpath(repo)] = epoch_now()
+        ran_at[f"clone repair {os.path.realpath(repo)}"] = epoch_now()  # the process's throttles (Caches.ran_at)
         url = knob_movies_remote()
         if not url:
             raise SystemExit(f"agentctl: cannot repair {repo}: no $AGENTCTL_MOVIES_REMOTE")
@@ -299,7 +296,7 @@ def repair_clone(repo, why, store, registry: ConditionRegistry):
                 shutil.rmtree(tmp, ignore_errors=True)
                 print_error(f"clone repair: {repo} stayed in use for "
                     f"{knob_clone_lock_wait():.0f} s; tried again next tick")
-                _clone_repair_at.pop(os.path.realpath(repo), None)
+                ran_at.pop(f"clone repair {os.path.realpath(repo)}", None)
                 return None
             os.rename(repo, broken)
             os.rename(tmp, repo)
@@ -320,13 +317,13 @@ def repair_clone(repo, why, store, registry: ConditionRegistry):
         _clone_repairing.release()
 
 
-def clone_heal_tick(repo, store, registry: ConditionRegistry):
+def clone_heal_tick(repo, store, registry: ConditionRegistry, ran_at):
     """The processor's "clone health" step: a suspect clone (a fetch failed with a corruption signature) is probed;
     broken, it is repaired (at most every CLONE_REPAIR_RETRY); healthy, the mark goes (it was something else)."""
     sus = read_record(clone_side(repo, "suspect.json"))
     if not sus:
         return None
-    if epoch_now() - _clone_repair_at.get(os.path.realpath(repo), 0) < knob_clone_repair_retry():
+    if epoch_now() - ran_at.get(f"clone repair {os.path.realpath(repo)}", 0) < knob_clone_repair_retry():
         return None
     r = run_probe(probe_clone_health, {"repo": repo})
     if r.ok:
@@ -334,10 +331,10 @@ def clone_heal_tick(repo, store, registry: ConditionRegistry):
         return f"clone health: {repo} is fine ({r.detail})"
     if r.ok is None:
         return None  # cannot tell now (the network): looked at again next tick
-    return repair_clone(repo, f"{r.detail}\n{sus.get('error') or ''}".strip(), store, registry)
+    return repair_clone(repo, f"{r.detail}\n{sus.get('error') or ''}".strip(), store, registry, ran_at)
 
 
-def clone_health_lines(repo: str, store: Any, registry: ConditionRegistry) -> list[str]:
+def clone_health_lines(repo: str, store: Any, registry: ConditionRegistry, ran_at: dict[str, float]) -> list[str]:
     """The clone-health step's line (its heal tick's), none when healing is off for the repo or the tick had nothing to say."""
-    line = clone_heal_tick(repo, store, registry) if heal_enabled(repo) else None
+    line = clone_heal_tick(repo, store, registry, ran_at) if heal_enabled(repo) else None
     return [line] if line else []

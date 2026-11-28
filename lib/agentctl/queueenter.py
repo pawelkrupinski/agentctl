@@ -433,10 +433,11 @@ def fix_replay_blocks(repo, head, store, known):
     if not verdict:
         return False
     pid, why = verdict
+    said: dict[Any, Any] = {}  # a land's own warning, said once by this one refusal (no tick repeats it)
     if pid == "fix-replay":
-        blocks = policy_blocks("fix-replay", None, None, why[:160])  # policy: fix-replay
+        blocks = policy_blocks("fix-replay", None, None, why[:160], said=said)  # policy: fix-replay
     else:
-        blocks = policy_blocks("fix-replay-outside", None, None, why[:160])  # policy: fix-replay-outside
+        blocks = policy_blocks("fix-replay-outside", None, None, why[:160], said=said)  # policy: fix-replay-outside
     if blocks:
         print(f"NOT LANDED: {why}. A red fix lands only once a replay proved it (or says why none can).")
     return blocks

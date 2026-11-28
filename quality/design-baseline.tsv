@@ -276,17 +276,12 @@ state	lib/agentctl/landedchange.py	1
 state	lib/agentctl/landedtwin.py	2
 state	lib/agentctl/laptoprole.py	1
 state	lib/agentctl/leases.py	1
-state	lib/agentctl/notifier.py	1
 state	lib/agentctl/onmain.py	3
-state	lib/agentctl/overlapcheck.py	2
 state	lib/agentctl/owned.py	4
-state	lib/agentctl/policy.py	1
 state	lib/agentctl/procrunner.py	1
 state	lib/agentctl/redrecord.py	1
 state	lib/agentctl/redrepos.py	1
-state	lib/agentctl/redretired.py	1
 state	lib/agentctl/repos.py	1
-state	lib/agentctl/serverclone.py	1
 state	lib/agentctl/storetoken.py	2
 mixed	devtools/baselinemerge.py:drive	4
 mixed	devtools/baselinemerge.py:install	5

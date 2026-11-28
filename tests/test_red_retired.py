@@ -155,8 +155,8 @@ class NewestRunTest(unittest.TestCase):
 class RetiredTickTest(RedReposBase):
     def setUp(self):
         super().setUp()
-        A._retire_cache.clear()
-        self.addCleanup(A._retire_cache.clear)
+        case_context().caches.retired.clear()
+        self.addCleanup(case_context().caches.retired.clear)
         self.core_newest = {}
         self.main_at(MAIN, "2026-10-31T21:05:16Z")
         # the ticks' clock at the fixtures' day: on the wall clock, from 2026-11-14 on, every fixture run of 10-31 was
@@ -225,7 +225,7 @@ class RetiredTickTest(RedReposBase):
         os.remove(os.path.join(self.d, f"api-repos_{CORE.replace('/', '_')}_commits_main.json"))
         self.others()
         self.assertEqual(self.core_reds()["Playwright Tests (deployed)"]["state"], "offered", "unread: it stays")
-        A._retire_cache.clear()
+        case_context().caches.retired.clear()
         self.main_at(MAIN, "2026-10-31T21:05:16Z")
         self.others(advance=60)
         self.assertEqual(self.core_reds()["Playwright Tests (deployed)"]["state"], "offered", "its job is main's")

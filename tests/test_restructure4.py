@@ -29,7 +29,7 @@ def maybe(rng, value, p=0.5):
 class TickChangesPassTest(unittest.TestCase):
     def build(self, case):
         r = case.rng
-        A._behind_said.clear()
+        case_context().caches.behind_said.clear()
         entries = [entry(r, i) for i in range(r.randint(1, 4))]
         st = Probe(case, "st", put_item=lambda rng, *a: {"state": rng.choice(["queued", "checking", "checked", "pushing"]),
                                                           "deadline": rng.randint(0, 100)})
@@ -160,7 +160,7 @@ class RedRetiredTest(unittest.TestCase):
     def test_red_run_retired(self):
         def build(case):
             r = case.rng
-            A._retire_cache.clear()
+            case_context().caches.retired.clear()
             date = lambda: f"2026-11-{r.randint(1, 25):02d}T10:00:00Z"  # noqa: E731
             texts = [workflow_text(r) for _ in range(2)]
             for name, gen in (
@@ -183,8 +183,8 @@ class RedRetiredTest(unittest.TestCase):
         def wrapped(A):
             def call(*args):
                 out = A.red_run_retired(*args, ctx=case_context())
-                why = A._retire_cache.get(("why", args[0]))
-                return out, why and why[1], ("fail", args[0]) in A._retire_cache
+                why = case_context().caches.retired.get(("why", args[0]))
+                return out, why and why[1], ("fail", args[0]) in case_context().caches.retired
             return call
         check(self, A, "red_run_retired", build, wrapped, 4000)
 
@@ -452,27 +452,27 @@ class Round4BackfillTest(unittest.TestCase):
         import time
         calls = []
 
-        def main(o_r):
+        def main(o_r, memo):
             calls.append(o_r)
             raise RuntimeError("x" * 300)
         saved = A.retire_main
         A.retire_main = main
         try:
-            A._retire_cache.clear()
+            case_context().caches.retired.clear()
             args = ("o/rb", "W", {"databaseId": 7}, ["build"], 1_795_000_000)
             self.assertIsNone(A.red_run_retired(*args, ctx=case_context()))
-            self.assertEqual(len(A._retire_cache[("why", "o/rb")][1]), len("W #None: ") + 200)
+            self.assertEqual(len(case_context().caches.retired[("why", "o/rb")][1]), len("W #None: ") + 200)
             self.assertIsNone(A.red_run_retired(*args, ctx=case_context()))  # within the TTL: not asked again
             self.assertEqual(len(calls), 1)
-            A._retire_cache[("fail", "o/rb")] = (A.epoch_now() - A.RETIRE_FAIL_TTL - 1, 0)
+            case_context().caches.retired[("fail", "o/rb")] = (A.epoch_now() - A.RETIRE_FAIL_TTL - 1, 0)
             A.red_run_retired(*args, ctx=case_context())  # expired: asked again
             self.assertEqual(len(calls), 2)
-            A._retire_cache[("fail", "o/rb")] = (A.epoch_now() - A.RETIRE_FAIL_TTL + 5, 0)
+            case_context().caches.retired[("fail", "o/rb")] = (A.epoch_now() - A.RETIRE_FAIL_TTL + 5, 0)
             A.red_run_retired(*args, ctx=case_context())  # still inside
             self.assertEqual(len(calls), 2)
         finally:
             A.retire_main = saved
-            A._retire_cache.clear()
+            case_context().caches.retired.clear()
 
     def test_retire_jobs_of_keeps_every_job(self):
         text = "name: w\non: push\njobs:\n" + "".join(f"  j{i}:\n    name: n{i}\n" for i in range(6))

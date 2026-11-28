@@ -52,5 +52,9 @@ class Caches:
     step_errors: dict[str, Any] = field(default_factory=dict)  # a tick step -> its last error (None: it ended well)
     status_page: dict[str, Any] = field(default_factory=dict)  # the status page this process serves: its url and server
     status: StatusMemos = field(default_factory=StatusMemos)  # what the status reads keep between refreshes
+    overlap_known: dict[Any, Any] = field(default_factory=dict)  # two heads (or main and a head) -> their overlap, asked once
+    behind_said: dict[Any, Any] = field(default_factory=dict)  # (entry id, what) -> the batch or change it waits behind, said once
+    retired: dict[Any, Any] = field(default_factory=dict)  # a retired-check read (main, a file, the flows, a run) -> (when, answer)
+    policy_said: dict[Any, Any] = field(default_factory=dict)  # (policy id, subject) -> True: its unapproved warning recorded
 
 

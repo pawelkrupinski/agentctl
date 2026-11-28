@@ -98,7 +98,10 @@ class OwnedCachesTest(unittest.TestCase):
                      "_last_upkeep", "_last_recovery", "_last_ref_sweep", "_pin_tried", "_last_red_tick",
                      "_last_others_tick", "_last_route", "_batch_said", "_bounded", "_step_errors", "_status_page",
                      "_tick_memo", "_status_wt", "_status_wt_reads", "_status_said", "_status_last", "_status_reading",
-                     "_status_cache", "_live_leased", "_live_info", "_live_metas", "_live_reg"):
+                     "_status_cache", "_live_leased", "_live_info", "_live_metas", "_live_reg", "_ghapp_tokens",
+                     "_gh_tally_kind", "_overlap_known", "_behind_said", "_retire_cache", "_clone_repair_at",
+                     "_unapproved_said", "_notify_cause"):
+
             self.assertFalse(hasattr(A, name), name)
 
 

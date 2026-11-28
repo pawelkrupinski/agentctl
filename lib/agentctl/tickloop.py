@@ -146,7 +146,7 @@ def cmd_tick(a: argparse.Namespace, clock: Clock, store: Any, registry: Conditio
     """`agentctl tick`: the processor (the reconciler's loop of ticks); `tick service install|uninstall|status`: it as the
     launchd agent."""
     if host_role() == "server":  # ci-runner: its own clone, systemd's notify protocol, a clean stop between ticks
-        repo = ensure_server_clone(a.repo, store, registry)
+        repo = ensure_server_clone(a.repo, store, registry, ctx.caches.ran_at)
         signal.signal(signal.SIGTERM, lambda *_: TICK_STOP.__setitem__(0, True))
         store.db().close()  # the database exists (its schema) before systemd hears READY
         sd_notify("READY=1")

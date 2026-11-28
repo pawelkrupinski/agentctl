@@ -70,7 +70,7 @@ def _check_entry(st: Any, repo: str, d: str, e: dict[str, Any], i: int, clock: C
     e["tip"] = head
     ChangeRecords(st, d).save(e)
     commits, reds = waiting_commits(tree, base, head), gate_reds(repo, ctx=ctx) if waiting_supported(repo) else set()
-    if tip_refused(st, repo, d, e, tree, commits, base):
+    if tip_refused(st, repo, d, e, tree, commits, base, ctx.caches.policy_said):
         return 1
     hook = precheck_hook(repo)
     mode = check_mode(d, e, tree, base, head, rem if adopt else {}, bool(reds) and must_wait(repo, commits, reds, st, ctx=ctx), hook)

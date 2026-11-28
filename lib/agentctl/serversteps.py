@@ -107,7 +107,7 @@ def server_steps(repo: str, d: str, shared: Callable[[Callable[[], Any]], Callab
     the recovery registry. Never the laptop's duties (events -> inbox, the notifier, the network and tunnel watches, the
     fixers, upkeep): those are sync_steps. clock, store and registry (the conditions' probes and actions): the process's
     (cli's), every step's time, store and registry."""
-    return (("clone health", lambda: logged(d, clone_health_lines(repo, store, registry))),
+    return (("clone health", lambda: logged(d, clone_health_lines(repo, store, registry, ctx.caches.ran_at))),
             ("landed changes", shared(lambda: [wlog(d, f"tick: {x}") for x in close_landed_changes(repo, clock, store,
                                                                                                   d)])),
             ("stranded changes", lambda: stranded_changes(repo, d, store)),

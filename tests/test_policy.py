@@ -108,7 +108,7 @@ class CrashLoopHoldTest(unittest.TestCase):
         self.assertIn("the owner, 2026-11-27", p.decided)
         self.assertFalse(p.mechanism)
         st = A.Store(path=os.path.join(tempfile.mkdtemp(prefix="agentctl-policy-"), "store.db"), clock=lambda: 1000.0)
-        self.assertTrue(A.policy_blocks("crash-loop-hold", st), "approved: enforced, never warn-only")
+        self.assertTrue(A.policy_blocks("crash-loop-hold", st, said={}), "approved: enforced, never warn-only")
 
 
 class PolicyBlocksTest(unittest.TestCase):
@@ -116,15 +116,16 @@ class PolicyBlocksTest(unittest.TestCase):
         t = [1000.0]
         st = A.Store(path=os.path.join(tempfile.mkdtemp(prefix="agentctl-policy-"), "store.db"), clock=lambda: t[0])
         st.put_item("change", "c1", "queued", {"worktree": "/w"})
-        self.assertTrue(A.policy_blocks("overlap", st, "c1"))
+        said: dict = {}  # the warnings recorded (Caches.policy_said)
+        self.assertTrue(A.policy_blocks("overlap", st, "c1", said=said))
         unapproved = next(p for p in A.unapproved_policies() if not p.softens)
-        self.assertFalse(A.policy_blocks(unapproved.id, st, "c1", "a test"))
-        self.assertFalse(A.policy_blocks(unapproved.id, st, "c1", "a test"))
+        self.assertFalse(A.policy_blocks(unapproved.id, st, "c1", "a test", said=said))
+        self.assertFalse(A.policy_blocks(unapproved.id, st, "c1", "a test", said=said))
         evs = [e for e in st.item_events("change", "c1") if e["kind"] == "policy.unapproved"]
         self.assertEqual(len(evs), 1, "its warning is recorded once per change")
         self.assertIn(f"POLICY UNAPPROVED {unapproved.id}", evs[0]["text"])
         with self.assertRaises(ValueError):
-            A.policy_blocks("no-such-rule", st, "c1")
+            A.policy_blocks("no-such-rule", st, "c1", said={})
 
 
 if __name__ == "__main__":

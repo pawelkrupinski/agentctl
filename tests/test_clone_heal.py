@@ -41,7 +41,7 @@ class AtomicCloneTest(unittest.TestCase):
         os.environ.update(self.saved_env)
 
     def test_a_clone_lands_verified_and_leaves_no_temp_directory(self):
-        self.assertEqual(A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A)), self.repo)
+        self.assertEqual(A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A), {}), self.repo)
         self.assertTrue(A.clone_verify(self.repo)[0])
         self.assertEqual(A.clone_temp_dirs(self.repo), [])
 
@@ -55,12 +55,12 @@ class AtomicCloneTest(unittest.TestCase):
         A.run_clone = cut_off
         try:
             with self.assertRaises(SystemExit):
-                A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A))
+                A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A), {})
         finally:
             A.run_clone = real_run
         self.assertFalse(os.path.exists(self.repo))
         self.assertEqual(A.clone_temp_dirs(self.repo), [])
-        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A))  # the next start clones afresh
+        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A), {})  # the next start clones afresh
         self.assertTrue(A.clone_verify(self.repo)[0])
 
     def test_a_clone_that_does_not_verify_is_never_renamed_into_place(self):
@@ -72,7 +72,7 @@ class AtomicCloneTest(unittest.TestCase):
         A.run_clone = no_refs
         try:
             with self.assertRaises(SystemExit) as cm:
-                A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A))
+                A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A), {})
         finally:
             A.run_clone = real_run
         self.assertIn("does not verify", str(cm.exception))
@@ -84,12 +84,12 @@ class AtomicCloneTest(unittest.TestCase):
         os.rmdir(self.repo)
         stale = os.path.join(os.path.dirname(self.repo), f".movies{A.CLONE_TMP}999999999-1")
         os.makedirs(os.path.join(stale, ".git"))
-        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A))
+        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A), {})
         self.assertFalse(os.path.exists(stale))
         self.assertTrue(A.clone_verify(self.repo)[0])
 
     def test_a_missing_blob_of_mains_tree_fails_the_verification(self):
-        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A))
+        A.ensure_server_clone(self.repo, A.CurrentStore(A.process_store), registry(A), {})
         blob = A.git(self.repo, "rev-parse", f"{A.remote()}/main:d/f2").strip()
         os.unlink(os.path.join(self.repo, ".git", "objects", blob[:2], blob[2:]))
         ok, detail = A.clone_verify(self.repo)
@@ -119,9 +119,9 @@ class HealTest(unittest.TestCase):
         self.repo = os.path.join(self.root, "var", "movies")
         self.saved_env = dict(os.environ)
         os.environ.update(AGENTCTL_MOVIES_REMOTE=self.src, AGENTCTL_MOVIES_REPO=self.repo)
-        A._clone_repair_at.clear()
+        self.ran_at: dict[str, float] = {}  # the clone repair's throttle (Caches.ran_at)
         self.store = A.Store(path=os.path.join(self.root, "store.db"))
-        A.ensure_server_clone(self.repo, self.store, registry(A))
+        A.ensure_server_clone(self.repo, self.store, registry(A), self.ran_at)
 
     def tearDown(self):
         os.environ.clear()
@@ -154,7 +154,7 @@ class HealTest(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("did not send all necessary objects", why)
         self.assertTrue(os.path.exists(A.clone_side(self.repo, "suspect.json")))
-        line = A.clone_heal_tick(self.repo, self.store, registry(A))
+        line = A.clone_heal_tick(self.repo, self.store, registry(A), self.ran_at)
         self.assertIn("re-cloned and swapped in", line)
         self.assertTrue(A.clone_verify(self.repo)[0])
         self.assertTrue(A.run_probe(A.probe_clone_health, {"repo": self.repo}).ok)
@@ -177,13 +177,13 @@ class HealTest(unittest.TestCase):
 
     def test_a_suspect_mark_on_a_healthy_clone_just_goes(self):
         A.write_json(A.clone_side(self.repo, "suspect.json"), {"at": 1, "error": "Could not read 409b8bb3c1"})
-        self.assertIn("is fine", A.clone_heal_tick(self.repo, self.store, registry(A)))
+        self.assertIn("is fine", A.clone_heal_tick(self.repo, self.store, registry(A), self.ran_at))
         self.assertFalse(os.path.exists(A.clone_side(self.repo, "suspect.json")))
         self.assertFalse([p for p in os.listdir(os.path.dirname(self.repo)) if ".broken-" in p])
 
     def test_at_startup_a_clone_that_does_not_verify_is_repaired(self):
         corrupt(self.repo)
-        A.ensure_server_clone(self.repo, self.store, registry(A))
+        A.ensure_server_clone(self.repo, self.store, registry(A), self.ran_at)
         self.assertTrue(A.clone_verify(self.repo)[0])
         self.assertEqual(len([p for p in os.listdir(os.path.dirname(self.repo)) if ".broken-" in p]), 1)
 
@@ -193,7 +193,7 @@ class HealTest(unittest.TestCase):
         os.makedirs(os.path.join(tree, "target"))
         open(os.path.join(tree, "target", "warm"), "w").close()
         corrupt(self.repo)
-        A.repair_clone(self.repo, "a test", self.store, registry(A))
+        A.repair_clone(self.repo, "a test", self.store, registry(A), self.ran_at)
         self.assertEqual(A.git(tree, "rev-parse", "HEAD").strip(), A.git(self.repo, "rev-parse", f"{A.remote()}/main").strip())
         A.git(tree, "reset", "-q", "--hard")
         self.assertTrue(os.path.exists(os.path.join(tree, "target", "warm")))
@@ -213,12 +213,12 @@ class HealTest(unittest.TestCase):
         t.start()
         held.wait(10)
         os.environ["AGENTCTL_CLONE_LOCK_WAIT"] = "0.5"
-        self.assertIsNone(A.repair_clone(self.repo, "a test", self.store, registry(A)))  # the user never let go: no swap, next tick
+        self.assertIsNone(A.repair_clone(self.repo, "a test", self.store, registry(A), self.ran_at))  # the user never let go: no swap, next tick
         self.assertFalse(A.clone_verify(self.repo)[0])
         self.assertEqual(A.clone_temp_dirs(self.repo), [])
         os.environ["AGENTCTL_CLONE_LOCK_WAIT"] = "30"
         threading.Timer(1.0, release.set).start()
-        line = A.repair_clone(self.repo, "a test", self.store, registry(A))  # waits for the user, then swaps
+        line = A.repair_clone(self.repo, "a test", self.store, registry(A), self.ran_at)  # waits for the user, then swaps
         t.join(10)
         self.assertIn("swapped in", line)
         self.assertTrue(A.clone_verify(self.repo)[0])

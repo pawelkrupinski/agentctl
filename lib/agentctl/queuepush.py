@@ -22,7 +22,7 @@ from agentctl.changekind import classify_change, classify_queue, facts_for, fact
 from agentctl.waiting import supersede
 from agentctl.redseen import gate_reds
 from agentctl.changelap import lap_change_deadline, regen_hold_overdue
-from agentctl.overlapcheck import OverlapHold, _behind_said, hold_for_overlap, main_conflict, overlap_hold
+from agentctl.overlapcheck import OverlapHold, hold_for_overlap, main_conflict, overlap_hold
 from agentctl.entrychecks import spawn_executor
 from agentctl.queuediff import push_change
 from agentctl.batchselect import backlog_held, push_held
@@ -116,10 +116,10 @@ def _tick_changes_pass(repo, d, st, clock, t, facts, kinds, phase, mine, todo, h
     return did
 
 
-def said_once(e: Any, key: Any, line: Any, did: Any) -> Any:
+def said_once(e: Any, key: Any, line: Any, did: Any, said: dict[Any, Any]) -> Any:
     """Say `line` (append it to did) once per entry and key: the hold it names is recorded each tick, said once."""
-    if not _behind_said.get((e["id"], key)):
-        _behind_said[(e["id"], key)] = True
+    if not said.get((e["id"], key)):
+        said[(e["id"], key)] = True
         did.append(line)
 
 
@@ -186,7 +186,7 @@ class ChangePass:
         lap_change_deadline(self.st, e, "queued", self.t)  # past its deadline: said, re-deadlined (A HELD WAIT IS NO ESCALATION)
         if alive:
             return False
-        gone = main_conflict(self.repo, e)
+        gone = main_conflict(self.repo, e, self.ctx.caches.overlap_known)
         if gone:  # it no longer applies on main itself: said now, never after a wait for a tree or an older change
             self.reject_stale(e, gone)
             did.append(f"{e['id']}: rejected (no longer applies on main)")
@@ -218,13 +218,13 @@ class ChangePass:
         st, t = self.st, self.t
         first = None if fix else batch_goes_first(st, self.d, ("assembling", "pushing"))
         if first:  # the next free check tree is the batch's: to assemble it, or to push from its own tree
-            did += behind_batch(e, first, "check")
+            did += behind_batch(e, first, "check", self.ctx.caches.behind_said)
             note_hold(st, e, "batch", f"its check waits for batch {first['id']} ({first['state']})", t, batch=first["id"])
             return True
         for ids, key, kind, line in ((self.pheld, "push batch", "push-batch", "its round waits for the next push batch"),
                                      (self.held, "backlog", "backlog-batch", "its check waits for the next backlog batch")):
             if not fix and e["id"] in ids:  # THE PUSH BATCH / THE BACKLOG BATCH checks it with others
-                said_once(e, key, f"{e['id']}: {line}", did)
+                said_once(e, key, f"{e['id']}: {line}", did, self.ctx.caches.behind_said)
                 note_hold(st, e, kind, line, t)
                 return True
         return False
@@ -238,9 +238,11 @@ class ChangePass:
             return
         if not fix and self.batch_seq is not None and self.batch_seq < e["seq"] \
                 and not check_tree_slot_free(st, self.repo, self.d) \
-                and policy_blocks("older-batch", st, e["id"], "the last free check tree kept for the older batch"):
+                and policy_blocks("older-batch", st, e["id"], "the last free check tree kept for the older batch",
+                                  said=self.ctx.caches.policy_said):
             slot[1].release()  # AGE ORDER: the last free tree is the older changes' batch's
-            said_once(e, "older batch", f"{e['id']}: its check waits: the last free tree goes to the older changes' batch", did)
+            said_once(e, "older batch", f"{e['id']}: its check waits: the last free tree goes to the older changes' batch", did,
+                      self.ctx.caches.behind_said)
             note_hold(st, e, "older-batch", "the last free check tree goes to the older changes' batch", self.t)
             return
         slot[1].release()  # the executor takes it again itself
@@ -249,13 +251,13 @@ class ChangePass:
         did.append(f"{e['id']}: executor started")
 
 
-def stacked_wait(st, t, e, parent):
+def stacked_wait(st, t, e, parent, said_to):
     """Queued change e waits for its parent (holdgraph.py): its hold recorded, the line said once per parent."""
     why = (f"its check waits for {parent['id']} ({parent.get('status')}), which its branch is stacked on: it lands "
            "after it, checked once on top of it")
     note_hold(st, e, "stacked", why, t, blocker=parent["id"])
-    said = _behind_said.get((e["id"], "stacked")) == parent["id"]
-    _behind_said[(e["id"], "stacked")] = parent["id"]
+    said = said_to.get((e["id"], "stacked")) == parent["id"]
+    said_to[(e["id"], "stacked")] = parent["id"]
     return [] if said else [f"{e['id']}: {why}"]
 
 
@@ -265,14 +267,14 @@ def queued_waiting_on_changes(repo, d, st, t, e, fix, todo, facts, stacks, *, ct
     parent = None if fix else stacks.get(e["id"])
     if parent is not None and parent.get("status") in OPEN_PARENT_STATES \
             and parent["id"] not in (e.get("cycle_ignore") or []):
-        return stacked_wait(st, t, e, parent), True
+        return stacked_wait(st, t, e, parent, ctx.caches.behind_said), True
     hold, did = live_overlap_hold(repo, d, st, t, e, fix, todo, facts, stacks, ctx=ctx)
     if hold and fix:  # a red fix never waits: its author is told of a conflict, and it goes on
-        return hold_for_overlap(st, d, e, *hold, waits=False, repo=repo), False
+        return hold_for_overlap(st, d, e, *hold, ctx.caches.behind_said, waits=False, repo=repo), False
     if not hold:
         return did, False
     o, shared = hold[0], hold[1]
-    did += hold_for_overlap(st, d, e, *hold, repo=repo)
+    did += hold_for_overlap(st, d, e, *hold, ctx.caches.behind_said, repo=repo)
     note_hold(st, e, "overlap", f"its check waits for {o['id']} ({o.get('status')}): both change "
               f"{', '.join(shared[:3])}" + (f" (+{len(shared) - 3} more)" if len(shared) > 3 else ""), t,
               blocker=o["id"], files=shared[:10])
@@ -305,16 +307,16 @@ def retry_hold(e):
     return "retry", f"its check is retried at {hhmmz(e['retry_after'])} (an infra failure{': ' + why[:200] if why else ''})"
 
 
-def _note_push_hold(st: Any, e: Any, first: Any, older: Any, pheld: Any, t: Any) -> Any:
+def _note_push_hold(st: Any, e: Any, first: Any, older: Any, pheld: Any, t: Any, said: dict[Any, Any]) -> Any:
     """The hold a checked entry's push waits under (the batch it is not in, the push batch, an older change's
     verification), recorded on its item; the lines to say, if any."""
     did = []
     if first:  # a solo push now moves main under the batch, and its whole check is thrown away
-        did += behind_batch(e, first, "push")
+        did += behind_batch(e, first, "push", said)
         note_hold(st, e, "batch", f"its push waits for batch {first['id']} ({first['state']}), which it is not in", t,
                   batch=first["id"])
     elif e["id"] in pheld:  # THE PUSH BATCH verifies and pushes it with others (never a red fix: push_candidates)
-        said_once(e, "push batch", f"{e['id']}: its push waits for the next push batch", did)
+        said_once(e, "push batch", f"{e['id']}: its push waits for the next push batch", did, said)
         note_hold(st, e, "push-batch", "its push waits for the next push batch", t)
     elif older:
         did.append(f"{e['id']}: its push waits for {older['id']}'s combined-tree verification")
@@ -331,7 +333,7 @@ def _push_checked(repo: Any, d: Any, st: Any, clock: Any, t: Any, e: Any, fix: A
     did = []
     first = None if fix else batch_goes_first(st, d)  # a red fix goes before the batch
     older = None if fix or first or e["id"] in pheld else older_verifying(todo, e, t, kinds, waiting_on_changes(st, todo))
-    did += _note_push_hold(st, e, first, older, pheld, t)
+    did += _note_push_hold(st, e, first, older, pheld, t, ctx.caches.behind_said)
     if first or older or e["id"] in pheld:
         lap_change_deadline(st, e, "checked", t)
         return did
@@ -380,12 +382,12 @@ def batch_goes_first(st, d, states=BATCH_FIRST):
     return it if it and it["state"] in states and (backlog or ChangeRecords(st, d).waiting()) else None
 
 
-def behind_batch(e, it, what):
+def behind_batch(e, it, what, said):
     """The tick's line for a change held behind the batch: once per change, batch and kind."""
     k = (e["id"], what)
-    if _behind_said.get(k) == it["id"]:
+    if said.get(k) == it["id"]:
         return []
-    _behind_said[k] = it["id"]
+    said[k] = it["id"]
     return [f"{e['id']}: its {what} waits for batch {it['id']} ({it['state']})"]
 
 

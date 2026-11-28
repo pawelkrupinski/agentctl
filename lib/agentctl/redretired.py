@@ -6,7 +6,6 @@ from agentctl.clock import epoch_now
 import os
 import re
 from typing import Any
-from agentctl.core import process_cache
 from agentctl.timefmt import parse_time
 from agentctl.forge import gh_json
 from agentctl.ciruns import CiRuns
@@ -17,30 +16,30 @@ from agentctl.redknobs import knob_red_stale_days
 
 RETIRE_MAIN_TTL = 60         # s: main's head is read again after this
 RETIRE_FAIL_TTL = 60         # s: an unreadable repo is not asked again before this
-_retire_cache = process_cache({})
 
 
-def _retire_get(key, ttl, f):
-    hit = _retire_cache.get(key)
+def _retire_get(key, ttl, f, memo):
+    """f()'s answer, kept in memo (the process's Caches.retired) for ttl s (None: for good)."""
+    hit = memo.get(key)
     now = epoch_now()
     if hit and (ttl is None or now - hit[0] < ttl):
         return hit[1]
     v = f()
-    if len(_retire_cache) > 2000:
-        _retire_cache.clear()
-    _retire_cache[key] = (now, v)
+    if len(memo) > 2000:
+        memo.clear()
+    memo[key] = (now, v)
     return v
 
 
-def retire_main(o_r):
+def retire_main(o_r, memo):
     """(sha, committer date) of main's head."""
     def read():
         c = gh_json(o_r, "api", f"repos/{o_r}/commits/main")
         return c["sha"], ((c.get("commit") or {}).get("committer") or {}).get("date")
-    return _retire_get(("main", o_r), RETIRE_MAIN_TTL, read)
+    return _retire_get(("main", o_r), RETIRE_MAIN_TTL, read, memo)
 
 
-def retire_file(o_r, sha, path):
+def retire_file(o_r, sha, path, memo):
     """The text of path at sha, or None when it does not exist there."""
     def read():
         import base64
@@ -51,7 +50,7 @@ def retire_file(o_r, sha, path):
                 return None
             raise
         return base64.b64decode(c.get("content") or "").decode("utf-8", "replace")
-    return _retire_get(("file", o_r, sha, path), None, read)
+    return _retire_get(("file", o_r, sha, path), None, read, memo)
 
 
 def _workflow_listing(o_r: Any, sha: Any) -> Any:
@@ -65,7 +64,7 @@ def _workflow_listing(o_r: Any, sha: Any) -> Any:
     return ls if isinstance(ls, list) else []
 
 
-def retire_flows(o_r, sha):
+def retire_flows(o_r, sha, memo):
     """{workflow name: (path, text)} of the workflow files at sha."""
     def read():
         out = {}
@@ -73,15 +72,16 @@ def retire_flows(o_r, sha):
             p = f.get("path") or ""
             if not p.endswith((".yml", ".yaml")):
                 continue
-            txt = retire_file(o_r, sha, p) or ""
+            txt = retire_file(o_r, sha, p, memo) or ""
             m = re.search(r"^name:\s*[\"']?(.+?)[\"']?\s*$", txt, re.M)
             out[m.group(1) if m else os.path.basename(p)] = (p, txt)
         return out
-    return _retire_get(("flows", o_r, sha), None, read)
+    return _retire_get(("flows", o_r, sha), None, read, memo)
 
 
-def retire_run(o_r, rid):
-    return _retire_get(("run", o_r, str(rid)), None, lambda: gh_json(o_r, "api", f"repos/{o_r}/actions/runs/{rid}"))
+def retire_run(o_r, rid, memo):
+    return _retire_get(("run", o_r, str(rid)), None, lambda: gh_json(o_r, "api", f"repos/{o_r}/actions/runs/{rid}"),
+                       memo)
 
 
 def retire_jobs(o_r, rid, *, ctx):
@@ -285,8 +285,8 @@ def red_job_retired(name, cur, old, steps=None):
     return f"its matrix row ({', '.join(vals)}) of job {k} is gone"
 
 
-def _retire_fail(o_r):
-    _retire_cache[("fail", o_r)] = (epoch_now(), True)
+def _retire_fail(o_r, memo):
+    memo[("fail", o_r)] = (epoch_now(), True)
 
 
 class RetiredRun:
@@ -298,9 +298,10 @@ class RetiredRun:
 
     def why(self) -> Any:
         o_r = self.o_r
-        self.sha, self.main_date = retire_main(o_r)
-        flows = retire_flows(o_r, self.sha)
-        self.r = retire_run(o_r, self.rid)
+        memo = self.ctx.caches.retired
+        self.sha, self.main_date = retire_main(o_r, memo)
+        flows = retire_flows(o_r, self.sha, memo)
+        self.r = retire_run(o_r, self.rid, memo)
         path = str(self.r.get("path") or "").split("@", 1)[0]
         if not path.startswith(".github/workflows/"):
             return None  # a forge-made workflow (Dependabot's `dynamic/...`): no file of ours retires it
@@ -329,7 +330,7 @@ class RetiredRun:
         if not cjobs:
             return None  # unparseable: the red stays
         head = self.r.get("head_sha") or (self.run or {}).get("headSha")
-        otext = retire_file(self.o_r, head, path) if head else None
+        otext = retire_file(self.o_r, head, path, self.ctx.caches.retired) if head else None
         ojobs = retire_jobs_of(otext) if otext else None
         api_jobs = retire_jobs(self.o_r, self.rid, ctx=self.ctx)
         names = self.failing_names(api_jobs)
@@ -361,13 +362,14 @@ def red_run_retired(o_r, workflow, run, jobs=None, now=None, *, ctx):
     rid = (run or {}).get("databaseId") or (run or {}).get("id")
     if not rid or not workflow:
         return None
-    if _retire_cache.get(("fail", o_r)) and ctx.clock.time() - _retire_cache[("fail", o_r)][0] < RETIRE_FAIL_TTL:
+    memo = ctx.caches.retired
+    if memo.get(("fail", o_r)) and ctx.clock.time() - memo[("fail", o_r)][0] < RETIRE_FAIL_TTL:
         return None
     try:
         return RetiredRun(o_r, workflow, run, rid, jobs, now, ctx=ctx).why()
     except (Exception, SystemExit) as e:
-        _retire_fail(o_r)  # silent (the status line and ci-why call this): the red stays, the reason kept for a look
-        _retire_cache[("why", o_r)] = (ctx.clock.time(), f"{workflow} #{(run or {}).get('number')}: {str(e)[:200]}")
+        _retire_fail(o_r, memo)  # silent (the status line and ci-why call this): the red stays, the reason kept for a look
+        memo[("why", o_r)] = (ctx.clock.time(), f"{workflow} #{(run or {}).get('number')}: {str(e)[:200]}")
         return None
 
 

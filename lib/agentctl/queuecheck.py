@@ -143,7 +143,8 @@ def round_head(st: Any, d: str, e: dict[str, Any], repo: str, i: int, base: str,
     return tree, head, via, base, conflicts
 
 
-def tip_refused(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any, commits: Any, base: str) -> bool:
+def tip_refused(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any, commits: Any, base: str,
+                said: dict[Any, Any]) -> bool:
     """The change rejected for its blame (queued before it was withdrawn or refuted: 2026-11-01, revert-629 re-queued
     by orphan duty) or an unreplayed fix (redreplay.py: the laptop's land may hold no token; its replays ride with the
     submission, `replays`)."""
@@ -153,11 +154,11 @@ def tip_refused(st: Any, repo: str, d: str, e: dict[str, Any], tree: Any, commit
         queue_verdict(st, d, e, "rejected", f"NOT LANDED: {dead}", decided_on=base)
         return True
     unreplayed = fix_replay_refusal(repo, commits, st, proofs=e.get("replays"))
-    if unreplayed and unreplayed[0] == "fix-replay" and policy_blocks("fix-replay", None, e["id"], unreplayed[1][:160]):
+    if unreplayed and unreplayed[0] == "fix-replay" and policy_blocks("fix-replay", None, e["id"], unreplayed[1][:160], said=said):
         queue_verdict(st, d, e, "rejected", f"NOT LANDED: {unreplayed[1]}", decided_on=base)  # policy: fix-replay
         return True
     if unreplayed and unreplayed[0] == "fix-replay-outside" \
-            and policy_blocks("fix-replay-outside", None, e["id"], unreplayed[1][:160]):
+            and policy_blocks("fix-replay-outside", None, e["id"], unreplayed[1][:160], said=said):
         queue_verdict(st, d, e, "rejected", f"NOT LANDED: {unreplayed[1]}", decided_on=base)  # policy: fix-replay-outside
         return True
     return False
